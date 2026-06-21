@@ -1,5 +1,6 @@
 ## 0. Project Structure
 
+```text
 merge-engine/
 ├── config/
 │   ├── config.yaml                 # Main configuration file
@@ -82,6 +83,7 @@ merge-engine/
 ├── requirements.txt
 ├── pyproject.toml                  # Project metadata and dependencies
 └── README.md
+```
 
 ---
 
@@ -498,28 +500,47 @@ class BaseConnector(ABC):
 
 ## 6. Python Code Schematics (Key Classes & Functions)
 
-```python
-# config.py
-@dataclass
-class OriginConfig:
-    id: str
-    type: str  # "postgres", "mongo", etc.
-    connection: dict  # host, port, user, password, etc.
-    priority: int    # for conflict resolution
+> **Note:** These are simplified schematics. The canonical definitions are in Sections 3 (State), 10 (Config), and 8 (Error Handling).
 
-@dataclass
-class DestinationConfig:
+```python
+# config.py  (canonical definition: Section 10.2)
+from pydantic import BaseModel, Field
+from typing import Optional
+
+class OriginConnection(BaseModel):
+    host: Optional[str] = None
+    port: Optional[int] = None
+    user: Optional[str] = None
+    password: Optional[str] = None
+    database: Optional[str] = None
+    uri: Optional[str] = None
+
+class OriginConfig(BaseModel):
+    id: str
+    type: str  # "postgres" | "mongodb" | "databricks"
+    connection: OriginConnection
+    priority: int = Field(default=0, ge=0)
+
+class DestinationConfig(BaseModel):
+    type: str = "databricks"
     host: str
     http_path: str
     token: str
     catalog: str
     schema: str
-    tables: dict  # mapping entity -> table_name
+    tables: dict[str, str]  # entity_type -> table_name
 
-class Config:
-    origins: list[OriginConfig]
+class LLMConfig(BaseModel):
+    provider: str = "openai"
+    model: str
+    api_key: str
+    base_url: Optional[str] = None
+
+class Config(BaseModel):
+    origins: list[OriginConfig] = Field(min_length=1)
     destination: DestinationConfig
-    llm: dict
+    llm: LLMConfig
+    blocking_keys: dict[str, list[str]] = {}
 ```
 
 ```python
@@ -535,56 +556,120 @@ async def discover_schema(origin: OriginConfig) -> dict:
 async def extract_data(origin: OriginConfig, table_name: str, columns: list[str],
                        batch_size: int = 1000, last_cursor: str = None) -> dict:
     # returns { "rows": [...], "total_count": int, "next_cursor": str, "ids": [...] }
-    # Uses SQL OFFSET/LIMIT or NoSQL cursor
+    # Uses SQL OFFSET/LIMIT or NoSQL cursor-based pagination
 ```
 
 ```python
-# orchestration/state.py
-from typing import TypedDict, Annotated, List, Dict, Any
-from langgraph.graph.message import add_messages
+# orchestration/state.py  (canonical definition: Section 3)
+from typing import TypedDict, NotRequired
 
 class MergeState(TypedDict):
     user_request: str
-    target_entities: List[str]
-    origins: List[OriginConfig]
+    target_entities: list[str]
+    origins: list[OriginConfig]
     destination: DestinationConfig
-    schemas: Dict[str, Any]
-    dependency_tree: Dict[str, List[str]]
-    extraction_order: List[str]
-    extracted_data: Dict[str, List[dict]]  # entity_type -> rows
-    entity_clusters: Dict[str, List[List[dict]]]  # entity_type -> clusters
-    unified_entities: Dict[str, List[dict]]
-    field_mappings: Dict[str, Any]
-    human_feedback: dict
-    load_approval: bool
-    errors: List[str]
-    current_step: str
+    schemas: dict[str, Any]
+    dependency_tree: dict[str, list[str]]
+    extraction_order: list[str]
+    extracted_data: dict[str, list[dict]]
+    entity_clusters: dict[str, list[dict]]
+    unified_entities: dict[str, list[dict]]
+    field_mappings: dict[str, dict]
+    pending_schema_changes: list[dict]
+    human_feedback: NotRequired[dict]
+    load_approval: NotRequired[bool]
+    errors: NotRequired[list[str]]
+    retry_counts: NotRequired[dict[str, int]]
+    interrupt_data: NotRequired[dict]
 ```
 
 ```python
 # orchestration/graph.py
+from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import MemorySaver
+
 def build_graph():
-    workflow = StateGraph(MergeState)
-    # ... add nodes as shown earlier
-    # Use SqliteSaver or MemorySaver for checkpoints
+    builder = StateGraph(MergeState)
+
+    # Add all nodes
+    for node_name, node_fn in [
+        ("parse_request", parse_request),
+        ("discover_schemas", discover_schemas),
+        ("analyze_deps", analyze_dependencies),
+        ("human_review_deps", human_review_deps),
+        ("extract_data", extract_data),
+        ("resolve_entities", resolve_entities),
+        ("human_review_matches", human_review_matches),
+        ("unify_entities", unify_entity_groups),
+        ("map_fields", map_fields),
+        ("human_review_mappings", human_review_mappings),
+        ("human_final_approval", human_final_approval),
+        ("load_data", load_data),
+        ("flag_origins", flag_origins),
+        ("handle_error", handle_error),
+    ]:
+        builder.add_node(node_name, node_fn)
+
+    # Error handling: wrap each node with try/except that routes errors to handle_error
+    for node_name in [n for n in ["parse_request", "discover_schemas", "analyze_deps",
+                                   "extract_data", "resolve_entities", "unify_entities",
+                                   "map_fields", "load_data", "flag_origins"]]:
+        builder.add_conditional_edges(
+            node_name,
+            error_router,
+            {"error": "handle_error", "next": node_name}  # retry or escalate
+        )
+
+    # Main flow edges
+    builder.set_entry_point("parse_request")
+    builder.add_edge("parse_request", "discover_schemas")
+    builder.add_edge("discover_schemas", "analyze_deps")
+    builder.add_edge("analyze_deps", "human_review_deps")
+    builder.add_edge("human_review_deps", "extract_data")
+    builder.add_edge("extract_data", "resolve_entities")
+    builder.add_conditional_edges("resolve_entities", has_low_confidence_clusters, {
+        True: "human_review_matches",
+        False: "unify_entities"
+    })
+    builder.add_edge("human_review_matches", "unify_entities")
+    builder.add_edge("unify_entities", "map_fields")
+    builder.add_conditional_edges("map_fields", has_unmapped_fields, {
+        True: "human_review_mappings",
+        False: "human_final_approval"
+    })
+    builder.add_edge("human_review_mappings", "human_final_approval")
+    builder.add_edge("human_final_approval", "load_data")
+    builder.add_edge("load_data", "flag_origins")
+    builder.add_edge("flag_origins", END)
+
+    # Compile with checkpointing (enables resume after interrupts)
     memory = MemorySaver()
-    graph = workflow.compile(checkpointer=memory, interrupt_before=["human_review_deps", ...])
-    return graph
+    return builder.compile(
+        checkpointer=memory,
+        interrupt_before=["human_review_deps", "human_review_matches",
+                          "human_review_mappings", "human_final_approval"]
+    )
 ```
 
 ```python
 # gradio_ui.py
 import gradio as gr
+from src.ui.workflow_manager import WorkflowManager
 
-def create_ui():
-    with gr.Blocks() as demo:
-        # chat input for user request
-        # dynamic panels for HITL forms
-        ...
-    return demo
+workflow_manager = WorkflowManager()
 
-# Integration: when graph interrupts, we display the interrupt prompt, collect response,
-# then call graph.stream(..., config) with resume.
+def handle_user_request(user_request: str):
+    thread_id = workflow_manager.start_workflow(user_request)
+    return f"Workflow started: `{thread_id}`", gr.update(visible=True)
+
+def poll_status(thread_id: str):
+    status = workflow_manager.get_workflow_status(thread_id)
+    if status["interrupt_data"]:
+        return render_interrupt_panel(status)
+    return gr.update(visible=False)
+
+def submit_feedback(thread_id: str, feedback: dict):
+    workflow_manager.resume_workflow(thread_id, feedback)
 ```
 
 ---
