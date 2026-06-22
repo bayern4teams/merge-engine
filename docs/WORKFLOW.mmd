@@ -1,0 +1,220 @@
+%% Mermaid diagram for the Merge-Engine workflow pipeline.
+%% View with: mmdc -i docs/WORKFLOW.mmd -o docs/WORKFLOW.svg
+%% Online: https://mermaid.live
+
+%% ──────────────────────────────────────────────────────────────
+%% SECTION 1 — Full end-to-end merge pipeline
+%% ──────────────────────────────────────────────────────────────
+%% NOTE: LangGraph compiles this as a StateGraph with dict state.
+%% Four nodes are interrupt-before HITL points (human_review_*,
+%% human_final_approval).  See src/orchestrator/graph.py
+
+graph TD
+    __START__([⟨START⟩]) --> parse_request
+
+    %% ── Deterministic main flow ──────────────────────────────
+    parse_request --> discover_schemas
+    discover_schemas --> analyze_dependencies
+    analyze_dependencies --> human_review_deps
+    human_review_deps --> extract_data
+    extract_data --> resolve_entities
+
+    resolve_entities -- "low-conf clusters?" -->|yes| human_review_matches
+    resolve_entities -- "low-conf clusters?" -->|no| unify_entities
+
+    human_review_matches --> unify_entities
+    unify_entities --> map_fields
+
+    map_fields -- "unmapped fields?" -->|yes| human_review_mappings
+    map_fields -- "unmapped fields?" -->|no| human_final_approval
+
+    human_review_mappings --> human_final_approval
+    human_final_approval -- rejected --> ABORT([⟨ABORT⟩])
+    human_final_approval -- approved --> load_data
+    load_data --> flag_origins
+    flag_origins --> __END__([⟨END⟩])
+
+    %% ──────────────────────────────────────────────────────────────
+    %% SECTION 2 — Error handling subgraph
+    %% ──────────────────────────────────────────────────────────────
+    parse_request -. "error?" -. E1[handle_error]
+    discover_schemas -. "error?" -. E2[handle_error]
+    analyze_dependencies -. "error?" -. E3[handle_error]
+    extract_data -. "error?" -. E4[handle_error]
+    resolve_entities -. "error?" -. E5[handle_error]
+    unify_entities -. "error?" -. E6[handle_error]
+    map_fields -. "error?" -. E7[handle_error]
+    load_data -. "error?" -. E8[handle_error]
+    flag_origins -. "error?" -. E9[handle_error]
+
+    classDef errorNode fill:#f99,stroke:#900,color:#fff
+    class E1,E2,E3,E4,E5,E6,E7,E8,E9 errorNode
+
+    %% ──────────────────────────────────────────────────────────────
+    %% SECTION 3 — Node descriptions (developer reference)
+    %% ──────────────────────────────────────────────────────────────
+    subgraph NODES["Node Reference — what each node does"]
+        direction TB
+
+        subgraph PARSING["Parsing & Discovery"]
+            N1["parse_request\n├─ LLM call → parse natural language\n├─ Extract target_entities from prompt\n└─ Write: target_entities"]
+            N2["discover_schemas\n├─ MCP discover_schema per origin\n├─ Flatten MongoDB nested docs\n├─ Write: schemas (per-origin schema dict)"]
+        end
+
+        subgraph DEPENDENCY["Dependency Analysis"]
+            N3["analyze_dependencies\n├─ LLM call → analyze FK deps\n├─ Topological sort (dependency_sort)\n└─ Write: dependency_tree,\n         extraction_order"]
+        end
+
+        subgraph HITL1["HITL: Dependency Review"]
+            N3H["human_review_deps\n├─ Interrupt: show dependency graph\n├─ User may reorder / override edges\n├─ Write: human_feedback, extraction_order\n└─ Resume → extract_data"]
+        end
+
+        subgraph EXTRACTION["Data Extraction"]
+            N4["extract_data\n├─ MCP extract_data per entity type\n├─ Paginate by batch_size\n├─ Write: extracted_data"]
+        end
+
+        subgraph RESOLUTION["Entity Resolution"]
+            N5["resolve_entities\n├─ Deterministic blocking (email, phone, name)\n├─ LLM scoring on candidate pairs\n├─ Confidence threshold check\n└─ Write: entity_clusters"]
+        end
+
+        subgraph HITL2["HITL: Match Review"]
+            N5H["human_review_matches\n├─ Interrupt: show low-conf clusters\n├─ User approves / rejects / merges\n├─ Write: human_feedback\n└─ Resume → unify_entities"]
+        end
+
+        subgraph UNIFICATION["Entity Unification"]
+            N6["unify_entities\n├─ Merge fields from cluster members\n├─ Conflict resolution (priority-based)\n├─ Generate unified entity IDs\n└─ Write: unified_entities"]
+        end
+
+        subgraph MAPPING["Field Mapping"]
+            N7["map_fields\n├─ LLM generates source→dest field map\n├─ Includes transformation rules\n├─ Write: field_mappings,\n         pending_schema_changes"]
+        end
+
+        subgraph HITL3["HITL: Mapping Review"]
+            N7H["human_review_mappings\n├─ Interrupt: show field mappings\n├─ User edits / adds mappings\n├─ Write: human_feedback, field_mappings\n└─ Resume → human_final_approval"]
+        end
+
+        subgraph APPROVAL["Final Approval"]
+            N8H["human_final_approval\n├─ Interrupt: show full merge summary\n├─ User approves or aborts\n├─ Write: load_approval\n└─ Approved → load_data\n   Rejected → ABORT"]
+        end
+
+        subgraph LOADING["Data Loading"]
+            N8["load_data\n├─ Apply ALTER TABLE if needed\n├─ Batch INSERT into destination\n├─ Track imported entity IDs\n└─ Write: load results, errors"]
+            N9["flag_origins\n├─ Mark source records as imported\n├─ Write imported flags to origins\n└─ Write: import tracking"]
+        end
+    end
+
+    %% Invisible links to keep node reference organized
+    N1 ~~~ N2 ~~~ N3 ~~~ N3H ~~~ N4 ~~~ N5 ~~~ N5H ~~~ N6 ~~~ N7 ~~~ N7H ~~~ N8H ~~~ N8 ~~~ N9
+
+    %% ──────────────────────────────────────────────────────────────
+    %% SECTION 4 — State mutation map
+    %% ──────────────────────────────────────────────────────────────
+    subgraph STATE["MergeState Field Mutations"]
+        direction TB
+
+        subgraph INIT["Initialization (get_initial_state)"]
+            S_INIT["Writes:\n  • origins, destination, llm_config\n  • extraction_config\n  • empty dicts/lists for all phases\n  • errors=[], retry_counts={}\n  • interrupt_data=null"]
+        end
+
+        subgraph PHASES["Phase-by-Phase Mutations"]
+            S1["parse_request\n  target_entities"]
+            S2["discover_schemas\n  schemas"]
+            S3["analyze_dependencies\n  dependency_tree,\n  extraction_order"]
+            S4["extract_data\n  extracted_data"]
+            S5["resolve_entities\n  entity_clusters"]
+            S6["unify_entities\n  unified_entities"]
+            S7["map_fields\n  field_mappings,\n  pending_schema_changes"]
+            S8["load_data\n  (load results logged)\n  errors on failure"]
+            S9["flag_origins\n  (import flags set)"]
+        end
+
+        subgraph HITL_FIELDS["HITL Field Mutations"]
+            H1["human_review_deps\n  human_feedback, extraction_order"]
+            H2["human_review_matches\n  human_feedback"]
+            H3["human_review_mappings\n  field_mappings, human_feedback"]
+            H4["human_final_approval\n  load_approval (bool)"]
+        end
+
+        subgraph ERROR["Error Tracking (all error nodes)"]
+            E["errors (append-only list)\n retry_counts (per-node counter)"]
+        end
+    end
+
+    S_INIT ~~~ S1 ~~~ S2 ~~~ S3 ~~~ S4 ~~~ S5 ~~~ S6 ~~~ S7 ~~~ S8 ~~~ S9
+    H1 ~~~ H2 ~~~ H3 ~~~ H4 ~~~ E
+
+    %% ──────────────────────────────────────────────────────────────
+    %% SECTION 5 — MCP tool ↔ Node mapping
+    %% ──────────────────────────────────────────────────────────────
+    subgraph MCP_MAP["MCP Tool ↔ Node Mapping"]
+        direction TB
+
+        subgraph TOOLS["MCP Tools"]
+            T1["discover_schema\n  → discover_schemas node"]
+            T2["extract_data\n  → extract_data node"]
+            T3["resolve_entities\n  → resolve_entities node"]
+            T4["unify_entity_group\n  → unify_entities node"]
+            T5["map_fields\n  → map_fields node"]
+            T6["load_data\n  → load_data node"]
+            T7["mark_imported\n  → flag_origins node"]
+        end
+
+        subgraph LLM["LLM Calls (internal, not MCP)"]
+            L1["parse_request\n  → request_parsing.txt"]
+            L2["analyze_dependencies\n  → dependency_analysis.txt"]
+            L3["resolve_entities scoring\n  → entity_resolution.txt"]
+            L4["map_fields generation\n  → field_mapping.txt"]
+        end
+    end
+
+    T1 ~~~ T2 ~~~ T3 ~~~ T4 ~~~ T5 ~~~ T6 ~~~ T7
+    L1 ~~~ L2 ~~~ L3 ~~~ L4
+
+    %% ──────────────────────────────────────────────────────────────
+    %% SECTION 6 — Per-entity-type data flow
+    %% ──────────────────────────────────────────────────────────────
+    subgraph ENTITY_FLOW["Per-Entity-Type Data Flow"]
+        direction TB
+
+        subgraph ORIGINS["Origins (multi-source)"]
+            O1["Origin 1\n(PostgreSQL)\n  companies, contacts,\n  products"]
+            O2["Origin 2\n(MongoDB)\n  companies, contacts,\n  products"]
+            O3["Origin N\n(Databricks)\n  ..."]
+        end
+
+        subgraph ENTITY_PIPELINE["Entity Pipeline (per type)"]
+            E1["1. discover_schema\n   → table structure,\n     column types,\n     indexes"]
+
+            E2["2. extract_data\n   → raw records with\n     source_id, origin_id"]
+
+            E3["3. resolve_entities\n   → block on key fields,\n     score pairs, cluster\n     matching records"]
+
+            E4["4. unify_entities\n   → merge cluster members\n     → one unified record\n     → unified company_id / person_id"]
+        end
+
+        subgraph DEST["Destination\n(PostgreSQL / Databricks)"]
+            D1["5. map_fields\n   → source columns →\n     destination columns\n   → generate ALTER TABLE"]
+            D2["6. load_data\n   → apply schema changes\n   → batch INSERT records\n   → generate company_uuid / person_uuid"]
+        end
+
+        O1 --> E1
+        O2 --> E1
+        O3 --> E1
+        E1 --> E2
+        E2 --> E3
+        E3 --> E4
+        E4 --> D1
+        D1 --> D2
+    end
+
+    %% ──────────────────────────────────────────────────────────────
+    %% CLASS DEFINITIONS
+    %% ──────────────────────────────────────────────────────────────
+    classDef mainNode fill:#4a90d9,stroke:#2a6db5,color:#fff,stroke-width:2px
+    classDef hitlNode fill:#d9a04a,stroke:#b57a2a,color:#fff,stroke-width:2px,stroke-dasharray: 5 5
+    classDef endNode fill:#5a5a5a,stroke:#3a3a3a,color:#fff,stroke-width:2px
+    classDef subgraphTitle fill:transparent,stroke:none,color:#aaa
+
+    class parse_request,discover_schemas,analyze_dependencies,extract_data,resolve_entities,unify_entities,map_fields,load_data,flag_origins mainNode
+    class human_review_deps,human_review_matches,human_review_mappings,human_final_approval hitlNode
+    class __START__,__END__,ABORT endNode
