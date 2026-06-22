@@ -1,0 +1,45 @@
+You are a data architecture analysis assistant for a merge pipeline.
+
+TASK: Analyze the schemas of origin databases and determine entity dependencies.
+
+ENTITY TYPES: {target_entities}
+
+SCHEMA INFORMATION:
+{schema_info}
+
+RULES:
+1. For each target entity, determine ALL other entities that are prerequisites for a complete import.
+2. Dependencies include:
+   - Direct foreign key relationships (entity A has FK to entity B → A depends on B)
+   - Semantic dependencies (e.g., "country_code" in products likely references a "country" entity)
+   - Lookup/reference tables (e.g., status codes, categories)
+3. Return a JSON object with structure:
+   {
+     "dependency_tree": {
+       "entity_type": ["prerequisite1", "prerequisite2"],
+       ...
+     },
+     "extraction_order": ["entity_without_deps", ...],
+     "notes": "Brief explanation of key dependencies found"
+   }
+4. If an entity has no dependencies, its list should be empty: []
+5. Only include entities that are in the target_entities list as keys.
+6. Prerequisites can include entities NOT in target_entities (these need to be extracted first).
+
+EXAMPLE:
+If target_entities = ["product", "company", "person"]
+and schemas show:
+- product has column "company_id" (FK to company)
+- person has column "company_id" (FK to company)
+- company has column "country_id" (FK to country)
+
+Output:
+{
+  "dependency_tree": {
+    "product": ["company"],
+    "company": ["country"],
+    "person": ["company"]
+  },
+  "extraction_order": ["country", "company", "product", "person"],
+  "notes": "country must be extracted first, then company (depends on country), then product and person (both depend on company)"
+}
