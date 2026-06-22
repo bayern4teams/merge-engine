@@ -1,0 +1,71 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Secrets & sensitive config
+config/config.secrets.yaml
+config/*.secret.yaml
+
+# Logs
+logs/
+*.log
+
+# Data & fixtures (large files)
+data/
+*.csv
+*.json
+!tests/fixtures/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# pytest
+.pytest_cache/
+coverage.xml
+htmlcov/
+.tox/
+
+# mypy
+.mypy_cache/
+
+# Ruff
+.ruff_cache/
+
+# Docker
+*.pid
+
+# Gradio cache
+.gradio/
+
+# Jupyter
+.ipynb_checkpoints
+
+# Temporary files
+tmp/
+temp/
+*.tmp
