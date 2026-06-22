@@ -72,7 +72,7 @@ def create_app(
 
     def start_workflow(user_request: str, chat_state: dict) -> tuple[list, str, dict, dict, dict, dict]:
         """Handle user starting a new merge workflow."""
-        nonlocal workflow_manager
+        global workflow_manager
         if not user_request or not user_request.strip():
             return (
                 chat_history + [["", "Please enter a request."]],
@@ -115,7 +115,7 @@ def create_app(
 
     def poll_status(chat_state: dict) -> tuple[str, dict, dict, dict, dict, str, str]:
         """Poll workflow status and update panels if interrupted."""
-        nonlocal workflow_manager
+        global workflow_manager
         if not workflow_manager or chat_state.get("status") in ("idle", "completed", "failed", "aborted"):
             return (
                 "\n".join(system_messages[-20:]),
@@ -224,7 +224,7 @@ def create_app(
         chat_state: dict,
     ) -> tuple[dict, dict, dict, dict, str, str]:
         """Handle human feedback from interrupt review panels."""
-        nonlocal workflow_manager
+        global workflow_manager
         thread_id = chat_state.get("thread_id")
 
         if not workflow_manager or not thread_id:
@@ -263,7 +263,7 @@ def create_app(
 
     def abort_workflow(chat_state: dict) -> tuple[dict, dict, dict, dict, str, str]:
         """Abort the current workflow."""
-        nonlocal workflow_manager
+        global workflow_manager
         thread_id = chat_state.get("thread_id")
 
         if workflow_manager and thread_id:
