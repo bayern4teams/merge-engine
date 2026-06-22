@@ -1,0 +1,49 @@
+# Test configuration fixture
+origins:
+  - id: test_crm
+    type: postgres
+    connection:
+      host: localhost
+      port: 5432
+      user: test_user
+      password: ${CRM_DB_PASSWORD}
+      database: test_db
+    priority: 1
+  - id: test_hr
+    type: mongodb
+    connection:
+      uri: mongodb://localhost:27017/test_hr
+    priority: 0
+
+destination:
+  type: databricks
+  host: test.cloud.databricks.com
+  http_path: /sql/1.0/warehouses/test123
+  token: test_token
+  catalog: main
+  schema: test
+  tables:
+    person: dim_person
+    company: dim_company
+    product: dim_product
+
+llm:
+  provider: openai
+  model: gpt-4o
+  api_key: test_key
+  base_url: null
+  temperature: 0.0
+
+blocking_keys:
+  person: [email, phone]
+  company: [registration_number, domain]
+
+retry:
+  max_attempts: 3
+  backoff: exponential
+  min_backoff_seconds: 1
+  max_backoff_seconds: 30
+
+extraction:
+  default_batch_size: 1000
+  max_batch_size: 10000
