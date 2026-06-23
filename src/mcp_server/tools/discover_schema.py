@@ -3,6 +3,8 @@ discover_schema tool implementation.
 
 Connects to an origin database and returns all tables/collections
 with column names, types, one sample value, and foreign keys.
+For PostgreSQL: uses information_schema.
+For MongoDB: samples N documents to infer schema.
 
 This function is called both by the MCP server dispatch and directly
 by the orchestrator node (no protocol overhead).
@@ -19,26 +21,91 @@ from src.orchestrator.utils.retry import TransientError, PermanentError
 logger = logging.getLogger("merge-engine.tools.discover_schema")
 
 
-async def discover_schema_impl(origin_id: str) -> dict[str, Any]:
+async def discover_schema_impl(origin_config: dict[str, Any]) -> dict[str, Any]:
     """Discover schema for a given origin.
 
     Parameters
     ----------
-    origin_id : str
-        The origin database ID from config.
+    origin_config : dict
+        Origin configuration from the UI, with keys:
+        - id (str): unique origin identifier
+        - type (str): "postgres" or "mongodb"
+        - connection (dict): host, port, user, password, database
+        - priority (int, optional): priority for conflict resolution
 
     Returns
     -------
     dict
-        Schema representation matching the BaseConnector interface.
+        Schema representation:
+        {
+            "origin_id": str,
+            "origin_type": str,
+            "tables": [
+                {
+                    "name": str,
+                    "columns": [{"name": ..., "type": ..., "nullable": ...}],
+                    "foreign_keys": [{"column": ..., "ref_table": ..., "ref_column": ...}],
+                    "sample_row": {...}
+                }
+            ]
+        }
 
     Raises
     ------
     ValueError
-        If *origin_id* is not found in config.
+        If origin config is invalid.
     PermanentError
         If the connector fails during discovery.
     """
+    origin_id = origin_config.get("id", "unknown")
+    origin_type = origin_config.get("type", "postgres")
+    connection = origin_config.get("connection", {})
+
+    if not origin_id:
+        raise ValueError("origin_config must have 'id' field")
+    if not origin_type:
+        raise ValueError("origin_config must have 'type' field")
+    if not connection:
+        raise ValueError("origin_config must have 'connection' dict")
+
+    try:
+        connector = create_connector(origin_type, connection)
+        schema = await connector.discover_schema()
+        return {
+            "origin_id": origin_id,
+            "origin_type": origin_type,
+            **schema,
+        }
+    except Exception as exc:
+        logger.error("Schema discovery failed for origin %s: %s", origin_id, exc)
+        raise PermanentError(
+            f"Schema discovery failed for origin '{origin_id}': {exc}"
+        ) from exc
+
+
+async def discover_schema_handler(arguments: dict[str, Any]) -> dict[str, Any]:
+    """MCP tool handler entry point.
+
+    Parameters
+    ----------
+    arguments : dict
+        Either {"origin_id": str} for legacy MCP calls,
+        or {"origin_config": dict} for full config calls.
+
+    Returns
+    -------
+    dict
+        Schema representation.
+    """
+    if "origin_config" in arguments:
+        return await discover_schema_impl(arguments["origin_config"])
+
+    # Legacy path: origin_id only
+    origin_id = arguments.get("origin_id")
+    if not origin_id:
+        raise ValueError("Either 'origin_id' or 'origin_config' must be provided")
+
+    # For backward compatibility, look up origin config
     from src.mcp_server.server import _get_config
     config = _get_config()
     origin_cfg = None
@@ -51,22 +118,9 @@ async def discover_schema_impl(origin_id: str) -> dict[str, Any]:
         available = [o.id for o in config.origins]
         raise ValueError(f"Unknown origin '{origin_id}'. Available: {available}")
 
-    try:
-        connector = create_connector(origin_cfg.type, origin_cfg.connection.model_dump())
-        schema = await connector.discover_schema()
-        return {
-            "origin_id": origin_id,
-            "origin_type": origin_cfg.type,
-            **schema,
-        }
-    except Exception as exc:
-        logger.error("Schema discovery failed for origin %s: %s", origin_id, exc)
-        raise PermanentError(
-            f"Schema discovery failed for origin '{origin_id}': {exc}"
-        ) from exc
-
-
-async def discover_schema_handler(arguments: dict[str, Any]) -> dict[str, Any]:
-    """MCP tool handler entry point."""
-    origin_id = arguments["origin_id"]
-    return await discover_schema_impl(origin_id)
+    return await discover_schema_impl({
+        "id": origin_cfg.id,
+        "type": origin_cfg.type,
+        "connection": origin_cfg.connection.model_dump(),
+        "priority": origin_cfg.priority,
+    })

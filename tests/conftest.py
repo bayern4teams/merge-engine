@@ -36,21 +36,38 @@ def test_config_dict(test_config: Config) -> dict[str, Any]:
         "target_entities": ["person", "company"],
         "origins": [
             {
-                "id": o.id,
-                "type": o.type,
-                "connection": o.connection.model_dump(),
-                "priority": o.priority,
-            }
-            for o in test_config.origins
+                "id": "test_crm",
+                "type": "postgres",
+                "connection": {
+                    "host": "localhost",
+                    "port": 5432,
+                    "user": "test",
+                    "password": "test",
+                    "database": "test_crm",
+                },
+                "priority": 1,
+            },
+            {
+                "id": "test_hr",
+                "type": "mongodb",
+                "connection": {
+                    "host": "localhost",
+                    "port": 27017,
+                    "user": "test",
+                    "password": "test",
+                    "database": "test_hr",
+                },
+                "priority": 0,
+            },
         ],
         "destination": {
-            "type": test_config.destination.type,
-            "host": test_config.destination.host,
-            "http_path": test_config.destination.http_path,
-            "token": test_config.destination.token,
-            "catalog": test_config.destination.catalog,
-            "schema": test_config.destination.schema_name,
-            "tables": test_config.destination.tables,
+            "type": "postgresql",
+            "host": test_config.destination.host or "localhost",
+            "port": test_config.destination.port or 5432,
+            "user": test_config.destination.user or "test",
+            "password": test_config.destination.password or "test",
+            "database": test_config.destination.database or "test_db",
+            "schema": test_config.destination.schema_name or "public",
         },
         "llm_config": {
             "provider": test_config.llm.provider,
@@ -221,30 +238,16 @@ def sample_schemas() -> dict[str, Any]:
 
 @pytest.fixture
 def temp_config_file() -> str:
-    """Create a temporary config file for testing."""
+    """Create a temporary config file for testing (minimal format, no origins)."""
     config_data = {
-        "origins": [
-            {
-                "id": "test_origin",
-                "type": "postgres",
-                "connection": {
-                    "host": "localhost",
-                    "port": 5432,
-                    "user": "test",
-                    "password": "test",
-                    "database": "test",
-                },
-                "priority": 1,
-            }
-        ],
         "destination": {
-            "type": "databricks",
-            "host": "test.databricks.com",
-            "http_path": "/sql/1.0/warehouses/test123",
-            "token": "test_token",
-            "catalog": "main",
-            "schema": "test",
-            "tables": {"person": "dim_person"},
+            "type": "postgresql",
+            "host": "localhost",
+            "port": 5432,
+            "user": "test",
+            "password": "test",
+            "database": "test_db",
+            "schema": "public",
         },
         "llm": {
             "provider": "openai",
@@ -253,7 +256,6 @@ def temp_config_file() -> str:
             "base_url": None,
             "temperature": 0.0,
         },
-        "blocking_keys": {"person": ["email"]},
         "retry": {
             "max_attempts": 3,
             "backoff": "exponential",
@@ -278,5 +280,5 @@ def clean_env(monkeypatch: Any) -> None:
     """Clean environment for each test."""
     # Clear any test-related env vars
     for key in list(os.environ.keys()):
-        if key.startswith("CRM_") or key.startswith("HR_") or key.startswith("DATABRICKS_") or key.startswith("OPENAI_"):
+        if key.startswith("DB_") or key.startswith("DATABRICKS_") or key.startswith("OPENAI_"):
             monkeypatch.delenv(key, raising=False)

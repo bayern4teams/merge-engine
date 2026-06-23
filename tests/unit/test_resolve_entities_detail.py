@@ -1,7 +1,7 @@
 """
 Unit tests for resolve_entities helper functions.
 
-Tests _record_id, _normalize, and _compute_deterministic_confidence.
+Tests _record_id, _normalize, and _compute_heuristic_confidence.
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from src.mcp_server.tools.resolve_entities import (
-    _compute_deterministic_confidence,
+    _compute_heuristic_confidence,
     _normalize,
     _record_id,
 )
@@ -107,108 +107,97 @@ class TestNormalize:
         assert _normalize("first_name") == "first_name"
 
 
-class TestComputeDeterministicConfidence:
-    """Tests for the _compute_deterministic_confidence helper."""
+class TestComputeHeuristicConfidence:
+    """Tests for the _compute_heuristic_confidence helper.
 
-    def test_no_blocking_keys(self) -> None:
-        """Should return 0 when no blocking keys provided."""
+    Note: This function no longer uses blocking keys - it compares
+    all common fields between records.
+    """
+
+    def test_no_common_fields(self) -> None:
+        """Should return 0 when no common fields."""
         rec1 = {"name": "Alice"}
-        rec2 = {"name": "Alice"}
-        assert _compute_deterministic_confidence(rec1, rec2, []) == 0.0
+        rec2 = {"age": 30}
+        assert _compute_heuristic_confidence(rec1, rec2) == 0.0
 
-    def test_empty_blocking_keys(self) -> None:
-        """Should return 0 when blocking keys list is empty."""
-        rec1 = {"name": "Alice"}
-        rec2 = {"name": "Alice"}
-        assert _compute_deterministic_confidence(rec1, rec2, []) == 0.0
-
-    def test_exact_match(self) -> None:
-        """Should return 1.0 for exact blocking key match."""
+    def test_exact_match_single_field(self) -> None:
+        """Should return 1.0 for exact field match."""
         rec1 = {"email": "alice@example.com"}
         rec2 = {"email": "alice@example.com"}
-        result = _compute_deterministic_confidence(rec1, rec2, ["email"])
+        result = _compute_heuristic_confidence(rec1, rec2)
         assert result == 1.0
 
     def test_null_value_skipped(self) -> None:
-        """Records with null values should skip that key."""
+        """Records with null values should skip that field."""
         rec1 = {"email": None}
         rec2 = {"email": "alice@example.com"}
-        result = _compute_deterministic_confidence(rec1, rec2, ["email"])
+        result = _compute_heuristic_confidence(rec1, rec2)
         assert result == 0.0
 
     def test_both_null_values(self) -> None:
-        """Both null should skip that key."""
+        """Both null should skip that field."""
         rec1 = {"email": None}
         rec2 = {"email": None}
-        result = _compute_deterministic_confidence(rec1, rec2, ["email"])
+        result = _compute_heuristic_confidence(rec1, rec2)
         assert result == 0.0
 
-    def test_multiple_keys_all_match(self) -> None:
-        """Should return 1.0 when all keys match."""
+    def test_multiple_fields_all_match(self) -> None:
+        """Should return 1.0 when all fields match."""
         rec1 = {"name": "Alice", "email": "a@b.com", "phone": "555-1234"}
         rec2 = {"name": "Alice", "email": "a@b.com", "phone": "555-1234"}
-        result = _compute_deterministic_confidence(rec1, rec2, ["name", "email", "phone"])
+        result = _compute_heuristic_confidence(rec1, rec2)
         assert result == 1.0
 
-    def test_multiple_keys_partial_match(self) -> None:
+    def test_multiple_fields_partial_match(self) -> None:
         """Should return partial score for partial matches."""
         rec1 = {"name": "Alice", "email": "a@b.com"}
         rec2 = {"name": "Bob", "email": "a@b.com"}
-        result = _compute_deterministic_confidence(rec1, rec2, ["name", "email"])
+        result = _compute_heuristic_confidence(rec1, rec2)
         assert result == 0.5
-
-    def test_normalized_string_match(self) -> None:
-        """Strings that normalize to same value should match."""
-        rec1 = {"name": "St. John"}
-        rec2 = {"name": "Saint John"}
-        result = _compute_deterministic_confidence(rec1, rec2, ["name"])
-        # After normalization: "stjohn" vs "saintjohn"
-        # These should have some overlap
-        assert 0.0 <= result <= 1.0
 
     def test_case_insensitive_match(self) -> None:
         """Case differences should be normalized away."""
         rec1 = {"email": "ALICE@EXAMPLE.COM"}
         rec2 = {"email": "alice@example.com"}
-        result = _compute_deterministic_confidence(rec1, rec2, ["email"])
+        result = _compute_heuristic_confidence(rec1, rec2)
         assert result == 1.0
 
     def test_completely_different(self) -> None:
         """Completely different values should return 0."""
         rec1 = {"name": "Alice"}
         rec2 = {"name": "Zachary"}
-        result = _compute_deterministic_confidence(rec1, rec2, ["name"])
+        result = _compute_heuristic_confidence(rec1, rec2)
         assert result == 0.0
 
     def test_one_record_missing_key(self) -> None:
         """Missing key should be treated as null."""
         rec1 = {"email": "alice@example.com"}
         rec2 = {"name": "Bob"}  # no email key
-        result = _compute_deterministic_confidence(rec1, rec2, ["email"])
+        result = _compute_heuristic_confidence(rec1, rec2)
         assert result == 0.0
 
     def test_string_similarity_overlap(self) -> None:
         """Similar strings should get partial credit."""
         rec1 = {"name": "Alexandr"}
         rec2 = {"name": "Alexander"}
-        result = _compute_deterministic_confidence(rec1, rec2, ["name"])
+        result = _compute_heuristic_confidence(rec1, rec2)
         # Should get some credit for character overlap
         assert 0.0 <= result <= 1.0
 
-    def test_multiple_keys_some_null(self) -> None:
+    def test_multiple_fields_some_null(self) -> None:
         """Null values should be skipped, not counted as mismatches."""
         rec1 = {"name": "Alice", "email": None, "phone": "555-1234"}
         rec2 = {"name": "Bob", "email": "b@b.com", "phone": "555-1234"}
-        result = _compute_deterministic_confidence(rec1, rec2, ["name", "email", "phone"])
+        result = _compute_heuristic_confidence(rec1, rec2)
         # Only name and phone count (email is null in rec1)
         # name mismatches, phone matches => 0.5
         assert 0.0 <= result <= 1.0
 
-    def test_numeric_blocking_key(self) -> None:
-        """Numeric blocking keys should work after normalization."""
+    def test_numeric_field(self) -> None:
+        """Numeric fields should work after normalization."""
         rec1 = {"age": 30}
         rec2 = {"age": 30}
-        result = _compute_deterministic_confidence(rec1, rec2, ["age"])
+        result = _compute_heuristic_confidence(rec1, rec2)
         assert result == 1.0
 
 

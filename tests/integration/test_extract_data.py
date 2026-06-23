@@ -17,9 +17,8 @@ class TestExtractDataIntegration:
     @pytest.mark.asyncio
     async def test_successful_extraction_with_pagination(
         self,
-        mock_config: Any,
         mock_connector_factory: Any,
-        patch_server_config: Any,
+        postgres_origin_config: dict[str, Any],
     ) -> None:
         """Test that extraction with cursor-based pagination works end-to-end."""
         sample_rows = [
@@ -34,7 +33,7 @@ class TestExtractDataIntegration:
 
             # First batch
             result = await extract_data_impl(
-                origin_id="postgres_main",
+                origin_config=postgres_origin_config,
                 table_name="companies",
                 columns=["*"],
                 batch_size=10,
@@ -48,7 +47,7 @@ class TestExtractDataIntegration:
 
             # Second batch using cursor
             result2 = await extract_data_impl(
-                origin_id="postgres_main",
+                origin_config=postgres_origin_config,
                 table_name="companies",
                 columns=["*"],
                 batch_size=10,
@@ -61,9 +60,8 @@ class TestExtractDataIntegration:
     @pytest.mark.asyncio
     async def test_extraction_single_batch(
         self,
-        mock_config: Any,
         mock_connector_factory: Any,
-        patch_server_config: Any,
+        postgres_origin_config: dict[str, Any],
     ) -> None:
         """Test extraction where all data fits in a single batch."""
         sample_rows = [
@@ -77,7 +75,7 @@ class TestExtractDataIntegration:
             mock_create.return_value = mock_conn
 
             result = await extract_data_impl(
-                origin_id="postgres_main",
+                origin_config=postgres_origin_config,
                 table_name="items",
                 columns=["id", "name"],
                 batch_size=100,
@@ -88,28 +86,25 @@ class TestExtractDataIntegration:
             assert result["next_cursor"] is None
 
     @pytest.mark.asyncio
-    async def test_extraction_unknown_origin(
+    async def test_extraction_missing_origin_config(
         self,
-        mock_config: Any,
-        patch_server_config: Any,
     ) -> None:
-        """Test that requesting an unknown origin raises a descriptive error."""
+        """Test that a missing origin config raises a descriptive error."""
         with pytest.raises(ValueError) as exc_info:
             await extract_data_impl(
-                origin_id="nonexistent_origin",
+                origin_config={},
                 table_name="companies",
                 columns=["*"],
             )
 
-        assert "Unknown origin" in str(exc_info.value)
-        assert "postgres_main" in str(exc_info.value)
+        # Empty dict fails on 'connection' check (id passes with "unknown")
+        assert "origin_config must have" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_extraction_error_becomes_permanent(
         self,
-        mock_config: Any,
         mock_connector_factory: Any,
-        patch_server_config: Any,
+        postgres_origin_config: dict[str, Any],
     ) -> None:
         """Test that connector exceptions are wrapped as PermanentError."""
         mock_conn = mock_connector_factory()
@@ -122,7 +117,7 @@ class TestExtractDataIntegration:
 
             with pytest.raises(PermanentError) as exc_info:
                 await extract_data_impl(
-                    origin_id="postgres_main",
+                    origin_config=postgres_origin_config,
                     table_name="companies",
                     columns=["*"],
                 )
@@ -132,9 +127,8 @@ class TestExtractDataIntegration:
     @pytest.mark.asyncio
     async def test_extraction_with_filter(
         self,
-        mock_config: Any,
         mock_connector_factory: Any,
-        patch_server_config: Any,
+        postgres_origin_config: dict[str, Any],
     ) -> None:
         """Test extraction passes filter to connector correctly."""
         sample_rows = [
@@ -149,7 +143,7 @@ class TestExtractDataIntegration:
 
             filter_cond = {"_imported": False}
             await extract_data_impl(
-                origin_id="postgres_main",
+                origin_config=postgres_origin_config,
                 table_name="items",
                 columns=["id", "name"],
                 filter=filter_cond,
@@ -163,9 +157,8 @@ class TestExtractDataIntegration:
     @pytest.mark.asyncio
     async def test_extraction_batch_size_respected(
         self,
-        mock_config: Any,
         mock_connector_factory: Any,
-        patch_server_config: Any,
+        postgres_origin_config: dict[str, Any],
     ) -> None:
         """Test that batch_size is passed through to the connector."""
         sample_rows = [
@@ -179,7 +172,7 @@ class TestExtractDataIntegration:
             mock_create.return_value = mock_conn
 
             await extract_data_impl(
-                origin_id="postgres_main",
+                origin_config=postgres_origin_config,
                 table_name="items",
                 columns=["*"],
                 batch_size=3,

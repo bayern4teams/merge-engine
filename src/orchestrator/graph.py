@@ -156,71 +156,150 @@ def _error_router(state: dict[str, Any]) -> str:
 
 def get_initial_state(
     user_request: str,
-    config: Any,
+    config_path: str | None = None,
+    config: Any = None,
+    origins: list[dict[str, Any]] | None = None,
+    destination: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create the initial state dict for a new workflow.
+
+    Parameters can be provided either via a loaded Config object
+    (legacy) or directly from the UI (origins + destination dicts).
 
     Parameters
     ----------
     user_request : str
         User's natural language prompt.
-    config : Config
-        Validated application config from config_loader.
+    config_path : str, optional
+        Path to config.yaml (used when config is None).
+    config : Config, optional
+        Validated application config from config_loader (legacy).
+        If provided, origins/destination are extracted from it.
+    origins : list[dict], optional
+        Origin database configurations from the UI.
+        Each dict: {id, type, connection: {host, port, user, password, database}, priority}
+    destination : dict, optional
+        Destination database configuration from the UI.
+        {type, host, port, user, password, database, schema}
 
     Returns
     -------
     dict
         Initial state ready for graph.stream().
     """
-    # Flatten config for state
-    origins_list = []
-    for o in config.origins:
-        origin_dict = {
-            "id": o.id,
-            "type": o.type,
-            "connection": o.connection.model_dump(),
-            "priority": o.priority,
+    # Handle UI-originated workflows (origins + destination dicts)
+    if origins is not None and destination is not None:
+        llm_config = _load_llm_config(config_path)
+        return {
+            "user_request": user_request,
+            "target_entities": [],
+            "origins": origins,
+            "destination": destination,
+            "llm_config": llm_config,
+            "extraction_config": {
+                "default_batch_size": 1000,
+            },
+            "schemas": {},
+            "dependency_tree": {},
+            "extraction_order": [],
+            "extracted_data": {},
+            "entity_clusters": {},
+            "unified_entities": {},
+            "field_mappings": {},
+            "pending_schema_changes": [],
+            "human_feedback": None,
+            "load_approval": None,
+            "errors": [],
+            "retry_counts": {},
+            "interrupt_data": None,
         }
-        origins_list.append(origin_dict)
 
-    destination_dict = {
-        "type": config.destination.type,
-        "host": config.destination.host,
-        "http_path": config.destination.http_path,
-        "token": config.destination.token,
-        "catalog": config.destination.catalog,
-        "schema": config.destination.schema_name,
-        "tables": config.destination.tables,
-    }
+    # Legacy path: extract from Config object
+    if config is not None:
+        origins_list = []
+        for o in config.origins:
+            origin_dict = {
+                "id": o.id,
+                "type": o.type,
+                "connection": o.connection.model_dump(),
+                "priority": o.priority,
+            }
+            origins_list.append(origin_dict)
 
-    llm_dict = {
-        "provider": config.llm.provider,
-        "model": config.llm.model,
-        "api_key": config.llm.api_key,
-        "base_url": config.llm.base_url,
-        "temperature": config.llm.temperature,
-    }
+        destination_dict = {
+            "type": config.destination.type,
+            "host": config.destination.host,
+            "port": config.destination.port or 5432,
+            "user": config.destination.user or "",
+            "password": config.destination.password or "",
+            "database": config.destination.database or "",
+            "schema": config.destination.schema_name or "public",
+        }
 
-    return {
-        "user_request": user_request,
-        "target_entities": [],
-        "origins": origins_list,
-        "destination": destination_dict,
-        "llm_config": llm_dict,
-        "extraction_config": {
-            "default_batch_size": config.extraction.default_batch_size,
-        },
-        "schemas": {},
-        "dependency_tree": {},
-        "extraction_order": [],
-        "extracted_data": {},
-        "entity_clusters": {},
-        "unified_entities": {},
-        "field_mappings": {},
-        "pending_schema_changes": [],
-        "human_feedback": None,
-        "load_approval": None,
-        "errors": [],
-        "retry_counts": {},
-        "interrupt_data": None,
-    }
+        llm_config = {
+            "provider": config.llm.provider,
+            "model": config.llm.model,
+            "api_key": config.llm.api_key,
+            "base_url": config.llm.base_url,
+            "temperature": config.llm.temperature,
+        }
+
+        return {
+            "user_request": user_request,
+            "target_entities": [],
+            "origins": origins_list,
+            "destination": destination_dict,
+            "llm_config": llm_config,
+            "extraction_config": {
+                "default_batch_size": config.extraction.default_batch_size,
+            },
+            "schemas": {},
+            "dependency_tree": {},
+            "extraction_order": [],
+            "extracted_data": {},
+            "entity_clusters": {},
+            "unified_entities": {},
+            "field_mappings": {},
+            "pending_schema_changes": [],
+            "human_feedback": None,
+            "load_approval": None,
+            "errors": [],
+            "retry_counts": {},
+            "interrupt_data": None,
+        }
+
+    raise ValueError("Must provide either (config) or (origins and destination)")
+
+
+def _load_llm_config(config_path: str | None) -> dict[str, Any]:
+    """Load LLM configuration from config file.
+
+    Parameters
+    ----------
+    config_path : str | None
+        Path to config.yaml. Uses default if None.
+
+    Returns
+    -------
+    dict
+        LLM configuration dict.
+    """
+    try:
+        from src.utils.config_loader import load_config
+        cfg = load_config(config_path)
+        return {
+            "provider": cfg.llm.provider,
+            "model": cfg.llm.model,
+            "api_key": cfg.llm.api_key,
+            "base_url": cfg.llm.base_url,
+            "temperature": cfg.llm.temperature,
+        }
+    except Exception:
+        # Return placeholder — LLM will be configured via env vars
+        return {
+            "provider": "openai",
+            "model": "gpt-4o",
+            "api_key": "",
+            "base_url": None,
+            "temperature": 0.0,
+        }

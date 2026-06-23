@@ -8,6 +8,32 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+ORIGIN_CONFIGS = [
+    {
+        "id": "test_crm",
+        "type": "postgres",
+        "connection": {
+            "host": "localhost",
+            "port": 5432,
+            "user": "test",
+            "password": "test",
+            "database": "test_db",
+        },
+        "priority": 1,
+    },
+]
+
+DESTINATION_CONFIG = {
+    "type": "postgresql",
+    "host": "localhost",
+    "port": 5432,
+    "user": "test",
+    "password": "test",
+    "database": "test_db",
+    "schema": "public",
+}
+
+
 class TestWorkflowManagerIntegration:
     """Test WorkflowManager start/status/resume/abort lifecycle."""
 
@@ -37,6 +63,8 @@ class TestWorkflowManagerIntegration:
                 thread_id = manager.start_workflow(
                     user_request="Import all companies",
                     config_path=str(test_config_path),
+                    origins=ORIGIN_CONFIGS,
+                    destination=DESTINATION_CONFIG,
                 )
 
                 assert thread_id.startswith("wf_")
@@ -82,6 +110,8 @@ class TestWorkflowManagerIntegration:
                 thread_id = manager.start_workflow(
                     user_request="Import companies",
                     config_path=str(test_config_path),
+                    origins=ORIGIN_CONFIGS,
+                    destination=DESTINATION_CONFIG,
                 )
 
                 # Wait briefly for the background thread
@@ -108,6 +138,8 @@ class TestWorkflowManagerIntegration:
                 thread_id = manager.start_workflow(
                     user_request="Import companies",
                     config_path=str(test_config_path),
+                    origins=ORIGIN_CONFIGS,
+                    destination=DESTINATION_CONFIG,
                 )
 
                 import time
@@ -135,6 +167,8 @@ class TestWorkflowManagerIntegration:
                 thread_id = manager.start_workflow(
                     user_request="Import companies",
                     config_path=str(test_config_path),
+                    origins=ORIGIN_CONFIGS,
+                    destination=DESTINATION_CONFIG,
                 )
 
                 # Give the thread time to start
@@ -189,6 +223,8 @@ class TestWorkflowManagerIntegration:
                 thread_id = manager.start_workflow(
                     user_request="Import companies",
                     config_path=str(test_config_path),
+                    origins=ORIGIN_CONFIGS,
+                    destination=DESTINATION_CONFIG,
                 )
 
                 import time
@@ -201,6 +237,44 @@ class TestWorkflowManagerIntegration:
 
                 # Verify update_state was called
                 mock_graph.update_state.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_start_workflow_with_origins_destination(
+        self,
+        mock_config: Any,
+        test_config_path: Any,
+    ) -> None:
+        """Test that start_workflow accepts origins and destination params."""
+        from src.orchestrator.workflow_manager import WorkflowManager
+
+        mock_graph = self._build_mock_graph()
+        origins = [{
+            "id": "test_crm",
+            "type": "postgres",
+            "connection": {"host": "localhost", "port": 5432, "user": "test", "password": "test", "database": "test_db"},
+            "priority": 1,
+        }]
+        destination = {
+            "type": "postgresql",
+            "host": "localhost",
+            "port": 5432,
+            "user": "test",
+            "password": "test",
+            "database": "test_db",
+            "schema": "public",
+        }
+
+        with patch("src.orchestrator.workflow_manager.load_config", return_value=mock_config):
+            with patch("src.orchestrator.workflow_manager.build_graph", return_value=mock_graph):
+                manager = WorkflowManager()
+                thread_id = manager.start_workflow(
+                    user_request="Import all companies",
+                    config_path=str(test_config_path),
+                    origins=origins,
+                    destination=destination,
+                )
+
+                assert thread_id.startswith("wf_")
 
     @pytest.mark.asyncio
     async def test_cleanup_completed_workflows(
@@ -224,6 +298,8 @@ class TestWorkflowManagerIntegration:
                     tid = manager.start_workflow(
                         user_request=f"Import data {i}",
                         config_path=str(test_config_path),
+                        origins=ORIGIN_CONFIGS,
+                        destination=DESTINATION_CONFIG,
                     )
                     threads.append(tid)
 
@@ -254,6 +330,8 @@ class TestWorkflowManagerIntegration:
                 thread_id = manager.start_workflow(
                     user_request="Import companies",
                     config_path=str(test_config_path),
+                    origins=ORIGIN_CONFIGS,
+                    destination=DESTINATION_CONFIG,
                 )
 
                 import time

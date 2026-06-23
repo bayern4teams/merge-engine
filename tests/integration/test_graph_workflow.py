@@ -44,12 +44,26 @@ class TestGraphWorkflowIntegration:
     async def test_get_initial_state_populates_fields(
         self,
         mock_config: Any,
+        postgres_origin_config: dict[str, Any],
     ) -> None:
         """Test that get_initial_state creates a properly initialized state."""
         from src.orchestrator.graph import get_initial_state
 
         user_request = "Import all companies and their contacts"
-        state = get_initial_state(user_request, mock_config)
+        state = get_initial_state(
+            user_request,
+            mock_config,
+            origins=[postgres_origin_config],
+            destination={
+                "type": "postgresql",
+                "host": "localhost",
+                "port": 5432,
+                "user": "test",
+                "password": "test",
+                "database": "test_db",
+                "schema": "public",
+            },
+        )
 
         assert state["user_request"] == user_request
         assert state["origins"] is not None
@@ -62,6 +76,7 @@ class TestGraphWorkflowIntegration:
     async def test_graph_stream_with_all_mocked_nodes(
         self,
         mock_config: Any,
+        postgres_origin_config: dict[str, Any],
     ) -> None:
         """Test that the graph streams events through all mocked nodes."""
         from src.orchestrator.graph import build_graph, get_initial_state
@@ -69,6 +84,16 @@ class TestGraphWorkflowIntegration:
         initial_state = get_initial_state(
             "Import all companies",
             mock_config,
+            origins=[postgres_origin_config],
+            destination={
+                "type": "postgresql",
+                "host": "localhost",
+                "port": 5432,
+                "user": "test",
+                "password": "test",
+                "database": "test_db",
+                "schema": "public",
+            },
         )
 
         # Mock each node to return empty updates
@@ -88,11 +113,25 @@ class TestGraphWorkflowIntegration:
     async def test_initial_state_has_correct_types(
         self,
         mock_config: Any,
+        postgres_origin_config: dict[str, Any],
     ) -> None:
         """Test that initial state fields have correct default types."""
         from src.orchestrator.graph import get_initial_state
 
-        state = get_initial_state("Test request", mock_config)
+        state = get_initial_state(
+            "Test request",
+            mock_config,
+            origins=[postgres_origin_config],
+            destination={
+                "type": "postgresql",
+                "host": "localhost",
+                "port": 5432,
+                "user": "test",
+                "password": "test",
+                "database": "test_db",
+                "schema": "public",
+            },
+        )
 
         assert isinstance(state["errors"], list)
         assert isinstance(state["retry_counts"], dict)
@@ -104,29 +143,56 @@ class TestGraphWorkflowIntegration:
     async def test_initial_state_includes_config(
         self,
         mock_config: Any,
+        postgres_origin_config: dict[str, Any],
     ) -> None:
         """Test that initial state includes resolved config."""
         from src.orchestrator.graph import get_initial_state
 
-        state = get_initial_state("Test request", mock_config)
+        state = get_initial_state(
+            "Test request",
+            mock_config,
+            origins=[postgres_origin_config],
+            destination={
+                "type": "postgresql",
+                "host": "localhost",
+                "port": 5432,
+                "user": "test",
+                "password": "test",
+                "database": "test_db",
+                "schema": "public",
+            },
+        )
 
-        assert len(state["origins"]) == len(mock_config.origins)
+        assert len(state["origins"]) == 1
         assert state["destination"] is not None
 
         # Verify origins have correct IDs
         origin_ids = [o["id"] if isinstance(o, dict) else o.id for o in state["origins"]]
-        expected_ids = [o.id for o in mock_config.origins]
-        assert set(origin_ids) == set(expected_ids)
+        assert set(origin_ids) == {"postgres_main"}
 
     @pytest.mark.asyncio
     async def test_workflow_state_field_defaults(
         self,
         mock_config: Any,
+        postgres_origin_config: dict[str, Any],
     ) -> None:
         """Test that all optional state fields have proper defaults."""
         from src.orchestrator.graph import get_initial_state
 
-        state = get_initial_state("Test", mock_config)
+        state = get_initial_state(
+            "Test",
+            mock_config,
+            origins=[postgres_origin_config],
+            destination={
+                "type": "postgresql",
+                "host": "localhost",
+                "port": 5432,
+                "user": "test",
+                "password": "test",
+                "database": "test_db",
+                "schema": "public",
+            },
+        )
 
         # These should be empty/default values
         assert state.get("schemas", {}) == {}
@@ -142,11 +208,25 @@ class TestGraphWorkflowIntegration:
     async def test_graph_state_transitions_basic(
         self,
         mock_config: Any,
+        postgres_origin_config: dict[str, Any],
     ) -> None:
         """Test that state transitions correctly between nodes."""
         from src.orchestrator.graph import build_graph, get_initial_state
 
-        initial_state = get_initial_state("Test request", mock_config)
+        initial_state = get_initial_state(
+            "Test request",
+            mock_config,
+            origins=[postgres_origin_config],
+            destination={
+                "type": "postgresql",
+                "host": "localhost",
+                "port": 5432,
+                "user": "test",
+                "password": "test",
+                "database": "test_db",
+                "schema": "public",
+            },
+        )
         mock_graph = build_graph()
 
         # Verify the graph has the expected nodes
@@ -157,6 +237,7 @@ class TestGraphWorkflowIntegration:
     async def test_multiple_entities_in_initial_state(
         self,
         mock_config: Any,
+        postgres_origin_config: dict[str, Any],
     ) -> None:
         """Test that target_entities can be populated from user request."""
         from src.orchestrator.graph import get_initial_state
@@ -164,6 +245,16 @@ class TestGraphWorkflowIntegration:
         state = get_initial_state(
             "Import all companies, persons, and countries",
             mock_config,
+            origins=[postgres_origin_config],
+            destination={
+                "type": "postgresql",
+                "host": "localhost",
+                "port": 5432,
+                "user": "test",
+                "password": "test",
+                "database": "test_db",
+                "schema": "public",
+            },
         )
 
         # target_entities starts empty - parsed by parse_request node

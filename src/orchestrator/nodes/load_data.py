@@ -51,7 +51,8 @@ async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
             continue
 
         mapping = field_mappings.get(entity_type, {})
-        dest_table = destination.tables.get(entity_type, entity_type) if hasattr(destination, 'tables') else entity_type
+        dest_tables = getattr(destination, 'tables', {}) if hasattr(destination, 'tables') else (destination.get('tables', {}) if isinstance(destination, dict) else {})
+        dest_table = dest_tables.get(entity_type, entity_type) if isinstance(dest_tables, dict) else entity_type
 
         # Prepare records for load_data_impl
         load_records = []
@@ -98,8 +99,8 @@ async def _apply_schema_changes(
     errors: list[str],
 ) -> None:
     """Apply pending ALTER TABLE ADD COLUMN statements to Databricks."""
-    dest_type = destination.type if hasattr(destination, "type") else destination.get("type", "databricks")
-    dest_config = destination.model_dump() if hasattr(destination, "model_dump") else destination
+    dest_type = destination.type if hasattr(destination, "type") else (destination.get("type", "postgresql") if isinstance(destination, dict) else "postgresql")
+    dest_config = destination.model_dump() if hasattr(destination, "model_dump") else (destination.connection.model_dump() if hasattr(destination, "connection") else destination)
 
     try:
         connector = create_connector(dest_type, dest_config)

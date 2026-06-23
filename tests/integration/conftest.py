@@ -18,48 +18,20 @@ import pytest_asyncio
 def test_config_path(tmp_path: Path) -> Path:
     """Create a minimal valid config file for integration tests."""
     config_content = """
-origins:
-  - id: postgres_main
-    type: postgres
-    connection:
-      host: localhost
-      port: 5432
-      user: test_user
-      password: test_pass
-      database: test_db
-    priority: 1
-  - id: mongo_analytics
-    type: mongodb
-    connection:
-      uri: mongodb://localhost:27017
-      database: analytics
-    priority: 2
-
 destination:
-  type: databricks
-  host: databricks.cloud
-  http_path: /sql/1.0/warehouses/abc123
-  token: test_token
-  catalog: main
-  schema: merge_engine
-  tables:
-    company: companies
-    person: people
-    country: countries
+  type: postgresql
+  host: localhost
+  port: 5432
+  user: test_user
+  password: test_pass
+  database: test_db
+  schema: public
 
 llm:
   provider: openai
   model: gpt-4
   api_key: test_api_key
   temperature: 0.0
-
-blocking_keys:
-  company:
-    - name
-    - email
-  person:
-    - name
-    - email
 
 retry:
   max_attempts: 3
@@ -190,6 +162,49 @@ def sample_extracted_data() -> dict[str, list[dict[str, Any]]]:
             {"id": 2, "name": "Canada", "code": "CA"},
         ],
     }
+
+
+# ──────────────────────────── Origin Config Fixtures ─────────────────────────
+
+
+@pytest.fixture
+def postgres_origin_config() -> dict[str, Any]:
+    """Sample PostgreSQL origin config dict."""
+    return {
+        "id": "postgres_main",
+        "type": "postgres",
+        "connection": {
+            "host": "localhost",
+            "port": 5432,
+            "user": "test_user",
+            "password": "test_pass",
+            "database": "test_db",
+        },
+        "priority": 1,
+    }
+
+
+@pytest.fixture
+def mongo_origin_config() -> dict[str, Any]:
+    """Sample MongoDB origin config dict."""
+    return {
+        "id": "mongo_analytics",
+        "type": "mongodb",
+        "connection": {
+            "host": "localhost",
+            "port": 27017,
+            "user": "test_user",
+            "password": "test_pass",
+            "database": "analytics",
+        },
+        "priority": 2,
+    }
+
+
+@pytest.fixture
+def origin_configs(postgres_origin_config: dict, mongo_origin_config: dict) -> list[dict]:
+    """Sample origin config dicts."""
+    return [postgres_origin_config, mongo_origin_config]
 
 
 # ──────────────────────────── Mock Fixtures ──────────────────────────────────
@@ -384,12 +399,27 @@ def patch_server_config(test_config_path: Path, mock_config: Any) -> Any:
 @pytest.fixture
 def initial_workflow_state(
     mock_config: Any,
+    origin_configs: list[dict],
 ) -> dict[str, Any]:
     """Create initial workflow state for testing."""
     from src.orchestrator.graph import get_initial_state
 
     user_request = "Import all companies and their contacts"
-    return get_initial_state(user_request, mock_config)
+    destination_config = {
+        "type": "postgresql",
+        "host": mock_config.destination.host or "localhost",
+        "port": mock_config.destination.port or 5432,
+        "user": mock_config.destination.user or "test",
+        "password": mock_config.destination.password or "test",
+        "database": mock_config.destination.database or "test_db",
+        "schema": mock_config.destination.schema_name or "public",
+    }
+    return get_initial_state(
+        user_request,
+        config_path=None,
+        origins=origin_configs,
+        destination=destination_config,
+    )
 
 
 @pytest.fixture

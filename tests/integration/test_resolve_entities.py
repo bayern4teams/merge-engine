@@ -1,4 +1,4 @@
-"""Integration tests for entity resolution with deterministic blocking + clustering."""
+"""Integration tests for entity resolution with heuristic scoring + clustering."""
 
 from __future__ import annotations
 
@@ -8,33 +8,14 @@ import pytest
 
 from src.mcp_server.tools.resolve_entities import (
     resolve_entities_impl,
-    _compute_deterministic_confidence,
+    _compute_heuristic_confidence,
     _normalize,
     _record_id,
 )
 
 
 class TestResolveEntitiesIntegration:
-    """Test entity resolution tool integrated with blocking + clustering."""
-
-    @pytest.mark.asyncio
-    async def test_exact_match_blocking_clusters(
-        self,
-        sample_company_records: list[dict[str, Any]],
-        patch_server_config: Any,
-    ) -> None:
-        """Test that records with matching blocking keys get clustered together."""
-        result = await resolve_entities_impl(
-            entity_type="company",
-            records=sample_company_records,
-        )
-
-        assert result["entity_type"] == "company"
-        assert result["total_records"] == 4
-        assert len(result["clusters"]) == 4
-        # With blocking keys [name, email], no two records share both blocking key values,
-        # so each record ends up in its own block with no candidate pairs generated.
-        # The test verifies clustering works even when no matches are found.
+    """Test entity resolution tool integrated with heuristic scoring + clustering."""
 
     @pytest.mark.asyncio
     async def test_single_record_no_clustering(
@@ -98,7 +79,7 @@ class TestResolveEntitiesIntegration:
         sample_person_records: list[dict[str, Any]],
         patch_server_config: Any,
     ) -> None:
-        """Test that borderline matches are flagged for human review."""
+        """Test that all clusters have required fields."""
         result = await resolve_entities_impl(
             entity_type="person",
             records=sample_person_records,
@@ -114,11 +95,11 @@ class TestResolveEntitiesIntegration:
             assert isinstance(cluster["required_human_review"], bool)
 
 
-class TestDeterministicBlockingHelpers:
-    """Test helper functions used in deterministic blocking."""
+class TestHeuristicScoringHelpers:
+    """Test helper functions used in heuristic scoring."""
 
     def test_normalize_handles_various_inputs(self) -> None:
-        """Test value normalization for blocking key comparison."""
+        """Test value normalization for comparison."""
         assert _normalize("  Hello World  ") == "hello_world"
         assert _normalize("test@email.com") == "test@emailcom"
         assert _normalize(None) == ""
@@ -142,45 +123,35 @@ class TestDeterministicBlockingHelpers:
         }
         assert _record_id(rec2) == "mongo1:contacts:abc"
 
-    def test_compute_deterministic_confidence_exact_match(self) -> None:
-        """Test that exact matching blocking keys produce high confidence."""
+    def test_compute_heuristic_confidence_exact_match(self) -> None:
+        """Test that exact matching fields produce high confidence."""
         rec1 = {"name": "John Smith", "email": "john@test.com"}
         rec2 = {"name": "John Smith", "email": "john@test.com"}
-        keys = ["name", "email"]
 
-        confidence = _compute_deterministic_confidence(rec1, rec2, keys)
+        confidence = _compute_heuristic_confidence(rec1, rec2)
         assert confidence == 1.0
 
-    def test_compute_deterministic_confidence_partial_match(self) -> None:
+    def test_compute_heuristic_confidence_partial_match(self) -> None:
         """Test partial matching produces intermediate confidence."""
         rec1 = {"name": "John Smith", "email": "john@test.com"}
         rec2 = {"name": "Jane Smith", "email": "john@test.com"}
-        keys = ["name", "email"]
 
-        confidence = _compute_deterministic_confidence(rec1, rec2, keys)
+        confidence = _compute_heuristic_confidence(rec1, rec2)
         assert 0.0 < confidence < 1.0
 
-    def test_compute_deterministic_confidence_no_match(self) -> None:
-        """Test completely different values produce low confidence."""
-        rec1 = {"name": "John Smith", "email": "john@test.com"}
-        rec2 = {"name": "完全不同的名字", "email": "完全不同的@email.com"}
-        keys = ["name", "email"]
+    def test_compute_heuristic_confidence_no_common_fields(self) -> None:
+        """Test completely different fields produce zero confidence."""
+        rec1 = {"name": "John"}
+        rec2 = {"age": 30}
 
-        confidence = _compute_deterministic_confidence(rec1, rec2, keys)
+        confidence = _compute_heuristic_confidence(rec1, rec2)
         assert confidence == 0.0
 
-    def test_compute_deterministic_confidence_null_values(self) -> None:
+    def test_compute_heuristic_confidence_null_values(self) -> None:
         """Test that null values are skipped in confidence calculation."""
         rec1 = {"name": "John", "email": None}
         rec2 = {"name": "John", "email": "john@test.com"}
-        keys = ["name", "email"]
 
-        confidence = _compute_deterministic_confidence(rec1, rec2, keys)
+        confidence = _compute_heuristic_confidence(rec1, rec2)
         # Only name should be compared, so 1.0
         assert confidence == 1.0
-
-    def test_compute_deterministic_confidence_empty_keys(self) -> None:
-        """Test empty blocking keys produce zero confidence."""
-        rec1 = {"name": "John"}
-        rec2 = {"name": "John"}
-        assert _compute_deterministic_confidence(rec1, rec2, []) == 0.0

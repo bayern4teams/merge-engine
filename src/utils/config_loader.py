@@ -1,8 +1,11 @@
 """
 Configuration loader with Pydantic validation and environment variable resolution.
 
-Loads config.yaml, resolves ${ENV_VAR} placeholders, optionally merges
-config.secrets.yaml, and validates against Pydantic models.
+Loads config.yaml, resolves ${ENV_VAR} placeholders, and validates against Pydantic models.
+Origin databases are loaded dynamically via the Gradio UI at runtime and are NOT
+part of the config file.
+
+All origin and destination credentials are entered interactively in the UI.
 """
 
 from __future__ import annotations
@@ -15,64 +18,32 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
+
 # ---------------------------------------------------------------------------
 # Pydantic Models (canonical definitions)
 # ---------------------------------------------------------------------------
 
 
-class OriginConnection(BaseModel):
-    """Connection parameters for an origin database."""
+class DestinationConfig(BaseModel):
+    """Configuration for the PostgreSQL destination database."""
 
-    host: str | None = None
-    port: int | None = None
-    user: str | None = None
-    password: str | None = None
-    database: str | None = None
-    uri: str | None = None
-
-
-class OriginConfig(BaseModel):
-    """Configuration for a single origin database."""
-
-    id: str
-    type: str  # "postgres" | "mongodb" | "databricks"
-    connection: OriginConnection
-    priority: int = Field(default=0, ge=0)
+    type: str = "postgresql"
+    host: str = ""
+    port: int = 5432
+    user: str = ""
+    password: str = ""
+    database: str = ""
+    schema_name: str = Field(
+        default="public",
+        alias="schema",
+        description="PostgreSQL schema name",
+    )
 
     @field_validator("type")
     @classmethod
     def validate_type(cls, v: str) -> str:
-        valid = {"postgres", "mongodb", "databricks"}
-        if v not in valid:
-            raise ValueError(f"Origin type must be one of {valid}, got '{v}'")
-        return v
-
-
-class DestinationConfig(BaseModel):
-    """Configuration for the Databricks destination."""
-
-    type: str = "databricks"
-    host: str
-    http_path: str
-    token: str
-    catalog: str
-    schema_name: str = Field(
-        alias="schema",
-        description="Databricks schema (namespace) name",
-    )
-    tables: dict[str, str] = Field(
-        default_factory=dict,
-        description="Mapping of entity_type -> destination_table_name",
-    )
-
-    @field_validator("http_path")
-    @classmethod
-    def validate_http_path(cls, v: str) -> str:
-        pattern = r"^/sql/\d\.\d/warehouses/[a-zA-Z0-9-]+$"
-        if not re.match(pattern, v):
-            raise ValueError(
-                f"http_path must match pattern '^/sql/\\d\\.\\d/warehouses/[a-zA-Z0-9-]+$', got '{v}'"
-            )
+        if v != "postgresql":
+            raise ValueError(f"Destination type must be 'postgresql', got '{v}'")
         return v
 
 
@@ -113,20 +84,10 @@ class ExtractionConfig(BaseModel):
 class Config(BaseModel):
     """Top-level application configuration."""
 
-    origins: list[OriginConfig] = Field(min_length=1)
     destination: DestinationConfig
     llm: LLMConfig
-    blocking_keys: dict[str, list[str]] = Field(default_factory=dict)
     retry: RetryConfig = Field(default_factory=RetryConfig)
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
-
-    @field_validator("origins")
-    @classmethod
-    def check_unique_ids(cls, v: list[OriginConfig]) -> list[OriginConfig]:
-        ids = [o.id for o in v]
-        if len(ids) != len(set(ids)):
-            raise ValueError("Origin IDs must be unique")
-        return v
 
 
 # ---------------------------------------------------------------------------
@@ -179,22 +140,17 @@ def _resolve_env_vars(obj: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 _DEFAULT_CONFIG_PATH = str(Path("config/config.yaml"))
-_DEFAULT_SECRETS_PATH = str(Path("config/config.secrets.yaml"))
 
 
 def load_config(
     config_path: str | None = None,
-    secrets_path: str | None = None,
 ) -> Config:
-    """Load, merge, resolve, and validate the application configuration.
+    """Load, resolve, and validate the application configuration.
 
     Parameters
     ----------
     config_path : str, optional
         Path to the main YAML config.  Defaults to ``config/config.yaml``.
-    secrets_path : str, optional
-        Path to the secrets YAML file.  Defaults to ``config/config.secrets.yaml``.
-        If the file does not exist it is silently skipped.
 
     Returns
     -------
@@ -209,26 +165,109 @@ def load_config(
         If the main config file does not exist.
     """
     config_path = config_path or _DEFAULT_CONFIG_PATH
-    secrets_path = secrets_path or _DEFAULT_SECRETS_PATH
 
     # Load base config
     with open(config_path, "r", encoding="utf-8") as fh:
         config_data = yaml.safe_load(fh)
 
-    # Load secrets (optional)
-    secrets_data: dict[str, Any] | None = None
-    if secrets_path and Path(secrets_path).exists():
-        with open(secrets_path, "r", encoding="utf-8") as fh:
-            secrets_data = yaml.safe_load(fh)
-
     # Resolve environment variables
     config_data = _resolve_env_vars(config_data)
 
-    # Merge secrets (secrets take precedence over config.yaml values)
-    if secrets_data:
-        config_data = _deep_merge(config_data, secrets_data)
-
-    # Re-resolve after merge (secrets might contain env-var references too)
-    config_data = _resolve_env_vars(config_data)
-
     return Config(**config_data)
+
+
+def build_destination_config(
+    host: str,
+    port: int,
+    user: str,
+    password: str,
+    database: str,
+    schema: str = "public",
+) -> DestinationConfig:
+    """Build a DestinationConfig from runtime values (e.g., from the UI).
+
+    This is the primary way destination config is created — via user input
+    in the Gradio UI, not from the config file.
+
+    Parameters
+    ----------
+    host : str
+        PostgreSQL hostname or IP address.
+    port : int
+        PostgreSQL port number.
+    user : str
+        PostgreSQL username.
+    password : str
+        PostgreSQL password.
+    database : str
+        Database name.
+    schema : str
+        Schema name (default: "public").
+
+    Returns
+    -------
+    DestinationConfig
+        Validated destination configuration.
+    """
+    return DestinationConfig(
+        type="postgresql",
+        host=host,
+        port=port,
+        user=user,
+        password=password,
+        database=database,
+        schema=schema,
+    )
+
+
+def build_origin_config(
+    origin_id: str,
+    db_type: str,
+    host: str,
+    port: int,
+    user: str,
+    password: str,
+    database: str,
+    priority: int = 0,
+) -> dict[str, Any]:
+    """Build an origin config dict from runtime values (e.g., from the UI).
+
+    Origin configs are created dynamically by the user in the Gradio UI.
+    They are not stored in config files.
+
+    Parameters
+    ----------
+    origin_id : str
+        Unique identifier for this origin (e.g., "crm", "hr_db").
+    db_type : str
+        Database type: "postgres" or "mongodb".
+    host : str
+        Hostname or IP address.
+    port : int
+        Port number.
+    user : str
+        Database username.
+    password : str
+        Database password.
+    database : str
+        Database name.
+    priority : int
+        Priority for conflict resolution (higher = preferred source).
+
+    Returns
+    -------
+    dict
+        Origin configuration dictionary.
+    """
+    return {
+        "id": origin_id,
+        "type": db_type,
+        "connection": {
+            "host": host,
+            "port": port,
+            "user": user,
+            "password": password,
+            "database": database,
+        },
+        "priority": priority,
+    }

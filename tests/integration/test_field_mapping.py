@@ -29,16 +29,15 @@ class TestFieldMappingNodeIntegration:
             ],
         }
         dependency_state["field_mappings"] = {}
-        dependency_state["destination"] = MagicMock(
-            type="databricks",
-            tables={"company": "companies", "person": "people"},
-            connection=MagicMock(model_dump=MagicMock(return_value={
-                "type": "databricks", "host": "test", "token": "test",
-                "schema": "test", "tables": {"company": "companies", "person": "people"},
-            })),
-            catalog="main",
-            schema="test",
-        )
+        dependency_state["destination"] = {
+            "type": "postgresql",
+            "host": "localhost",
+            "port": 5432,
+            "user": "test",
+            "password": "test",
+            "database": "test_db",
+            "schema": "public",
+        }
 
         result = await map_fields(dependency_state)
 
@@ -72,15 +71,15 @@ class TestFieldMappingNodeIntegration:
         dependency_state["target_entities"] = ["company"]
         dependency_state["unified_entities"] = {"company": []}
         dependency_state["field_mappings"] = {}
-        dependency_state["destination"] = MagicMock(
-            type="databricks",
-            tables={"company": "companies"},
-            connection=MagicMock(model_dump=MagicMock(return_value={
-                "type": "databricks", "host": "test", "token": "test",
-            })),
-            catalog="main",
-            schema="test",
-        )
+        dependency_state["destination"] = {
+            "type": "postgresql",
+            "host": "localhost",
+            "port": 5432,
+            "user": "test",
+            "password": "test",
+            "database": "test_db",
+            "schema": "public",
+        }
 
         result = await map_fields(dependency_state)
 
@@ -101,15 +100,15 @@ class TestFieldMappingNodeIntegration:
             "country": [{"name": "USA", "code": "US"}],
         }
         dependency_state["field_mappings"] = {}
-        dependency_state["destination"] = MagicMock(
-            type="databricks",
-            tables={"company": "companies", "person": "people", "country": "countries"},
-            connection=MagicMock(model_dump=MagicMock(return_value={
-                "type": "databricks", "host": "test", "token": "test",
-            })),
-            catalog="main",
-            schema="test",
-        )
+        dependency_state["destination"] = {
+            "type": "postgresql",
+            "host": "localhost",
+            "port": 5432,
+            "user": "test",
+            "password": "test",
+            "database": "test_db",
+            "schema": "public",
+        }
 
         result = await map_fields(dependency_state)
 

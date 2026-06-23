@@ -39,18 +39,15 @@ class TestLoadDataNodeIntegration:
             },
         }
         dependency_state["extraction_order"] = ["company", "person"]
-        dependency_state["destination"] = MagicMock(
-            type="databricks",
-            tables={"company": "companies", "person": "people"},
-            model_dump=MagicMock(return_value={
-                "type": "databricks",
-                "host": "databricks.cloud",
-                "http_path": "/sql/1.0/warehouses/abc123",
-                "token": "test",
-                "schema": "test",
-                "tables": {"company": "companies", "person": "people"},
-            })
-        )
+        dependency_state["destination"] = {
+            "type": "postgresql",
+            "host": "localhost",
+            "port": 5432,
+            "user": "test",
+            "password": "test",
+            "database": "test_db",
+            "schema": "public",
+        }
 
         mock_databricks = MagicMock()
         mock_databricks.load_batch = AsyncMock(
@@ -76,17 +73,15 @@ class TestLoadDataNodeIntegration:
         dependency_state["unified_entities"] = {}
         dependency_state["field_mappings"] = {}
         dependency_state["extraction_order"] = ["company"]
-        dependency_state["destination"] = MagicMock(
-            type="databricks",
-            tables={},
-            model_dump=MagicMock(return_value={
-                "type": "databricks",
-                "host": "databricks.cloud",
-                "http_path": "/sql/1.0/warehouses/abc123",
-                "token": "test",
-                "schema": "test",
-            })
-        )
+        dependency_state["destination"] = {
+            "type": "postgresql",
+            "host": "localhost",
+            "port": 5432,
+            "user": "test",
+            "password": "test",
+            "database": "test_db",
+            "schema": "public",
+        }
 
         mock_databricks = MagicMock()
         mock_databricks.load_batch = AsyncMock(
@@ -116,27 +111,23 @@ class TestLoadDataNodeIntegration:
             "company": {"name": {"dest_column": "name", "confidence": 0.98}},
         }
         dependency_state["extraction_order"] = ["company"]
-        dependency_state["destination"] = MagicMock(
-            type="databricks",
-            tables={"company": "companies"},
-            model_dump=MagicMock(return_value={
-                "type": "databricks",
-                "host": "databricks.cloud",
-                "http_path": "/sql/1.0/warehouses/abc123",
-                "token": "test",
-                "schema": "test",
-                "tables": {"company": "companies"},
-            })
-        )
+        dependency_state["destination"] = {
+            "type": "postgresql",
+            "host": "localhost",
+            "port": 5432,
+            "user": "test",
+            "password": "test",
+            "database": "test_db",
+            "schema": "public",
+        }
 
-        mock_databricks = MagicMock()
-        mock_databricks.load_batch = AsyncMock(
-            side_effect=ConnectionError("Databricks unreachable")
+        mock_pg = MagicMock()
+        mock_pg.load_batch = AsyncMock(
+            side_effect=ConnectionError("PostgreSQL unreachable")
         )
-        mock_databricks.close = AsyncMock()
 
         with patch("src.orchestrator.nodes.load_data.create_connector") as mock_create:
-            mock_create.return_value = mock_databricks
+            mock_create.return_value = mock_pg
             result = await load_data_node(dependency_state)
 
         assert "errors" in result
@@ -149,10 +140,8 @@ class TestLoadDataToolIntegration:
     @pytest.mark.asyncio
     async def test_load_data_tool_success(
         self,
-        mock_config: Any,
-        patch_server_config: Any,
     ) -> None:
-        """Test load_data tool with mocked Databricks connector."""
+        """Test load_data tool with mocked connector."""
         from src.mcp_server.tools.load_data import load_data_impl
 
         records = [
@@ -164,18 +153,25 @@ class TestLoadDataToolIntegration:
             "email": {"dest_column": "contact_email", "confidence": 0.95},
         }
 
-        mock_databricks = MagicMock()
-        mock_databricks.load_batch = AsyncMock(
-            return_value={"inserted": 2, "updated": 0}
-        )
-        mock_databricks.close = AsyncMock()
+        dest_config = {
+            "host": "localhost",
+            "port": 5432,
+            "user": "test",
+            "password": "test",
+            "database": "test_db",
+            "schema": "public",
+        }
 
-        with patch("src.mcp_server.tools.load_data.create_connector") as mock_create:
-            mock_create.return_value = mock_databricks
+        # load_batch is a SYNC method (decorated with @retry_on_transient)
+        mock_connector = MagicMock()
+        mock_connector.load_batch.return_value = {"inserted": 2, "updated": 0}
+
+        with patch("src.mcp_server.tools.load_data._get_destination_connector", return_value=mock_connector):
             result = await load_data_impl(
                 entity_type="company",
                 records=records,
                 mapping=mapping,
+                destination_config=dest_config,
             )
 
         assert result["success"] is True
@@ -185,34 +181,24 @@ class TestLoadDataToolIntegration:
     @pytest.mark.asyncio
     async def test_load_data_tool_empty_records(
         self,
-        mock_config: Any,
-        patch_server_config: Any,
     ) -> None:
         """Test load_data tool with empty records list."""
         from src.mcp_server.tools.load_data import load_data_impl
 
-        mock_databricks = MagicMock()
-        mock_databricks.load_batch = AsyncMock(
-            return_value={"inserted": 0, "updated": 0}
+        result = await load_data_impl(
+            entity_type="company",
+            records=[],
+            mapping=None,
         )
-        mock_databricks.close = AsyncMock()
-
-        with patch("src.mcp_server.tools.load_data.create_connector") as mock_create:
-            mock_create.return_value = mock_databricks
-            result = await load_data_impl(
-                entity_type="company",
-                records=[],
-                mapping=None,
-            )
 
         assert result["success"] is True
         assert result["total_records"] == 0
+        assert result["inserted"] == 0
+        assert result["updated"] == 0
 
     @pytest.mark.asyncio
     async def test_load_data_tool_missing_mapping(
         self,
-        mock_config: Any,
-        patch_server_config: Any,
     ) -> None:
         """Test load_data tool handles no mapping by passing through fields."""
         from src.mcp_server.tools.load_data import load_data_impl
@@ -221,18 +207,24 @@ class TestLoadDataToolIntegration:
             {"id": "uuid-1", "name": "Acme Corp", "email": "info@acme.com"},
         ]
 
-        mock_databricks = MagicMock()
-        mock_databricks.load_batch = AsyncMock(
-            return_value={"inserted": 1, "updated": 0}
-        )
-        mock_databricks.close = AsyncMock()
+        dest_config = {
+            "host": "localhost",
+            "port": 5432,
+            "user": "test",
+            "password": "test",
+            "database": "test_db",
+            "schema": "public",
+        }
 
-        with patch("src.mcp_server.tools.load_data.create_connector") as mock_create:
-            mock_create.return_value = mock_databricks
+        mock_connector = MagicMock()
+        mock_connector.load_batch.return_value = {"inserted": 1, "updated": 0}
+
+        with patch("src.mcp_server.tools.load_data._get_destination_connector", return_value=mock_connector):
             result = await load_data_impl(
                 entity_type="company",
                 records=records,
                 mapping=None,
+                destination_config=dest_config,
             )
 
         assert result["success"] is True

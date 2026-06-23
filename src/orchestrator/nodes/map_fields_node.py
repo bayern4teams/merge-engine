@@ -37,9 +37,14 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
     field_mappings: dict[str, dict] = dict(state.get("field_mappings", {}))
     pending_schema_changes: list[dict] = list(state.get("pending_schema_changes", []))
 
-    # Get destination connector for schema inspection
-    dest_type = destination.type if hasattr(destination, "type") else destination.get("type", "databricks")
-    dest_config = destination.connection.model_dump() if hasattr(destination, "connection") else destination
+    # Get destination type (handles both dict and Config object)
+    if isinstance(destination, dict):
+        dest_type = destination.get("type", "postgresql")
+        # Check if destination has nested tables mapping
+        dest_tables = destination.get("tables", {})
+    else:
+        dest_type = getattr(destination, "type", "postgresql")
+        dest_tables = getattr(destination, "tables", {})
 
     for entity_type in target_entities:
         records = unified_entities.get(entity_type, [])
@@ -49,24 +54,16 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
             continue
 
         # Get destination table schema
-        dest_table = destination.tables.get(entity_type, entity_type)
-        if hasattr(destination, "catalog") and hasattr(destination, "schema"):
-            dest_schema_info = {
-                "table": dest_table,
-                "columns": [
-                    {"name": "id", "type": "STRING"},
-                    {"name": "_source_ids", "type": "STRING"},
-                    {"name": "_loaded_at", "type": "TIMESTAMP"},
-                ],
-            }
-        else:
-            dest_schema_info = {
-                "table": dest_table,
-                "columns": [
-                    {"name": "id", "type": "STRING"},
-                    {"name": "_source_ids", "type": "STRING"},
-                ],
-            }
+        dest_table = dest_tables.get(entity_type, entity_type) if isinstance(dest_tables, dict) else entity_type
+
+        # Build destination schema info
+        dest_schema_info = {
+            "table": dest_table,
+            "columns": [
+                {"name": "id", "type": "STRING"},
+                {"name": "_source_ids", "type": "STRING"},
+            ],
+        }
 
         # Build unified schema from sample records
         unified_schema: dict[str, Any] = {}

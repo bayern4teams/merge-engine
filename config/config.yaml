@@ -1,76 +1,32 @@
 # =============================================================================
 # merge-engine Configuration
 # =============================================================================
-# Non-sensitive configuration. Environment variables are resolved at runtime
-# using ${ENV_VAR_NAME} placeholders.
+# Minimal pipeline configuration. Origin databases are loaded dynamically via
+# the Gradio UI at runtime — they are NOT stored in config files.
 #
-# Sensitive values (passwords, tokens) should be in config.secrets.yaml
-# or set as environment variables directly.
+# All origin and destination credentials are entered interactively in the UI.
+# Only pipeline-level settings (LLM, retry, extraction defaults) are stored here.
 # =============================================================================
 
-# ── Origin Databases ───────────────────────────────────────────────────────
-origins:
-  - id: crm
-    type: postgres
-    connection:
-      host: "${CRM_DB_HOST}"
-      port: 5432
-      user: "${CRM_DB_USER}"
-      password: "${CRM_DB_PASSWORD}"
-      database: "${CRM_DB_NAME}"
-    priority: 1  # Higher priority = preferred source for conflicts
-
-  - id: hr_system
-    type: mongodb
-    connection:
-      uri: "${HR_MONGO_URI}"
-    priority: 0
-
-  - id: legacy_sql
-    type: postgres
-    connection:
-      host: "${LEGACY_DB_HOST}"
-      port: 5432
-      user: "${LEGACY_DB_USER}"
-      password: "${LEGACY_DB_PASSWORD}"
-      database: "${LEGACY_DB_NAME}"
-    priority: 0
-
-# ── Destination (Databricks) ────────────────────────────────────────────────
+# ── Destination (PostgreSQL) ───────────────────────────────────────────────
+# Destination connection details are provided via the Gradio UI at runtime.
+# These env-var placeholders serve as defaults for the UI form.
 destination:
-  type: databricks
-  host: "${DATABRICKS_HOST}"
-  http_path: "${DATABRICKS_HTTP_PATH}"
-  token: "${DATABRICKS_TOKEN}"
-  catalog: main
-  schema: unified
-  tables:
-    person: dim_person
-    company: dim_company
-    product: dim_product
-    country: dim_country
-    address: dim_address
+  type: postgresql
+  host: ""              # Provided at runtime via UI
+  port: 5432            # Provided at runtime via UI
+  user: ""              # Provided at runtime via UI
+  password: ""          # Provided at runtime via UI
+  database: ""          # Provided at runtime via UI
+  schema: "public"      # Default schema (can be extended dynamically)
 
 # ── LLM Configuration ──────────────────────────────────────────────────────
 llm:
-  provider: openai  # "openai" | "azure" | "anthropic"
+  provider: openai      # "openai" | "azure" | "anthropic"
   model: gpt-4o
   api_key: "${OPENAI_API_KEY}"
   base_url: "${OPENAI_BASE_URL}"  # Optional: for Azure or custom endpoints
-  temperature: 0.0  # Deterministic outputs preferred
-
-# ── Entity Blocking Keys ──────────────────────────────────────────────────
-# Used for deterministic entity resolution (blocking phase)
-blocking_keys:
-  person:
-    - email
-    - phone
-    - birth_date
-    - national_id
-  company:
-    - registration_number
-    - domain
-    - name_country
+  temperature: 0.0      # Deterministic outputs preferred
 
 # ── Retry Configuration ───────────────────────────────────────────────────
 retry:

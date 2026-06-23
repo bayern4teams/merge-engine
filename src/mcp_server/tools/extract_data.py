@@ -19,7 +19,7 @@ logger = logging.getLogger("merge-engine.tools.extract_data")
 
 
 async def extract_data_impl(
-    origin_id: str,
+    origin_config: dict[str, Any],
     table_name: str,
     columns: list[str],
     batch_size: int = 1000,
@@ -30,8 +30,8 @@ async def extract_data_impl(
 
     Parameters
     ----------
-    origin_id : str
-        The origin database ID from config.
+    origin_config : dict
+        Origin configuration dict with keys: id, type, connection, priority.
     table_name : str
         Table or collection name.
     columns : list[str]
@@ -54,20 +54,19 @@ async def extract_data_impl(
             "origin_ids": [...],
         }
     """
-    from src.mcp_server.server import _get_config
-    config = _get_config()
-    origin_cfg = None
-    for o in config.origins:
-        if o.id == origin_id:
-            origin_cfg = o
-            break
+    origin_id = origin_config.get("id", "unknown")
+    origin_type = origin_config.get("type", "postgres")
+    connection = origin_config.get("connection", {})
 
-    if origin_cfg is None:
-        available = [o.id for o in config.origins]
-        raise ValueError(f"Unknown origin '{origin_id}'. Available: {available}")
+    if not origin_id:
+        raise ValueError("origin_config must have 'id' field")
+    if not origin_type:
+        raise ValueError("origin_config must have 'type' field")
+    if not connection:
+        raise ValueError("origin_config must have 'connection' dict")
 
     try:
-        connector = create_connector(origin_cfg.type, origin_cfg.connection.model_dump())
+        connector = create_connector(origin_type, connection)
         result = await connector.extract(
             table_name=table_name,
             columns=columns,
@@ -88,5 +87,42 @@ async def extract_data_impl(
 
 
 async def extract_data_handler(arguments: dict[str, Any]) -> dict[str, Any]:
-    """MCP tool handler entry point."""
-    return await extract_data_impl(**arguments)
+    """MCP tool handler entry point.
+
+    Parameters
+    ----------
+    arguments : dict
+        Either {"origin_config": dict, ...} for full config calls,
+        or {"origin_id": str, ...} for legacy MCP calls.
+
+    Returns
+    -------
+    dict
+        Extraction result.
+    """
+    if "origin_config" in arguments:
+        return await extract_data_impl(**arguments)
+
+    # Legacy path: origin_id only — look up from config
+    origin_id = arguments.get("origin_id")
+    if not origin_id:
+        raise ValueError("Either 'origin_id' or 'origin_config' must be provided")
+
+    from src.mcp_server.server import _get_config
+    config = _get_config()
+    origin_cfg = None
+    for o in config.origins:
+        if o.id == origin_id:
+            origin_cfg = o
+            break
+
+    if origin_cfg is None:
+        available = [o.id for o in config.origins]
+        raise ValueError(f"Unknown origin '{origin_id}'. Available: {available}")
+
+    return await extract_data_impl({
+        "id": origin_cfg.id,
+        "type": origin_cfg.type,
+        "connection": origin_cfg.connection.model_dump(),
+        "priority": origin_cfg.priority,
+    }, **{k: v for k, v in arguments.items() if k != "origin_id"})

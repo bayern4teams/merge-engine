@@ -1,42 +1,24 @@
-# Test configuration fixture
-origins:
-  - id: test_crm
-    type: postgres
-    connection:
-      host: localhost
-      port: 5432
-      user: test_user
-      password: ${CRM_DB_PASSWORD}
-      database: test_db
-    priority: 1
-  - id: test_hr
-    type: mongodb
-    connection:
-      uri: mongodb://localhost:27017/test_hr
-    priority: 0
+# =============================================================================
+# Test configuration fixture for merge-engine tests.
+#
+# Uses the minimal config format (no origins — origins are loaded dynamically via UI).
+# =============================================================================
 
 destination:
-  type: databricks
-  host: test.cloud.databricks.com
-  http_path: /sql/1.0/warehouses/test123
-  token: test_token
-  catalog: main
-  schema: test
-  tables:
-    person: dim_person
-    company: dim_company
-    product: dim_product
+  type: postgresql
+  host: "localhost"
+  port: 5432
+  user: "test"
+  password: "test"
+  database: "test_db"
+  schema: "public"
 
 llm:
   provider: openai
   model: gpt-4o
-  api_key: test_key
+  api_key: "test_key_12345"
   base_url: null
   temperature: 0.0
-
-blocking_keys:
-  person: [email, phone]
-  company: [registration_number, domain]
 
 retry:
   max_attempts: 3

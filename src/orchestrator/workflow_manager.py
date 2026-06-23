@@ -40,6 +40,8 @@ class WorkflowManager:
         user_request: str,
         config_path: str | None = None,
         thread_id: str | None = None,
+        origins: list[dict[str, Any]] | None = None,
+        destination: dict[str, Any] | None = None,
     ) -> str:
         """Start a new merge workflow in a background thread.
 
@@ -51,6 +53,12 @@ class WorkflowManager:
             Path to config.yaml. Defaults to "config/config.yaml".
         thread_id : str, optional
             Custom LangGraph thread ID. Auto-generated if None.
+        origins : list[dict], optional
+            Origin database configurations from the UI. Each dict has:
+            {id, type, connection: {host, port, user, password, database}, priority}
+        destination : dict, optional
+            Destination database configuration from the UI:
+            {type, host, port, user, password, database, schema}
 
         Returns
         -------
@@ -60,11 +68,13 @@ class WorkflowManager:
         thread_id = thread_id or f"wf_{uuid.uuid4().hex[:8]}"
         config_path = config_path or "config/config.yaml"
 
-        # Load config
-        config = load_config(config_path)
-
-        # Create initial state
-        initial_state = get_initial_state(user_request, config)
+        # Build initial state with origins and destination from UI
+        initial_state = get_initial_state(
+            user_request=user_request,
+            config_path=config_path,
+            origins=origins,
+            destination=destination,
+        )
 
         # Store workflow metadata
         with self._lock:
@@ -84,7 +94,12 @@ class WorkflowManager:
         )
         thread.start()
 
-        logger.info("Started workflow %s for request: %r", thread_id, user_request[:50])
+        logger.info(
+            "Started workflow %s for request: %r (origins: %d, dest: %s)",
+            thread_id, user_request[:50],
+            len(origins) if origins else 0,
+            destination.get("host", "unknown") if destination else "none",
+        )
         return thread_id
 
     def _run_workflow(
