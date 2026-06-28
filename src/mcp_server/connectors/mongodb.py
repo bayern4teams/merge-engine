@@ -44,8 +44,8 @@ class MongoDBConnector(BaseConnector):
         if not self._db_name or self._db_name == "admin":
             # Parse dbname from mongodb://host:port/dbname
             parts = uri.split("/")
-            if len(parts) >= 3:
-                self._db_name = parts[2].split("?")[0].split("&")[0]
+            if len(parts) >= 4:
+                self._db_name = parts[3].split("?")[0].split("&")[0]
 
         self._client = AsyncMongoClient(
             uri,
