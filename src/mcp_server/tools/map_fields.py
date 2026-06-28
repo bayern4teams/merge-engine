@@ -146,10 +146,15 @@ def _heuristic_match(source: str, dest: str) -> float:
         "phone": ["telephone", "tel", "phone_number", "mobile"],
         "birth_date": ["dob", "date_of_birth", "birthday"],
     }
+    # Build reverse lookup: variant -> canonical
+    variant_to_canonical: dict[str, str] = {}
     for canonical, variants in aliases.items():
-        if s in variants or d in variants:
-            if s == d or s in d or d in s:
-                return 0.7
+        for v in variants:
+            variant_to_canonical[v] = canonical
+        variant_to_canonical[canonical] = canonical  # canonical maps to itself
+    if s in variant_to_canonical and d in variant_to_canonical:
+        if variant_to_canonical[s] == variant_to_canonical[d]:
+            return 0.7
     return 0.0
 
 
