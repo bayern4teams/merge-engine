@@ -166,7 +166,10 @@ def main() -> None:
     # Load config
     try:
         config = load_config(args.config)
-        logging.info("Loaded config with %d origins", len(config.origins))
+        logging.info(
+            "Config loaded (origins configured via UI at runtime, config_path=%s)",
+            args.config,
+        )
     except Exception as exc:
         logging.error("Failed to load config: %s", exc)
         sys.exit(1)

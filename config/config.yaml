@@ -22,10 +22,10 @@ destination:
 
 # ── LLM Configuration ──────────────────────────────────────────────────────
 llm:
-  provider: openai      # "openai" | "azure" | "anthropic"
-  model: gpt-4o
-  api_key: "${OPENAI_API_KEY}"
-  base_url: "${OPENAI_BASE_URL}"  # Optional: for Azure or custom endpoints
+  provider: "openai"      # "openai" | "azure" | "anthropic"
+  model: "Qwen/Qwen3.6-35B-A3B-FP8"
+  api_key: "a"
+  base_url: "http://10.10.9.45:8000/v1"  # Optional: for Azure or custom endpoints
   temperature: 0.0      # Deterministic outputs preferred
 
 # ── Retry Configuration ───────────────────────────────────────────────────
