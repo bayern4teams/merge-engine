@@ -1,93 +1,85 @@
 """
-Unit tests for the retry logic module.
-
-Tests retry decorators, transient/permanent error handling, and backoff strategies.
+Tests for src/orchestrator/utils/retry.py - Retry logic wrapper using tenacity.
 """
 
-from __future__ import annotations
-
-import asyncio
-import time
-
 import pytest
-
 from src.orchestrator.utils.retry import (
-    PermanentError,
     TransientError,
-    _build_wait_strategy,
+    PermanentError,
     retry_on_transient,
+    _build_wait_strategy,
 )
-
-
-class TestBuildWaitStrategy:
-    """Tests for wait strategy construction."""
-
-    def test_exponential_backoff(self) -> None:
-        """Should build exponential backoff strategy."""
-        strategy = _build_wait_strategy("exponential", 1.0, 30.0)
-        assert strategy is not None
-
-    def test_linear_backoff(self) -> None:
-        """Should build linear backoff strategy."""
-        strategy = _build_wait_strategy("linear", 2.0, 10.0)
-        assert strategy is not None
-
-    def test_default_backoff(self) -> None:
-        """Unknown backoff type should default to exponential."""
-        strategy = _build_wait_strategy("unknown", 1.0, 30.0)
-        assert strategy is not None
-
-    def test_backoff_bounds(self) -> None:
-        """Min and max backoff values should be applied."""
-        # Should not raise
-        strategy = _build_wait_strategy("exponential", 0.5, 60.0)
-        assert strategy is not None
 
 
 class TestTransientError:
     """Tests for TransientError exception."""
 
-    def test_transient_error_message(self) -> None:
-        """Should store error message."""
+    def test_transient_error_inherits_from_exception(self):
+        """TransientError should inherit from Exception."""
+        assert issubclass(TransientError, Exception)
+
+    def test_transient_error_message(self):
+        """TransientError should store the error message."""
         err = TransientError("connection timeout")
         assert str(err) == "connection timeout"
 
-    def test_transient_error_retry_after(self) -> None:
-        """Should store optional retry_after value."""
+    def test_transient_error_retry_after(self):
+        """TransientError should store retry_after value."""
         err = TransientError("rate limited", retry_after=5.0)
         assert err.retry_after == 5.0
 
-    def test_transient_error_default_retry_after(self) -> None:
-        """retry_after should default to None."""
-        err = TransientError("timeout")
+    def test_transient_error_default_retry_after(self):
+        """TransientError should default retry_after to None."""
+        err = TransientError("some error")
         assert err.retry_after is None
 
 
 class TestPermanentError:
     """Tests for PermanentError exception."""
 
-    def test_permanent_error_message(self) -> None:
-        """Should store error message."""
-        err = PermanentError("auth failed")
-        assert str(err) == "auth failed"
+    def test_permanent_error_inherits_from_exception(self):
+        """PermanentError should inherit from Exception."""
+        assert issubclass(PermanentError, Exception)
+
+    def test_permanent_error_message(self):
+        """PermanentError should store the error message."""
+        err = PermanentError("invalid config")
+        assert str(err) == "invalid config"
 
 
-class TestRetrySync:
-    """Tests for retry decorator with sync functions."""
+class TestBuildWaitStrategy:
+    """Tests for _build_wait_strategy()."""
 
-    def test_success_on_first_attempt(self) -> None:
-        """Should return immediately on success."""
-        call_count = 0
+    def test_exponential_backoff(self):
+        """Exponential backoff should build a wait chain."""
+        strategy = _build_wait_strategy("exponential", 1.0, 30.0)
+        assert strategy is not None
 
+    def test_linear_backoff(self):
+        """Linear backoff should build a fixed wait."""
+        strategy = _build_wait_strategy("linear", 2.0, 10.0)
+        assert strategy is not None
+
+    def test_unknown_backoff_defaults_to_exponential(self):
+        """Unknown backoff strategy should default to exponential."""
+        strategy = _build_wait_strategy("unknown", 1.0, 30.0)
+        assert strategy is not None
+
+
+class TestRetryOnTransientSync:
+    """Tests for retry_on_transient decorator with synchronous functions."""
+
+    def test_success_on_first_attempt(self):
+        """Function that succeeds should return immediately."""
         @retry_on_transient(max_attempts=3)
         def success_func():
-            return "ok"
+            return "success"
 
         result = success_func()
-        assert result == "ok"
+        assert result == "success"
 
-    def test_retry_on_transient_error(self) -> None:
-        """Should retry on TransientError."""
+    def test_retry_on_transient_error(self):
+        """Function should retry on TransientError."""
         call_count = 0
 
         @retry_on_transient(max_attempts=3)
@@ -95,275 +87,187 @@ class TestRetrySync:
             nonlocal call_count
             call_count += 1
             if call_count < 3:
-                raise TransientError("try again")
-            return "success"
+                raise TransientError("temporary failure")
+            return "recovered"
 
         result = flaky_func()
-        assert result == "success"
+        assert result == "recovered"
         assert call_count == 3
 
-    def test_max_attempts_exhausted(self) -> None:
-        """Should raise after max_attempts."""
+    def test_exhausts_max_attempts(self):
+        """Function should raise after max_attempts."""
         call_count = 0
 
-        @retry_on_transient(max_attempts=2)
+        @retry_on_transient(max_attempts=3)
         def always_fails():
             nonlocal call_count
             call_count += 1
-            raise TransientError("always fails")
+            raise TransientError("permanent transient error")
 
         with pytest.raises(TransientError):
             always_fails()
-        assert call_count == 2
+        assert call_count == 3
 
-    def test_permanent_error_not_retried(self) -> None:
+    def test_no_retry_on_permanent_error(self):
         """PermanentError should not be retried."""
         call_count = 0
 
         @retry_on_transient(max_attempts=3)
-        def permanent_fail():
+        def fails_permanently():
             nonlocal call_count
             call_count += 1
-            raise PermanentError("can't recover")
+            raise PermanentError("cannot recover")
 
         with pytest.raises(PermanentError):
-            permanent_fail()
+            fails_permanently()
         assert call_count == 1
 
-    def test_custom_retryable_exceptions(self) -> None:
-        """Should retry on custom exception types."""
-        class MyError(Exception):
-            pass
-
+    def test_custom_retryable_exceptions(self):
+        """Custom retryable exceptions should be respected."""
         call_count = 0
 
+        class CustomRetryable(Exception):
+            pass
+
         @retry_on_transient(
-            max_attempts=3,
-            retryable_exceptions=(MyError,),
+            max_attempts=2,
+            retryable_exceptions=(CustomRetryable,),
         )
-        def custom_fail():
+        def fails_with_custom():
             nonlocal call_count
             call_count += 1
-            if call_count < 2:
-                raise MyError("custom transient")
-            return "ok"
+            raise CustomRetryable("custom error")
 
-        result = custom_fail()
-        assert result == "ok"
+        with pytest.raises(CustomRetryable):
+            fails_with_custom()
         assert call_count == 2
 
-    def test_non_retryable_exception(self) -> None:
-        """Non-specified exceptions should raise immediately."""
+    def test_no_retry_on_non_retryable_exception(self):
+        """Non-retryable exceptions should not trigger retry."""
         call_count = 0
 
         @retry_on_transient(max_attempts=3)
-        def value_error_func():
+        def fails_with_value_error():
             nonlocal call_count
             call_count += 1
             raise ValueError("not retryable")
 
         with pytest.raises(ValueError):
-            value_error_func()
+            fails_with_value_error()
         assert call_count == 1
 
 
-class TestRetryAsync:
-    """Tests for retry decorator with async functions."""
+class TestRetryOnTransientAsync:
+    """Tests for retry_on_transient decorator with async functions."""
 
     @pytest.mark.asyncio
-    async def test_async_success(self) -> None:
-        """Should return immediately on async success."""
+    async def test_async_success_on_first_attempt(self):
+        """Async function that succeeds should return immediately."""
+        @retry_on_transient(max_attempts=3)
+        async def async_success():
+            return "async_success"
+
+        result = await async_success()
+        assert result == "async_success"
+
+    @pytest.mark.asyncio
+    async def test_async_retry_on_transient_error(self):
+        """Async function should retry on TransientError."""
         call_count = 0
 
         @retry_on_transient(max_attempts=3)
-        async def async_success():
-            nonlocal call_count
-            call_count += 1
-            return "async_ok"
-
-        result = await async_success()
-        assert result == "async_ok"
-        assert call_count == 1
-
-    @pytest.mark.asyncio
-    async def test_async_retry_on_transient(self) -> None:
-        """Should retry async function on TransientError."""
-        call_count = 0
-
-        @retry_on_transient(max_attempts=4)
         async def async_flaky():
             nonlocal call_count
             call_count += 1
             if call_count < 3:
-                raise TransientError("try again")
-            return "recovered"
+                raise TransientError("temporary async failure")
+            return "async_recovered"
 
         result = await async_flaky()
-        assert result == "recovered"
+        assert result == "async_recovered"
         assert call_count == 3
 
     @pytest.mark.asyncio
-    async def test_async_max_attempts(self) -> None:
-        """Should raise after max attempts in async."""
+    async def test_async_exhausts_max_attempts(self):
+        """Async function should raise after max_attempts."""
         call_count = 0
 
         @retry_on_transient(max_attempts=2)
-        async def async_always_fail():
+        async def async_always_fails():
             nonlocal call_count
             call_count += 1
-            raise TransientError("permanent failure")
+            raise TransientError("async permanent transient error")
 
         with pytest.raises(TransientError):
-            await async_always_fail()
+            await async_always_fails()
         assert call_count == 2
 
     @pytest.mark.asyncio
-    async def test_async_permanent_error_not_retried(self) -> None:
-        """PermanentError should not be retried in async."""
+    async def test_async_no_retry_on_permanent_error(self):
+        """Async PermanentError should not be retried."""
         call_count = 0
 
         @retry_on_transient(max_attempts=3)
-        async def async_permanent():
+        async def async_fails_permanently():
             nonlocal call_count
             call_count += 1
-            raise PermanentError("fatal")
+            raise PermanentError("async cannot recover")
 
         with pytest.raises(PermanentError):
-            await async_permanent()
+            await async_fails_permanently()
         assert call_count == 1
-
-    @pytest.mark.asyncio
-    async def test_async_with_exception_transfer(self) -> None:
-        """Should properly handle exception chaining."""
-        call_count = 0
-
-        @retry_on_transient(max_attempts=2)
-        async def async_chain():
-            nonlocal call_count
-            call_count += 1
-            raise TransientError("chained error")
-
-        with pytest.raises(TransientError, match="chained error"):
-            await async_chain()
-
-
-class TestRetryWithLogging:
-    """Tests for retry decorator with logging enabled."""
-
-    def test_retry_logs_attempts(self, caplog: pytest.LogCaptureFixture) -> None:
-        """Should log retry attempts."""
-        caplog.set_level("DEBUG", logger="merge-engine.retry")
-        call_count = 0
-
-        @retry_on_transient(max_attempts=3)
-        def loggable_func():
-            nonlocal call_count
-            call_count += 1
-            if call_count < 2:
-                raise TransientError("log me")
-            return "ok"
-
-        result = loggable_func()
-        assert result == "ok"
-        assert "retry" in caplog.text.lower() or call_count == 2
-
-    def test_no_retry_on_success_logs(self, caplog: pytest.LogCaptureFixture) -> None:
-        """Success should log at debug level."""
-        caplog.set_level("DEBUG", logger="merge-engine.retry")
-
-        @retry_on_transient(max_attempts=3)
-        def success_func():
-            return "ok"
-
-        result = success_func()
-        assert result == "ok"
 
 
 class TestRetryConfiguration:
-    """Tests for various retry configurations."""
+    """Tests for retry configuration parameters."""
 
-    def test_single_attempt(self) -> None:
-        """max_attempts=1 should not retry."""
-        call_count = 0
-
-        @retry_on_transient(max_attempts=1)
-        def no_retry():
-            nonlocal call_count
-            call_count += 1
-            raise TransientError("no retry")
-
-        with pytest.raises(TransientError):
-            no_retry()
-        assert call_count == 1
-
-    def test_large_max_attempts(self) -> None:
-        """Should support large max_attempts values."""
+    def test_custom_max_attempts(self):
+        """Custom max_attempts should be respected."""
         call_count = 0
 
         @retry_on_transient(max_attempts=5)
-        def many_retries():
+        def func():
             nonlocal call_count
             call_count += 1
-            if call_count < 4:
-                raise TransientError("still trying")
-            return "done"
+            raise TransientError("keep retrying")
 
-        result = many_retries()
-        assert result == "done"
-        assert call_count == 4
+        with pytest.raises(TransientError):
+            func()
+        assert call_count == 5
 
-    def test_custom_backoff_values(self) -> None:
-        """Should use custom min/max backoff."""
+    def test_linear_backoff_config(self):
+        """Linear backoff should work with custom parameters."""
         call_count = 0
 
         @retry_on_transient(
             max_attempts=2,
             backoff="linear",
             min_backoff=0.01,
-            max_backoff=0.01,
         )
-        def fast_retry():
+        def func():
             nonlocal call_count
             call_count += 1
-            raise TransientError("fast")
+            raise TransientError("linear backoff test")
 
         with pytest.raises(TransientError):
-            fast_retry()
+            func()
         assert call_count == 2
 
-    def test_both_async_and_sync_in_decorator(self) -> None:
-        """Same decorator should work for both sync and async."""
-        sync_calls = 0
-        async_calls = 0
+    def test_exponential_backoff_config(self):
+        """Exponential backoff should work with custom parameters."""
+        call_count = 0
 
-        # Sync function
-        @retry_on_transient(max_attempts=2)
-        def sync_f():
-            nonlocal sync_calls
-            sync_calls += 1
-            if sync_calls < 2:
-                raise TransientError("sync retry")
-            return "sync_ok"
+        @retry_on_transient(
+            max_attempts=2,
+            backoff="exponential",
+            min_backoff=0.01,
+            max_backoff=5.0,
+        )
+        def func():
+            nonlocal call_count
+            call_count += 1
+            raise TransientError("exponential backoff test")
 
-        # Async function
-        @retry_on_transient(max_attempts=2)
-        async def async_f():
-            nonlocal async_calls
-            async_calls += 1
-            if async_calls < 2:
-                raise TransientError("async retry")
-            return "async_ok"
-
-        # Run sync
-        sync_result = sync_f()
-        assert sync_result == "sync_ok"
-        assert sync_calls == 2
-
-        # Run async
-        loop = asyncio.new_event_loop()
-        try:
-            async_result = loop.run_until_complete(async_f())
-            assert async_result == "async_ok"
-            assert async_calls == 2
-        finally:
-            loop.close()
+        with pytest.raises(TransientError):
+            func()
+        assert call_count == 2

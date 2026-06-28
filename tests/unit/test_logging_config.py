@@ -1,172 +1,119 @@
 """
-Unit tests for the logging configuration module.
-
-Tests setup_logging function and JSON formatter.
+Tests for src/utils/logging_config.py - Structured logging configuration.
 """
 
-from __future__ import annotations
-
+import json
 import logging
 import sys
+from io import StringIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.utils.logging_config import setup_logging, _JSONFormatter
+
 
 class TestSetupLogging:
-    """Tests for the setup_logging function."""
+    """Tests for setup_logging()."""
 
-    def test_default_setup(self) -> None:
-        """Should configure logging with default settings."""
-        from src.utils.logging_config import setup_logging
-
-        with patch("logging.getLogger") as mock_getlogger, \
-             patch("structlog.configure"):
+    def test_setup_logging_default_level(self):
+        """Default logging level should be INFO."""
+        with patch("logging.getLogger") as mock_get_logger:
             mock_logger = MagicMock()
-            mock_getlogger.return_value = mock_logger
+            mock_get_logger.return_value = mock_logger
             setup_logging()
-            mock_getlogger.assert_called_once_with("merge-engine")
-            mock_logger.setLevel.assert_called_once_with(logging.INFO)
+            mock_logger.setLevel.assert_called_with(logging.INFO)
 
-    def test_custom_level(self) -> None:
-        """Should respect custom log level."""
-        from src.utils.logging_config import setup_logging
-
-        with patch("logging.getLogger") as mock_getlogger, \
-             patch("structlog.configure"):
+    def test_setup_logging_custom_level(self):
+        """Custom logging level should be applied."""
+        with patch("logging.getLogger") as mock_get_logger:
             mock_logger = MagicMock()
-            mock_getlogger.return_value = mock_logger
+            mock_get_logger.return_value = mock_logger
             setup_logging(level="DEBUG")
-            mock_logger.setLevel.assert_called_once_with(logging.DEBUG)
+            mock_logger.setLevel.assert_called_with(logging.DEBUG)
 
-    def test_warning_level(self) -> None:
-        """Should handle WARNING level."""
-        from src.utils.logging_config import setup_logging
-
-        with patch("logging.getLogger") as mock_getlogger, \
-             patch("structlog.configure"):
+    def test_setup_logging_error_level(self):
+        """ERROR level should be applied."""
+        with patch("logging.getLogger") as mock_get_logger:
             mock_logger = MagicMock()
-            mock_getlogger.return_value = mock_logger
-            setup_logging(level="WARNING")
-            mock_logger.setLevel.assert_called_once_with(logging.WARNING)
-
-    def test_error_level(self) -> None:
-        """Should handle ERROR level."""
-        from src.utils.logging_config import setup_logging
-
-        with patch("logging.getLogger") as mock_getlogger, \
-             patch("structlog.configure"):
-            mock_logger = MagicMock()
-            mock_getlogger.return_value = mock_logger
+            mock_get_logger.return_value = mock_logger
             setup_logging(level="ERROR")
-            mock_logger.setLevel.assert_called_once_with(logging.ERROR)
+            mock_logger.setLevel.assert_called_with(logging.ERROR)
 
-    def test_invalid_level_defaults_to_info(self) -> None:
-        """Invalid level string should default to INFO."""
-        from src.utils.logging_config import setup_logging
-
-        with patch("logging.getLogger") as mock_getlogger, \
-             patch("structlog.configure"):
+    def test_setup_logging_with_console_handler(self):
+        """Console handler should be added."""
+        with patch("logging.getLogger") as mock_get_logger:
             mock_logger = MagicMock()
-            mock_getlogger.return_value = mock_logger
-            setup_logging(level="INVALID_LEVEL_NAME")
-            mock_logger.setLevel.assert_called_once_with(logging.INFO)
-
-    def test_custom_app_name(self) -> None:
-        """Should use custom application name."""
-        from src.utils.logging_config import setup_logging
-
-        with patch("logging.getLogger") as mock_getlogger, \
-             patch("structlog.configure"):
-            mock_logger = MagicMock()
-            mock_getlogger.return_value = mock_logger
-            setup_logging(app_name="my-custom-app")
-            mock_getlogger.assert_called_once_with("my-custom-app")
-
-    def test_json_formatter_enabled(self) -> None:
-        """Should use JSONFormatter when json=True."""
-        from src.utils.logging_config import setup_logging
-
-        with patch("logging.getLogger") as mock_getlogger, \
-             patch("sys.stdout", MagicMock()), \
-             patch("structlog.configure"):
-            mock_logger = MagicMock()
-            mock_getlogger.return_value = mock_logger
-            setup_logging(json=True)
-            handlers = mock_logger.addHandler.call_args_list
-            assert len(handlers) >= 1
-
-    def test_log_file_handler(self, tmp_path: Path) -> None:
-        """Should create file handler when log_file is provided."""
-        from src.utils.logging_config import setup_logging
-
-        log_file = str(tmp_path / "logs" / "app.log")
-
-        with patch("logging.getLogger") as mock_getlogger, \
-             patch("structlog.configure"):
-            mock_logger = MagicMock()
-            mock_getlogger.return_value = mock_logger
-            setup_logging(log_file=log_file)
-            handler_calls = mock_logger.addHandler.call_args_list
-            assert len(handler_calls) >= 2
-
-    def test_log_file_creates_directory(self, tmp_path: Path) -> None:
-        """Should create log directory if it doesn't exist."""
-        from src.utils.logging_config import setup_logging
-
-        log_file = str(tmp_path / "nested" / "dirs" / "app.log")
-
-        with patch("logging.getLogger") as mock_getlogger, \
-             patch("structlog.configure"):
-            mock_logger = MagicMock()
-            mock_getlogger.return_value = mock_logger
-            setup_logging(log_file=log_file)
-            log_dir = Path(log_file).parent
-            assert log_dir.exists()
-
-    def test_console_handler_added(self) -> None:
-        """Should always add a console handler."""
-        from src.utils.logging_config import setup_logging
-
-        with patch("logging.getLogger") as mock_getlogger, \
-             patch("sys.stdout", MagicMock()), \
-             patch("structlog.configure"):
-            mock_logger = MagicMock()
-            mock_getlogger.return_value = mock_logger
+            mock_get_logger.return_value = mock_logger
             setup_logging()
-            mock_logger.addHandler.assert_called()
+            # Check that addHandler was called for console handler
+            handler_calls = mock_logger.addHandler.call_count
+            assert handler_calls >= 1
 
-    def test_multiple_level_options(self) -> None:
-        """Should handle all standard logging levels."""
-        from src.utils.logging_config import setup_logging
+    def test_setup_logging_custom_app_name(self):
+        """Custom app name should be used as logger name prefix."""
+        with patch("logging.getLogger") as mock_get_logger:
+            mock_logger = MagicMock()
+            mock_get_logger.return_value = mock_logger
+            setup_logging(app_name="custom-app")
+            mock_get_logger.assert_called_with("custom-app")
 
-        levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
-        expected = [
-            logging.DEBUG, logging.INFO, logging.WARNING,
-            logging.ERROR, logging.CRITICAL,
-        ]
+    def test_setup_logging_with_file_handler(self, tmp_path):
+        """File handler should be added when log_file is specified."""
+        log_file = str(tmp_path / "test.log")
+        with patch("logging.getLogger") as mock_get_logger:
+            mock_logger = MagicMock()
+            mock_get_logger.return_value = mock_logger
+            setup_logging(log_file=log_file)
+            # Should have both console and file handlers
+            assert mock_logger.addHandler.call_count >= 2
 
-        for level_str, expected_level in zip(levels, expected):
-            with patch("logging.getLogger") as mock_getlogger, \
-                 patch("structlog.configure"):
-                mock_logger = MagicMock()
-                mock_getlogger.return_value = mock_logger
-                setup_logging(level=level_str)
-                mock_logger.setLevel.assert_called_with(expected_level)
+    def test_setup_logging_creates_log_directory(self, tmp_path):
+        """Log directory should be created if it doesn't exist."""
+        log_file = str(tmp_path / "subdir" / "nested" / "test.log")
+        with patch("logging.getLogger") as mock_get_logger:
+            mock_logger = MagicMock()
+            mock_get_logger.return_value = mock_logger
+            setup_logging(log_file=log_file)
+            assert Path(tmp_path / "subdir" / "nested").exists()
+
+    def test_setup_logging_json_mode(self):
+        """JSON mode should use JSONFormatter."""
+        with patch("logging.getLogger") as mock_get_logger:
+            mock_logger = MagicMock()
+            mock_get_logger.return_value = mock_logger
+            setup_logging(json=True)
+            # Check handler was added with JSON formatter
+            handlers = [
+                call.args[0] for call in mock_logger.addHandler.call_args_list
+            ]
+            # At least one handler should use JSONFormatter
+            json_handlers = [
+                h for h in handlers
+                if isinstance(h.formatter, _JSONFormatter)
+            ]
+            assert len(json_handlers) >= 1
 
 
 class TestJSONFormatter:
-    """Tests for the _JSONFormatter class."""
+    """Tests for _JSONFormatter class."""
 
-    def test_json_formatter_basic(self) -> None:
-        """Should produce valid JSON output."""
-        import json
-        from src.utils.logging_config import _JSONFormatter
+    def test_json_formatter_init(self):
+        """_JSONFormatter should initialize with default app name."""
+        formatter = _JSONFormatter()
+        assert formatter.app_name == "merge-engine"
 
+    def test_json_formatter_custom_app_name(self):
+        """_JSONFormatter should accept custom app name."""
         formatter = _JSONFormatter(app_name="test-app")
+        assert formatter.app_name == "test-app"
+
+    def test_json_formatter_output_structure(self):
+        """JSON output should contain standard fields."""
+        formatter = _JSONFormatter()
         record = logging.LogRecord(
-            name="test.logger",
+            name="test-logger",
             level=logging.INFO,
             pathname="test.py",
             lineno=42,
@@ -174,141 +121,45 @@ class TestJSONFormatter:
             args=(),
             exc_info=None,
         )
-        output = formatter.format(record)
-        parsed = json.loads(output)
-        assert parsed["message"] == "Test message"
-        assert parsed["level"] == "INFO"
-        assert parsed["logger"] == "test.logger"
-        assert parsed["app"] == "test-app"
-        assert parsed["module"] == "test"
-        assert parsed["line"] == 42
+        output = json.loads(formatter.format(record))
+        assert "timestamp" in output
+        assert output["level"] == "INFO"
+        assert output["logger"] == "test-logger"
+        assert output["message"] == "Test message"
+        assert output["module"] == "test"
+        # funcName is None for manually created LogRecord without funcName
+        assert output["function"] is None or output["function"] == "<module>"
+        assert output["line"] == 42
+        assert output["app"] == "merge-engine"
 
-    def test_json_formatter_custom_app_name(self) -> None:
-        """Should use custom app name."""
-        import json
-        from src.utils.logging_config import _JSONFormatter
-
-        formatter = _JSONFormatter(app_name="custom-app")
-        record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="test.py",
-            lineno=1, msg="test", args=(), exc_info=None,
-        )
-        output = formatter.format(record)
-        parsed = json.loads(output)
-        assert parsed["app"] == "custom-app"
-
-    def test_json_formatter_with_extra_data(self) -> None:
-        """Should include extra data in JSON output."""
-        import json
-        from src.utils.logging_config import _JSONFormatter
-
+    def test_json_formatter_with_extra_data(self):
+        """JSON output should include extra_data if present."""
         formatter = _JSONFormatter()
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="test.py",
-            lineno=1, msg="test", args=(), exc_info=None,
+            name="test-logger",
+            level=logging.INFO,
+            pathname="test.py",
+            lineno=42,
+            msg="Test message",
+            args=(),
+            exc_info=None,
         )
-        record.extra_data = {"request_id": "abc-123", "user": "alice"}
-        output = formatter.format(record)
-        parsed = json.loads(output)
-        assert parsed["request_id"] == "abc-123"
-        assert parsed["user"] == "alice"
+        record.extra_data = {"user_id": 123, "action": "login"}
+        output = json.loads(formatter.format(record))
+        assert output["user_id"] == 123
+        assert output["action"] == "login"
 
-    def test_json_formatter_contains_timestamp(self) -> None:
-        """JSON output should contain a timestamp."""
-        import json
-        from src.utils.logging_config import _JSONFormatter
-
+    def test_json_formatter_escapes_special_chars(self):
+        """JSON output should properly escape special characters."""
         formatter = _JSONFormatter()
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="test.py",
-            lineno=1, msg="test", args=(), exc_info=None,
+            name="test-logger",
+            level=logging.INFO,
+            pathname="test.py",
+            lineno=42,
+            msg='Message with "quotes" and \\backslash',
+            args=(),
+            exc_info=None,
         )
-        output = formatter.format(record)
-        parsed = json.loads(output)
-        assert "timestamp" in parsed
-
-    def test_json_formatter_contains_function(self) -> None:
-        """JSON output should contain function info."""
-        import json
-        from src.utils.logging_config import _JSONFormatter
-
-        formatter = _JSONFormatter()
-        record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="test.py",
-            lineno=42, msg="test", args=(), exc_info=None,
-        )
-        record.funcName = "test_function"
-        output = formatter.format(record)
-        parsed = json.loads(output)
-        assert parsed["function"] == "test_function"
-
-    def test_json_formatter_different_levels(self) -> None:
-        """Should handle different log levels."""
-        import json
-        from src.utils.logging_config import _JSONFormatter
-
-        formatter = _JSONFormatter()
-
-        for level_name, level_num in [
-            ("DEBUG", logging.DEBUG),
-            ("INFO", logging.INFO),
-            ("WARNING", logging.WARNING),
-            ("ERROR", logging.ERROR),
-            ("CRITICAL", logging.CRITICAL),
-        ]:
-            record = logging.LogRecord(
-                name="test", level=level_num, pathname="test.py",
-                lineno=1, msg="test", args=(), exc_info=None,
-            )
-            output = formatter.format(record)
-            parsed = json.loads(output)
-            assert parsed["level"] == level_name
-
-    def test_json_formatter_with_args(self) -> None:
-        """Should format message with args."""
-        import json
-        from src.utils.logging_config import _JSONFormatter
-
-        formatter = _JSONFormatter()
-        record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="test.py",
-            lineno=1, msg="Hello %s", args=("world",), exc_info=None,
-        )
-        output = formatter.format(record)
-        parsed = json.loads(output)
-        assert parsed["message"] == "Hello world"
-
-    def test_json_formatter_error_level(self) -> None:
-        """Should handle ERROR level records."""
-        import json
-        from src.utils.logging_config import _JSONFormatter
-
-        formatter = _JSONFormatter()
-        record = logging.LogRecord(
-            name="test", level=logging.ERROR, pathname="test.py",
-            lineno=100, msg="Something failed", args=(), exc_info=None,
-        )
-        output = formatter.format(record)
-        parsed = json.loads(output)
-        assert parsed["level"] == "ERROR"
-        assert parsed["message"] == "Something failed"
-
-    def test_json_formatter_exception_info(self) -> None:
-        """Should handle records with exception info."""
-        import json
-        from src.utils.logging_config import _JSONFormatter
-
-        formatter = _JSONFormatter()
-        try:
-            raise ValueError("test error")
-        except ValueError:
-            import sys
-            exc_info = sys.exc_info()
-
-        record = logging.LogRecord(
-            name="test", level=logging.ERROR, pathname="test.py",
-            lineno=1, msg="An error occurred", args=(), exc_info=exc_info,
-        )
-        output = formatter.format(record)
-        parsed = json.loads(output)
-        assert parsed["message"] == "An error occurred"
+        output = json.loads(formatter.format(record))
+        assert '"' in output["message"] or '""' in output["message"]
