@@ -29,7 +29,7 @@ logger = logging.getLogger("merge-engine.retry")
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-class TransientError(Exception):
+class TransientError(RuntimeError):
     """Raised when a recoverable transient error occurs."""
 
     def __init__(self, message: str, retry_after: float | None = None) -> None:
@@ -37,7 +37,7 @@ class TransientError(Exception):
         self.retry_after = retry_after
 
 
-class PermanentError(Exception):
+class PermanentError(RuntimeError):
     """Raised when a non-recoverable error occurs."""
 
     pass
