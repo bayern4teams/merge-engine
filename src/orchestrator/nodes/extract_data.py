@@ -31,6 +31,8 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
     dict
         Update dict with ``extracted_data`` key.
     """
+    logger.debug("ENTER extract_data")
+    logger.debug("State keys: %s", list(state.keys()))
     extraction_order = state.get("extraction_order", [])
     schemas = state.get("schemas", {})
     origins = state.get("origins", [])
@@ -39,18 +41,24 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
     extracted_data: dict[str, list[dict]] = dict(state.get("extracted_data", {}))
 
     default_batch_size = extraction_config.get("default_batch_size", 1000)
+    logger.debug("extraction_order: %s", extraction_order)
+    logger.debug("default_batch_size: %d", default_batch_size)
 
     # Group entities that can be extracted in parallel
-    execution_groups = find_execution_groups(
-        {e: state.get("dependency_tree", {}).get(e, []) for e in extraction_order}
-    )
+    dep_tree = {e: state.get("dependency_tree", {}).get(e, []) for e in extraction_order}
+    execution_groups = find_execution_groups(dep_tree)
+    logger.debug("Execution groups: %d groups", len(execution_groups))
 
-    for group in execution_groups:
+    for group_idx, group in enumerate(execution_groups):
+        logger.debug("Processing execution group %d: %s", group_idx, group)
         for entity_type in group:
             logger.info("Extracting entity type: %s", entity_type)
 
             # Determine which origin tables contain this entity
             table_candidates = _find_entity_tables(entity_type, schemas)
+            logger.debug("Found %d table candidates for entity '%s'", len(table_candidates), entity_type)
+            for tc in table_candidates:
+                logger.debug("  Candidate: %s (%s)", tc["table_name"], tc["origin_id"])
 
             if not table_candidates:
                 msg = f"No tables found for entity '{entity_type}' in any origin."
@@ -68,12 +76,17 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                 if not columns:
                     columns = ["*"]
 
+                logger.debug("Extracting from %s:%s (columns=%s, batch_size=%d)", origin_id, table_name, columns[:5], default_batch_size)
+
                 # Extract all batches
                 cursor = None
                 total_fetched = 0
+                batch_num = 0
 
                 while True:
+                    batch_num += 1
                     try:
+                        logger.debug("  Batch %d for %s:%s, cursor=%s", batch_num, origin_id, table_name, cursor)
                         result = await extract_data_impl(
                             origin_id=origin_id,
                             table_name=table_name,
@@ -86,6 +99,7 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                         batch_rows = result.get("rows", [])
                         all_rows.extend(batch_rows)
                         total_fetched += len(batch_rows)
+                        logger.debug("  Batch %d returned %d rows, total=%d, next_cursor=%s", batch_num, len(batch_rows), total_fetched, result.get("next_cursor"))
 
                         # Tag rows with origin metadata
                         for row in batch_rows:
@@ -98,12 +112,12 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
 
                     except TransientError as exc:
                         msg = f"Transient error extracting {origin_id}:{table_name}: {exc}"
-                        logger.error(msg)
+                        logger.error(msg, exc_info=True)
                         errors.append(msg)
                         break
                     except Exception as exc:
                         msg = f"Extraction failed for {origin_id}:{table_name}: {exc}"
-                        logger.error(msg)
+                        logger.error(msg, exc_info=True)
                         errors.append(msg)
                         break
 
@@ -116,10 +130,33 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                 )
 
             extracted_data[entity_type] = all_rows
+            logger.debug("Entity '%s' total rows: %d", entity_type, len(all_rows))
+
+    logger.debug("Total entities in extracted_data: %d", len(extracted_data))
+    for et, rows in extracted_data.items():
+        logger.debug("  Entity '%s': %d rows", et, len(rows))
+    logger.debug("Total errors: %d", len(errors))
+    logger.debug("EXIT extract_data")
 
     return {
         "extracted_data": extracted_data,
         "errors": errors,
+        "origins": state.get("origins", []),
+        "destination": state.get("destination", {}),
+        "llm_config": state.get("llm_config", {}),
+        "extraction_config": state.get("extraction_config", {}),
+        "target_entities": state.get("target_entities", []),
+        "schemas": state.get("schemas", {}),
+        "dependency_tree": state.get("dependency_tree", {}),
+        "extraction_order": state.get("extraction_order", []),
+        "entity_clusters": state.get("entity_clusters", {}),
+        "unified_entities": state.get("unified_entities", {}),
+        "field_mappings": state.get("field_mappings", {}),
+        "pending_schema_changes": state.get("pending_schema_changes", []),
+        "human_feedback": state.get("human_feedback"),
+        "load_approval": state.get("load_approval"),
+        "retry_counts": state.get("retry_counts", {}),
+        "interrupt_data": None,
     }
 
 

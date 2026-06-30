@@ -30,6 +30,8 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
     dict
         Update dict with ``field_mappings``, ``pending_schema_changes``, ``errors``.
     """
+    logger.debug("ENTER map_fields")
+    logger.debug("State keys: %s", list(state.keys()))
     unified_entities: dict[str, list[dict]] = state.get("unified_entities", {})
     destination = state.get("destination")
     target_entities: list[str] = state.get("target_entities", [])
@@ -37,17 +39,23 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
     field_mappings: dict[str, dict] = dict(state.get("field_mappings", {}))
     pending_schema_changes: list[dict] = list(state.get("pending_schema_changes", []))
 
+    logger.debug("target_entities: %s", target_entities)
+    logger.debug("unified_entities keys: %s", list(unified_entities.keys()))
+    for ue, recs in unified_entities.items():
+        logger.debug("  Entity '%s': %d unified records", ue, len(recs))
+
     # Get destination type (handles both dict and Config object)
     if isinstance(destination, dict):
         dest_type = destination.get("type", "postgresql")
-        # Check if destination has nested tables mapping
         dest_tables = destination.get("tables", {})
     else:
         dest_type = getattr(destination, "type", "postgresql")
         dest_tables = getattr(destination, "tables", {})
+    logger.debug("destination type: %s", dest_type)
 
     for entity_type in target_entities:
         records = unified_entities.get(entity_type, [])
+        logger.debug("Processing entity '%s': %d unified records", entity_type, len(records))
         if not records:
             logger.info("No unified records for entity '%s', skipping field mapping.", entity_type)
             field_mappings[entity_type] = {}
@@ -55,6 +63,7 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
 
         # Get destination table schema
         dest_table = dest_tables.get(entity_type, entity_type) if isinstance(dest_tables, dict) else entity_type
+        logger.debug("Destination table: %s", dest_table)
 
         # Build destination schema info
         dest_schema_info = {
@@ -76,21 +85,31 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
                         "type": type(value).__name__,
                         "sample_value": value,
                     }
+        logger.debug("Unified schema fields: %d", len(unified_schema))
+        for fname, finfo in unified_schema.items():
+            logger.debug("  Field '%s': type=%s", fname, finfo.get("type"))
 
         try:
+            logger.debug("Calling map_fields_impl for entity '%s'", entity_type)
             result = await map_fields_impl(
                 entity_type=entity_type,
                 unified_schema=unified_schema,
                 destination_schema=dest_schema_info,
             )
+            logger.debug("map_fields_impl result keys: %s", list(result.keys()))
 
             mapping = result.get("field_mapping", {})
             field_mappings[entity_type] = mapping
+            logger.debug("Field mapping for '%s': %d mappings", entity_type, len(mapping))
+            for mname, mval in mapping.items():
+                logger.debug("  Mapping '%s': requires_schema_change=%s", mname, mval.get("requires_schema_change", False))
 
             schema_changes = result.get("schema_changes", [])
             pending_schema_changes.extend(schema_changes)
+            logger.debug("Schema changes: %d", len(schema_changes))
 
-            unmapped = result.get("unmapped_fields", [])
+            unmapped = result.get("unapped_fields", [])
+            logger.debug("Unmapped fields: %d", len(unmapped))
 
             logger.info(
                 "Field mapping for '%s': %d mapped, %d unmapped, %d schema changes",
@@ -102,14 +121,34 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
 
         except Exception as exc:
             msg = f"Field mapping failed for '{entity_type}': {exc}"
-            logger.error(msg)
+            logger.error(msg, exc_info=True)
             errors.append(msg)
             field_mappings[entity_type] = {}
+
+    logger.debug("Total field_mappings: %d", len(field_mappings))
+    logger.debug("Total pending_schema_changes: %d", len(pending_schema_changes))
+    logger.debug("Total errors: %d", len(errors))
+    logger.debug("EXIT map_fields")
 
     return {
         "field_mappings": field_mappings,
         "pending_schema_changes": pending_schema_changes,
         "errors": errors,
+        "origins": state.get("origins", []),
+        "destination": state.get("destination", {}),
+        "llm_config": state.get("llm_config", {}),
+        "extraction_config": state.get("extraction_config", {}),
+        "target_entities": target_entities,
+        "schemas": state.get("schemas", {}),
+        "dependency_tree": state.get("dependency_tree", {}),
+        "extraction_order": state.get("extraction_order", []),
+        "extracted_data": state.get("extracted_data", {}),
+        "entity_clusters": state.get("entity_clusters", {}),
+        "unified_entities": unified_entities,
+        "human_feedback": state.get("human_feedback"),
+        "load_approval": state.get("load_approval"),
+        "retry_counts": state.get("retry_counts", {}),
+        "interrupt_data": None,
     }
 
 

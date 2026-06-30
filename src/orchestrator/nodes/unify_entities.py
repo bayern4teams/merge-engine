@@ -28,15 +28,24 @@ async def unify_entity_groups(state: dict[str, Any]) -> dict[str, Any]:
     dict
         Update dict with ``unified_entities`` and ``errors`` keys.
     """
+    logger.debug("ENTER unify_entity_groups")
+    logger.debug("State keys: %s", list(state.keys()))
     entity_clusters: dict[str, list[dict]] = state.get("entity_clusters", {})
     extracted_data: dict[str, list[dict]] = state.get("extracted_data", {})
     target_entities: list[str] = state.get("target_entities", [])
     errors: list[str] = list(state.get("errors", []))
     unified_entities: dict[str, list[dict]] = dict(state.get("unified_entities", {}))
 
+    logger.debug("target_entities: %s", target_entities)
+    logger.debug("entity_clusters keys: %s", list(entity_clusters.keys()))
+
+    total_clusters = sum(len(v) for v in entity_clusters.values())
+    logger.debug("Total clusters across all entities: %d", total_clusters)
+
     for entity_type in target_entities:
         clusters = entity_clusters.get(entity_type, [])
         all_records = extracted_data.get(entity_type, [])
+        logger.debug("Processing entity '%s': %d clusters, %d records", entity_type, len(clusters), len(all_records))
 
         # Build record lookup by origin_id
         record_lookup: dict[str, dict] = {}
@@ -47,9 +56,10 @@ async def unify_entity_groups(state: dict[str, Any]) -> dict[str, Any]:
         unified_records: list[dict] = []
         total_conflicts = 0
 
-        for cluster in clusters:
+        for cluster_idx, cluster in enumerate(clusters):
             cluster_id = cluster.get("cluster_id", "")
             record_ids = cluster.get("record_ids", [])
+            logger.debug("  Cluster %d (%s): %d records", cluster_idx, cluster_id[:12] if cluster_id else "?", len(record_ids))
 
             # Look up actual records
             cluster_records = []
@@ -65,16 +75,19 @@ async def unify_entity_groups(state: dict[str, Any]) -> dict[str, Any]:
                 continue
 
             try:
+                logger.debug("    Calling unify_entity_group_impl for cluster '%s'", cluster_id[:12])
                 result = await unify_entity_group_impl(
                     cluster_id=cluster_id,
                     records=cluster_records,
                 )
+                logger.debug("    unify_entity_group_impl result keys: %s", list(result.keys()))
 
                 unified_record = result.get("unified_record", {})
                 conflicts = result.get("conflicts", [])
                 null_filled = result.get("null_filled_fields", [])
 
                 total_conflicts += len(conflicts)
+                logger.debug("    Conflicts: %d, Null-filled: %d", len(conflicts), len(null_filled))
 
                 # Assign universal UUID to unified record
                 unified_record["id"] = cluster_id
@@ -98,10 +111,11 @@ async def unify_entity_groups(state: dict[str, Any]) -> dict[str, Any]:
 
             except Exception as exc:
                 msg = f"Unify failed for cluster '{cluster_id}': {exc}"
-                logger.error(msg)
+                logger.error(msg, exc_info=True)
                 errors.append(msg)
 
         unified_entities[entity_type] = unified_records
+        logger.debug("Entity '%s': %d unified records", entity_type, len(unified_records))
 
         logger.info(
             "Entity unification for '%s': %d clusters → %d unified records, %d total conflicts",
@@ -111,7 +125,29 @@ async def unify_entity_groups(state: dict[str, Any]) -> dict[str, Any]:
             total_conflicts,
         )
 
+    logger.debug("Total unified_entities keys: %d", len(unified_entities))
+    for ue, records in unified_entities.items():
+        logger.debug("  Entity '%s': %d unified records", ue, len(records))
+    logger.debug("Total errors: %d", len(errors))
+    logger.debug("EXIT unify_entity_groups")
+
     return {
         "unified_entities": unified_entities,
         "errors": errors,
+        "origins": state.get("origins", []),
+        "destination": state.get("destination", {}),
+        "llm_config": state.get("llm_config", {}),
+        "extraction_config": state.get("extraction_config", {}),
+        "target_entities": target_entities,
+        "schemas": state.get("schemas", {}),
+        "dependency_tree": state.get("dependency_tree", {}),
+        "extraction_order": state.get("extraction_order", []),
+        "extracted_data": extracted_data,
+        "entity_clusters": entity_clusters,
+        "field_mappings": state.get("field_mappings", {}),
+        "pending_schema_changes": state.get("pending_schema_changes", []),
+        "human_feedback": state.get("human_feedback"),
+        "load_approval": state.get("load_approval"),
+        "retry_counts": state.get("retry_counts", {}),
+        "interrupt_data": None,
     }
