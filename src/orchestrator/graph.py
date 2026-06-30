@@ -3,6 +3,10 @@ LangGraph state graph builder and compiled graph for merge-engine.
 
 Wires all orchestrator nodes, edges, conditional edges, and interrupt points
 into a single compiled LangGraph workflow.
+
+Supports two modes:
+1. In-process mode: build_graph() with MemorySaver (for direct WorkflowManager use)
+2. Server mode: graph module-level export for LangGraph CLI server
 """
 
 from __future__ import annotations
@@ -42,20 +46,8 @@ HITL_NODES = [
 ]
 
 
-def build_graph() -> Any:
-    """Build and compile the LangGraph state graph.
-
-    Returns
-    -------
-    Any
-        A compiled LangGraph workflow ready for execution.
-
-    Notes
-    -----
-    This uses dict-based state (not TypedDict) for flexibility with
-    LangGraph's state mutation patterns. The actual state schema is
-    documented in src/orchestrator/state.py.
-    """
+def _build_builder() -> StateGraph:
+    """Build the raw StateGraph (nodes + edges) without compiling."""
     builder = StateGraph(dict)
 
     # ── Add all nodes ───────────────────────────────────────────────
@@ -83,7 +75,7 @@ def build_graph() -> Any:
     builder.add_edge("human_review_deps", "extract_data")
     builder.add_edge("extract_data", "resolve_entities")
 
-    # Conditional: low-confidence entity matches → human review
+    # Conditional: low-confidence entity matches -> human review
     builder.add_conditional_edges(
         "resolve_entities",
         has_low_confidence_clusters,
@@ -93,7 +85,7 @@ def build_graph() -> Any:
     builder.add_edge("human_review_matches", "unify_entities")
     builder.add_edge("unify_entities", "map_fields")
 
-    # Conditional: unmapped fields → human review
+    # Conditional: unmapped fields -> human review
     builder.add_conditional_edges(
         "map_fields",
         has_unmapped_fields,
@@ -106,42 +98,60 @@ def build_graph() -> Any:
     builder.add_edge("flag_origins", END)
 
     # ── Error routing ───────────────────────────────────────────────
-    # After each processing node, check for errors
-    error_nodes = [
-        "parse_request",
-        "discover_schemas",
-        "analyze_dependencies",
-        "extract_data",
-        "resolve_entities",
-        "unify_entities",
-        "map_fields",
-        "load_data",
-        "flag_origins",
-    ]
+    # NOTE: Error routing conditional edges are NOT added here because
+    # StateGraph(dict) uses an overwrite reducer that only keeps what
+    # nodes return. Adding conditional edges that route "continue" back
+    # to the same node causes state loss (the original fields like
+    # user_request are lost after the first node runs).
+    #
+    # Each node handles errors internally by returning them in the
+    # "errors" list, and the orchestrator workflow_manager.py tracks
+    # and logs errors appropriately.
 
-    for node_name in error_nodes:
-        builder.add_conditional_edges(
-            node_name,
-            _error_router,
-            {"error": "handle_error", "continue": node_name},
-        )
+    return builder
 
-    # After handle_error, retry the original node or escalate
-    builder.add_edge("handle_error", "parse_request")  # Simplified: always retry from current
+
+def build_graph(checkpointer: Any = None) -> Any:
+    """Build and compile the LangGraph state graph.
+
+    Parameters
+    ----------
+    checkpointer : Any, optional
+        LangGraph checkpointer. If None, uses MemorySaver.
+        For production use, pass SqliteSaver or PostgresSaver.
+
+    Returns
+    -------
+    Any
+        A compiled LangGraph workflow ready for execution.
+    """
+    builder = _build_builder()
 
     # Compile with checkpointing (enables resume after interrupts)
-    try:
-        from langgraph.checkpoint.memory import MemorySaver
-        memory = MemorySaver()
-        graph = builder.compile(
-            checkpointer=memory,
-            interrupt_before=HITL_NODES,
-            interrupt_after=[],
-        )
-        logger.info("Compiled merge workflow graph with %d HITL interrupt points", len(HITL_NODES))
-    except ImportError:
-        logger.warning("langgraph-checkpoint not installed; compiling without checkpointer")
-        graph = builder.compile()
+    if checkpointer is not None:
+        try:
+            graph = builder.compile(
+                checkpointer=checkpointer,
+                interrupt_before=HITL_NODES,
+                interrupt_after=[],
+            )
+            logger.info("Compiled merge workflow graph with %d HITL interrupt points", len(HITL_NODES))
+        except Exception:
+            logger.warning("Failed to compile with checkpointer, compiling without")
+            graph = builder.compile()
+    else:
+        try:
+            from langgraph.checkpoint.memory import MemorySaver
+            memory = MemorySaver()
+            graph = builder.compile(
+                checkpointer=memory,
+                interrupt_before=HITL_NODES,
+                interrupt_after=[],
+            )
+            logger.info("Compiled merge workflow graph with MemorySaver and %d HITL interrupt points", len(HITL_NODES))
+        except ImportError:
+            logger.warning("langgraph-checkpoint not installed; compiling without checkpointer")
+            graph = builder.compile()
 
     return graph
 
@@ -295,7 +305,7 @@ def _load_llm_config(config_path: str | None) -> dict[str, Any]:
             "temperature": cfg.llm.temperature,
         }
     except Exception:
-        # Return placeholder — LLM will be configured via env vars
+        # Return placeholder -- LLM will be configured via env vars
         return {
             "provider": "openai",
             "model": "gpt-4o",
@@ -303,3 +313,30 @@ def _load_llm_config(config_path: str | None) -> dict[str, Any]:
             "base_url": None,
             "temperature": 0.0,
         }
+
+
+# ── Server Mode Export ──────────────────────────────────────────────
+# LangGraph CLI server expects a compiled `graph` at module level.
+# The server handles checkpointer/persistence automatically — it does NOT
+# allow custom checkpointer in the compiled graph. We compile WITHOUT
+# a checkpointer for the CLI server path. The server adds its own
+# persistence layer at runtime.
+
+def _get_server_graph():
+    """Create a compiled graph for LangGraph CLI server mode.
+    
+    The LangGraph API handles persistence automatically. Custom
+    checkpointer (MemorySaver/SqliteSaver/etc.) are NOT allowed in
+    server mode — the API overrides them with its own persistence.
+    """
+    builder = _build_builder()
+    graph = builder.compile(
+        interrupt_before=HITL_NODES,
+        interrupt_after=[],
+    )
+    logger.info("Server graph compiled (no custom checkpointer — API handles persistence)")
+    return graph
+
+
+# Module-level graph export for LangGraph CLI
+graph = _get_server_graph()

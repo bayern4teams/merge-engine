@@ -108,40 +108,61 @@ class WorkflowManager:
         initial_state: dict[str, Any],
         config: dict[str, Any],
     ) -> None:
-        """Run the graph in a background thread, polling for interrupts."""
+        """Run the graph in a background thread, polling for interrupts.
+        
+        Uses asyncio to handle async nodes in the graph.
+        """
+        import sys
+        
         try:
-            for event in self.graph.stream(initial_state, config=config):
-                # event is a dict like {"node_name": output_dict}
-                for node_name, output in event.items():
-                    # Update workflow status
-                    with self._lock:
-                        wf = self._active_workflows.get(thread_id)
-                        if wf:
-                            wf["current_interrupt_node"] = node_name
+            # Check if there's already an event loop running
+            # If we're in a background thread, create a new one
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                # Run the async stream directly
+                async def _collect_events():
+                    events = []
+                    async for event in self.graph.astream(initial_state, config=config):
+                        events.append(event)
+                    return events
 
-                            # Check if this node is a HITL node (has interrupt_data)
-                            if output and output.get("interrupt_data"):
-                                wf["status"] = "interrupted"
+                events = loop.run_until_complete(_collect_events())
+
+                for event in events:
+                    # event is a dict like {"node_name": output_dict}
+                    for node_name, output in event.items():
+                        # Update workflow status
+                        with self._lock:
+                            wf = self._active_workflows.get(thread_id)
+                            if wf:
                                 wf["current_interrupt_node"] = node_name
-                                wf["interrupt_data"] = output["interrupt_data"]
-                                logger.info(
-                                    "Workflow %s interrupted at node '%s'",
-                                    thread_id,
-                                    node_name,
-                                )
-                            elif output and output.get("load_approval") is not None:
-                                if output["load_approval"]:
-                                    wf["status"] = "running"  # Resume after approval
-                                else:
-                                    wf["status"] = "aborted"
-                                    logger.info("Workflow %s aborted by user", thread_id)
 
-            # If we get here without interruption, workflow completed
-            with self._lock:
-                wf = self._active_workflows.get(thread_id)
-                if wf:
-                    wf["status"] = "completed"
-                    logger.info("Workflow %s completed successfully", thread_id)
+                                # Check if this node is a HITL node (has interrupt_data)
+                                if output and output.get("interrupt_data"):
+                                    wf["status"] = "interrupted"
+                                    wf["current_interrupt_node"] = node_name
+                                    wf["interrupt_data"] = output["interrupt_data"]
+                                    logger.info(
+                                        "Workflow %s interrupted at node '%s'",
+                                        thread_id,
+                                        node_name,
+                                    )
+                                elif output and output.get("load_approval") is not None:
+                                    if output["load_approval"]:
+                                        wf["status"] = "running"  # Resume after approval
+                                    else:
+                                        wf["status"] = "aborted"
+                                        logger.info("Workflow %s aborted by user", thread_id)
+
+                # If we get here without interruption, workflow completed
+                with self._lock:
+                    wf = self._active_workflows.get(thread_id)
+                    if wf:
+                        wf["status"] = "completed"
+                        logger.info("Workflow %s completed successfully", thread_id)
+            finally:
+                loop.close()
 
         except Exception as exc:
             logger.error("Workflow %s failed: %s", thread_id, exc, exc_info=True)
@@ -242,28 +263,36 @@ class WorkflowManager:
 
             logger.info("Resumed workflow %s from node '%s'", thread_id, interrupt_node)
 
-            # Continue streaming from the checkpoint
-            for event in self.graph.stream(None, config=config):
-                for node_name, output in event.items():
-                    with self._lock:
-                        wf = self._active_workflows.get(thread_id)
-                        if wf:
-                            wf["current_interrupt_node"] = node_name
+            # Continue streaming from the checkpoint using async API
+            async def _async_resume_stream():
+                async for event in self.graph.astream(None, config=config):
+                    yield event
 
-                            if output and output.get("interrupt_data"):
-                                wf["status"] = "interrupted"
-                                wf["interrupt_data"] = output["interrupt_data"]
-                            elif output and output.get("load_approval") is not None:
-                                if output["load_approval"]:
-                                    wf["status"] = "running"
-                                else:
-                                    wf["status"] = "aborted"
+            loop = asyncio.new_event_loop()
+            try:
+                for event in loop.run_until_complete(_async_resume_stream()):
+                    for node_name, output in event.items():
+                        with self._lock:
+                            wf = self._active_workflows.get(thread_id)
+                            if wf:
+                                wf["current_interrupt_node"] = node_name
 
-            with self._lock:
-                wf = self._active_workflows.get(thread_id)
-                if wf:
-                    wf["status"] = "completed"
-                    logger.info("Workflow %s completed after resume", thread_id)
+                                if output and output.get("interrupt_data"):
+                                    wf["status"] = "interrupted"
+                                    wf["interrupt_data"] = output["interrupt_data"]
+                                elif output and output.get("load_approval") is not None:
+                                    if output["load_approval"]:
+                                        wf["status"] = "running"
+                                    else:
+                                        wf["status"] = "aborted"
+
+                with self._lock:
+                    wf = self._active_workflows.get(thread_id)
+                    if wf:
+                        wf["status"] = "completed"
+                        logger.info("Workflow %s completed after resume", thread_id)
+            finally:
+                loop.close()
 
         except Exception as exc:
             logger.error("Resume failed for workflow %s: %s", thread_id, exc, exc_info=True)

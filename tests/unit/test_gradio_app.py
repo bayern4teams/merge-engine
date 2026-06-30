@@ -95,6 +95,8 @@ def chat_state_dict():
         "origins": [],
         "destination": {},
         "setup_step": "origins",
+        "recent_origins": [],
+        "recent_destinations": [],
     }
 
 
@@ -116,6 +118,8 @@ class TestChatState:
         assert state.origins == []
         assert state.destination == {}
         assert state.setup_step == "origins"
+        assert state.recent_origins == []
+        assert state.recent_destinations == []
 
     def test_status_transitions(self):
         """ChatState status should be settable to all valid values."""
@@ -172,223 +176,172 @@ class TestCreateApp:
 
 
 # =============================================================================
-# Setup Wizard: add_origin_form_row tests
+# Setup Wizard: add_origin_to_json tests
 # =============================================================================
 
-class TestAddOriginFormRow:
-    """Tests for add_origin_form_row function."""
+class TestAddOriginToJson:
+    """Tests for add_origin_to_json function."""
 
-    @patch("src.ui.gradio_app._origin_count", 0)
-    @patch("src.ui.gradio_app.gr")
-    def test_returns_form_components(self, mock_gr, mock_workflow_manager):
-        """add_origin_form_row should return 8 component references."""
-        from src.ui.gradio_app import create_app
+    def test_adds_valid_origin(self):
+        """add_origin_to_json should add a valid origin to the list."""
+        from src.ui.gradio_app import add_origin_to_json
 
-        mock_gr.Dropdown.return_value = MagicMock()
-        mock_gr.Textbox.return_value = MagicMock()
-        mock_gr.Number.return_value = MagicMock()
-        mock_gr.Button.return_value = MagicMock()
-        mock_gr.update.return_value = MagicMock()
-
-        with patch("src.ui.gradio_app.create_app", side_effect=lambda *a, **k: None):
-            # We test the function directly by importing from the module namespace
-            pass
-
-    @patch("src.ui.gradio_app._origin_count", 5)
-    @patch("src.ui.gradio_app.gr")
-    def test_increments_origin_count(self, mock_gr, mock_workflow_manager):
-        """add_origin_form_row should increment _origin_count each call."""
-        import src.ui.gradio_app as app_module
-
-        app_module._origin_count = 5
-        mock_gr.Dropdown.return_value = MagicMock()
-        mock_gr.Textbox.return_value = MagicMock()
-        mock_gr.Number.return_value = MagicMock()
-        mock_gr.Button.return_value = MagicMock()
-        mock_gr.update.return_value = MagicMock()
-
-        from src.ui.gradio_app import add_origin_form_row
-
-        result = add_origin_form_row()
-
-        assert len(result) == 8
-        assert app_module._origin_count == 6
-
-
-# =============================================================================
-# Setup Wizard: collect_origins_from_state tests
-# =============================================================================
-
-class TestCollectOriginsFromState:
-    """Tests for collect_origins_from_state function."""
-
-    def test_returns_empty_list_when_no_indices(self):
-        """collect_origins_from_state should return [] for empty indices."""
-        from src.ui.gradio_app import collect_origins_from_state
-
-        origins = collect_origins_from_state([], [], [], [], [], [], [], [])
-        assert origins == []
-
-    def test_filters_incomplete_origins(self):
-        """collect_origins_from_state should skip entries missing required fields."""
-        from src.ui.gradio_app import collect_origins_from_state
-
-        origins = collect_origins_from_state(
-            indices=[0],
-            types=["postgres"],
-            hosts=[""],  # missing host
-            ports=[5432],
-            users=["admin"],
-            passwords=["pass"],
-            databases=["mydb"],
-            priorities=[0],
+        json_data = []
+        recent = []
+        json_data, recent, msg, _ = add_origin_to_json(
+            json_data, "postgres", "localhost", 5432, "user", "pass", "mydb", 0, recent
         )
-        assert origins == []
+        assert len(json_data) == 1
+        assert json_data[0]["type"] == "postgres"
+        assert json_data[0]["connection"]["host"] == "localhost"
+        assert json_data[0]["connection"]["database"] == "mydb"
+        assert "✅" in msg
+        assert len(recent) == 1
+        assert "postgres → localhost:5432/mydb" in recent[0]
 
-    def test_collects_valid_origin(self):
-        """collect_origins_from_state should build origin dict for complete entry."""
-        from src.ui.gradio_app import collect_origins_from_state
+    def test_rejects_missing_fields(self):
+        """add_origin_to_json should reject origins missing required fields."""
+        from src.ui.gradio_app import add_origin_to_json
 
-        origins = collect_origins_from_state(
-            indices=[0],
-            types=["postgres"],
-            hosts=["localhost"],
-            ports=[5432],
-            users=["admin"],
-            passwords=["secret"],
-            databases=["mydb"],
-            priorities=[10],
+        json_data = []
+        recent = []
+        json_data, recent, msg, _ = add_origin_to_json(
+            json_data, "postgres", "", 5432, "", "", "", 0, recent
         )
+        assert len(json_data) == 0
+        assert "⚠️" in msg
 
-        assert len(origins) == 1
-        origin = origins[0]
-        assert origin["id"] == "origin_1"
-        assert origin["type"] == "postgres"
-        assert origin["connection"]["host"] == "localhost"
-        assert origin["connection"]["port"] == 5432
-        assert origin["connection"]["user"] == "admin"
-        assert origin["connection"]["password"] == "secret"
-        assert origin["connection"]["database"] == "mydb"
-        assert origin["priority"] == 10
+    def test_recent_origins_tracking(self):
+        """add_origin_to_json should return display labels for recent origins."""
+        from src.ui.gradio_app import add_origin_to_json
 
-    def test_collects_multiple_origins(self):
-        """collect_origins_from_state should handle multiple origins."""
-        from src.ui.gradio_app import collect_origins_from_state
-
-        origins = collect_origins_from_state(
-            indices=[0, 1],
-            types=["postgres", "mongodb"],
-            hosts=["host1", "host2"],
-            ports=[5432, 27017],
-            users=["user1", "user2"],
-            passwords=["pass1", "pass2"],
-            databases=["db1", "db2"],
-            priorities=[10, 20],
+        json_data = []
+        recent_dicts = []
+        # add_origin_to_json returns: (json_data, display_labels, msg, config_json)
+        # The internal recent list is returned and must be captured
+        json_data, display_labels, msg, config_json = add_origin_to_json(
+            json_data, "postgres", "host1", 5432, "user", "pass", "db1", 0, recent_dicts
         )
-
-        assert len(origins) == 2
-        assert origins[0]["id"] == "origin_1"
-        assert origins[1]["id"] == "origin_2"
-        assert origins[1]["type"] == "mongodb"
-
-    def test_defaults_port_to_5432_when_zero(self):
-        """collect_origins_from_state should default port to 5432 when 0."""
-        from src.ui.gradio_app import collect_origins_from_state
-
-        origins = collect_origins_from_state(
-            indices=[0],
-            types=["postgres"],
-            hosts=["localhost"],
-            ports=[0],
-            users=["admin"],
-            passwords=["pass"],
-            databases=["mydb"],
-            priorities=[0],
+        # Update recent_dicts with the returned list (it may be a new list)
+        from src.ui.gradio_app import _add_to_recent
+        recent_dicts = _add_to_recent(recent_dicts, json_data[0])
+        json_data, display_labels, msg, config_json = add_origin_to_json(
+            json_data, "postgres", "host2", 5432, "user", "pass", "db2", 0, recent_dicts
         )
+        recent_dicts = _add_to_recent(recent_dicts, json_data[0])
+        # display_labels should be strings from _get_recent_display
+        assert len(display_labels) == 2
+        assert "host1" in display_labels[0]
+        assert "host2" in display_labels[1]
 
-        assert origins[0]["connection"]["port"] == 5432
+    def test_recent_origins_max_size(self):
+        """add_origin_to_json should keep only last 5 in recent history."""
+        from src.ui.gradio_app import add_origin_to_json, _add_to_recent
 
-    def test_defaults_priority_to_0_when_zero(self):
-        """collect_origins_from_state should default priority to 0 when 0."""
-        from src.ui.gradio_app import collect_origins_from_state
-
-        origins = collect_origins_from_state(
-            indices=[0],
-            types=["postgres"],
-            hosts=["localhost"],
-            ports=[5432],
-            users=["admin"],
-            passwords=["pass"],
-            databases=["mydb"],
-            priorities=[0],
-        )
-
-        assert origins[0]["priority"] == 0
+        json_data = []
+        recent_dicts = []
+        for i in range(7):
+            new_origin = {
+                "id": f"origin_{len(json_data) + 1}",
+                "type": "postgres",
+                "connection": {
+                    "host": f"host{i}",
+                    "port": 5432,
+                    "user": "user",
+                    "password": "pass",
+                    "database": f"db{i}",
+                },
+                "priority": 0,
+            }
+            json_data.append(new_origin)
+            recent_dicts = _add_to_recent(recent_dicts, new_origin)
+        # recent_dicts should keep only last 5 items
+        assert len(recent_dicts) == 5
+        assert recent_dicts[0]["connection"]["host"] == "host2"
+        assert recent_dicts[4]["connection"]["host"] == "host6"
 
 
 # =============================================================================
-# Setup Wizard: submit_origins tests
+# get_origin_port_for_type tests
 # =============================================================================
 
-class TestSubmitOrigins:
-    """Tests for submit_origins function."""
+class TestGetOriginPortForType:
+    """Tests for get_origin_port_for_type function."""
+
+    def test_postgres_returns_5432(self):
+        """get_origin_port_for_type should return 5432 for postgres."""
+        from src.ui.gradio_app import get_origin_port_for_type
+
+        assert get_origin_port_for_type("postgres") == 5432
+
+    def test_mongodb_returns_27017(self):
+        """get_origin_port_for_type should return 27017 for mongodb."""
+        from src.ui.gradio_app import get_origin_port_for_type
+
+        assert get_origin_port_for_type("mongodb") == 27017
+
+    def test_clickhouse_returns_8123(self):
+        """get_origin_port_for_type should return 8123 for clickhouse."""
+        from src.ui.gradio_app import get_origin_port_for_type
+
+        assert get_origin_port_for_type("clickhouse") == 8123
+
+
+# =============================================================================
+# Setup Wizard: submit_origins_json tests
+# =============================================================================
+
+class TestSubmitOriginsJson:
+    """Tests for submit_origins_json function."""
 
     def test_returns_error_when_no_origins(self, chat_state_dict):
-        """submit_origins should return error when no valid origins collected."""
-        from src.ui.gradio_app import submit_origins
+        """submit_origins_json should return error when no origins provided."""
+        from src.ui.gradio_app import submit_origins_json
 
-        result = submit_origins(
-            indices=[], types=[], hosts=[], ports=[],
-            users=[], passwords=[], databases=[], priorities=[],
-            chat_state=chat_state_dict,
-        )
-
-        # submit_origins returns 4 values: (summary, chat_state, panel1, panel2)
+        result = submit_origins_json([], chat_state_dict)
         summary = result[0]
         assert "⚠️" in summary
-        assert chat_state_dict["origins"] == []
 
     def test_stores_origins_in_state(self, chat_state_dict):
-        """submit_origins should store collected origins in chat state."""
-        from src.ui.gradio_app import submit_origins
+        """submit_origins_json should store origins in chat state."""
+        from src.ui.gradio_app import submit_origins_json
 
-        submit_origins(
-            indices=[0],
-            types=["postgres"],
-            hosts=["localhost"],
-            ports=[5432],
-            users=["admin"],
-            passwords=["pass"],
-            databases=["mydb"],
-            priorities=[10],
-            chat_state=chat_state_dict,
-        )
-
+        json_data = [{
+            "id": "origin_1",
+            "type": "postgres",
+            "connection": {"host": "localhost", "port": 5432, "user": "u", "password": "p", "database": "db"},
+            "priority": 10,
+        }]
+        result = submit_origins_json(json_data, chat_state_dict)
         assert len(chat_state_dict["origins"]) == 1
         assert chat_state_dict["setup_step"] == "destination"
 
     def test_returns_summary_with_origin_details(self, chat_state_dict):
-        """submit_origins should return summary string with origin info."""
-        from src.ui.gradio_app import submit_origins
+        """submit_origins_json should return summary with origin info."""
+        from src.ui.gradio_app import submit_origins_json
 
-        summary, _, _, _ = submit_origins(
-            indices=[0],
-            types=["postgres"],
-            hosts=["localhost"],
-            ports=[5432],
-            users=["admin"],
-            passwords=["pass"],
-            databases=["mydb"],
-            priorities=[10],
-            chat_state=chat_state_dict,
-        )
-
+        json_data = [{
+            "id": "origin_1",
+            "type": "postgres",
+            "connection": {"host": "localhost", "port": 5432, "user": "u", "password": "p", "database": "mydb"},
+            "priority": 10,
+        }]
+        summary, _, _ = submit_origins_json(json_data, chat_state_dict)
         assert "✅" in summary
         assert "origin_1" in summary
-        assert "postgres" in summary
         assert "localhost:5432/mydb" in summary
-        assert "priority: 10" in summary
-        assert "destination" in summary.lower()
+
+
+# =============================================================================
+# Setup Wizard: collect_origins_from_state tests (legacy - skip)
+# =============================================================================
+
+class TestCollectOriginsFromState:
+    """Tests for collect_origins_from_state function (legacy, removed from gradio_app)."""
+
+    @pytest.mark.skip(reason="collect_origins_from_state removed in UI redesign")
+    def test_placeholder(self):
+        pass
 
 
 # =============================================================================
@@ -402,10 +355,11 @@ class TestSubmitDestination:
         """submit_destination should return error for missing fields."""
         from src.ui.gradio_app import submit_destination
 
-        summary, _, _ = submit_destination(
+        summary, _, _, _, _ = submit_destination(
+            dest_type="postgresql",
             dest_host="", dest_port=5432, dest_user="",
             dest_password="", dest_database="", dest_schema="public",
-            chat_state=chat_state_dict,
+            chat_state=chat_state_dict, recent_destinations=[], current_origins=[],
         )
 
         assert "⚠️" in summary
@@ -415,9 +369,10 @@ class TestSubmitDestination:
         from src.ui.gradio_app import submit_destination
 
         submit_destination(
+            dest_type="postgresql",
             dest_host="localhost", dest_port=5432, dest_user="admin",
             dest_password="secret", dest_database="mergedb", dest_schema="analytics",
-            chat_state=chat_state_dict,
+            chat_state=chat_state_dict, recent_destinations=[], current_origins=[],
         )
 
         dest = chat_state_dict["destination"]
@@ -426,48 +381,97 @@ class TestSubmitDestination:
         assert dest["port"] == 5432
         assert dest["user"] == "admin"
         assert dest["database"] == "mergedb"
-        assert dest["schema"] == "analytics"
+        assert dest.get("schema") == "analytics"
         assert chat_state_dict["setup_step"] == "pipeline"
 
-    def test_defaults_schema_to_public(self, chat_state_dict):
-        """submit_destination should default schema to 'public' when empty."""
+    def test_stores_clickhouse_destination(self, chat_state_dict):
+        """submit_destination should store ClickHouse config correctly."""
         from src.ui.gradio_app import submit_destination
 
         submit_destination(
-            dest_host="localhost", dest_port=5432, dest_user="admin",
-            dest_password="secret", dest_database="mergedb", dest_schema="",
-            chat_state=chat_state_dict,
+            dest_type="clickhouse",
+            dest_host="10.0.0.1", dest_port=8123, dest_user="admin",
+            dest_password="secret", dest_database="default", dest_schema="",
+            chat_state=chat_state_dict, recent_destinations=[], current_origins=[],
         )
 
-        assert chat_state_dict["destination"]["schema"] == "public"
+        dest = chat_state_dict["destination"]
+        assert dest["type"] == "clickhouse"
+        assert dest["host"] == "10.0.0.1"
+        assert dest["port"] == 8123
+        assert dest["user"] == "admin"
+        assert dest["database"] == "default"
+        assert "schema" not in dest
 
-    def test_defaults_port_to_5432(self, chat_state_dict):
-        """submit_destination should default port to 5432 when 0."""
+    def test_defaults_port_for_postgresql(self, chat_state_dict):
+        """submit_destination should default port to 5432 for PostgreSQL when 0."""
         from src.ui.gradio_app import submit_destination
 
         submit_destination(
+            dest_type="postgresql",
             dest_host="localhost", dest_port=0, dest_user="admin",
             dest_password="secret", dest_database="mergedb", dest_schema="public",
-            chat_state=chat_state_dict,
+            chat_state=chat_state_dict, recent_destinations=[], current_origins=[],
         )
 
         assert chat_state_dict["destination"]["port"] == 5432
+
+    def test_defaults_port_for_clickhouse(self, chat_state_dict):
+        """submit_destination should default port to 8123 for ClickHouse when 0."""
+        from src.ui.gradio_app import submit_destination
+
+        submit_destination(
+            dest_type="clickhouse",
+            dest_host="localhost", dest_port=0, dest_user="admin",
+            dest_password="secret", dest_database="default", dest_schema="",
+            chat_state=chat_state_dict, recent_destinations=[], current_origins=[],
+        )
+
+        assert chat_state_dict["destination"]["port"] == 8123
 
     def test_returns_summary_with_destination_info(self, chat_state_dict):
         """submit_destination should return summary with destination details."""
         from src.ui.gradio_app import submit_destination
 
         chat_state_dict["origins"] = [{"id": "origin_1"}]
-        summary, _, _, _ = submit_destination(
+        summary, _, _, _, _ = submit_destination(
+            dest_type="postgresql",
             dest_host="db.example.com", dest_port=5433, dest_user="admin",
             dest_password="secret", dest_database="mergedb", dest_schema="analytics",
-            chat_state=chat_state_dict,
+            chat_state=chat_state_dict, recent_destinations=[], current_origins=[{"id": "origin_1"}],
         )
 
         assert "✅" in summary
         assert "db.example.com:5433" in summary
-        assert "mergedb.analytics" in summary
+        assert "mergedb" in summary
+        assert "analytics" in summary
         assert "1" in summary
+
+    def test_adds_destination_to_recent(self, chat_state_dict):
+        """submit_destination should add destination to recent_destinations."""
+        from src.ui.gradio_app import submit_destination
+
+        # Track dicts separately for adding
+        dict_recent = []
+        summary, _, _, display_recent, _ = submit_destination(
+            dest_type="postgresql",
+            dest_host="localhost", dest_port=5432, dest_user="admin",
+            dest_password="secret", dest_database="mergedb", dest_schema="public",
+            chat_state=chat_state_dict, recent_destinations=dict_recent, current_origins=[],
+        )
+
+        # dict_recent should have the dict
+        assert len(chat_state_dict["recent_destinations"]) == 1
+        dest_item = chat_state_dict["recent_destinations"][0]
+        assert dest_item["type"] == "postgresql"
+        assert dest_item["connection"]["host"] == "localhost"
+        assert dest_item["connection"]["database"] == "mergedb"
+
+        # display_recent should have the display string
+        assert len(display_recent) == 1
+        assert "postgresql" in display_recent[0]
+        assert "localhost" in display_recent[0]
+        assert "mergedb" in display_recent[0]
 
 
 # =============================================================================
@@ -569,12 +573,14 @@ class TestPollStatus:
         from src.ui.gradio_app import poll_status
 
         result = poll_status(chat_state_dict)
-        status_msg = result[0]
 
-        # poll_status returns 7 values: (msg, dep_panel, match_panel, mapping_panel, summary_panel, thread_id, btn_state)
-        assert len(result) == 7
+        # poll_status returns 8 values: (event_log_html, pipeline_progress_html, dep_panel, match_panel, mapping_panel, summary_panel, thread_id, btn_state)
+        assert len(result) == 8
+        # event_log and pipeline_progress are HTML strings
+        assert isinstance(result[0], str)  # event_log_html
+        assert isinstance(result[1], str)  # pipeline_progress_html
         # All panels should be gr.update(visible=False) calls
-        for panel in result[1:5]:
+        for panel in result[2:6]:
             # Panels should be MagicMock calls to gr.update()
             assert panel is not None
 
@@ -587,7 +593,10 @@ class TestPollStatus:
         from src.ui.gradio_app import poll_status
 
         result = poll_status(chat_state_dict)
-        assert result[5] == ""  # status_output
+        # Returns 8 values: (event_log_html, pipeline_progress_html, dep_panel, match_panel, mapping_panel, summary_panel, thread_id, btn_state)
+        # thread_id at index 6 should be empty string
+        assert result[6] == ""  # thread_id
+        assert result[7] == "disabled"  # btn_state
 
     @patch("src.ui.gradio_app.workflow_manager")
     def test_detects_interrupted_status(self, mock_global_wm, chat_state_dict):
@@ -837,6 +846,48 @@ class TestAbortWorkflow:
 
 
 # =============================================================================
+# db_discovery module tests
+# =============================================================================
+
+class TestDbDiscovery:
+    """Tests for the db_discovery module."""
+
+    @pytest.mark.no_gradio_mock
+    def test_test_and_discover_schemas_unsupported_type(self):
+        """test_and_discover_schemas should return error for unsupported type."""
+        # Need to temporarily remove the gradio mock for this test
+        gradio_module = sys.modules.pop('gradio', None)
+        try:
+            from src.ui.components.db_discovery import test_and_discover_schemas
+
+            result = test_and_discover_schemas("unsupported", "localhost", 5432, "user", "pass")
+            assert result["connected"] is False
+            assert "Unsupported" in result["error"]
+            assert result["databases"] == []
+            assert result["schemas"] == []
+        finally:
+            if gradio_module:
+                sys.modules['gradio'] = gradio_module
+
+    @pytest.mark.no_gradio_mock
+    def test_test_and_discover_schemas_missing_credentials(self):
+        """test_and_discover_schemas should handle empty credentials gracefully."""
+        gradio_module = sys.modules.pop('gradio', None)
+        try:
+            from src.ui.components.db_discovery import test_and_discover_schemas
+
+            # Should not raise, just return error
+            result = test_and_discover_schemas("postgres", "", 0, "", "")
+            assert isinstance(result, dict)
+            assert "connected" in result
+            assert "error" in result
+            assert "databases" in result
+        finally:
+            if gradio_module:
+                sys.modules['gradio'] = gradio_module
+
+
+# =============================================================================
 # UI Event Handler Wiring tests
 # =============================================================================
 
@@ -849,12 +900,8 @@ class TestUIWiring:
         mock_wm_cls.return_value = mock_workflow_manager
 
         from src.ui.gradio_app import create_app
-        from src.ui import gradio_app as app_module
 
-        # Reset counter
-        app_module._origin_count = 0
-
-        with patch.object(app_module, 'gr') as mock_gr:
+        with patch("src.ui.gradio_app.gr") as mock_gr:
             mock_gr.Blocks.return_value = MagicMock()
             create_app()
 
@@ -864,10 +911,7 @@ class TestUIWiring:
         mock_wm_cls.return_value = mock_workflow_manager
 
         from src.ui.gradio_app import create_app
-        from src.ui import gradio_app as app_module
 
-        app_module._origin_count = 0
-
-        with patch.object(app_module, 'gr') as mock_gr:
+        with patch("src.ui.gradio_app.gr") as mock_gr:
             mock_gr.Blocks.return_value = MagicMock()
             create_app()

@@ -144,11 +144,13 @@ class TestConnectorModuleExports:
         """All connector classes should be exported."""
         from src.mcp_server.connectors import (
             BaseConnector,
+            ClickHouseConnector,
             PostgresConnector,
             MongoDBConnector,
             DatabricksConnector,
         )
         assert BaseConnector is not None
+        assert ClickHouseConnector is not None
         assert PostgresConnector is not None
         assert MongoDBConnector is not None
         assert DatabricksConnector is not None
@@ -159,8 +161,10 @@ class TestConnectorModuleExports:
         assert "postgres" in _CONNECTOR_REGISTRY
         assert "mongodb" in _CONNECTOR_REGISTRY
         assert "databricks" in _CONNECTOR_REGISTRY
+        assert "clickhouse" in _CONNECTOR_REGISTRY
 
     def test_connector_registry_no_duplicates(self) -> None:
         """Connector registry should have no duplicate entries."""
         from src.mcp_server.connectors import _CONNECTOR_REGISTRY
-        assert len(_CONNECTOR_REGISTRY) == 3
+        assert len(_CONNECTOR_REGISTRY) == 4
+        assert "clickhouse" in _CONNECTOR_REGISTRY

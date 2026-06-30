@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.mcp_server.connectors.base import BaseConnector
+from src.mcp_server.connectors.clickhouse import ClickHouseConnector
 from src.mcp_server.connectors.databricks import DatabricksConnector
 from src.mcp_server.connectors.mongodb import MongoDBConnector
 from src.mcp_server.connectors.postgres import PostgresConnector
@@ -18,6 +19,7 @@ _CONNECTOR_REGISTRY: dict[str, type[BaseConnector]] = {
     "postgres": PostgresConnector,
     "mongodb": MongoDBConnector,
     "databricks": DatabricksConnector,
+    "clickhouse": ClickHouseConnector,
 }
 
 
@@ -27,7 +29,7 @@ def create_connector(origin_type: str, config: dict[str, Any]) -> BaseConnector:
     Parameters
     ----------
     origin_type : str
-        One of "postgres", "mongodb", "databricks".
+        One of "postgres", "mongodb", "databricks", "clickhouse".
     config : dict
         Connection configuration for the target origin/destination.
 
@@ -52,6 +54,7 @@ def create_connector(origin_type: str, config: dict[str, Any]) -> BaseConnector:
 
 __all__ = [
     "BaseConnector",
+    "ClickHouseConnector",
     "DatabricksConnector",
     "MongoDBConnector",
     "PostgresConnector",

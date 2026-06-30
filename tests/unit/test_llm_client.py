@@ -62,8 +62,9 @@ class TestLLMClientGetModel:
         client = LLMClient(config)
         # Model should not be initialized yet
         assert client._model is None
-        # Mock the ChatOpenAI class
-        with patch("src.llm.client.ChatOpenAI") as mock_chat:
+        # Mock the ChatOpenAI class and disable Langfuse tracing for this test
+        with patch("src.llm.client.ChatOpenAI") as mock_chat, \
+             patch("src.llm.client._get_langfuse_config", return_value={}):
             mock_model = MagicMock()
             mock_chat.return_value = mock_model
             model = client._get_model()
