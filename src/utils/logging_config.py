@@ -55,27 +55,37 @@ def setup_logging(
     stdlib_logger = logging.getLogger(app_name)
     stdlib_logger.setLevel(log_level)
 
-    formatter: logging.Formatter
+    # Prevent duplicate handlers if setup_logging is called multiple times
+    if stdlib_logger.handlers:
+        return
+
     if json:
         formatter = _JSONFormatter(app_name=app_name)
+        console_fmt = formatter
     else:
-        formatter = logging.Formatter(
-            fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        # Verbose console formatter with module name, line number, and level for DEBUG
+        console_fmt = logging.Formatter(
+            fmt="[%(levelname)-8s] %(asctime)s %(name)s:%(lineno)d — %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+        # Standard formatter for file (slightly more compact)
+        file_fmt = logging.Formatter(
+            fmt="%(asctime)s [%(levelname)s] %(name)s:%(lineno)d — %(message)s",
             datefmt="%Y-%m-%dT%H:%M:%S",
         )
 
     # Console handler
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(formatter)
+    console_handler.setFormatter(console_fmt)
     console_handler.setLevel(log_level)
     stdlib_logger.addHandler(console_handler)
 
-    # File handler (optional)
+    # File handler (optional) — write ALL levels >= log_level
     if log_file:
         log_path = Path(log_file)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         file_handler = logging.FileHandler(log_file, mode="a", encoding="utf-8")
-        file_handler.setFormatter(formatter)
+        file_handler.setFormatter(file_fmt if not json else formatter)
         file_handler.setLevel(log_level)
         stdlib_logger.addHandler(file_handler)
 
