@@ -29,7 +29,9 @@ class PostgresConnector(BaseConnector):
 
     async def _ensure_engine(self) -> AsyncEngine:
         """Create or return the async SQLAlchemy engine."""
+        logger.debug("ENTER _ensure_engine")
         if self._engine is not None:
+            logger.debug("Engine already exists, returning")
             return self._engine
 
         conn = self.config.get("connection", {})
@@ -41,6 +43,10 @@ class PostgresConnector(BaseConnector):
         database = conn.get("database") or ""
 
         url = f"{drivername}://{user}:{password}@{host}:{port}/{database}"
+        logger.debug(
+            "Creating PostgreSQL async engine: host=%s, port=%d, database=%s, user=%s",
+            host, port, database, user,
+        )
         self._engine = create_async_engine(
             url,
             echo=False,
@@ -48,17 +54,21 @@ class PostgresConnector(BaseConnector):
             pool_recycle=3600,
             pool_pre_ping=True,
         )
+        logger.debug("PostgreSQL async engine created successfully")
         return self._engine
 
     async def close(self) -> None:
+        logger.debug("ENTER close")
         if self._engine is not None:
             await self._engine.dispose()
             self._engine = None
+            logger.debug("PostgreSQL engine disposed")
 
     # ── Schema Discovery ──────────────────────────────────────────────
 
     async def discover_schema(self) -> dict[str, Any]:
         """Discover tables, columns, types, FKs, and one sample row per table."""
+        logger.debug("ENTER discover_schema")
         engine = await self._ensure_engine()
         meta = MetaData()
 
@@ -74,15 +84,18 @@ class PostgresConnector(BaseConnector):
         )
 
         tables: list[dict[str, Any]] = []
+        logger.debug("Querying information_schema.tables for user tables")
         async with engine.connect() as conn:  # type: ignore[attr-defined]
             result = await conn.execute(query)
             rows = result.mappings().fetchall()
             await conn.commit()
+        logger.debug("Found %d user tables", len(rows))
 
         for tbl_row in rows:
             schema_name = tbl_row["table_schema"]
             table_name = tbl_row["table_name"]
             full_name = f"{schema_name}.{table_name}"
+            logger.debug("Discovering schema for table: %s", full_name)
 
             try:
                 # Fetch columns
@@ -106,6 +119,7 @@ class PostgresConnector(BaseConnector):
                         "type": self._map_sql_type(c["data_type"], c.get("character_maximum_length")),
                         "nullable": c["is_nullable"] == "YES",
                     })
+                logger.debug("  Table %s: %d columns", full_name, len(columns))
 
                 # Fetch foreign keys
                 fk_query = text(
@@ -139,6 +153,7 @@ class PostgresConnector(BaseConnector):
                     }
                     for fk in fk_rows
                 ]
+                logger.debug("  Table %s: %d foreign keys", full_name, len(foreign_keys))
 
                 # Fetch sample row (limit 1)
                 sample_query = text(f'SELECT * FROM "{schema_name}"."{table_name}" LIMIT 1')
@@ -157,7 +172,9 @@ class PostgresConnector(BaseConnector):
                 })
             except Exception as exc:
                 logger.warning("Failed to discover schema for %s: %s", full_name, exc)
+                logger.debug("Continuing to next table after error for %s", full_name)
 
+        logger.debug("EXIT discover_schema - total tables: %d", len(tables))
         return {"tables": tables}
 
     # ── Data Extraction ───────────────────────────────────────────────
@@ -172,11 +189,15 @@ class PostgresConnector(BaseConnector):
         cursor: str | None = None,
     ) -> dict[str, Any]:
         """Extract rows with OFFSET/LIMIT pagination."""
+        logger.debug("ENTER extract: table=%s, columns=%s, filter=%s, batch_size=%d, cursor=%s",
+                      table_name, columns, filter, batch_size, cursor)
         engine = await self._ensure_engine()
 
         # Resolve schema-qualified table name (default to public)
+        original_table_name = table_name
         if "." not in table_name:
             table_name = f"public.{table_name}"
+        logger.debug("Resolved table name: %s", table_name)
 
         col_list = "* " if columns == ["*"] else ", ".join(f'"{c}"' for c in columns)
         sql = f"SELECT {col_list} FROM {table_name}"
@@ -190,15 +211,18 @@ class PostgresConnector(BaseConnector):
             conditions.append('"_imported" = :imported')
             params["imported"] = filter["_imported"]
             has_imported = True
+            logger.debug("Adding _imported filter: %s", filter["_imported"])
 
         # Custom filters from caller
         if filter and not has_imported:
             for k, v in filter.items():
                 conditions.append(f'"{k}" = :{k}')
                 params[k] = v
+                logger.debug("Adding custom filter: %s = %s", k, v)
 
         if conditions:
             sql += " WHERE " + " AND ".join(conditions)
+            logger.debug("Query WHERE clause: %s", conditions)
 
         # Pagination
         if cursor is not None:
@@ -208,6 +232,7 @@ class PostgresConnector(BaseConnector):
                 offset = 0
         else:
             offset = 0
+        logger.debug("Pagination: offset=%d, batch_size=%d", offset, batch_size)
 
         sql += f" ORDER BY 1 OFFSET :offset LIMIT :limit"
         params["offset"] = offset
@@ -218,20 +243,25 @@ class PostgresConnector(BaseConnector):
         if conditions:
             count_sql += " WHERE " + " AND ".join(conditions)
 
+        logger.debug("Executing count query")
         async with engine.connect() as conn:  # type: ignore[attr-defined]
             # Total count
             cr = await conn.execute(text(count_sql), params)
             total_count = cr.scalar()
             await conn.commit()
+        logger.debug("Total count: %d", total_count)
 
-            # Data batch
+        logger.debug("Executing data query")
+        async with engine.connect() as conn:  # type: ignore[attr-defined]
             dr = await conn.execute(text(sql), params)
             rows = [dict(r) for r in dr.mappings().fetchall()]
             await conn.commit()
+        logger.debug("Extracted %d rows", len(rows))
 
         next_cursor = str(offset + len(rows)) if len(rows) == batch_size else None
         origin_ids = [str(i) for i in range(offset, offset + len(rows))]
 
+        logger.debug("EXIT extract: rows=%d, next_cursor=%s", len(rows), next_cursor)
         return {
             "rows": rows,
             "column_names": list(rows[0].keys()) if rows else [],
@@ -249,22 +279,26 @@ class PostgresConnector(BaseConnector):
         ids: list[str],
     ) -> bool:
         """Set _imported = TRUE for rows whose id column matches the given IDs."""
+        logger.debug("ENTER mark_imported: table=%s, ids_count=%d", table_name, len(ids))
         engine = await self._ensure_engine()
 
         if "." not in table_name:
             table_name = f"public.{table_name}"
 
         if not ids:
+            logger.debug("No IDs provided, returning True early")
             return True
 
         placeholders = ", ".join(f":id_{i}" for i in range(len(ids)))
         sql = text(f'UPDATE "{table_name}" SET "_imported" = TRUE WHERE "id" IN ({placeholders})')
         params = {f"id_{i}": iid for i, iid in enumerate(ids)}
+        logger.debug("Executing UPDATE: %d IDs for table %s", len(ids), table_name)
 
         async with engine.connect() as conn:  # type: ignore[attr-defined]
             await conn.execute(sql, params)
             await conn.commit()
 
+        logger.debug("mark_imported completed successfully for %d IDs", len(ids))
         return True
 
     # ── Helpers ───────────────────────────────────────────────────────
