@@ -48,24 +48,32 @@ async def map_fields_impl(
             "schema_changes": [{"column": str, "data_type": str, "table": str}],
         }
     """
+    logger.debug("ENTER map_fields_impl: entity_type=%s, source_fields=%d, dest_columns=%d",
+                  entity_type, len(unified_schema), len(destination_schema.get("columns", [])))
     from src.mcp_server.server import _get_config
     config = _get_config()
 
     source_fields = list(unified_schema.keys())
     dest_columns = {col["name"]: col for col in destination_schema.get("columns", [])}
     dest_table = destination_schema.get("table", entity_type)
+    logger.debug("Source fields: %d, Destination columns: %d, Dest table: %s",
+                  len(source_fields), len(dest_columns), dest_table)
 
     field_mapping: dict[str, dict[str, Any]] = {}
     unmapped_fields: list[dict[str, Any]] = []
     schema_changes: list[dict[str, str]] = []
 
     # ── Phase 1: Exact name matching ─────────────────────────────────
+    logger.debug("Phase 1: Exact name matching")
+    exact_matches = 0
     for field in source_fields:
         if field in dest_columns:
             field_mapping[field] = {
                 "dest_column": field,
                 "confidence": 1.0,
             }
+            exact_matches += 1
+    logger.debug("Phase 1 complete: %d exact matches", exact_matches)
 
     # ── Phase 2: LLM-assisted mapping for remaining fields ───────────
     # In a full implementation, this would call the LLM with a prompt like:
@@ -74,7 +82,12 @@ async def map_fields_impl(
     # For now, we use heuristic matching:
     remaining_fields = [f for f in source_fields if f not in field_mapping]
     remaining_columns = set(dest_columns.keys()) - set(field_mapping.keys())
+    logger.debug("Phase 2: %d remaining fields, %d remaining columns",
+                  len(remaining_fields), len(remaining_columns))
 
+    heuristic_matches = 0
+    unmapped_count = 0
+    schema_change_count = 0
     for field in remaining_fields:
         best_match = None
         best_score = 0.0
@@ -93,6 +106,7 @@ async def map_fields_impl(
                 "confidence": best_score,
             }
             remaining_columns.discard(best_match)
+            heuristic_matches += 1
         elif best_score >= 0.3:
             # Low confidence — flag as unmapped for human review
             unmapped_fields.append({
@@ -101,6 +115,7 @@ async def map_fields_impl(
                 "suggested_column": best_match,
                 "reason": "Low confidence match; requires human review",
             })
+            unmapped_count += 1
         else:
             # No match found — may need new column
             source_type = unified_schema.get(field, {}).get("type", "STRING")
@@ -115,7 +130,16 @@ async def map_fields_impl(
                 "confidence": 0.0,
                 "requires_schema_change": True,
             }
+            schema_change_count += 1
 
+    logger.debug(
+        "Phase 2 complete: heuristic_matches=%d, unmapped=%d, schema_changes=%d",
+        heuristic_matches, unmapped_count, schema_change_count,
+    )
+    logger.debug(
+        "EXIT map_fields_impl: total_mappings=%d, unmapped=%d, schema_changes=%d",
+        len(field_mapping), len(unmapped_fields), len(schema_changes),
+    )
     return {
         "entity_type": entity_type,
         "field_mapping": field_mapping,
@@ -188,4 +212,5 @@ def _map_type_to_databricks(source_type: str) -> str:
 
 async def map_fields_handler(arguments: dict[str, Any]) -> dict[str, Any]:
     """MCP tool handler entry point."""
+    logger.debug("ENTER map_fields_handler: arguments_keys=%s", list(arguments.keys()))
     return await map_fields_impl(**arguments)

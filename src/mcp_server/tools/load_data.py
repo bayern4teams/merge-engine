@@ -16,6 +16,7 @@ from typing import Any
 
 from src.mcp_server.connectors import create_connector
 from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
+from src.mcp_server.connectors.clickhouse_destination import ClickHouseDestinationConnector
 from src.orchestrator.utils.retry import TransientError, PermanentError
 from src.utils.id_utils import generate_uuid
 
@@ -54,7 +55,10 @@ async def load_data_impl(
             "failed": int,
         }
     """
+    logger.debug("ENTER load_data_impl: entity_type=%s, records_count=%d",
+                  entity_type, len(records))
     if not records:
+        logger.debug("No records to load, returning early")
         return {
             "success": True,
             "entity_type": entity_type,
@@ -71,9 +75,12 @@ async def load_data_impl(
 
     # Get the destination table name — use entity_type as default (dynamic)
     dest_table = entity_type
+    logger.debug("Destination table: %s", dest_table)
 
     # Transform records using mapping
+    logger.debug("Transforming %d records with mapping=%s", len(records), mapping is not None)
     transformed_records = _transform_records(records, mapping, dest_table)
+    logger.debug("Transformed %d records", len(transformed_records))
 
     # Build provenance tracking
     for rec in transformed_records:
@@ -81,12 +88,14 @@ async def load_data_impl(
         rec["_source_count"] = rec.get("_source_count", 1)
 
     try:
+        logger.debug("Calling connector.load_batch: table=%s, records=%d", dest_table, len(transformed_records))
         result = connector.load_batch(
             table_name=dest_table,
             records=transformed_records,
             mapping=mapping,
             upsert_key="id",
         )
+        logger.debug("load_batch completed: %s", result)
         return {
             "success": True,
             "entity_type": entity_type,
@@ -104,8 +113,8 @@ async def load_data_impl(
 
 def _get_destination_connector(
     destination_config: dict[str, Any] | None,
-) -> PostgreSQLDestinationConnector:
-    """Get or create a PostgreSQL destination connector.
+):
+    """Get or create a destination connector (PostgreSQL or ClickHouse).
 
     Parameters
     ----------
@@ -114,9 +123,10 @@ def _get_destination_connector(
 
     Returns
     -------
-    PostgreSQLDestinationConnector
+    PostgreSQLDestinationConnector | ClickHouseDestinationConnector
     """
     if destination_config:
+        dest_type = destination_config.get("type", "postgresql")
         config_dict = {
             "host": destination_config.get("host", "localhost"),
             "port": destination_config.get("port", 5432),
@@ -129,6 +139,7 @@ def _get_destination_connector(
         from src.mcp_server.server import _get_config
         config = _get_config()
         dest = config.destination
+        dest_type = getattr(dest, "type", "postgresql") if dest else "postgresql"
         config_dict = {
             "host": dest.host or "localhost",
             "port": dest.port or 5432,
@@ -137,6 +148,11 @@ def _get_destination_connector(
             "database": dest.database or "",
             "schema": dest.schema_name or "public",
         }
+
+    if dest_type == "clickhouse":
+        # ClickHouse uses port 8123 by default
+        config_dict["port"] = destination_config.get("port", 8123) if destination_config else 8123
+        return ClickHouseDestinationConnector(config_dict)
 
     return PostgreSQLDestinationConnector(config_dict)
 
@@ -219,4 +235,5 @@ def _get_timestamp() -> str:
 
 async def load_data_handler(arguments: dict[str, Any]) -> dict[str, Any]:
     """MCP tool handler entry point."""
+    logger.debug("ENTER load_data_handler: arguments_keys=%s", list(arguments.keys()))
     return await load_data_impl(**arguments)

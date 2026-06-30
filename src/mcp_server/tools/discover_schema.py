@@ -57,20 +57,28 @@ async def discover_schema_impl(origin_config: dict[str, Any]) -> dict[str, Any]:
     PermanentError
         If the connector fails during discovery.
     """
+    logger.debug("ENTER discover_schema_impl: origin_id=%s, origin_type=%s",
+                  origin_config.get("id"), origin_config.get("type"))
     origin_id = origin_config.get("id", "unknown")
     origin_type = origin_config.get("type", "postgres")
     connection = origin_config.get("connection", {})
 
     if not origin_id:
+        logger.debug("Validation failed: missing origin_id")
         raise ValueError("origin_config must have 'id' field")
     if not origin_type:
+        logger.debug("Validation failed: missing origin_type")
         raise ValueError("origin_config must have 'type' field")
     if not connection:
+        logger.debug("Validation failed: missing connection dict")
         raise ValueError("origin_config must have 'connection' dict")
 
+    logger.debug("Creating connector for type: %s", origin_type)
     try:
         connector = create_connector(origin_type, connection)
+        logger.debug("Connector created, calling discover_schema()")
         schema = await connector.discover_schema()
+        logger.debug("Schema discovery completed: %d tables", len(schema.get("tables", [])))
         return {
             "origin_id": origin_id,
             "origin_type": origin_type,
@@ -97,11 +105,14 @@ async def discover_schema_handler(arguments: dict[str, Any]) -> dict[str, Any]:
     dict
         Schema representation.
     """
+    logger.debug("ENTER discover_schema_handler: arguments_keys=%s", list(arguments.keys()))
     if "origin_config" in arguments:
+        logger.debug("Using origin_config path")
         return await discover_schema_impl(arguments["origin_config"])
 
     # Legacy path: origin_id only
     origin_id = arguments.get("origin_id")
+    logger.debug("Using legacy origin_id path: origin_id=%s", origin_id)
     if not origin_id:
         raise ValueError("Either 'origin_id' or 'origin_config' must be provided")
 

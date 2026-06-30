@@ -39,20 +39,28 @@ async def mark_imported_impl(
     dict
         {"success": True, "marked_count": int}
     """
+    logger.debug("ENTER mark_imported_impl: origin_id=%s, table=%s, ids_count=%d",
+                  origin_config.get("id"), table_name, len(ids))
     origin_id = origin_config.get("id", "unknown")
     origin_type = origin_config.get("type", "postgres")
     connection = origin_config.get("connection", {})
 
     if not origin_id:
+        logger.debug("Validation failed: missing origin_id")
         raise ValueError("origin_config must have 'id' field")
     if not origin_type:
+        logger.debug("Validation failed: missing origin_type")
         raise ValueError("origin_config must have 'type' field")
     if not connection:
+        logger.debug("Validation failed: missing connection dict")
         raise ValueError("origin_config must have 'connection' dict")
 
+    logger.debug("Creating connector for type: %s", origin_type)
     try:
         connector = create_connector(origin_type, connection)
+        logger.debug("Calling connector.mark_imported: table=%s, ids_count=%d", table_name, len(ids))
         success = await connector.mark_imported(table_name=table_name, ids=ids)
+        logger.debug("mark_imported completed: success=%s, marked_count=%d", success, len(ids))
         return {
             "success": success,
             "marked_count": len(ids),
@@ -82,11 +90,14 @@ async def mark_imported_handler(arguments: dict[str, Any]) -> dict[str, Any]:
     dict
         Mark imported result.
     """
+    logger.debug("ENTER mark_imported_handler: arguments_keys=%s", list(arguments.keys()))
     if "origin_config" in arguments:
+        logger.debug("Using origin_config path")
         return await mark_imported_impl(**arguments)
 
     # Legacy path: origin_id only — look up from config
     origin_id = arguments.get("origin_id")
+    logger.debug("Using legacy origin_id path: origin_id=%s", origin_id)
     if not origin_id:
         raise ValueError("Either 'origin_id' or 'origin_config' must be provided")
 

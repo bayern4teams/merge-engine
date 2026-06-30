@@ -68,10 +68,13 @@ async def resolve_entities_impl(
             "llm_scored": int,
         }
     """
+    logger.debug("ENTER resolve_entities_impl: entity_type=%s, records_count=%d",
+                  entity_type, len(records))
     if blocking_keys is None:
         blocking_keys = []  # Ignored
 
     if not records:
+        logger.debug("No records to resolve, returning empty clusters")
         return {
             "entity_type": entity_type,
             "clusters": [],
@@ -89,6 +92,7 @@ async def resolve_entities_impl(
     # If only one record, it's its own cluster
     if len(records) == 1:
         rid = _record_id(records[0])
+        logger.debug("Single record, creating singleton cluster: %s", rid)
         return {
             "entity_type": entity_type,
             "clusters": [{
@@ -105,26 +109,36 @@ async def resolve_entities_impl(
 
     # ── Step 1: Generate candidate pairs ──────────────────────────────
     candidate_pairs = _generate_candidate_pairs(records)
+    logger.debug("Generated %d candidate pairs", len(candidate_pairs))
     logger.info(
         "Generated %d candidate pairs for entity '%s'",
         len(candidate_pairs), entity_type,
     )
 
     # ── Step 2: Score all pairs using LLM ─────────────────────────────
+    logger.debug("Step 2: Scoring %d candidate pairs using LLM", len(candidate_pairs))
     # Score pairs in parallel batches
     scored_pairs = await _score_pairs_batch(
         entity_type, candidate_pairs, records
     )
+    logger.debug("Scored %d pairs", len(scored_pairs))
 
     auto_matched = 0
     auto_excluded = 0
     llm_scored = len(scored_pairs)
 
     # ── Step 3: Connected Components (Union-Find) ─────────────────────
+    logger.debug("Step 3: Building clusters from %d scored pairs", len(scored_pairs))
     clusters, auto_matched, auto_excluded = _build_clusters(
         records, scored_pairs
     )
+    logger.debug("Built %d clusters: matched=%d, excluded=%d",
+                  len(clusters), auto_matched, auto_excluded)
 
+    logger.debug(
+        "EXIT resolve_entities_impl: clusters=%d, matched=%d, excluded=%d",
+        len(clusters), auto_matched, auto_excluded,
+    )
     return {
         "entity_type": entity_type,
         "clusters": clusters,
@@ -142,6 +156,8 @@ def _generate_candidate_pairs(
 
     Returns list of (id1, id2, record1, record2) tuples.
     """
+    logger.debug("_generate_candidate_pairs: %d records -> %d possible pairs",
+                  len(records), len(records) * (len(records) - 1) // 2)
     pairs = []
     n = len(records)
 
@@ -152,6 +168,7 @@ def _generate_candidate_pairs(
             if id1 != id2:  # Skip self-comparisons
                 pairs.append((id1, id2, records[i], records[j]))
 
+    logger.debug("_generate_candidate_pairs: generated %d pairs", len(pairs))
     return pairs
 
 
@@ -164,15 +181,22 @@ async def _score_pairs_batch(
 
     Returns list of (id1, id2, confidence) tuples.
     """
+    logger.debug("ENTER _score_pairs_batch: entity_type=%s, pairs_count=%d",
+                  entity_type, len(pairs))
     if not pairs:
+        logger.debug("No pairs to score, returning empty")
         return []
 
     results: list[tuple[str, str, float]] = []
 
     # Process in batches to avoid overwhelming the LLM
     batch_size = 10
+    total_batches = (len(pairs) + batch_size - 1) // batch_size
+    logger.debug("Processing %d pairs in %d batches of %d", len(pairs), total_batches, batch_size)
     for i in range(0, len(pairs), batch_size):
         batch = pairs[i : i + batch_size]
+        batch_num = i // batch_size + 1
+        logger.debug("Processing batch %d/%d: %d pairs", batch_num, total_batches, len(batch))
 
         # Run LLM scoring for each pair in parallel
         tasks = [_score_single_pair(entity_type, p) for p in batch]
@@ -189,7 +213,10 @@ async def _score_pairs_batch(
                     results.append((id1, id2, conf))  # Auto-exclude
                 else:
                     results.append((id1, id2, conf))  # Keep for clustering
+        logger.debug("Batch %d/%d completed: %d/10 scored successfully",
+                      batch_num, total_batches, sum(1 for r in batch_results if not isinstance(r, Exception)))
 
+    logger.debug("EXIT _score_pairs_batch: %d scored pairs", len(results))
     return results
 
 
