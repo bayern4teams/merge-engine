@@ -1,13 +1,14 @@
 # Core dependencies
 langgraph>=0.2.0
 langgraph-checkpoint
+langgraph-checkpoint-sqlite
 langchain>=0.2.0
 langchain-openai>=0.1.0
 langchain-anthropic>=0.1.0
-langfuse>=3.0.0,<4.0.0
 mcp>=1.0.0
 sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.0
+asyncpg>=0.29.0
 pymongo>=4.6.0
 databricks-sql-connector>=3.0.0
 clickhouse-connect>=0.7.0
@@ -15,8 +16,11 @@ pydantic>=2.0.0
 pyyaml>=6.0
 tenacity>=8.2.0
 uuid-utils>=0.8.0
-gradio>=4.0.0
+fastapi>=0.115.0
+uvicorn>=0.30.0
 structlog>=24.0.0
+# Observability (self-hosted Langfuse — docker/langfuse-compose.yml)
+langfuse>=3.0.0
 
-# Development dependencies
--r requirements-dev.txt
+# Per-run extraction spool: rows live here instead of in graph state.
+duckdb>=1.0.0

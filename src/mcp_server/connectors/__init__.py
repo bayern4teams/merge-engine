@@ -17,6 +17,7 @@ from src.mcp_server.connectors.postgres import PostgresConnector
 # Mapping of connector type strings to their classes
 _CONNECTOR_REGISTRY: dict[str, type[BaseConnector]] = {
     "postgres": PostgresConnector,
+    "postgresql": PostgresConnector,
     "mongodb": MongoDBConnector,
     "databricks": DatabricksConnector,
     "clickhouse": ClickHouseConnector,

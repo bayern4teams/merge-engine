@@ -10,6 +10,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from src.orchestrator.spool import clusters_for, store_clusters, unified_for
+from src.orchestrator.utils.cluster_edits import apply_cluster_decisions
+
+# Imported lazily inside the function that needs it — graph.py imports this
+# module, so a module-level import would be circular.
+
 logger = logging.getLogger("merge-engine.orchestrator.human_nodes")
 
 
@@ -34,8 +40,16 @@ async def human_review_deps(state: dict[str, Any]) -> dict[str, Any]:
         "data": {
             "dependency_tree": dependency_tree,
             "extraction_order": extraction_order,
+            # Which source tables will actually be read. A table missing here
+            # contributes nothing to the merge, so this is reviewed before any
+            # extraction happens rather than discovered afterwards.
+            "entity_tables": state.get("entity_tables", {}),
+            "table_selection_notes": state.get("table_selection_notes", ""),
         },
     }
+    warning = state.get("dependency_analysis_warning", "")
+    if warning:
+        interrupt_data["data"]["warning"] = warning
 
     # Check if user has already provided feedback (on resume)
     human_feedback = state.get("human_feedback")
@@ -53,6 +67,60 @@ async def human_review_deps(state: dict[str, Any]) -> dict[str, Any]:
     return {"interrupt_data": interrupt_data}
 
 
+async def human_review_scope(state: dict[str, Any]) -> dict[str, Any]:
+    """Interrupt: confirm which subject the scoped merge targets, and how.
+
+    Only reached for a scoped merge ("all information about Nova"). Shows the
+    subject, the candidate rows the match found (so a human can tell Nova Labs
+    from Novatech), and the per-entity join plan that will pull in that
+    subject's people and products. On resume the user may replace the plan
+    (edit-then-continue) — e.g. after narrowing to one specific company.
+    """
+    logger.debug("ENTER human_review_scope")
+    scope_plan = state.get("scope_plan", {}) or {}
+
+    interrupt_data = _build_scope_interrupt(scope_plan)
+
+    human_feedback = state.get("human_feedback")
+    if human_feedback and "scope_plan" in human_feedback:
+        logger.info("Human confirmed/edited the merge scope")
+        return {
+            "scope_plan": human_feedback["scope_plan"],
+            "errors": state.get("errors", []),
+        }
+
+    logger.debug("Interrupting at human_review_scope checkpoint")
+    logger.debug("EXIT human_review_scope (interrupt)")
+    return {"interrupt_data": interrupt_data}
+
+
+def _build_scope_interrupt(scope_plan: dict[str, Any]) -> dict[str, Any]:
+    """The payload the scope gate shows. Shared with the workflow manager,
+    since interrupt_before means this node's body has not run at the pause."""
+    entities = scope_plan.get("entities", {}) or {}
+    plan_rows: list[dict[str, Any]] = []
+    for entity, entries in entities.items():
+        for e in entries:
+            plan_rows.append({
+                "entity_type": entity,
+                "origin_id": e.get("origin_id"),
+                "table": e.get("table"),
+                "mode": e.get("mode"),
+                "columns": e.get("columns", []),
+                "reason": e.get("reason", ""),
+            })
+    return {
+        "node": "human_review_scope",
+        "title": "Confirm merge scope",
+        "data": {
+            "subject": scope_plan.get("subject", ""),
+            "subject_entity": scope_plan.get("subject_entity", "company"),
+            "candidates": scope_plan.get("candidates", []),
+            "plan": plan_rows,
+        },
+    }
+
+
 async def human_review_matches(state: dict[str, Any]) -> dict[str, Any]:
     """Interrupt: Show low-confidence entity matches for review.
 
@@ -64,7 +132,8 @@ async def human_review_matches(state: dict[str, Any]) -> dict[str, Any]:
     entity_clusters = state.get("entity_clusters", {})
     low_conf_clusters: list[dict[str, Any]] = []
 
-    for entity_type, clusters in entity_clusters.items():
+    for entity_type in entity_clusters:
+        clusters = clusters_for(state, entity_type)
         for cluster in clusters:
             if cluster.get("required_human_review", False):
                 low_conf_clusters.append({
@@ -89,8 +158,32 @@ async def human_review_matches(state: dict[str, Any]) -> dict[str, Any]:
     if human_feedback and "cluster_decisions" in human_feedback:
         logger.info("Human reviewed entity matches")
         logger.debug("Feedback keys: %s", list(human_feedback.keys()))
-        # Process decisions: keep, split, or merge clusters
-        return {"errors": state.get("errors", [])}
+        # Clusters live in the spool, so materialise them, apply the
+        # user's splits, and write the result back as a handle.
+        run_id = str(state.get("run_id") or "unknown")
+        materialised = {
+            e: clusters_for(state, e) for e in entity_clusters
+        }
+        rebuilt, stats = apply_cluster_decisions(
+            materialised, human_feedback["cluster_decisions"]
+        )
+        rebuilt = {
+            e: store_clusters(
+                run_id, e, cs,
+                needs_review=sum(
+                    1 for c in cs if c.get("required_human_review")
+                ),
+                multi_record=sum(
+                    1 for c in cs if len(c.get("record_ids", [])) > 1
+                ),
+            )
+            for e, cs in rebuilt.items()
+        }
+        logger.info("Cluster decisions applied: %s", stats)
+        return {
+            "entity_clusters": rebuilt,
+            "errors": state.get("errors", []),
+        }
 
     logger.debug("Interrupting at human_review_matches checkpoint")
     logger.debug("EXIT human_review_matches (interrupt)")
@@ -107,19 +200,22 @@ async def human_review_mappings(state: dict[str, Any]) -> dict[str, Any]:
     logger.debug("State keys: %s", list(state.keys()))
     field_mappings = state.get("field_mappings", {})
     pending_schema_changes = state.get("pending_schema_changes", [])
+    unmapped_fields_by_entity: dict[str, list[dict[str, Any]]] = state.get("unmapped_fields", {})
 
     logger.debug("field_mappings keys: %s", list(field_mappings.keys()))
     logger.debug("pending_schema_changes: %d", len(pending_schema_changes))
 
-    # Collect unmapped fields
+    # Collect unmapped (low-confidence) fields flagged by map_fields_impl
     unmapped: list[dict[str, Any]] = []
-    for entity_type, mapping in field_mappings.items():
-        for src_field, info in mapping.items():
-            if info.get("confidence", 1.0) == 0 and not info.get("requires_schema_change"):
-                unmapped.append({
-                    "entity_type": entity_type,
-                    "source_field": src_field,
-                })
+    for entity_type, fields in unmapped_fields_by_entity.items():
+        for field_info in fields:
+            unmapped.append({
+                "entity_type": entity_type,
+                "source_field": field_info.get("field"),
+                "confidence": field_info.get("confidence"),
+                "suggested_column": field_info.get("suggested_column"),
+                "reason": field_info.get("reason"),
+            })
 
     logger.debug("Unmapped fields: %d", len(unmapped))
 
@@ -168,7 +264,8 @@ async def human_final_approval(state: dict[str, Any]) -> dict[str, Any]:
         "errors": len(errors),
     }
 
-    for entity_type, records in unified_entities.items():
+    for entity_type in unified_entities:
+        records = unified_for(state, entity_type)
         summary["entity_counts"][entity_type] = len(records)
         for rec in records:
             conflicts = rec.get("_conflicts", rec.get("_conflicts", []))
@@ -186,8 +283,17 @@ async def human_final_approval(state: dict[str, Any]) -> dict[str, Any]:
         },
     }
 
+    # Only honor feedback addressed to this node — feedback left over from
+    # an earlier checkpoint (e.g. approving mappings) must not auto-approve
+    # the final load. Feedback without a "node" key is accepted for
+    # backward compatibility.
     human_feedback = state.get("human_feedback")
-    if human_feedback and human_feedback.get("approved"):
+    feedback_node = (human_feedback or {}).get("node")
+    if (
+        human_feedback
+        and human_feedback.get("approved")
+        and feedback_node in (None, "human_final_approval")
+    ):
         logger.info("Human approved final load")
         logger.debug("EXIT human_final_approval (approved)")
         return {
@@ -200,56 +306,90 @@ async def human_final_approval(state: dict[str, Any]) -> dict[str, Any]:
     return {"interrupt_data": interrupt_data}
 
 
+def build_error_interrupt(state: dict[str, Any]) -> dict[str, Any]:
+    """The payload the error gate shows: what failed, where, and how often.
+
+    Shared with ``WorkflowManager._build_interrupt_data`` because with
+    ``interrupt_before`` the node body has not run when the graph pauses.
+    """
+    from src.orchestrator.graph import NODE_SUCCESSOR
+
+    failure = state.get("failure") or {}
+    failed_node = failure.get("node") or "unknown"
+    attempts = (state.get("retry_counts") or {}).get(failed_node, 0)
+    successor = NODE_SUCCESSOR.get(failed_node, "")
+
+    return {
+        "node": "handle_error",
+        "title": f"Problem in step '{failed_node}'",
+        "data": {
+            "failed_node": failed_node,
+            "error": failure.get("error", ""),
+            "error_class": failure.get("error_class", ""),
+            "disposition": failure.get("disposition", "escalate"),
+            "context": failure.get("context", {}),
+            "attempts": attempts,
+            # Spelled out because "skip" sounds harmless and is not: it
+            # continues the merge with this step's output missing.
+            "options": [
+                {
+                    "decision": "retry",
+                    "label": f"Retry '{failed_node}'",
+                    "detail": "Run the failed step again from the same state.",
+                },
+                {
+                    "decision": "skip",
+                    "label": "Skip and continue",
+                    "detail": (
+                        f"Continue at '{successor}' without this step's "
+                        "output. The merge will be knowingly incomplete."
+                    ) if successor else "Continue without this step's output.",
+                },
+                {
+                    "decision": "abort",
+                    "label": "Abort the run",
+                    "detail": "Stop here. Nothing further is written.",
+                },
+            ],
+            "recent_errors": [str(e) for e in (state.get("errors") or [])[-5:]],
+        },
+    }
+
+
 async def handle_error(state: dict[str, Any]) -> dict[str, Any]:
-    """Error handler node: Inspect errors and decide retry vs escalate.
+    """Error escalation gate: stop, show a human what broke, take a decision.
 
-    Parameters
-    ----------
-    state : dict
-        MergeState with current error information.
-
-    Returns
-    -------
-    dict
-        Update dict. If max retries exceeded, triggers interrupt.
+    In the normal resume path this body does NOT run: ``resume_workflow``
+    calls ``update_state(as_node="handle_error")``, which tells LangGraph the
+    node has already executed, so the decision is recorded there instead.
+    This is the fallback for any path that reaches the node directly, and it
+    is written to be idempotent with that one — an already-cleared
+    ``failure`` makes it a no-op rather than a second audit entry.
     """
     logger.debug("ENTER handle_error")
-    logger.debug("State keys: %s", list(state.keys()))
-    errors = state.get("errors", [])
-    retry_counts = state.get("retry_counts", {})
-    current_node = state.get("current_step", "unknown")
+    failure = state.get("failure") or {}
+    if not failure:
+        logger.debug("EXIT handle_error (nothing to handle)")
+        return {}
 
-    logger.debug("errors count: %d, current_node: %s, retry_counts: %s", len(errors), current_node, retry_counts)
+    feedback = state.get("human_feedback") or {}
+    decision = str(feedback.get("decision") or "abort").strip().lower()
+    failed_node = failure.get("node") or "unknown"
 
-    if not errors:
-        logger.debug("No errors, returning immediately")
-        logger.debug("EXIT handle_error (no errors)")
-        return {"errors": errors}
+    retry_counts = dict(state.get("retry_counts") or {})
+    if decision == "retry":
+        retry_counts[failed_node] = retry_counts.get(failed_node, 0) + 1
 
-    last_error = errors[-1] if errors else ""
-    current_count = retry_counts.get(current_node, 0) + 1
-    max_attempts = 3  # Configurable
+    logger.warning(
+        "Error gate: user chose '%s' for failure in '%s' (%s)",
+        decision, failed_node, str(failure.get("error", ""))[:200],
+    )
+    logger.debug("EXIT handle_error (decision=%s)", decision)
 
-    retry_counts[current_node] = current_count
-
-    if current_count >= max_attempts:
-        # Escalate to human
-        logger.error("Max retries exceeded for node '%s': %s", current_node, last_error)
-        logger.debug("EXIT handle_error (escalate)")
-        return {
-            "errors": errors,
-            "retry_counts": retry_counts,
-            "interrupt_data": {
-                "node": "handle_error",
-                "title": "Error: Max Retries Exceeded",
-                "data": {
-                    "error": last_error,
-                    "node_name": current_node,
-                    "retry_count": current_count,
-                },
-            },
-        }
-
-    logger.warning("Retry %d/%d for node '%s': %s", current_count, max_attempts, current_node, last_error)
-    logger.debug("EXIT handle_error (retry)")
-    return {"errors": errors, "retry_counts": retry_counts}
+    return {
+        # Cleared so the failing node's router lets it through on a retry,
+        # and so a skipped failure does not re-trigger the gate.
+        "failure": {},
+        "handled_failures": [{**failure, "decision": decision}],
+        "retry_counts": retry_counts,
+    }

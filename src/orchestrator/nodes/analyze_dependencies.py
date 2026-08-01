@@ -12,7 +12,9 @@ import logging
 from typing import Any
 
 from src.llm import LLMClient, PROMPT_TEMPLATES
+from src.mcp_server.tools.select_entity_tables import select_entity_tables_impl
 from src.orchestrator.utils.dependency_sort import topological_sort
+from src.orchestrator.utils.retry_hints import apply_retry_hint
 
 logger = logging.getLogger("merge-engine.orchestrator.analyze_dependencies")
 
@@ -53,31 +55,86 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
             "errors": errors + [msg],
         }
 
+    # Decide WHICH tables hold each entity before reasoning about their order.
+    # Uses the full unfiltered catalog, so tables whose names don't resemble
+    # the entity ("customer" for person) are still considered.
+    entity_tables: dict[str, Any] = {}
+    table_selection_notes = ""
+
+    # A profile that already pins these entities' tables is reused rather than
+    # re-derived (Phase O.1). Re-asking the LLM would spend a call to
+    # re-decide something a human already confirmed, and it might answer
+    # differently — which is the whole reason profiles exist.
+    pinned = state.get("entity_tables") or {}
+    reuse_pinned = bool(pinned) and all(e in pinned for e in target_entities)
+
+    if reuse_pinned:
+        entity_tables = pinned
+        table_selection_notes = (
+            f"Reused from saved profile "
+            f"{state.get('profile_name') or '(unnamed)'}."
+        )
+        logger.info(
+            "Reusing pinned table selection for %s",
+            ", ".join(target_entities),
+        )
+    else:
+        try:
+            selection = await select_entity_tables_impl(
+                target_entities=target_entities,
+                schemas=schemas,
+                llm_config=llm_config,
+                user_request=state.get("user_request", ""),
+            )
+            entity_tables = selection.get("entity_tables", {})
+            table_selection_notes = selection.get("notes", "")
+            for entity, tables in entity_tables.items():
+                logger.info(
+                    "Entity '%s' -> %d source table(s): %s",
+                    entity, len(tables),
+                    ", ".join(
+                        f"{t['origin_id']}:{t['table']}" for t in tables
+                    ) or "none",
+                )
+        except Exception as exc:
+            # Never fail the run over table selection — extraction falls back
+            # to the alias heuristic when entity_tables is empty.
+            logger.warning(
+                "Entity table selection failed: %s", exc, exc_info=True
+            )
+
     # Build schema summary for LLM prompt
     schema_summary = _build_schema_summary(schemas, target_entities)
     logger.debug("Schema summary generated (%d chars)", len(schema_summary))
 
     client = LLMClient(llm_config)
-    prompt_template = PROMPT_TEMPLATES.get("dependency_analysis", "")
+    prompts = PROMPT_TEMPLATES.get("dependency_analysis", {})
+    system_prompt = prompts.get("system", "")
+    human_template = prompts.get("human", "")
 
-    if not prompt_template:
-        prompt_template = (
+    if not system_prompt or not human_template:
+        system_prompt = system_prompt or (
+            "You analyze database schemas to determine which entities must be "
+            "extracted before others. Return only JSON."
+        )
+        human_template = human_template or (
             "Analyze these schemas and determine dependencies for entities: {target_entities}\n\n{schema_info}"
         )
 
-    user_prompt = prompt_template.format(
-        target_entities=json.dumps(target_entities),
-        schema_info=schema_summary,
-    )
+    # The prompt contains literal JSON examples with curly braces,
+    # so str.format() would raise KeyError — substitute placeholders directly.
+    user_prompt = human_template.replace(
+        "{target_entities}", json.dumps(target_entities)
+    ).replace("{schema_info}", schema_summary)
+    # If a reviewer rejected the previous dependency tree, their reason is
+    # appended here so this rerun answers the objection.
+    user_prompt = apply_retry_hint(user_prompt, state, "analyze_dependencies")
     logger.debug("LLM prompt prepared (first 300 chars): %s", user_prompt[:300])
 
     try:
         logger.debug("Calling LLMClient.call_json for dependency analysis")
         result = await client.call_json(
-            system_prompt=(
-                "You analyze database schemas to determine which entities must be "
-                "extracted before others. Return only JSON."
-            ),
+            system_prompt=system_prompt,
             user_prompt=user_prompt,
         )
         logger.debug("LLM response received: %s", json.dumps(result, default=str)[:500])
@@ -99,7 +156,10 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
 
         return {
             "dependency_tree": dependency_tree,
+            "dependency_analysis_warning": "",
             "extraction_order": extraction_order,
+            "entity_tables": entity_tables,
+            "table_selection_notes": table_selection_notes,
             "errors": errors,
             "origins": state.get("origins", []),
             "destination": state.get("destination", {}),
@@ -122,9 +182,17 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
         msg = f"Dependency analysis failed: {exc}"
         logger.error(msg, exc_info=True)
         errors.append(msg)
+        warning = (
+            "Dependency order is UNVERIFIED — the LLM analysis failed, so this is "
+            "a flat, unordered fallback. Review carefully before approving; extraction "
+            "may hit foreign-key violations if a real dependency was missed."
+        )
         return {
             "dependency_tree": {e: [] for e in target_entities},
+            "dependency_analysis_warning": warning,
             "extraction_order": list(target_entities),
+            "entity_tables": entity_tables,
+            "table_selection_notes": table_selection_notes,
             "errors": errors,
             "origins": state.get("origins", []),
             "destination": state.get("destination", {}),
@@ -180,8 +248,16 @@ def _build_schema_summary(schemas: dict[str, Any], target_entities: list[str]) -
     return "\n".join(lines)
 
 
+# Common irregular plurals not caught by the +s/+es heuristic below.
+_IRREGULAR_PLURALS = {"person": "people"}
+
+
 def _table_may_be_related(table_name: str, target_entities: list[str]) -> bool:
     """Heuristic: check if a table name plausibly matches a target entity."""
+    if not target_entities:
+        # No entity filter information — include every table rather than
+        # hiding schema from the LLM.
+        return True
     name_lower = table_name.lower().replace("_", " ").replace("-", " ")
     for entity in target_entities:
         if entity in name_lower or name_lower in entity:
@@ -191,4 +267,9 @@ def _table_may_be_related(table_name: str, target_entities: list[str]) -> bool:
         entity_possessive = entity + "'" + "s"
         if entity_plural in name_lower or entity_possessive in name_lower:
             return True
-    return True  # Default: include all tables (schema summary may be small enough)
+        if entity + "es" in name_lower:
+            return True
+        irregular = _IRREGULAR_PLURALS.get(entity)
+        if irregular and irregular in name_lower:
+            return True
+    return False

@@ -7,14 +7,48 @@ Uses clickhouse-connect for driver access.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import clickhouse_connect
 
 from src.mcp_server.connectors.base import BaseConnector
+from src.mcp_server.connectors.filters import normalize_filter
+from src.mcp_server.connectors.watermark import detect_watermark_column
+from src.mcp_server.connectors.keyset import (
+    advance_boundary,
+    drop_consumed,
+    choose_keyset,
+    decode_cursor,
+    encode_cursor,
+)
 from src.orchestrator.utils.retry import TransientError, retry_on_transient
 
 logger = logging.getLogger("merge-engine.connectors.clickhouse")
+
+
+def _clickhouse_param_type(value: Any) -> str:
+    """Name the bind type for a keyset value.
+
+    ClickHouse's parameter syntax carries the type, and cursors round-trip
+    through JSON, so a timestamp arrives as text and has to be named as such
+    for the server to parse it back.
+    """
+    if isinstance(value, bool):
+        return "UInt8"
+    if isinstance(value, int):
+        return "Int64"
+    if isinstance(value, float):
+        return "Float64"
+    text = str(value)
+    if _CH_DATETIME_RE.match(text):
+        return "DateTime"
+    return "String"
+
+
+_CH_DATETIME_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}"
+)
 
 # ClickHouse substitution format for HTTP transport
 _CH_PARAM = " {name:String} "
@@ -37,7 +71,10 @@ class ClickHouseConnector(BaseConnector):
             logger.debug("Client already exists, returning")
             return self._client
 
-        conn = self.config.get("connection", {})
+        conn = self.config
+        # Support both flat connection dict and nested origin config shape
+        if "connection" in conn and isinstance(conn["connection"], dict):
+            conn = conn["connection"]
         host = conn.get("host", "localhost")
         port = conn.get("port", 8123)
         user = conn.get("user", "default")
@@ -98,10 +135,10 @@ class ClickHouseConnector(BaseConnector):
         for table_name in table_names:
             logger.debug("Discovering schema for table: %s", table_name)
             try:
-                # Fetch columns
+                # Fetch columns (+ whether each is part of the primary key)
                 cols_result = client.query(
                     f"""
-                    SELECT name, type, default_kind, default_expression
+                    SELECT name, type, default_kind, default_expression, is_in_primary_key
                     FROM system.columns
                     WHERE database = {{db:String}} AND table = {{tbl:String}}
                     ORDER BY position
@@ -110,8 +147,9 @@ class ClickHouseConnector(BaseConnector):
                 )
 
                 columns: list[dict[str, Any]] = []
+                primary_key: list[str] = []
                 for col_row in cols_result.result_rows:
-                    col_name, col_type, _, _ = col_row
+                    col_name, col_type, _, _, is_pk = col_row
                     nullable = "Nullable" in str(col_type)
                     base_type = col_type.replace("Nullable(", "").replace(")", "")
                     columns.append({
@@ -119,7 +157,9 @@ class ClickHouseConnector(BaseConnector):
                         "type": base_type,
                         "nullable": nullable,
                     })
-                logger.debug("Table %s has %d columns", table_name, len(columns))
+                    if is_pk:
+                        primary_key.append(col_name)
+                logger.debug("Table %s has %d columns, primary_key=%s", table_name, len(columns), primary_key)
 
                 # Fetch sample row
                 sample = client.query(
@@ -132,10 +172,16 @@ class ClickHouseConnector(BaseConnector):
                         sample_row[col_name] = row_data[i]
                 logger.debug("Table %s sample_row: %s", table_name, sample_row)
 
+                watermark_column, watermark_kind = detect_watermark_column(columns, primary_key)
+                logger.debug("Table %s: watermark_column=%s, watermark_kind=%s", table_name, watermark_column, watermark_kind)
+
                 tables.append({
                     "name": table_name,
                     "columns": columns,
                     "foreign_keys": [],  # ClickHouse doesn't have native FKs in the same sense
+                    "primary_key": primary_key,
+                    "watermark_column": watermark_column,
+                    "watermark_kind": watermark_kind,
                     "sample_row": sample_row,
                 })
             except Exception as exc:
@@ -155,10 +201,28 @@ class ClickHouseConnector(BaseConnector):
         filter: dict[str, Any] | None = None,
         batch_size: int = 1000,
         cursor: str | None = None,
+        watermark: dict[str, Any] | None = None,
+        pk_columns: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Extract rows with OFFSET/LIMIT pagination."""
-        logger.debug("ENTER extract: table=%s, columns=%s, filter=%s, batch_size=%d, cursor=%s",
-                      table_name, columns, filter, batch_size, cursor)
+        """Extract rows a batch at a time, seeking rather than counting past.
+
+        ``LIMIT offset, n`` makes ClickHouse re-read and discard every earlier
+        row on every batch — on the 43M-row cell_towers table that dominates
+        the whole extraction. When the table offers a unique ordering
+        (watermark plus sorting/primary key) each batch instead asks for the
+        rows *after* the last one seen.
+
+        Parameters
+        ----------
+        watermark : dict, optional
+            ``{"column": str, "since": Any, "kind": "numeric"|"timestamp"}``.
+            When given, pushes an incremental ``> since`` filter down into
+            the query and orders by that column ascending.
+        pk_columns : list[str], optional
+            Key columns used to break ties in a non-unique watermark.
+        """
+        logger.debug("ENTER extract: table=%s, columns=%s, filter=%s, batch_size=%d, cursor=%s, watermark=%s",
+                      table_name, columns, filter, batch_size, cursor, watermark)
         client = await self._ensure_client()
 
         col_list = "*" if columns == ["*"] else ", ".join(f"`{c}`" for c in columns)
@@ -167,53 +231,121 @@ class ClickHouseConnector(BaseConnector):
         conditions: list[str] = []
         params: dict[str, Any] = {}
 
-        # Default filter: exclude imported rows
-        has_imported = False
-        if filter and filter.get("_imported") is not None:
-            conditions.append(f"`_imported` = {{imported:Int}}")
-            params["imported"] = filter["_imported"]
-            has_imported = True
-            logger.debug("Adding _imported filter: %s", filter["_imported"])
+        # Custom filters: equals (back-compat), ILIKE (subject-name substring)
+        # and IN (foreign key in a set of subject ids). ClickHouse binds by
+        # declared type, so each value's placeholder type is inferred from the
+        # Python value — an int id compared as a String would never match.
+        for i, cond in enumerate(normalize_filter(filter)):
+            col, op, val = cond["column"], cond["op"], cond["value"]
+            if op == "ilike":
+                conditions.append(f"toString(`{col}`) ILIKE {{f{i}:String}}")
+                params[f"f{i}"] = f"%{val}%"
+            elif op == "in":
+                names = [f"f{i}_{j}" for j in range(len(val))]
+                conditions.append(
+                    f"`{col}` IN ("
+                    + ", ".join(
+                        f"{{{n}:{_clickhouse_param_type(v)}}}" for n, v in zip(names, val)
+                    )
+                    + ")"
+                )
+                for n, v in zip(names, val):
+                    params[n] = v
+            else:
+                conditions.append(f"`{col}` = {{f{i}:{_clickhouse_param_type(val)}}}")
+                params[f"f{i}"] = val
+            logger.debug("Adding custom filter: %s %s %s", col, op, val)
 
-        # Custom filters
-        if filter and not has_imported:
-            for k, v in filter.items():
-                conditions.append(f"`{k}` = {{{k}:String}}")
-                params[k] = v
-                logger.debug("Adding custom filter: %s = %s", k, v)
+        if watermark and watermark.get("since") is not None:
+            wm_col = watermark["column"]
+            wm_type = "DateTime" if watermark.get("kind") == "timestamp" else "Int64"
+            conditions.append(f"`{wm_col}` > {{wm_since:{wm_type}}}")
+            params["wm_since"] = watermark["since"]
+            logger.debug("Adding watermark filter: %s > %s", wm_col, watermark["since"])
 
         if conditions:
-            sql += " WHERE " + " AND ".join(conditions)
             logger.debug("Query WHERE clause: %s", conditions)
 
-        # Pagination
-        offset = 0
-        if cursor is not None:
-            try:
-                offset = int(cursor)
-            except ValueError:
-                offset = 0
-        logger.debug("Pagination: offset=%d, batch_size=%d", offset, batch_size)
+        # ── Pagination ──────────────────────────────────────────────
+        position = decode_cursor(cursor)
+        offset = position["offset"]
+        keyset = choose_keyset(watermark, pk_columns)
 
-        # Build the final SQL with inline integers (offset/limit are always safe ints here)
-        # ClickHouse HTTP transport uses LIMIT offset, count syntax (not OFFSET ... LIMIT)
+        # Built before the keyset predicate is added, or it would only count
+        # the rows still ahead of us.
+        count_conditions = list(conditions)
+
+        # ClickHouse has no uniqueness constraint. What `system.columns`
+        # reports as the primary key is the sparse sorting key, and MergeTree
+        # happily stores duplicate rows under it — cell_towers has 43,276,150
+        # rows for ~42.97M distinct (radio, mcc, net, created, cell) tuples.
+        # Trusting it the way a PostgreSQL PRIMARY KEY can be trusted would
+        # take the strict-">" fast path and drop rows at every batch boundary,
+        # so this connector always paginates defensively.
+        boundary_seen = position["boundary_seen"]
+        if keyset:
+            quoted_keyset = ", ".join(f"`{c}`" for c in keyset)
+            if position["keyset"]:
+                # ClickHouse supports tuple comparison, which is exactly
+                # "at or after this row in this ordering". It is ">=" and not
+                # ">" because the key is not guaranteed unique — the rows at
+                # the boundary key that were already returned get dropped in
+                # Python below rather than excluded by SQL, which would also
+                # discard the ones we have not seen.
+                placeholders = []
+                for i, value in enumerate(position["keyset"]):
+                    ch_type = _clickhouse_param_type(value)
+                    placeholders.append(f"{{ks_{i}:{ch_type}}}")
+                    params[f"ks_{i}"] = value
+                conditions.append(
+                    f"({quoted_keyset}) >= ({', '.join(placeholders)})"
+                )
+            order_clause = quoted_keyset
+            # Deterministic tiebreak within a run of equal keys, so
+            # "skip the ones already returned" skips the same rows twice.
+            order_clause += ", cityHash64(*)"
+            logger.debug("Keyset pagination on (%s), after=%s",
+                         quoted_keyset, position["keyset"])
+        else:
+            order_clause = (
+                f"`{watermark['column']}`"
+                if watermark and watermark.get("column") else "tuple()"
+            )
+            logger.warning(
+                "Table %s has no watermark or key column to seek on — using "
+                "OFFSET pagination, which slows down as the table is read.",
+                table_name,
+            )
+
         final_sql = f"SELECT {col_list} FROM `{self._database}`.`{table_name}`"
         if conditions:
             final_sql += " WHERE " + " AND ".join(conditions)
-        final_sql += f" ORDER BY tuple() LIMIT {int(offset)}, {int(batch_size)}"
+        final_sql += f" ORDER BY {order_clause}"
+        # ClickHouse HTTP transport uses LIMIT offset, count syntax.
+        # The window is widened by boundary_seen so that after dropping the
+        # already-returned boundary rows a full batch still remains.
+        fetch_limit = int(batch_size) + int(boundary_seen)
+        if keyset:
+            final_sql += f" LIMIT {fetch_limit}"
+        else:
+            final_sql += f" LIMIT {int(offset)}, {int(batch_size)}"
 
-        # Total count
-        count_sql = f"SELECT COUNT(*) AS cnt FROM `{self._database}`.`{table_name}`"
-        if conditions:
-            count_sql += " WHERE " + " AND ".join(conditions)
-        logger.debug("Executing count query")
-
-        try:
-            total_result = client.query(count_sql, parameters=params)
-            total_count = total_result.result_rows[0][0] if total_result.result_rows else 0
-        except Exception:
-            total_count = 0
-        logger.debug("Total row count: %d", total_count)
+        # ── Row count: once per table, not once per batch ───────────
+        total_count = position["total_count"]
+        if total_count is None:
+            count_sql = f"SELECT COUNT(*) AS cnt FROM `{self._database}`.`{table_name}`"
+            if count_conditions:
+                count_sql += " WHERE " + " AND ".join(count_conditions)
+            logger.debug("Executing count query (first batch only)")
+            try:
+                total_result = client.query(count_sql, parameters=params)
+                total_count = (
+                    total_result.result_rows[0][0]
+                    if total_result.result_rows else 0
+                )
+            except Exception:
+                total_count = 0
+        logger.debug("Total row count: %s", total_count)
 
         logger.debug("Executing data query")
         result = client.query(final_sql, parameters=params)
@@ -224,8 +356,31 @@ class ClickHouseConnector(BaseConnector):
                 row_dict[col_name] = row_data[i]
             rows.append(row_dict)
 
-        logger.debug("Extracted %d rows (total available: %d)", len(rows), total_count)
-        next_cursor = str(offset + len(rows)) if len(rows) == batch_size else None
+        fetched = len(rows)
+        if keyset:
+            rows = drop_consumed(
+                rows, keyset, position["keyset"], boundary_seen
+            )[:batch_size]
+
+        logger.debug("Extracted %d rows (total available: %s)", len(rows), total_count)
+        next_cursor = None
+        if keyset:
+            # A short window means the table is exhausted; a full one means
+            # there may be more. Judging by len(rows) instead would stop early
+            # whenever dropped boundary rows left the batch under-full.
+            if fetched == fetch_limit and rows:
+                keyset_values, next_seen = advance_boundary(
+                    rows, keyset, position["keyset"], boundary_seen
+                )
+                next_cursor = encode_cursor(
+                    keyset_values=keyset_values,
+                    total_count=total_count,
+                    boundary_seen=next_seen,
+                )
+        elif len(rows) == batch_size:
+            next_cursor = encode_cursor(
+                offset=offset + len(rows), total_count=total_count
+            )
         origin_ids = [str(i) for i in range(offset, offset + len(rows))]
 
         logger.debug("EXIT extract: rows=%d, next_cursor=%s", len(rows), next_cursor)
@@ -236,34 +391,5 @@ class ClickHouseConnector(BaseConnector):
             "next_cursor": next_cursor,
             "origin_ids": origin_ids,
         }
-
-    # ── Import Flagging ───────────────────────────────────────────────
-
-    @retry_on_transient(max_attempts=3, backoff="exponential")
-    async def mark_imported(
-        self,
-        table_name: str,
-        ids: list[str],
-    ) -> bool:
-        """Set _imported = 1 for rows matching the given id values."""
-        logger.debug("ENTER mark_imported: table=%s, ids_count=%d", table_name, len(ids))
-        client = await self._ensure_client()
-
-        if not ids:
-            logger.debug("No IDs provided, returning True early")
-            return True
-
-        # Build ALTER TABLE UPDATE for ClickHouse
-        placeholders = ", ".join(f"{{{i}:String}}" for i in range(len(ids)))
-        sql = (
-            f"ALTER TABLE `{self._database}`.`{table_name}` "
-            f"UPDATE `_imported` = 1 WHERE `id` IN ({placeholders})"
-        )
-        logger.debug("Executing ALTER TABLE UPDATE: %d IDs", len(ids))
-
-        param_values = {str(i): iid for i, iid in enumerate(ids)}
-        client.execute_query(sql, param_values, server_database=self._database)
-        logger.debug("mark_imported completed successfully for %d IDs", len(ids))
-        return True
 
     # ── Helpers ───────────────────────────────────────────────────────

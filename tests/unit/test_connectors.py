@@ -75,7 +75,7 @@ class TestBaseConnector:
     def test_all_abstract_methods_defined(self) -> None:
         """BaseConnector should define expected abstract methods."""
         abstract_methods = [
-            "discover_schema", "extract", "mark_imported", "close",
+            "discover_schema", "extract", "close",
         ]
         for method in abstract_methods:
             assert hasattr(BaseConnector, method)
@@ -166,5 +166,7 @@ class TestConnectorModuleExports:
     def test_connector_registry_no_duplicates(self) -> None:
         """Connector registry should have no duplicate entries."""
         from src.mcp_server.connectors import _CONNECTOR_REGISTRY
-        assert len(_CONNECTOR_REGISTRY) == 4
+        # 4 connector types plus the "postgresql" alias for "postgres"
+        assert len(_CONNECTOR_REGISTRY) == 5
         assert "clickhouse" in _CONNECTOR_REGISTRY
+        assert _CONNECTOR_REGISTRY["postgresql"] is _CONNECTOR_REGISTRY["postgres"]

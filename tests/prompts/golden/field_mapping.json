@@ -1,0 +1,185 @@
+{
+  "stage": "field_mapping",
+  "description": "Golden mapping cases mirroring the seeded test DBs. Score = per-field action (and dest_column when action=map) equals expected.",
+  "cases": [
+    {
+      "id": "fm-01-company-semantic-renames",
+      "input": {
+        "entity_type": "company",
+        "dest_table": "companies",
+        "destination_schema": [
+          {"name": "id", "type": "BIGINT"},
+          {"name": "name", "type": "TEXT"},
+          {"name": "industry", "type": "TEXT"},
+          {"name": "city", "type": "TEXT"},
+          {"name": "founded_year", "type": "INTEGER"},
+          {"name": "_source_ids", "type": "TEXT"}
+        ],
+        "fields": [
+          {"name": "org_title", "type": "str", "sample_values": ["Acme Intl Corporation", "Globex GmbH", "Northwind Trading Co"]},
+          {"name": "sector", "type": "str", "sample_values": ["Logistics", "Manufacturing"]},
+          {"name": "hq_city", "type": "str", "sample_values": ["Berlin", "Munich"]},
+          {"name": "established", "type": "int", "sample_values": [1998, 2004]}
+        ]
+      },
+      "expected": {
+        "org_title": {"action": "map", "dest_column": "name"},
+        "sector": {"action": "map", "dest_column": "industry"},
+        "hq_city": {"action": "map", "dest_column": "city"},
+        "established": {"action": "map", "dest_column": "founded_year"}
+      }
+    },
+    {
+      "id": "fm-02-person-semantic-renames",
+      "input": {
+        "entity_type": "person",
+        "dest_table": "people",
+        "destination_schema": [
+          {"name": "id", "type": "BIGINT"},
+          {"name": "name", "type": "TEXT"},
+          {"name": "email", "type": "TEXT"},
+          {"name": "phone", "type": "TEXT"},
+          {"name": "_source_ids", "type": "TEXT"}
+        ],
+        "fields": [
+          {"name": "name_full", "type": "str", "sample_values": ["Sara Ahmadi", "Katarina Weiss"]},
+          {"name": "email_addr", "type": "str", "sample_values": ["s.ahmadi@acme.com"]},
+          {"name": "tel_number", "type": "str", "sample_values": ["+49 30 1234567"]}
+        ]
+      },
+      "expected": {
+        "name_full": {"action": "map", "dest_column": "name"},
+        "email_addr": {"action": "map", "dest_column": "email"},
+        "tel_number": {"action": "map", "dest_column": "phone"}
+      }
+    },
+    {
+      "id": "fm-03-genuinely-new-column",
+      "input": {
+        "entity_type": "company",
+        "dest_table": "companies",
+        "destination_schema": [
+          {"name": "id", "type": "BIGINT"},
+          {"name": "name", "type": "TEXT"},
+          {"name": "_source_ids", "type": "TEXT"}
+        ],
+        "fields": [
+          {"name": "esg_risk_score", "type": "float", "sample_values": [0.42, 0.77]},
+          {"name": "org_title", "type": "str", "sample_values": ["Acme Corp"]}
+        ]
+      },
+      "expected": {
+        "esg_risk_score": {"action": "new_column"},
+        "org_title": {"action": "map", "dest_column": "name"}
+      }
+    },
+    {
+      "id": "fm-04-sample-values-beat-names",
+      "input": {
+        "entity_type": "person",
+        "dest_table": "people",
+        "destination_schema": [
+          {"name": "id", "type": "BIGINT"},
+          {"name": "name", "type": "TEXT"},
+          {"name": "email", "type": "TEXT"},
+          {"name": "membership_tier", "type": "TEXT"},
+          {"name": "_source_ids", "type": "TEXT"}
+        ],
+        "fields": [
+          {"name": "flag", "type": "str", "sample_values": ["gold", "silver", "platinum"]}
+        ]
+      },
+      "expected": {
+        "flag": {"action": "map", "dest_column": "membership_tier"}
+      }
+    },
+    {
+      "id": "fm-05-cryptic-abbreviations",
+      "input": {
+        "entity_type": "company",
+        "dest_table": "companies",
+        "destination_schema": [
+          {"name": "id", "type": "BIGINT"},
+          {"name": "name", "type": "TEXT"},
+          {"name": "industry", "type": "TEXT"},
+          {"name": "city", "type": "TEXT"},
+          {"name": "founded_year", "type": "INTEGER"},
+          {"name": "_source_ids", "type": "TEXT"}
+        ],
+        "fields": [
+          {"name": "co_nm", "type": "str", "sample_values": ["Acme Corp", "Delta LLC"]},
+          {"name": "yr_est", "type": "int", "sample_values": [1998, 2010]},
+          {"name": "hq_loc", "type": "str", "sample_values": ["Berlin", "Austin"]}
+        ]
+      },
+      "expected": {
+        "co_nm": {"action": "map", "dest_column": "name"},
+        "yr_est": {"action": "map", "dest_column": "founded_year"},
+        "hq_loc": {"action": "map", "dest_column": "city"}
+      }
+    },
+    {
+      "id": "fm-06-two-letter-name-sample-values-decide",
+      "input": {
+        "entity_type": "person",
+        "dest_table": "people",
+        "destination_schema": [
+          {"name": "id", "type": "BIGINT"},
+          {"name": "name", "type": "TEXT"},
+          {"name": "email", "type": "TEXT"},
+          {"name": "phone", "type": "TEXT"},
+          {"name": "membership_tier", "type": "TEXT"},
+          {"name": "_source_ids", "type": "TEXT"}
+        ],
+        "fields": [
+          {"name": "cd", "type": "str", "sample_values": ["gold", "silver", "bronze"]}
+        ]
+      },
+      "expected": {
+        "cd": {"action": "map", "dest_column": "membership_tier"}
+      }
+    },
+    {
+      "id": "fm-07-numeric-vs-text-disambiguation",
+      "input": {
+        "entity_type": "company",
+        "dest_table": "companies",
+        "destination_schema": [
+          {"name": "id", "type": "BIGINT"},
+          {"name": "name", "type": "TEXT"},
+          {"name": "employee_count", "type": "INTEGER"},
+          {"name": "industry", "type": "TEXT"},
+          {"name": "_source_ids", "type": "TEXT"}
+        ],
+        "fields": [
+          {"name": "org", "type": "str", "sample_values": ["Acme Corp", "Globex GmbH"]},
+          {"name": "org_size", "type": "int", "sample_values": [45, 230]}
+        ]
+      },
+      "expected": {
+        "org": {"action": "map", "dest_column": "name"},
+        "org_size": {"action": "map", "dest_column": "employee_count"}
+      }
+    },
+    {
+      "id": "fm-08-genuinely-unmappable-new-column",
+      "input": {
+        "entity_type": "person",
+        "dest_table": "people",
+        "destination_schema": [
+          {"name": "id", "type": "BIGINT"},
+          {"name": "name", "type": "TEXT"},
+          {"name": "email", "type": "TEXT"},
+          {"name": "phone", "type": "TEXT"},
+          {"name": "_source_ids", "type": "TEXT"}
+        ],
+        "fields": [
+          {"name": "linkedin_url", "type": "str", "sample_values": ["https://linkedin.com/in/abc", "https://linkedin.com/in/xyz"]}
+        ]
+      },
+      "expected": {
+        "linkedin_url": {"action": "new_column"}
+      }
+    }
+  ]
+}

@@ -12,6 +12,15 @@ from typing import Any
 import pytest
 import yaml
 
+# Must be set BEFORE src.ui.connections is imported anywhere: its module-level
+# CONFIG_PATH reads this env var. Without it, tests that exercise the recent-
+# connections history overwrite the user's real
+# config/recent_connections.json with fixture data.
+os.environ.setdefault(
+    "MERGE_ENGINE_HISTORY_PATH",
+    os.path.join(tempfile.gettempdir(), "merge_engine_test_history.json"),
+)
+
 from src.utils.config_loader import load_config, Config
 from src.orchestrator.workflow_manager import WorkflowManager
 

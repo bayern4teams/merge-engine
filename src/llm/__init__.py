@@ -2,6 +2,11 @@
 
 Provides prompt templates and an async LLM client for
 entity resolution, dependency analysis, and field mapping.
+
+Each stage's prompt is a (system, human) pair loaded from
+``<name>.system.txt`` / ``<name>.human.txt`` in ``prompts/``: the system
+message carries the role, rules, and output contract; the human message
+carries few-shot examples plus the live input template.
 """
 
 from __future__ import annotations
@@ -14,6 +19,15 @@ from src.llm.client import LLMClient, create_llm_client
 
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 
+_STAGE_NAMES = (
+    "request_parsing",
+    "dependency_analysis",
+    "entity_table_selection",
+    "scope_planning",
+    "entity_resolution",
+    "field_mapping",
+)
+
 
 def _read_prompt(filename: str) -> str:
     """Read a prompt template file and return its contents."""
@@ -23,26 +37,16 @@ def _read_prompt(filename: str) -> str:
     return ""
 
 
-PROMPT_TEMPLATES: dict[str, str] = {
-    "request_parsing": _read_prompt("request_parsing.txt"),
-    "dependency_analysis": _read_prompt("dependency_analysis.txt"),
-    "entity_resolution": _read_prompt("entity_resolution.txt"),
-    "field_mapping": _read_prompt("field_mapping.txt"),
+PROMPT_TEMPLATES: dict[str, dict[str, str]] = {
+    name: {
+        "system": _read_prompt(f"{name}.system.txt"),
+        "human": _read_prompt(f"{name}.human.txt"),
+    }
+    for name in _STAGE_NAMES
 }
-
-
-# Convenience access to individual prompts
-request_parsing_prompt = PROMPT_TEMPLATES["request_parsing"]
-dependency_analysis_prompt = PROMPT_TEMPLATES["dependency_analysis"]
-entity_resolution_prompt = PROMPT_TEMPLATES["entity_resolution"]
-field_mapping_prompt = PROMPT_TEMPLATES["field_mapping"]
 
 __all__ = [
     "LLMClient",
     "create_llm_client",
     "PROMPT_TEMPLATES",
-    "request_parsing_prompt",
-    "dependency_analysis_prompt",
-    "entity_resolution_prompt",
-    "field_mapping_prompt",
 ]

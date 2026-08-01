@@ -1,0 +1,42 @@
+{
+  "cases": [
+    {
+      "id": "sp-01-basic-link",
+      "input": {
+        "subject": "Nova",
+        "subject_entity": "company",
+        "target_entities": ["company", "person"],
+        "table_catalog": "=== Origin: crm_origin (postgresql) ===\n  public.companies [500 rows] — company_id, name, industry\n      FK: (none)\n  public.employees [4000 rows] — employee_id, first_name, last_name, company_id\n      FK: company_id -> public.companies.company_id"
+      },
+      "expected": {
+        "must_include": {
+          "company": [
+            {"origin_id": "crm_origin", "table": "public.companies", "mode": "match"}
+          ],
+          "person": [
+            {"origin_id": "crm_origin", "table": "public.employees", "mode": "link", "link_entity": "company"}
+          ]
+        }
+      }
+    },
+    {
+      "id": "sp-02-link-via-junction",
+      "input": {
+        "subject": "Nova",
+        "subject_entity": "company",
+        "target_entities": ["company", "person"],
+        "table_catalog": "=== Origin: hr_origin (clickhouse) ===\n  default.organizations [500 rows] — org_id, org_name\n  default.people [3000 rows] — person_id, first_name, last_name\n  default.jobs [3500 rows] — job_id, company_id, person_id, title"
+      },
+      "expected": {
+        "must_include": {
+          "company": [
+            {"origin_id": "hr_origin", "table": "default.organizations", "mode": "match"}
+          ],
+          "person": [
+            {"origin_id": "hr_origin", "table": "default.people", "mode": "link_via", "link_entity": "company"}
+          ]
+        }
+      }
+    }
+  ]
+}

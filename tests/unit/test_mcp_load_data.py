@@ -12,6 +12,7 @@ from src.mcp_server.tools.load_data import (
     load_data_impl,
     load_data_handler,
     _transform_records,
+    _translate_foreign_keys,
     _get_destination_connector,
 )
 
@@ -81,6 +82,33 @@ class TestLoadDataImpl:
         assert result["inserted"] == 2
         assert result["updated"] == 0
         mock_connector.load_batch.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_load_data_translates_foreign_keys_after_mapping(self) -> None:
+        # The FK column ("industry_id") only exists on the record after
+        # _transform_records renames the raw source field ("sourceCategory")
+        # to it — translation must see the post-mapping shape, not the raw one.
+        records = [{"id": "c1", "sourceCategory": "raw-industry-id"}]
+        mapping = {"sourceCategory": {"dest_column": "industry_id"}}
+        mock_connector = MagicMock()
+        mock_connector.load_batch = MagicMock(return_value={"inserted": 1, "updated": 0})
+
+        with patch(
+            "src.mcp_server.tools.load_data._get_destination_connector",
+            return_value=mock_connector,
+        ):
+            await load_data_impl(
+                entity_type="company",
+                records=records,
+                mapping=mapping,
+                table_name="company",
+                connector=mock_connector,
+                foreign_keys={"industry_id": "industry"},
+                cluster_lookup_by_table={"industry": {"raw-industry-id": "industry-cluster-1"}},
+            )
+
+        loaded = mock_connector.load_batch.call_args.kwargs["records"]
+        assert loaded[0]["industry_id"] == "industry-cluster-1"
 
     @pytest.mark.asyncio
     async def test_load_data_empty_records(self) -> None:
@@ -225,6 +253,60 @@ class TestLoadDataImpl:
         assert result["total_records"] == 2
 
 
+class TestTranslateForeignKeys:
+    """Fix #7 (part 2): FK translation must run on transformed (dest-column
+    keyed) records — a free-text field that was heuristically mapped straight
+    onto an FK column (e.g. company's own "sourceCategory" -> industry_id,
+    never a real pointer to any industry row) must be nulled rather than
+    inserted as-is, which is exactly what crashed load_data on Boeing.
+    """
+
+    def test_free_text_value_with_no_matching_cluster_is_nulled(self) -> None:
+        records = [{"industry_id": "Space And Satellite Manufacturers"}]
+        translated = _translate_foreign_keys(
+            records,
+            {"industry_id": "industry"},
+            {"industry": {"3e53fd25b09b25ae": "industry-cid-1"}},
+        )
+        assert translated == 1
+        assert records[0]["industry_id"] is None
+
+    def test_genuine_source_id_is_translated(self) -> None:
+        records = [{"industry_id": "3e53fd25b09b25ae"}]
+        translated = _translate_foreign_keys(
+            records,
+            {"industry_id": "industry"},
+            {"industry": {"3e53fd25b09b25ae": "industry-cid-1"}},
+        )
+        assert translated == 1
+        assert records[0]["industry_id"] == "industry-cid-1"
+
+    def test_referenced_entity_with_zero_clusters_still_nulls_the_value(self) -> None:
+        # technologic_category was resolved to entity type "technology_category"
+        # but that entity type had no records extracted this run at all — the
+        # lookup for it is a real, empty dict (key present), not an absent one.
+        # Every value pointing there is unconditionally unresolvable.
+        records = [{"category_id": '["IT Asset Management Software"]'}]
+        translated = _translate_foreign_keys(
+            records,
+            {"category_id": "technologic_category"},
+            {"technologic_category": {}},
+        )
+        assert translated == 1
+        assert records[0]["category_id"] is None
+
+    def test_referenced_table_absent_entirely_leaves_value_untouched(self) -> None:
+        # Genuinely unknown (caller never even attempted to resolve this
+        # table to an entity type) is different from "resolved, zero
+        # clusters" — leave it for the database to judge instead of guessing.
+        records = [{"category_id": "some-id"}]
+        translated = _translate_foreign_keys(
+            records, {"category_id": "technologic_category"}, {}
+        )
+        assert translated == 0
+        assert records[0]["category_id"] == "some-id"
+
+
 class TestTransformRecords:
     """Tests for _transform_records."""
 
@@ -251,6 +333,36 @@ class TestTransformRecords:
         assert result[0]["user_age"] == 30
         assert "id" in result[0]
 
+    def test_many_to_one_mapping_coalesces(self) -> None:
+        """Two source fields mapping to one dest column must coalesce:
+        the absent origin's None must not clobber the mapped value."""
+        records = [
+            {"org_title": "Titan Labs", "_cluster_id": "c1"},
+            {"company_name": "Acme Corp", "_cluster_id": "c2"},
+        ]
+        mapping = {
+            # Iteration order deliberately puts each record's present
+            # field first for one record and last for the other.
+            "company_name": {"dest_column": "name", "confidence": 0.95},
+            "org_title": {"dest_column": "name", "confidence": 0.9},
+        }
+        result = _transform_records(records, mapping, "companies")
+        assert result[0]["name"] == "Titan Labs"
+        assert result[1]["name"] == "Acme Corp"
+
+    def test_null_mapped_id_is_backfilled(self) -> None:
+        """A mapping like person_id -> id must not leave id NULL for
+        records whose origin lacks that source field."""
+        records = [
+            {"staff_id": 7, "_cluster_id": "cluster-77"},
+        ]
+        mapping = {
+            "person_id": {"dest_column": "id", "confidence": 0.9},
+            "staff_id": {"dest_column": "staff_id", "confidence": 0.9},
+        }
+        result = _transform_records(records, mapping, "persons")
+        assert result[0]["id"] == "cluster-77"
+
     def test_transform_no_mapping_passes_through(self) -> None:
         """Test that records without mapping pass through non-internal fields."""
         records = [
@@ -269,8 +381,9 @@ class TestTransformRecords:
         assert "_internal_field" not in result[0]
         assert "_cluster_id" in result[0]
 
-    def test_transform_skips_schema_change_fields(self) -> None:
-        """Test that fields requiring schema changes are skipped."""
+    def test_transform_keeps_schema_change_fields(self) -> None:
+        """Fields requiring schema changes are kept — their columns are
+        added before load, and load_batch drops any still-missing column."""
         records = [
             {
                 "id": "uuid-1",
@@ -280,7 +393,7 @@ class TestTransformRecords:
         ]
         mapping = {
             "new_field": {
-                "dest_column": "new_field",
+                "dest_column": None,
                 "confidence": 0.0,
                 "requires_schema_change": True,
             },
@@ -288,7 +401,7 @@ class TestTransformRecords:
 
         result = _transform_records(records, mapping, "users")
 
-        assert "new_field" not in result[0]
+        assert result[0]["new_field"] == "value"
 
     def test_transform_generates_uuid_if_missing(self) -> None:
         """Test that UUID is generated if neither id nor _cluster_id exists."""

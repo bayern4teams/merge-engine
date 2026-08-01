@@ -1,0 +1,82 @@
+{
+  "stage": "request_parsing",
+  "description": "Golden utterances for entity-type extraction. Score = exact set match on entity_types.",
+  "cases": [
+    {
+      "id": "rp-01-single-company",
+      "input": {"user_request": "Merge all company records from both origins"},
+      "expected": {"entity_types": ["company"]}
+    },
+    {
+      "id": "rp-02-company-and-person",
+      "input": {"user_request": "Import companies and people from the CRM and HR systems"},
+      "expected": {"entity_types": ["company", "person"]}
+    },
+    {
+      "id": "rp-03-implied-person",
+      "input": {"user_request": "Bring over all our employees"},
+      "expected": {"entity_types": ["person"]}
+    },
+    {
+      "id": "rp-04-everything",
+      "input": {"user_request": "Sync everything into the destination"},
+      "expected": {"entity_types": ["person", "company", "product", "country", "address", "account", "order", "finance", "industry", "location", "experience", "education", "skill", "technology", "technology_category", "contact", "company_relation", "contract"]}
+    },
+    {
+      "id": "rp-05-everything-except",
+      "input": {"user_request": "Merge everything except products and orders"},
+      "expected": {"entity_types": ["person", "company", "country", "address", "account", "finance", "industry", "location", "experience", "education", "skill", "technology", "technology_category", "contact", "company_relation", "contract"]}
+    },
+    {
+      "id": "rp-06-persian",
+      "input": {"user_request": "همه شرکت‌ها و کارمندان را ادغام کن"},
+      "expected": {"entity_types": ["company", "person"]}
+    },
+    {
+      "id": "rp-07-mixed-language",
+      "input": {"user_request": "لطفا merge کن all customers with their orders"},
+      "expected": {"entity_types": ["person", "order"]}
+    },
+    {
+      "id": "rp-08-no-entity",
+      "input": {"user_request": "Make the import faster please"},
+      "expected": {"entity_types": []}
+    },
+    {
+      "id": "rp-09-filters-ignored",
+      "input": {"user_request": "Import active companies only, deduplicate by tax id, incremental sync"},
+      "expected": {"entity_types": ["company"]}
+    },
+    {
+      "id": "rp-10-plural-ambiguity",
+      "input": {"user_request": "Combine the organizations and their founders"},
+      "expected": {"entity_types": ["company", "person"]}
+    },
+    {
+      "id": "rp-11-accounts-orders",
+      "input": {"user_request": "Unify every customer's account and purchase history"},
+      "expected": {"entity_types": ["person", "account", "order"]}
+    },
+    {
+      "id": "rp-12-address",
+      "input": {"user_request": "Merge company records together with their office locations"},
+      "expected": {"entity_types": ["company", "location"]}
+    },
+    {
+      "id": "rp-13-company-wildcard",
+      "input": {"user_request": "Bring over all information about Nova"},
+      "expected": {
+        "entity_types": ["company", "person", "product", "address", "finance", "industry", "location", "experience", "education", "skill", "technology", "technology_category", "contact", "company_relation", "contract"],
+        "explicit_entity_types": []
+      }
+    },
+    {
+      "id": "rp-14-explicit-subset",
+      "input": {"user_request": "Merge company and finance records only"},
+      "expected": {
+        "entity_types": ["company", "finance"],
+        "explicit_entity_types": ["company", "finance"]
+      }
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "merge-engine"
@@ -11,6 +11,7 @@ dependencies = [
     # LangGraph orchestration
     "langgraph>=0.2.0",
     "langgraph-checkpoint",
+    "langgraph-checkpoint-sqlite",
     # LLM integration
     "langchain>=0.2.0",
     "langchain-openai>=0.1.0",
@@ -28,8 +29,11 @@ dependencies = [
     # Utilities
     "tenacity>=8.2.0",
     "uuid-utils>=0.8.0",
-    # UI
-    "gradio>=4.0.0",
+    # UI (FastAPI serves the built React frontend)
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    # Observability (self-hosted Langfuse — docker/langfuse-compose.yml)
+    "langfuse>=3.0.0",
     # Logging
     "structlog>=24.0.0",
 ]

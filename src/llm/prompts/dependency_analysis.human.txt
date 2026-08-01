@@ -1,0 +1,43 @@
+## Worked example
+
+Target entities: company, person, order
+
+Schema summary:
+companies: id, name, industry
+persons: id, full_name, company_id -> companies.id
+orders: id, person_id -> persons.id, company_id -> companies.id, total
+
+Output:
+{
+  "dependency_tree": {
+    "company": [],
+    "person": ["company"],
+    "order": ["person", "company"]
+  },
+  "notes": ""
+}
+
+## Second example (no clear relationships)
+
+Target entities: product, country
+
+Schema summary:
+products: id, sku, name
+countries: id, iso_code, name
+
+Output:
+{
+  "dependency_tree": {
+    "product": [],
+    "country": []
+  },
+  "notes": "No foreign-key relationship found between product and country; order between them doesn't matter."
+}
+
+---
+Target entities: {target_entities}
+
+Schema summary:
+{schema_info}
+
+Output:

@@ -1,0 +1,121 @@
+{
+  "description": "Golden scope-plan cases (P.8). Each case gives a schema and the plan the planner must produce for a scoped merge. Locks in structure — which table, matched by name or linked by id, which column — independent of the subject value. Add a case here to pin a new scenario; the test in tests/unit/test_scope_plan_eval.py scores the heuristic planner against every case.",
+  "cases": [
+    {
+      "name": "postgres_declared_fks",
+      "why": "The crm-style origin: company matched by name, dependents linked by a declared foreign key.",
+      "subject_entity": "company",
+      "target_entities": ["company", "person", "product"],
+      "schema": {
+        "crm": {
+          "origin_type": "postgres",
+          "tables": [
+            {"name": "companies", "full_name": "public.companies",
+             "columns": [{"name": "id"}, {"name": "name"}, {"name": "industry"}],
+             "primary_key": ["id"], "foreign_keys": []},
+            {"name": "employees", "full_name": "public.employees",
+             "columns": [{"name": "id"}, {"name": "full_name"}, {"name": "company_id"}],
+             "primary_key": ["id"],
+             "foreign_keys": [{"column": "company_id", "ref_table": "companies", "ref_column": "id"}]},
+            {"name": "products", "full_name": "public.products",
+             "columns": [{"name": "id"}, {"name": "title"}, {"name": "company_id"}],
+             "primary_key": ["id"],
+             "foreign_keys": [{"column": "company_id", "ref_table": "companies", "ref_column": "id"}]}
+          ]
+        }
+      },
+      "expected": {
+        "company": [{"origin_id": "crm", "table": "public.companies", "mode": "match", "columns": ["name"]}],
+        "person": [{"origin_id": "crm", "table": "public.employees", "mode": "link", "columns": ["company_id"]}],
+        "product": [{"origin_id": "crm", "table": "public.products", "mode": "link", "columns": ["company_id"]}]
+      }
+    },
+    {
+      "name": "clickhouse_no_fk_inferred_link",
+      "why": "The hr-style origin: no declared FKs, so the link column is inferred from its name (org_id).",
+      "subject_entity": "company",
+      "target_entities": ["company", "person"],
+      "schema": {
+        "hr": {
+          "origin_type": "clickhouse",
+          "tables": [
+            {"name": "organizations", "full_name": "organizations",
+             "columns": [{"name": "org_id"}, {"name": "org_name"}],
+             "primary_key": ["org_id"], "foreign_keys": []},
+            {"name": "people", "full_name": "people",
+             "columns": [{"name": "person_id"}, {"name": "name"}, {"name": "org_id"}],
+             "primary_key": ["person_id"], "foreign_keys": []}
+          ]
+        }
+      },
+      "expected": {
+        "company": [{"origin_id": "hr", "table": "organizations", "mode": "match", "columns": ["org_name"]}],
+        "person": [{"origin_id": "hr", "table": "people", "mode": "link", "columns": ["org_id"]}]
+      }
+    },
+    {
+      "name": "two_origins_together",
+      "why": "Both origins in one run: each origin's dependents link to that origin's own company ids.",
+      "subject_entity": "company",
+      "target_entities": ["company", "person"],
+      "schema": {
+        "crm": {
+          "origin_type": "postgres",
+          "tables": [
+            {"name": "companies", "full_name": "public.companies",
+             "columns": [{"name": "id"}, {"name": "name"}],
+             "primary_key": ["id"], "foreign_keys": []},
+            {"name": "employees", "full_name": "public.employees",
+             "columns": [{"name": "id"}, {"name": "full_name"}, {"name": "company_id"}],
+             "primary_key": ["id"],
+             "foreign_keys": [{"column": "company_id", "ref_table": "companies", "ref_column": "id"}]}
+          ]
+        },
+        "hr": {
+          "origin_type": "clickhouse",
+          "tables": [
+            {"name": "organizations", "full_name": "organizations",
+             "columns": [{"name": "org_id"}, {"name": "org_name"}],
+             "primary_key": ["org_id"], "foreign_keys": []},
+            {"name": "people", "full_name": "people",
+             "columns": [{"name": "person_id"}, {"name": "name"}, {"name": "org_id"}],
+             "primary_key": ["person_id"], "foreign_keys": []}
+          ]
+        }
+      },
+      "expected": {
+        "company": [
+          {"origin_id": "crm", "table": "public.companies", "mode": "match", "columns": ["name"]},
+          {"origin_id": "hr", "table": "organizations", "mode": "match", "columns": ["org_name"]}
+        ],
+        "person": [
+          {"origin_id": "crm", "table": "public.employees", "mode": "link", "columns": ["company_id"]},
+          {"origin_id": "hr", "table": "people", "mode": "link", "columns": ["org_id"]}
+        ]
+      }
+    },
+    {
+      "name": "mongo_origin_nested",
+      "why": "The mongo-style origin: company matched by name, employees linked by company_id.",
+      "subject_entity": "company",
+      "target_entities": ["company", "person"],
+      "schema": {
+        "mongo_origin": {
+          "origin_type": "mongodb",
+          "tables": [
+            {"name": "businesses", "full_name": "mongo_origin.businesses",
+             "columns": [{"name": "_id"}, {"name": "name"}, {"name": "industry"}],
+             "primary_key": ["_id"], "foreign_keys": []},
+            {"name": "persons", "full_name": "mongo_origin.persons",
+             "columns": [{"name": "_id"}, {"name": "full_name"}, {"name": "company_id"}],
+             "primary_key": ["_id"], "foreign_keys": []}
+          ]
+        }
+      },
+      "expected": {
+        "company": [{"origin_id": "mongo_origin", "table": "mongo_origin.businesses", "mode": "match", "columns": ["name"]}],
+        "person": [{"origin_id": "mongo_origin", "table": "mongo_origin.persons", "mode": "link", "columns": ["company_id"]}]
+      }
+    }
+  ]
+}

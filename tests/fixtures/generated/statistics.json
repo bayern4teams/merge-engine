@@ -1,0 +1,12 @@
+{
+  "postgres_companies": 280,
+  "postgres_contacts": 485,
+  "postgres_products": 308,
+  "mongodb_companies": 280,
+  "mongodb_contacts": 486,
+  "mongodb_products": 308,
+  "orders": 400,
+  "total_companies": 350,
+  "total_contacts": 607,
+  "total_products": 385
+}

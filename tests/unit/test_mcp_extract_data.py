@@ -38,6 +38,7 @@ class TestExtractDataImpl:
     ) -> None:
         """Test successful data extraction."""
         mock_connector = MagicMock()
+        mock_connector.close = AsyncMock()
         mock_connector.extract = AsyncMock(return_value={
             "rows": [
                 {"id": 1, "name": "Alice", "email": "alice@example.com"},
@@ -71,6 +72,7 @@ class TestExtractDataImpl:
     ) -> None:
         """Test extraction with pagination cursor."""
         mock_connector = MagicMock()
+        mock_connector.close = AsyncMock()
         mock_connector.extract = AsyncMock(return_value={
             "rows": [{"id": 3, "name": "Charlie"}],
             "column_names": ["id", "name"],
@@ -96,6 +98,7 @@ class TestExtractDataImpl:
             filter=None,
             batch_size=500,
             cursor="cursor_abc123",
+            watermark=None,
         )
         assert result["next_cursor"] == "cursor_abc123"
 
@@ -105,6 +108,7 @@ class TestExtractDataImpl:
     ) -> None:
         """Test extraction with filter conditions."""
         mock_connector = MagicMock()
+        mock_connector.close = AsyncMock()
         mock_connector.extract = AsyncMock(return_value={
             "rows": [{"id": 1, "name": "Alice"}],
             "column_names": ["id", "name"],
@@ -129,6 +133,7 @@ class TestExtractDataImpl:
             filter={"name": "Alice"},
             batch_size=1000,
             cursor=None,
+            watermark=None,
         )
 
     @pytest.mark.asyncio
@@ -179,6 +184,7 @@ class TestExtractDataImpl:
     ) -> None:
         """Test handling of connector extraction failure."""
         mock_connector = MagicMock()
+        mock_connector.close = AsyncMock()
         mock_connector.extract = AsyncMock(
             side_effect=Exception("Table not found")
         )
@@ -201,6 +207,7 @@ class TestExtractDataImpl:
     ) -> None:
         """Test extraction with empty result set."""
         mock_connector = MagicMock()
+        mock_connector.close = AsyncMock()
         mock_connector.extract = AsyncMock(return_value={
             "rows": [],
             "column_names": ["id", "name"],
@@ -278,6 +285,8 @@ class TestExtractDataHandler:
         mock_config.origins = [mock_origin]
 
         mock_conn = MagicMock()
+
+        mock_conn.close = AsyncMock()
         mock_conn.extract = AsyncMock(return_value={
             "rows": [],
             "column_names": ["id"],

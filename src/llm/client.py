@@ -2,7 +2,11 @@
 LLM client setup using LangChain.
 
 Provides a unified async interface for calling LLMs (OpenAI, Azure, Anthropic)
-with structured JSON output support and optional Langfuse tracing.
+with structured JSON output support. Tracing goes to a self-hosted Langfuse
+instance: every ``ainvoke`` here carries the shared Langfuse callback handler
+(see ``src/llm/tracing.py``), so each call produces a generation span — nested
+under the owning graph-node span when invoked inside the pipeline. Tracing is a
+no-op when Langfuse isn't configured, so calls work with or without the stack.
 """
 
 from __future__ import annotations
@@ -17,89 +21,40 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 
+from src.llm.tracing import trace_config
+from src.llm.cost import (
+    COST_LEDGER,
+    SEMANTIC_CACHE,
+    cache_key,
+    token_usage,
+)
+
 logger = logging.getLogger("merge-engine.llm.client")
 
-
-# ── Langfuse Settings ────────────────────────────────────────────────────
-# Read from environment variables with sensible defaults.
-# Also load from .env file if present.
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
-
-USE_LANGFUSE = os.getenv("LANGFUSE_ENABLED", "false").lower() in ("true", "1", "yes")
-LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY", "")
-LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "")
-LANGFUSE_HOST = os.getenv("LANGFUSE_HOST", "http://localhost:3000")
+# Substrings that mark a call as blocked by the provider's account/quota
+# state rather than a transient network blip or a bad request — the only
+# class of error a same-account retry can never recover from, so it's the
+# trigger for moving to the next model in the fallback chain instead of
+# just re-raising.
+_QUOTA_ERROR_MARKERS = (
+    "quota", "429", "403", "rate limit", "rate_limit",
+    "insufficient_quota", "allocationquota", "billing",
+)
 
 
-class _LangfuseContext:
-    """Lazy-loaded Langfuse CallbackHandler."""
-
-    _handler: Any = None
-    _initialized: bool = False
-
-    @classmethod
-    def init_langfuse(cls):
-        """Initialize Langfuse client (called once)."""
-        if cls._initialized:
-            return
-        cls._initialized = True
-        if not USE_LANGFUSE:
-            logger.debug("Langfuse tracing disabled (LANGFUSE_ENABLED=false)")
-            return
-        try:
-            from langfuse import Langfuse
-
-            Langfuse(
-                public_key=LANGFUSE_PUBLIC_KEY,
-                secret_key=LANGFUSE_SECRET_KEY,
-                host=LANGFUSE_HOST,
-            )
-            logger.info("Langfuse client initialized (host=%s)", LANGFUSE_HOST)
-            logger.debug("Langfuse public_key=%s", LANGFUSE_PUBLIC_KEY[:8] + "..." if LANGFUSE_PUBLIC_KEY else "None")
-        except Exception as exc:
-            logger.warning("Failed to initialize Langfuse: %s", exc, exc_info=True)
-
-    @classmethod
-    def get_handler(cls):
-        """Get or create the Langfuse CallbackHandler instance."""
-        cls.init_langfuse()
-        if cls._handler is None and USE_LANGFUSE:
-            try:
-                from langfuse.langchain import CallbackHandler
-
-                cls._handler = CallbackHandler()
-                logger.debug("Langfuse CallbackHandler created")
-            except ImportError:
-                logger.warning(
-                    "langfuse.langchain module not found; tracing disabled. "
-                    "Ensure langfuse>=3.0.0,<4.0.0 is installed."
-                )
-            except Exception as exc:
-                logger.warning("Failed to create Langfuse CallbackHandler: %s", exc)
-        if not USE_LANGFUSE:
-            return None
-        return cls._handler
+def _is_quota_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in _QUOTA_ERROR_MARKERS)
 
 
-def _get_langfuse_config(session_name: str = "merge-engine") -> dict[str, Any]:
-    """Build Langfuse tracing config dict for with_config()."""
-    handler = _LangfuseContext.get_handler()
-    if handler is None:
-        return {}
-    return {
-        "callbacks": [handler],
-        "metadata": {
-            "user_id": "merge-engine",
-            "langfuse_session_id": session_name,
-            "langfuse_tags": ["merge-pipeline"],
-        },
-        "tags": ["merge-pipeline", "langgraph"],
-        "run_name": "llm_call",
-    }
+def _estimate_tokens(*parts: str) -> int:
+    """Rough token count for the *avoided* cost of a cache hit.
+
+    Deliberately only used for the saved-token figure, never for billing:
+    ~4 characters per token is a well-known approximation, and labelling an
+    estimate as a measurement is how a cost report stops being trustworthy.
+    """
+    return sum(len(p or "") for p in parts) // 4
 
 
 class LLMClient:
@@ -113,20 +68,57 @@ class LLMClient:
         config : dict
             LLM configuration with keys: provider, model, api_key, base_url, temperature.
         session_name : str
-            Langfuse session name for tracing grouping.
+            Session name used for tracing/grouping.
         """
         self.provider = config.get("provider", "openai")
         self.model_name = config.get("model", "gpt-4o")
         self.api_key = config.get("api_key", "")
         self.base_url = config.get("base_url")
         self.temperature = config.get("temperature", 0.0)
+        self.structured_output = config.get("structured_output", True)
         self.session_name = session_name
+        # Phase O.5. Caching is on by default because entity resolution asks
+        # about the same record pairs over and over; set cache_enabled=false
+        # to compare against an uncached run.
+        self.cache_enabled = config.get("cache_enabled", True)
+        self.run_id = config.get("run_id", "") or session_name
         self._model: Any = None
+        self._json_mode_unsupported = False
+        # Automatic quota fallback (Phase 7): the primary model followed by
+        # every model in config's fallback_models, tried in that exact order.
+        # A quota/billing error on one account-bound model is never going to
+        # resolve itself mid-run, so call() advances through this chain
+        # instead of surfacing the failure and waiting for a manual restart.
+        self.model_chain: list[str] = [self.model_name] + list(
+            config.get("fallback_models") or []
+        )
+        self._model_chain_idx = 0
         logger.debug("Initialized LLMClient (provider=%s, model=%s, base_url=%s, temp=%.1f)",
                      self.provider, self.model_name, self.base_url, self.temperature)
+        if len(self.model_chain) > 1:
+            logger.debug("LLM fallback chain (%d models): %s",
+                         len(self.model_chain), self.model_chain)
+
+    def _advance_model(self) -> bool:
+        """Move to the next model in the fallback chain.
+
+        Returns False once the chain is exhausted, so the caller knows to
+        stop retrying and surface the error instead of looping forever.
+        """
+        if self._model_chain_idx + 1 >= len(self.model_chain):
+            return False
+        self._model_chain_idx += 1
+        self.model_name = self.model_chain[self._model_chain_idx]
+        self._model = None  # force _get_model() to rebuild for the new name
+        logger.warning(
+            "LLM quota/billing error — falling back to next model in the "
+            "chain (%d/%d): %s",
+            self._model_chain_idx + 1, len(self.model_chain), self.model_name,
+        )
+        return True
 
     def _get_model(self) -> Any:
-        """Lazy-initialize the LangChain chat model with optional Langfuse tracing."""
+        """Lazy-initialize the LangChain chat model."""
         if self._model is not None:
             return self._model
 
@@ -154,14 +146,6 @@ class LLMClient:
         else:
             raise ValueError(f"Unsupported LLM provider: '{self.provider}'")
 
-        # Add Langfuse tracing if enabled
-        config = _get_langfuse_config(self.session_name)
-        if config:
-            self._model = self._model.with_config(config)
-            logger.debug("Langfuse tracing enabled for model")
-        else:
-            logger.debug("Langfuse tracing disabled for model")
-
         return self._model
 
     async def call(
@@ -169,6 +153,7 @@ class LLMClient:
         system_prompt: str,
         user_prompt: str,
         response_format: dict[str, Any] | None = None,
+        json_mode: bool = False,
     ) -> Any:
         """Call the LLM with system and user prompts.
 
@@ -179,34 +164,100 @@ class LLMClient:
         user_prompt : str
             User message with the actual query/data.
         response_format : dict, optional
-            JSON schema for structured output (OpenAI only).
+            JSON schema for tool-calling-based structured output
+            (``model.with_structured_output``).
+        json_mode : bool
+            Request OpenAI-style ``{"type": "json_object"}`` response
+            formatting (looser than ``response_format`` — just constrains
+            output to be valid JSON, no fixed schema). Silently skipped if
+            an earlier call showed the endpoint doesn't support it.
 
         Returns
         -------
         Any
             Parsed response content.
         """
-        logger.debug("ENTER LLMClient.call (provider=%s, model=%s)", self.provider, self.model_name)
+        logger.debug("ENTER LLMClient.call (provider=%s, model=%s, json_mode=%s)", self.provider, self.model_name, json_mode)
         logger.debug("system_prompt (truncated): %.200s", system_prompt)
         logger.debug("user_prompt (truncated): %.500s", user_prompt)
 
-        model = self._get_model()
+        key = cache_key(
+            model=self.model_name,
+            temperature=self.temperature,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_format=response_format,
+            json_mode=json_mode,
+        )
+        if self.cache_enabled:
+            found, cached = SEMANTIC_CACHE.get(key)
+            if found:
+                logger.debug("LLM cache hit (%s…)", key[:12])
+                COST_LEDGER.record(
+                    self.run_id, model=self.model_name, cached=True,
+                    input_tokens=_estimate_tokens(system_prompt, user_prompt),
+                )
+                return cached
+
         messages = [
             SystemMessage(content=system_prompt),
             HumanMessage(content=user_prompt),
         ]
+        cfg = trace_config(tags=[self.session_name])
 
-        if response_format:
-            model = model.with_structured_output(response_format)
-            logger.debug("Structured output mode enabled")
+        while True:
+            base_model = self._get_model()
+            if response_format:
+                model = base_model.with_structured_output(response_format)
+                logger.debug("Structured output mode enabled")
+            elif json_mode and self.provider in ("openai", "azure") and not self._json_mode_unsupported:
+                model = base_model.bind(response_format={"type": "json_object"})
+                logger.debug("JSON-object response format requested")
+            else:
+                model = base_model
 
-        logger.debug("Calling model.ainvoke() with %d messages", len(messages))
-        response = await model.ainvoke(messages)
+            logger.debug("Calling model.ainvoke() with %d messages (model=%s)",
+                         len(messages), self.model_name)
+            try:
+                response = await model.ainvoke(messages, config=cfg)
+                break
+            except Exception as exc:
+                if json_mode and not response_format and not self._json_mode_unsupported:
+                    logger.warning("json_object response_format rejected by endpoint, retrying without it: %s", exc)
+                    self._json_mode_unsupported = True
+                    try:
+                        response = await base_model.ainvoke(messages, config=cfg)
+                        break
+                    except Exception as exc2:
+                        exc = exc2
+                if _is_quota_error(exc) and self._advance_model():
+                    continue
+                raise
         logger.debug("LLM response received: type=%s, len=%d chars", type(response.content).__name__, len(str(response.content)))
         logger.debug("LLM response (first 500 chars): %s", str(response.content)[:500])
 
+        prompt_tokens, completion_tokens = token_usage(response)
+        COST_LEDGER.record(
+            self.run_id, model=self.model_name,
+            input_tokens=prompt_tokens, output_tokens=completion_tokens,
+        )
+        if self.cache_enabled:
+            SEMANTIC_CACHE.put(key, response.content)
+
         logger.debug("EXIT LLMClient.call")
         return response.content
+
+    @staticmethod
+    def _parse_json_content(content: str) -> dict[str, Any]:
+        """Parse LLM output as JSON, falling back to markdown code-block extraction."""
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            import re
+            match = re.search(r"```(?:json)?\s*(.*?)```", content, re.DOTALL)
+            if match:
+                return json.loads(match.group(1).strip())
+            raise
 
     async def call_json(
         self,
@@ -214,6 +265,11 @@ class LLMClient:
         user_prompt: str,
     ) -> dict[str, Any]:
         """Call the LLM and parse the response as JSON.
+
+        Requests JSON-object response formatting (subject to
+        ``structured_output`` config / endpoint support), and retries once
+        with the parse error fed back to the model if the first response
+        isn't valid JSON.
 
         Parameters
         ----------
@@ -230,38 +286,35 @@ class LLMClient:
         Raises
         ------
         json.JSONDecodeError
-            If the response is not valid JSON.
+            If neither attempt produces valid JSON.
         """
         logger.debug("ENTER LLMClient.call_json")
-        content = await self.call(system_prompt, user_prompt)
+        content = await self.call(system_prompt, user_prompt, json_mode=self.structured_output)
 
-        # Try direct JSON parse
         try:
-            result = json.loads(content)
-            logger.debug("Direct JSON parse successful: type=%s, keys=%s", type(result).__name__, list(result.keys()) if isinstance(result, dict) else "N/A")
-            logger.debug("EXIT LLMClient.call_json (direct parse)")
+            result = self._parse_json_content(content)
+            logger.debug("Direct/markdown JSON parse successful: type=%s", type(result).__name__)
+            logger.debug("EXIT LLMClient.call_json (first attempt)")
             return result
         except json.JSONDecodeError as exc:
-            # Try to extract JSON from markdown code blocks
-            logger.debug("Direct JSON parse failed, trying markdown extraction: %s", exc)
-            import re
-            match = re.search(r"```(?:json)?\s*(.*?)```", content, re.DOTALL)
-            if match:
-                extracted = match.group(1).strip()
-                logger.debug("Found markdown JSON block, extracting and parsing")
-                try:
-                    result = json.loads(extracted)
-                    logger.debug("EXIT LLMClient.call_json (markdown parse)")
-                    return result
-                except json.JSONDecodeError as exc2:
-                    logger.error("Markdown JSON parse failed: %s", exc2)
-                    raise
-            logger.error("Response is not valid JSON and no markdown block found")
-            raise json.JSONDecodeError(
-                f"Response is not valid JSON: {content[:200]}",
-                content,
-                0,
+            logger.warning("LLM output was not valid JSON, retrying once with error feedback: %s", exc)
+            retry_prompt = (
+                f"{user_prompt}\n\n---\n"
+                f"Your previous output was not valid JSON: {exc}. "
+                f"Return ONLY the JSON object, with no surrounding text or markdown fences."
             )
+            content = await self.call(system_prompt, retry_prompt, json_mode=self.structured_output)
+            try:
+                result = self._parse_json_content(content)
+                logger.debug("EXIT LLMClient.call_json (retry succeeded)")
+                return result
+            except json.JSONDecodeError:
+                logger.error("Retry also failed to produce valid JSON")
+                raise json.JSONDecodeError(
+                    f"Response is not valid JSON after retry: {content[:200]}",
+                    content,
+                    0,
+                )
 
     async def call_batch(
         self,
@@ -292,10 +345,11 @@ class LLMClient:
             all_messages.append([messages[0], msg])
 
         # Process sequentially (parallel requires careful concurrency management)
+        cfg = trace_config(tags=[self.session_name])
         results = []
         for idx, msgs in enumerate(all_messages):
             logger.debug("  Processing prompt %d/%d", idx + 1, len(prompts))
-            response = await model.ainvoke(msgs)
+            response = await model.ainvoke(msgs, config=cfg)
             results.append(response.content)
             logger.debug("  Prompt %d done: %d chars", idx + 1, len(str(response.content)))
 

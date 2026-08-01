@@ -1,0 +1,8 @@
+Subject: {subject}
+Subject is a: {subject_entity}
+Target entities to scope: {target_entities}
+
+Table catalog (every origin; columns and any declared foreign keys shown):
+{table_catalog}
+
+Return the scope plan as JSON per the output contract.

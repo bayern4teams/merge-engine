@@ -1,0 +1,91 @@
+"""
+Create the golden-baseline database used to verify remediations 1-6 against the
+hand-merged references (see docs: BOEING/AIRBUS/LOCKHEED_APP_VS_MANUAL_DIAGNOSIS.md,
+and the plan at merge-engine-remediation-1-to-6 in project memory).
+
+This provisions ONE new PostgreSQL database, `global_warehouse_golden`, with THREE
+schemas (`boeing`, `airbus`, `lockheed`) — each an exact clone of the 25-table Global
+Warehouse DDL in sample_databases/destination/sql/*.sql. It is never configured as an
+app destination, so the standing "exactly one destination at a time" rule on
+`global_warehouse` itself is untouched.
+
+Usage:
+    python setup_golden_db.py [--host localhost] [--port 55201] [--user postgres]
+                               [--password pass] [--admin-db postgres]
+                               [--golden-db global_warehouse_golden]
+"""
+import argparse
+import pathlib
+import sys
+
+import psycopg2
+
+SCHEMAS = ("boeing", "airbus", "lockheed")
+DDL_DIR = pathlib.Path(__file__).resolve().parent.parent.parent / "sample_databases" / "destination" / "sql"
+DDL_FILES = sorted(DDL_DIR.glob("*.sql"))  # 01_company.sql ... 07_technographic.sql
+
+
+def log(msg: str) -> None:
+    print(msg, flush=True)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--host", default="localhost")
+    ap.add_argument("--port", type=int, default=55201)
+    ap.add_argument("--user", default="postgres")
+    ap.add_argument("--password", default="pass")
+    ap.add_argument("--admin-db", default="postgres")
+    ap.add_argument("--golden-db", default="global_warehouse_golden")
+    args = ap.parse_args()
+
+    if not DDL_FILES:
+        log(f"!! No DDL files found under {DDL_DIR}")
+        return 1
+    log(f"Using {len(DDL_FILES)} DDL files: {[f.name for f in DDL_FILES]}")
+
+    # 1. Create the golden database if it doesn't exist yet.
+    admin_conn = psycopg2.connect(
+        host=args.host, port=args.port, user=args.user,
+        password=args.password, dbname=args.admin_db,
+    )
+    admin_conn.autocommit = True
+    with admin_conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (args.golden_db,))
+        exists = cur.fetchone() is not None
+        if exists:
+            log(f"Database '{args.golden_db}' already exists — reusing it.")
+        else:
+            cur.execute(f'CREATE DATABASE "{args.golden_db}"')
+            log(f"Created database '{args.golden_db}'.")
+    admin_conn.close()
+
+    # 2. Build each schema from the same DDL used for global_warehouse's `public`.
+    conn = psycopg2.connect(
+        host=args.host, port=args.port, user=args.user,
+        password=args.password, dbname=args.golden_db,
+    )
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        for schema in SCHEMAS:
+            cur.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+            cur.execute(f'CREATE SCHEMA "{schema}"')
+            cur.execute(f'SET search_path TO "{schema}"')
+            for ddl_file in DDL_FILES:
+                sql = ddl_file.read_text(encoding="utf-8")
+                cur.execute(sql)
+            cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_schema = %s", (schema,))
+            n_tables = cur.fetchone()[0]
+            log(f"  schema '{schema}': {n_tables} tables created")
+            if n_tables != 25:
+                log(f"  !! expected 25 tables in '{schema}', got {n_tables}")
+    conn.close()
+
+    log("\nDone. Golden DB ready:")
+    log(f"  host={args.host} port={args.port} dbname={args.golden_db}")
+    log(f"  schemas: {', '.join(SCHEMAS)}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -140,13 +140,20 @@ def _discover_postgres(
                     SELECT schema_name
                     FROM information_schema.schemata
                     WHERE schema_name NOT IN ('pg_catalog', 'information_schema')
+                      AND schema_name NOT LIKE 'pg\\_%'
                     ORDER BY schema_name
                     """
                 )
                 result["schemas"] = [row[0] for row in db_cur.fetchall()]
 
-                # Discover tables and columns for the specified schema or all schemas
-                target_schema = schema if schema else result["schemas"][0] if result["schemas"] else "public"
+                # Discover tables and columns for the specified schema; prefer
+                # "public" over the alphabetically-first schema as the default
+                if schema:
+                    target_schema = schema
+                elif "public" in result["schemas"]:
+                    target_schema = "public"
+                else:
+                    target_schema = result["schemas"][0] if result["schemas"] else "public"
                 db_cur.execute(
                     """
                     SELECT table_name, column_name, data_type, is_nullable
@@ -322,16 +329,21 @@ def _discover_clickhouse(
         if database:
             try:
                 # Get tables with their columns
+                # clickhouse-connect uses server-side {name:Type} binding,
+                # NOT SQLAlchemy-style :name (which reaches the server
+                # literally and raises SYNTAX_ERROR code 62).
                 table_result = client.query(
                     """
                     SELECT name, engine_full
                     FROM system.tables
-                    WHERE database = :db
+                    WHERE database = {db:String}
                     ORDER BY name
                     """,
                     parameters={"db": database},
                 )
-                result["tables"] = [row[0] for row in table_result.result_columns[0]]
+                # result_rows is a list of (name, engine_full) tuples;
+                # result_columns[0] would be the flat list of names.
+                result["tables"] = [row[0] for row in table_result.result_rows]
 
                 # Get columns for each table
                 for tbl_name in result["tables"]:
@@ -340,15 +352,19 @@ def _discover_clickhouse(
                             """
                             SELECT name, type, default_kind
                             FROM system.columns
-                            WHERE database = :db AND table = :tbl
+                            WHERE database = {db:String} AND table = {tbl:String}
                             ORDER BY position
                             """,
                             parameters={"db": database, "tbl": tbl_name},
                         )
-                        columns = col_result.result_columns[0]
+                        # result_rows: list of (name, type, default_kind) tuples
                         result["table_columns"][tbl_name] = [
-                            {"name": c[0], "type": c[1], "nullable": c[2] != " mater"}
-                            for c in columns
+                            {
+                                "name": c[0],
+                                "type": c[1],
+                                "nullable": str(c[1]).startswith("Nullable"),
+                            }
+                            for c in col_result.result_rows
                         ]
                     except Exception:
                         result["table_columns"][tbl_name] = []
@@ -356,7 +372,9 @@ def _discover_clickhouse(
                     # Get row count
                     try:
                         count_result = client.query(
-                            "SELECT count() FROM {:}.{:}".format(database, tbl_name),
+                            "SELECT count() FROM `{}`.`{}`".format(
+                                database.replace("`", ""), tbl_name.replace("`", "")
+                            ),
                         )
                         result["table_row_counts"][tbl_name] = count_result.result_rows[0][0]
                     except Exception:

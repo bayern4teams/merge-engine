@@ -1,0 +1,56 @@
+## Worked example
+
+Target entities: person, film
+
+Table catalog:
+=== Origin: pg_main (postgresql) ===
+  public.staff [1500 rows] — staff_id, first_name, last_name, email, address_id, store_id, active
+  public.customer [599 rows] — customer_id, store_id, first_name, last_name, email, address_id, activebool
+  public.rental [16044 rows] — rental_id, rental_date, inventory_id, customer_id, staff_id
+  public.film [1000 rows] — film_id, title, description, release_year, rental_rate, length
+  public.film_actor [5462 rows] — actor_id, film_id, last_update
+  public.address [603 rows] — address_id, address, district, city_id, postal_code
+
+Output:
+{
+  "entity_tables": {
+    "person": [
+      {"origin_id": "pg_main", "table": "public.staff", "confidence": 0.95, "reason": "first_name, last_name, email — staff are people"},
+      {"origin_id": "pg_main", "table": "public.customer", "confidence": 0.93, "reason": "first_name, last_name, email — customers are people"}
+    ],
+    "film": [
+      {"origin_id": "pg_main", "table": "public.film", "confidence": 0.98, "reason": "title, release_year, rental_rate"}
+    ]
+  },
+  "notes": "rental and film_actor reference people and films but are relationships, not entity records; address is a separate concept."
+}
+
+## Second example (entity spread across two origins under different names)
+
+Target entities: person
+
+Table catalog:
+=== Origin: crm (postgresql) ===
+  public.contacts [820 rows] — contact_id, given_name, family_name, work_email, phone
+=== Origin: mongo_app (mongodb) ===
+  sample_mflix.users [185 rows] — _id, name, email, password
+  sample_mflix.comments [50304 rows] — _id, name, email, movie_id, text, date
+
+Output:
+{
+  "entity_tables": {
+    "person": [
+      {"origin_id": "crm", "table": "public.contacts", "confidence": 0.95, "reason": "given_name, family_name, work_email"},
+      {"origin_id": "mongo_app", "table": "sample_mflix.users", "confidence": 0.92, "reason": "name, email — user accounts are people"}
+    ]
+  },
+  "notes": "comments carries a name and email but each row is a comment, not a person record."
+}
+
+---
+Target entities: {target_entities}
+
+Table catalog:
+{table_catalog}
+
+Output:

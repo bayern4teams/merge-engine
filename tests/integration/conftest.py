@@ -271,9 +271,6 @@ def mock_connector_factory() -> Any:
 
             connector.extract = AsyncMock(side_effect=mock_extract)
 
-        # Mark imported
-        connector.mark_imported = AsyncMock(return_value=True)
-
         # Close
         connector.close = AsyncMock()
 

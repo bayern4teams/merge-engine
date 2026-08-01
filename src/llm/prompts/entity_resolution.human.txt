@@ -1,0 +1,7 @@
+Entity type: {entity_type}
+
+Judge each of the following {pair_count} pairs. Fields starting with an underscore are internal metadata — ignore them.
+
+{pairs_block}
+
+Output:

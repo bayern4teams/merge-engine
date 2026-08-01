@@ -49,7 +49,6 @@ class TestListTools:
         expected_tools = [
             "discover_schema",
             "extract_data",
-            "mark_imported",
             "resolve_entities",
             "unify_entity_group",
             "map_fields",
@@ -66,7 +65,9 @@ class TestListTools:
         from src.mcp_server.server import list_tools
 
         tools = await list_tools()
-        assert len(tools) == 8
+        # mark_imported was removed: origins are read-only, incremental
+        # tracking now lives in the destination's extraction-state table.
+        assert len(tools) == 7
 
     @pytest.mark.asyncio
     async def test_list_tools_discover_schema_schema(self) -> None:
@@ -150,6 +151,7 @@ class TestCallTool:
             "src.mcp_server.tools.discover_schema.create_connector"
         ) as mock_create:
             mock_conn = MagicMock()
+            mock_conn.close = AsyncMock()
             mock_conn.discover_schema = AsyncMock(return_value={
                 "tables": [],
             })
@@ -176,7 +178,6 @@ class TestToolHandlersRegistry:
         expected_handlers = [
             "discover_schema",
             "extract_data",
-            "mark_imported",
             "resolve_entities",
             "unify_entity_group",
             "map_fields",

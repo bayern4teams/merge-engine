@@ -7,12 +7,17 @@ Uses PyMongo for async driver access.
 from __future__ import annotations
 
 import logging
+import re
+from datetime import datetime
 from typing import Any
+from urllib.parse import quote_plus
 
 from pymongo import AsyncMongoClient
 from pymongo.server_api import ServerApi
 
 from src.mcp_server.connectors.base import BaseConnector
+from src.mcp_server.connectors.filters import normalize_filter
+from src.mcp_server.connectors.keyset import decode_cursor, encode_cursor
 from src.orchestrator.utils.retry import TransientError, retry_on_transient
 
 logger = logging.getLogger("merge-engine.connectors.mongodb")
@@ -35,19 +40,31 @@ class MongoDBConnector(BaseConnector):
             logger.debug("Client already exists, returning")
             return self._client
 
-        conn = self.config.get("connection", {})
+        # Support both flat connection dict and nested origin config shape
+        conn = self.config
+        if "connection" in conn and isinstance(conn["connection"], dict):
+            conn = conn["connection"]
         uri = conn.get("uri") or ""
+        database = conn.get("database") or ""
 
-        # Extract database from URI if not set in config
         if not uri:
-            logger.debug("No URI provided, raising ValueError")
-            raise ValueError("MongoDB connection URI is required")
+            host = conn.get("host") or ""
+            if not host:
+                logger.debug("No URI and no host provided, raising ValueError")
+                raise ValueError("MongoDB connection requires either a uri or a host")
+            port = conn.get("port", 27017)
+            user = conn.get("user") or ""
+            password = conn.get("password") or ""
+            credentials = f"{quote_plus(user)}:{quote_plus(password)}@" if user else ""
+            uri = f"mongodb://{credentials}{host}:{port}/"
+            logger.debug("Built MongoDB URI from host/port/user: host=%s, port=%s", host, port)
 
-        # Try to parse database from URI
-        if not self._db_name or self._db_name == "admin":
+        if database:
+            self._db_name = database
+        elif not self._db_name or self._db_name == "admin":
             # Parse dbname from mongodb://host:port/dbname
             parts = uri.split("/")
-            if len(parts) >= 4:
+            if len(parts) >= 4 and parts[3]:
                 self._db_name = parts[3].split("?")[0].split("&")[0]
                 logger.debug("Parsed database from URI: %s", self._db_name)
 
@@ -166,8 +183,18 @@ class MongoDBConnector(BaseConnector):
         filter: dict[str, Any] | None = None,
         batch_size: int = 1000,
         cursor: str | None = None,
+        watermark: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Extract rows using _id-based cursor pagination."""
+        """Extract documents by seeking forward through ``_id``.
+
+        ``_id`` is unique and ordered, so it is already the ideal keyset —
+        each batch asks for the documents after the last one seen, which an
+        index answers in constant time.
+
+        Note: watermark-based incremental extraction is not yet implemented
+        for MongoDB; the parameter is accepted for interface compatibility
+        but ignored (full re-scan every run).
+        """
         logger.debug("ENTER extract: collection=%s, columns=%s, batch_size=%d, cursor=%s",
                       table_name, columns, batch_size, cursor)
         client = await self._ensure_client()
@@ -186,48 +213,77 @@ class MongoDBConnector(BaseConnector):
             has_imported = True
             logger.debug("Adding _imported filter: $ne %s", filter["_imported"])
 
-        # Custom filters
+        # Custom filters: equals (back-compat), ilike (case-insensitive
+        # substring via $regex, for a subject-name match) and in ($in, for a
+        # link column restricted to a set of subject ids).
         if filter and not has_imported:
-            for k, v in filter.items():
-                query_filter[k] = v
-                logger.debug("Adding custom filter: %s = %s", k, v)
+            for cond in normalize_filter(filter):
+                col, op, val = cond["column"], cond["op"], cond["value"]
+                if op == "ilike":
+                    query_filter[col] = {"$regex": re.escape(str(val)), "$options": "i"}
+                elif op == "in":
+                    query_filter[col] = {"$in": val}
+                else:
+                    query_filter[col] = val
+                logger.debug("Adding custom filter: %s %s %s", col, op, val)
 
-        # Column projection
+        # Column projection. `_id` is always fetched even when the caller did
+        # not ask for it — it is the pagination key, and excluding it left
+        # every batch with no cursor to continue from.
         projection: dict[str, Any] | None = None
+        drop_id_from_output = False
         if columns and columns != ["*"]:
             projection = {col: 1 for col in columns}
-            projection["_id"] = 0  # Exclude _id from projection for cleaner output
+            if "_id" not in projection:
+                projection["_id"] = 1
+                drop_id_from_output = True
             logger.debug("Using column projection: %s", columns)
 
-        # Total count
-        logger.debug("Counting documents matching filter")
-        total_count = await collection.count_documents(query_filter)
-        logger.debug("Total matching documents: %d", total_count)
+        # ── Position, and the once-per-collection count ─────────────
+        position = decode_cursor(cursor)
+        total_count = position["total_count"]
+        if total_count is None:
+            logger.debug("Counting documents matching filter (first batch only)")
+            total_count = await collection.count_documents(query_filter)
+            logger.debug("Total matching documents: %d", total_count)
 
-        # Cursor-based pagination using _id
-        skip = 0
-        if cursor is not None:
-            # MongoDB cursor is the _id string of the last document
-            query_filter["_id"] = {"$gt": cursor}
-            logger.debug("Using cursor-based pagination: $gt %s", cursor)
+        last_seen = (position["keyset"] or [None])[0]
+        if last_seen is not None:
+            # The cursor travels as text; an ObjectId collection needs it
+            # converted back or `$gt` silently matches nothing.
+            query_filter["_id"] = {"$gt": self._as_id(last_seen)}
+            logger.debug("Seeking documents after _id %s", last_seen)
 
+        # One extra document is fetched purely to learn whether another page
+        # exists; it is never returned.
         logger.debug("Fetching with limit=%d", batch_size + 1)
-        cursor_obj = collection.find(query_filter, projection).limit(batch_size + 1)
-        rows = []
-        last_id = None
+        cursor_obj = (
+            collection.find(query_filter, projection)
+            .sort("_id", 1)
+            .limit(batch_size + 1)
+        )
+        fetched: list[dict[str, Any]] = []
         async for doc in cursor_obj:
-            last_id = str(doc.get("_id", ""))
-            if len(rows) < batch_size:
-                rows.append(self._flatten_doc(doc))
+            fetched.append(doc)
 
-        logger.debug("Fetched %d rows (fetched %d with extra)", len(rows), len(rows) + (1 if last_id else 0))
-        next_cursor = last_id if len(rows) == batch_size + 1 and last_id else None
-        if next_cursor and len(rows) > batch_size:
-            rows = rows[:batch_size]
+        has_more = len(fetched) > batch_size
+        page = fetched[:batch_size]
+        last_id = str(page[-1].get("_id", "")) if page else None
 
+        rows = []
+        for doc in page:
+            flat = self._flatten_doc(doc)
+            if drop_id_from_output:
+                flat.pop("_id", None)
+            rows.append(flat)
+
+        next_cursor = (
+            encode_cursor(keyset_values=[last_id], total_count=total_count)
+            if has_more and last_id else None
+        )
         origin_ids = [str(i) for i in range(len(rows))]
 
-        logger.debug("EXIT extract: rows=%d, next_cursor=%s", len(rows), next_cursor)
+        logger.debug("EXIT extract: rows=%d, has_more=%s", len(rows), has_more)
         return {
             "rows": rows,
             "column_names": list(rows[0].keys()) if rows else [],
@@ -235,6 +291,18 @@ class MongoDBConnector(BaseConnector):
             "next_cursor": next_cursor,
             "origin_ids": origin_ids,
         }
+
+    @staticmethod
+    def _as_id(value: str) -> Any:
+        """Turn a cursor string back into whatever `_id` type the collection uses."""
+        try:
+            from bson import ObjectId
+
+            if ObjectId.is_valid(value):
+                return ObjectId(value)
+        except Exception:
+            pass
+        return value
 
     # ── Import Flagging ───────────────────────────────────────────────
 
@@ -299,13 +367,27 @@ class MongoDBConnector(BaseConnector):
         return "UNKNOWN"
 
     @staticmethod
+    def _to_serializable(val: Any) -> Any:
+        """Coerce BSON-only types (ObjectId, Decimal128, Binary…) to plain values.
+
+        LangGraph checkpoints graph state with msgpack, which rejects BSON types.
+        """
+        if isinstance(val, (str, int, float, bool, type(None), datetime)):
+            return val
+        if isinstance(val, list):
+            return [MongoDBConnector._to_serializable(v) for v in val]
+        if isinstance(val, dict):
+            return {k: MongoDBConnector._to_serializable(v) for k, v in val.items()}
+        return str(val)
+
+    @staticmethod
     def _flatten_doc(doc: dict[str, Any]) -> dict[str, Any]:
         """Flatten nested document keys with dot notation."""
         flat: dict[str, Any] = {}
         for key, val in doc.items():
             if isinstance(val, dict):
                 for sub_key, sub_val in val.items():
-                    flat[f"{key}.{sub_key}"] = sub_val
+                    flat[f"{key}.{sub_key}"] = MongoDBConnector._to_serializable(sub_val)
             else:
-                flat[key] = val
+                flat[key] = MongoDBConnector._to_serializable(val)
         return flat

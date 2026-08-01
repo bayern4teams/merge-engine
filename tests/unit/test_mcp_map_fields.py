@@ -11,7 +11,7 @@ from src.mcp_server.tools.map_fields import (
     map_fields_impl,
     map_fields_handler,
     _heuristic_match,
-    _map_type_to_databricks,
+    _map_type_generic,
 )
 
 
@@ -247,53 +247,60 @@ class TestHeuristicMatch:
         assert _heuristic_match("first-name", "first_name") >= 0.8
 
 
-class TestMapTypeToDatabricks:
-    """Tests for _map_type_to_databricks helper."""
+class TestMapTypeGeneric:
+    """Tests for _map_type_generic helper."""
 
     def test_string_types(self) -> None:
-        """Test STRING, VARCHAR, TEXT map to STRING."""
-        assert _map_type_to_databricks("STRING") == "STRING"
-        assert _map_type_to_databricks("VARCHAR") == "STRING"
-        assert _map_type_to_databricks("TEXT") == "STRING"
+        """Test STRING, VARCHAR, TEXT map to TEXT."""
+        assert _map_type_generic("STRING") == "TEXT"
+        assert _map_type_generic("VARCHAR") == "TEXT"
+        assert _map_type_generic("TEXT") == "TEXT"
+
+    def test_python_type_names(self) -> None:
+        """Python type().__name__ values map correctly."""
+        assert _map_type_generic("str") == "TEXT"
+        assert _map_type_generic("int") == "BIGINT"
+        assert _map_type_generic("float") == "DOUBLE PRECISION"
+        assert _map_type_generic("bool") == "BOOLEAN"
 
     def test_integer_types(self) -> None:
         """Test integer types map correctly."""
-        assert _map_type_to_databricks("INTEGER") == "INTEGER"
-        assert _map_type_to_databricks("BIGINT") == "BIGINT"
-        assert _map_type_to_databricks("SMALLINT") == "INTEGER"
+        assert _map_type_generic("INTEGER") == "INTEGER"
+        assert _map_type_generic("BIGINT") == "BIGINT"
+        assert _map_type_generic("SMALLINT") == "INTEGER"
 
     def test_floating_point_types(self) -> None:
         """Test floating point types map correctly."""
-        assert _map_type_to_databricks("REAL") == "FLOAT"
-        assert _map_type_to_databricks("DOUBLE") == "DOUBLE"
-        assert _map_type_to_databricks("DECIMAL") == "DECIMAL(19,4)"
+        assert _map_type_generic("REAL") == "DOUBLE PRECISION"
+        assert _map_type_generic("DOUBLE") == "DOUBLE PRECISION"
+        assert _map_type_generic("DECIMAL") == "DOUBLE PRECISION"
 
     def test_boolean_type(self) -> None:
         """Test boolean type."""
-        assert _map_type_to_databricks("BOOLEAN") == "BOOLEAN"
+        assert _map_type_generic("BOOLEAN") == "BOOLEAN"
 
     def test_date_time_types(self) -> None:
         """Test date/time types."""
-        assert _map_type_to_databricks("TIMESTAMP") == "TIMESTAMP"
-        assert _map_type_to_databricks("TIMESTAMPTZ") == "TIMESTAMP"
-        assert _map_type_to_databricks("DATE") == "DATE"
-        assert _map_type_to_databricks("TIME") == "STRING"
+        assert _map_type_generic("TIMESTAMP") == "TIMESTAMP"
+        assert _map_type_generic("TIMESTAMPTZ") == "TIMESTAMP"
+        assert _map_type_generic("DATE") == "DATE"
+        assert _map_type_generic("TIME") == "TEXT"
 
     def test_json_uuid_types(self) -> None:
         """Test JSON and UUID types."""
-        assert _map_type_to_databricks("JSON") == "STRING"
-        assert _map_type_to_databricks("JSONB") == "STRING"
-        assert _map_type_to_databricks("UUID") == "STRING"
+        assert _map_type_generic("JSON") == "TEXT"
+        assert _map_type_generic("JSONB") == "TEXT"
+        assert _map_type_generic("UUID") == "TEXT"
 
     def test_complex_types(self) -> None:
         """Test complex types."""
-        assert _map_type_to_databricks("OBJECT") == "STRING"
-        assert _map_type_to_databricks("ARRAY") == "STRING"
+        assert _map_type_generic("OBJECT") == "TEXT"
+        assert _map_type_generic("ARRAY") == "TEXT"
 
-    def test_unknown_type_defaults_to_string(self) -> None:
-        """Test unknown types default to STRING."""
-        assert _map_type_to_databricks("UNKNOWN") == "STRING"
-        assert _map_type_to_databricks("CUSTOM_TYPE") == "STRING"
+    def test_unknown_type_defaults_to_text(self) -> None:
+        """Test unknown types default to TEXT."""
+        assert _map_type_generic("UNKNOWN") == "TEXT"
+        assert _map_type_generic("CUSTOM_TYPE") == "TEXT"
 
 
 class TestMapFieldsHandler:

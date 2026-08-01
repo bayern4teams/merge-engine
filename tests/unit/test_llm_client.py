@@ -62,9 +62,7 @@ class TestLLMClientGetModel:
         client = LLMClient(config)
         # Model should not be initialized yet
         assert client._model is None
-        # Mock the ChatOpenAI class and disable Langfuse tracing for this test
-        with patch("src.llm.client.ChatOpenAI") as mock_chat, \
-             patch("src.llm.client._get_langfuse_config", return_value={}):
+        with patch("src.llm.client.ChatOpenAI") as mock_chat:
             mock_model = MagicMock()
             mock_chat.return_value = mock_model
             model = client._get_model()
@@ -145,6 +143,96 @@ class TestLLMClientCall:
             client._get_model()
 
 
+class TestLLMClientModelFallback:
+    """Fix (Phase 7): a quota/billing error on the active model is never
+    going to resolve itself mid-run, so call() must advance through
+    config's fallback_models instead of surfacing the failure.
+    """
+
+    def test_chain_built_from_model_plus_fallbacks(self):
+        config = {
+            "model": "primary",
+            "fallback_models": ["second", "third"],
+            "api_key": "test",
+        }
+        client = LLMClient(config)
+        assert client.model_chain == ["primary", "second", "third"]
+        assert client.model_name == "primary"
+
+    def test_no_fallback_models_is_a_single_element_chain(self):
+        client = LLMClient({"model": "solo", "api_key": "test"})
+        assert client.model_chain == ["solo"]
+
+    def test_advance_model_updates_name_and_resets_cached_model(self):
+        client = LLMClient({
+            "model": "primary", "fallback_models": ["second"], "api_key": "test",
+        })
+        client._model = object()  # pretend a model was already built
+        assert client._advance_model() is True
+        assert client.model_name == "second"
+        assert client._model is None
+
+    def test_advance_model_returns_false_when_chain_exhausted(self):
+        client = LLMClient({"model": "only", "api_key": "test"})
+        assert client._advance_model() is False
+        assert client.model_name == "only"
+
+    @pytest.mark.asyncio
+    async def test_quota_error_falls_back_to_next_model_and_succeeds(self):
+        config = {
+            "model": "primary", "fallback_models": ["second"], "api_key": "test",
+            "cache_enabled": False,
+        }
+        client = LLMClient(config)
+
+        failing_model = AsyncMock()
+        failing_model.ainvoke = AsyncMock(
+            side_effect=Exception("Error code: 403 - AllocationQuota.FreeTierOnly")
+        )
+        working_model = AsyncMock()
+        working_model.ainvoke = AsyncMock(return_value=MagicMock(content="ok"))
+
+        with patch.object(
+            client, "_get_model", side_effect=[failing_model, working_model]
+        ):
+            result = await client.call(system_prompt="s", user_prompt="u")
+
+        assert result == "ok"
+        assert client.model_name == "second"
+
+    @pytest.mark.asyncio
+    async def test_non_quota_error_does_not_advance_model(self):
+        # A malformed-request error, for example, will fail identically on
+        # every model in the chain — burning through it would just delay
+        # the real failure, not fix anything.
+        config = {
+            "model": "primary", "fallback_models": ["second"], "api_key": "test",
+            "cache_enabled": False,
+        }
+        client = LLMClient(config)
+
+        model = AsyncMock()
+        model.ainvoke = AsyncMock(side_effect=ValueError("malformed request body"))
+
+        with patch.object(client, "_get_model", return_value=model):
+            with pytest.raises(ValueError, match="malformed request body"):
+                await client.call(system_prompt="s", user_prompt="u")
+
+        assert client.model_name == "primary"
+
+    @pytest.mark.asyncio
+    async def test_quota_error_on_last_model_raises(self):
+        config = {"model": "only", "api_key": "test", "cache_enabled": False}
+        client = LLMClient(config)
+
+        model = AsyncMock()
+        model.ainvoke = AsyncMock(side_effect=Exception("429 rate limit exceeded"))
+
+        with patch.object(client, "_get_model", return_value=model):
+            with pytest.raises(Exception, match="429 rate limit exceeded"):
+                await client.call(system_prompt="s", user_prompt="u")
+
+
 class TestLLMClientCallJson:
     """Tests for call_json() method."""
 
@@ -217,7 +305,7 @@ class TestLLMClientCallBatch:
         with patch.object(client, "_get_model") as mock_get_model:
             mock_model = MagicMock()
 
-            async def mock_ainvoke(msgs):
+            async def mock_ainvoke(msgs, config=None):
                 return MagicMock(content=f"Response to {msgs[1].content}")
 
             mock_model.ainvoke = AsyncMock(side_effect=mock_ainvoke)

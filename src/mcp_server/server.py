@@ -115,32 +115,6 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
-            name="mark_imported",
-            description=(
-                "Flag extracted rows as imported by setting _imported=true "
-                "or inserting into a tracking table."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "origin_id": {
-                        "type": "string",
-                        "description": "The origin database ID from config.",
-                    },
-                    "table_name": {
-                        "type": "string",
-                        "description": "Name of the table or collection.",
-                    },
-                    "ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Original row identifiers to mark.",
-                    },
-                },
-                "required": ["origin_id", "table_name", "ids"],
-            },
-        ),
-        Tool(
             name="resolve_entities",
             description=(
                 "Given records from multiple sources for a given entity type, "
@@ -299,7 +273,6 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 from src.mcp_server.tools import (
     discover_schema_handler,
     extract_data_handler,
-    mark_imported_handler,
     resolve_entities_impl,
     unify_entity_group_handler,
     map_fields_handler,
@@ -317,6 +290,7 @@ async def _extend_schema_handler(arguments: dict[str, Any]) -> dict[str, Any]:
     dest_cfg = config.destination
     changes = arguments.get("changes", [])
 
+    connector = None
     try:
         connector = create_connector(dest_cfg.type, dest_cfg.model_dump())
         result = await connector.extend_schema_batch(changes)
@@ -327,12 +301,14 @@ async def _extend_schema_handler(arguments: dict[str, Any]) -> dict[str, Any]:
         }
     except Exception as exc:
         raise PermanentError(f"Schema extension failed: {exc}") from exc
+    finally:
+        if connector is not None:
+            await connector.close()
 
 
 _TOOL_HANDLERS: dict[str, Any] = {
     "discover_schema": discover_schema_handler,
     "extract_data": extract_data_handler,
-    "mark_imported": mark_imported_handler,
     "resolve_entities": resolve_entities_impl,
     "unify_entity_group": unify_entity_group_handler,
     "map_fields": map_fields_handler,

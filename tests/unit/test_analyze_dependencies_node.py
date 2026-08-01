@@ -38,9 +38,12 @@ class TestTableMayBeRelated:
         assert _table_may_be_related("customer's_data", ["customer"]) is True
 
     def test_no_match(self) -> None:
-        """Test no match returns True (default inclusion)."""
-        # Default behavior: returns True for all tables (fallback)
-        assert _table_may_be_related("unrelated_table_xyz", ["person"]) is True
+        """Test unrelated table is filtered out."""
+        assert _table_may_be_related("unrelated_table_xyz", ["person"]) is False
+
+    def test_irregular_plural_match(self) -> None:
+        """Test irregular plural (person -> people) matches."""
+        assert _table_may_be_related("people", ["person"]) is True
 
     def test_underscore_replacement(self) -> None:
         """Test that underscores are replaced with spaces."""
@@ -209,7 +212,7 @@ class TestAnalyzeDependencies:
             return_value=mock_llm_client,
         ), patch(
             "src.orchestrator.nodes.analyze_dependencies.PROMPT_TEMPLATES",
-            {"dependency_analysis": "Analyze: {target_entities}\n\n{schema_info}"},
+            {"dependency_analysis": {"system": "Analyze schemas. Return only JSON.", "human": "Analyze: {target_entities}\n\n{schema_info}"}},
         ):
             result = await analyze_dependencies(base_state)
 
@@ -218,6 +221,7 @@ class TestAnalyzeDependencies:
         assert "person" in result["extraction_order"]
         assert result["extraction_order"].index("company") < result["extraction_order"].index("person")
         assert not result["errors"]
+        assert result["dependency_analysis_warning"] == ""
 
     @pytest.mark.asyncio
     async def test_analyze_dependencies_empty_target_entities(
@@ -260,6 +264,7 @@ class TestAnalyzeDependencies:
         assert result["extraction_order"] == ["person", "company"]
         assert len(result["errors"]) == 1
         assert "Dependency analysis failed" in result["errors"][0]
+        assert "UNVERIFIED" in result["dependency_analysis_warning"]
 
     @pytest.mark.asyncio
     async def test_analyze_dependencies_missing_prompt_template(
@@ -289,7 +294,7 @@ class TestAnalyzeDependencies:
             return_value=mock_llm_client,
         ), patch(
             "src.orchestrator.nodes.analyze_dependencies.PROMPT_TEMPLATES",
-            {"dependency_analysis": "Analyze: {target_entities}\n\n{schema_info}"},
+            {"dependency_analysis": {"system": "Analyze schemas. Return only JSON.", "human": "Analyze: {target_entities}\n\n{schema_info}"}},
         ):
             result = await analyze_dependencies(base_state)
 
@@ -308,7 +313,7 @@ class TestAnalyzeDependencies:
             return_value=mock_client,
         ), patch(
             "src.orchestrator.nodes.analyze_dependencies.PROMPT_TEMPLATES",
-            {"dependency_analysis": "Analyze: {target_entities}\n\n{schema_info}"},
+            {"dependency_analysis": {"system": "Analyze schemas. Return only JSON.", "human": "Analyze: {target_entities}\n\n{schema_info}"}},
         ):
             result = await analyze_dependencies(base_state)
 
@@ -340,7 +345,7 @@ class TestAnalyzeDependencies:
             return_value=mock_client,
         ), patch(
             "src.orchestrator.nodes.analyze_dependencies.PROMPT_TEMPLATES",
-            {"dependency_analysis": "Analyze: {target_entities}\n\n{schema_info}"},
+            {"dependency_analysis": {"system": "Analyze schemas. Return only JSON.", "human": "Analyze: {target_entities}\n\n{schema_info}"}},
         ):
             result = await analyze_dependencies(base_state)
 
@@ -377,7 +382,7 @@ class TestAnalyzeDependencies:
             return_value=mock_client,
         ), patch(
             "src.orchestrator.nodes.analyze_dependencies.PROMPT_TEMPLATES",
-            {"dependency_analysis": "Analyze: {target_entities}\n\n{schema_info}"},
+            {"dependency_analysis": {"system": "Analyze schemas. Return only JSON.", "human": "Analyze: {target_entities}\n\n{schema_info}"}},
         ):
             result = await analyze_dependencies(base_state)
 
@@ -414,4 +419,6 @@ class TestAnalyzeDependencies:
         assert "postgres_main" in result
         assert "mongo_analytics" in result
         assert "customers" in result
-        assert "leads" in result
+        # "leads" is unrelated to the "customer" entity, so the relatedness
+        # filter excludes it from the LLM prompt.
+        assert "leads" not in result

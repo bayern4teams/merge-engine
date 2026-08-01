@@ -18,6 +18,15 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
+# Load .env so ${ENV_VAR} placeholders in config.yaml resolve regardless of
+# which module is imported first (client.py also loads it; this just makes
+# config_loader independently correct).
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 
 # ---------------------------------------------------------------------------
 # Pydantic Models (canonical definitions)
@@ -25,7 +34,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class DestinationConfig(BaseModel):
-    """Configuration for the PostgreSQL destination database."""
+    """Configuration for the destination database (PostgreSQL or ClickHouse)."""
 
     type: str = "postgresql"
     host: str = ""
@@ -36,14 +45,15 @@ class DestinationConfig(BaseModel):
     schema_name: str = Field(
         default="public",
         alias="schema",
-        description="PostgreSQL schema name",
+        description="Database schema name",
     )
 
     @field_validator("type")
     @classmethod
     def validate_type(cls, v: str) -> str:
-        if v != "postgresql":
-            raise ValueError(f"Destination type must be 'postgresql', got '{v}'")
+        allowed = ("postgresql", "clickhouse")
+        if v not in allowed:
+            raise ValueError(f"Destination type must be one of {allowed}, got '{v}'")
         return v
 
 
@@ -52,9 +62,18 @@ class LLMConfig(BaseModel):
 
     provider: str = "openai"  # "openai" | "azure" | "anthropic"
     model: str
+    # Tried in order after ``model`` whenever a call hits a quota/billing
+    # error (LLMClient._advance_model) — a same-account retry can't recover
+    # from that, so the client moves to the next model instead of failing.
+    fallback_models: list[str] = Field(default_factory=list)
     api_key: str
     base_url: str | None = None
     temperature: float = 0.0
+    structured_output: bool = True
+    # Hybrid-LLM feature gates: heuristics always run; these enable the
+    # LLM fallback for borderline entity pairs / unmappable fields.
+    entity_resolution_enabled: bool = True
+    field_mapping_enabled: bool = True
 
     @field_validator("provider")
     @classmethod

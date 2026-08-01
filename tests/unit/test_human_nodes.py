@@ -183,8 +183,18 @@ class TestHumanReviewMappings:
             "field_mappings": {
                 "company": {
                     "name": {"confidence": 0.98},
-                    "unknown_field": {"confidence": 0.0},
+                    "unknown_field": {"confidence": 0.0, "requires_schema_change": True},
                 }
+            },
+            "unmapped_fields": {
+                "company": [
+                    {
+                        "field": "unknown_field",
+                        "confidence": 0.4,
+                        "suggested_column": None,
+                        "reason": "Low confidence match; requires human review",
+                    }
+                ],
             },
             "pending_schema_changes": [
                 {"column": "new_column", "data_type": "VARCHAR"}
@@ -235,6 +245,7 @@ class TestHumanReviewMappings:
                 "name": {"confidence": 1.0},
             }
         }
+        base_state["unmapped_fields"] = {}
         base_state["pending_schema_changes"] = []
 
         result = await human_review_mappings(base_state)
@@ -253,6 +264,7 @@ class TestHumanReviewMappings:
                 "email": {"confidence": 0.95},
             }
         }
+        base_state["unmapped_fields"] = {}
 
         result = await human_review_mappings(base_state)
 
@@ -356,119 +368,162 @@ class TestHumanFinalApproval:
 
 
 class TestHandleError:
-    """Tests for the handle_error node."""
+    """Tests for the handle_error escalation gate.
+
+    The gate no longer counts retries on its own — LangGraph's per-node
+    RetryPolicy handles transient failures automatically, and what reaches
+    this gate is a failure a human has to make a call on. Its whole job is
+    to record that call and clear the failure so the router can act.
+    """
 
     @pytest.fixture
     def base_state(self) -> dict[str, Any]:
-        """Base workflow state."""
+        """A run stopped by a failure in extract_data."""
         return {
             "errors": ["Something went wrong"],
             "retry_counts": {},
-            "current_step": "extract_data",
+            "failure": {
+                "node": "extract_data",
+                "error": "table orders failed on batch 3",
+                "error_class": "DataQualityError",
+                "disposition": "escalate",
+                "context": {"failed_tables": [{"table_name": "orders"}]},
+            },
+            "human_feedback": {"decision": "retry"},
         }
 
     @pytest.mark.asyncio
-    async def test_handle_error_no_errors(
-        self, base_state: dict[str, Any]
-    ) -> None:
-        """Test with no errors returns cleanly."""
-        base_state["errors"] = []
+    async def test_no_failure_is_a_no_op(self, base_state: dict[str, Any]) -> None:
+        """With nothing to handle the gate must not invent state."""
+        base_state["failure"] = {}
 
         result = await handle_error(base_state)
 
-        assert result["errors"] == []
+        assert result == {}
 
     @pytest.mark.asyncio
-    async def test_handle_error_first_retry(
+    async def test_failure_is_cleared_so_a_retry_can_proceed(
         self, base_state: dict[str, Any]
     ) -> None:
-        """Test first retry increments count but doesn't interrupt."""
+        """Leaving `failure` set would make the node's own router re-catch it."""
         result = await handle_error(base_state)
 
-        assert result["retry_counts"]["extract_data"] == 1
-        assert "interrupt_data" not in result
+        assert result["failure"] == {}
 
     @pytest.mark.asyncio
-    async def test_handle_error_second_retry(
+    async def test_decision_travels_with_the_handled_failure(
         self, base_state: dict[str, Any]
     ) -> None:
-        """Test second retry still below max."""
+        """The outbound router reads node+decision from handled_failures."""
+        result = await handle_error(base_state)
+
+        assert len(result["handled_failures"]) == 1
+        handled = result["handled_failures"][0]
+        assert handled["node"] == "extract_data"
+        assert handled["decision"] == "retry"
+        assert handled["error"] == "table orders failed on batch 3"
+
+    @pytest.mark.asyncio
+    async def test_retry_increments_that_node_s_attempt_count(
+        self, base_state: dict[str, Any]
+    ) -> None:
+        """The router's loop guard reads this count."""
         base_state["retry_counts"] = {"extract_data": 1}
 
         result = await handle_error(base_state)
 
         assert result["retry_counts"]["extract_data"] == 2
-        assert "interrupt_data" not in result
 
     @pytest.mark.asyncio
-    async def test_handle_error_third_retry_exceeds_max(
+    async def test_skip_does_not_count_as_an_attempt(
         self, base_state: dict[str, Any]
     ) -> None:
-        """Test third retry triggers interrupt (max=3)."""
-        base_state["retry_counts"] = {"extract_data": 2}
+        """Skipping is not retrying — it must not consume a retry budget."""
+        base_state["human_feedback"] = {"decision": "skip"}
 
         result = await handle_error(base_state)
 
-        assert result["retry_counts"]["extract_data"] == 3
-        assert "interrupt_data" in result
-        assert result["interrupt_data"]["node"] == "handle_error"
-        assert result["interrupt_data"]["title"] == "Error: Max Retries Exceeded"
-        assert result["interrupt_data"]["data"]["error"] == "Something went wrong"
-        assert result["interrupt_data"]["data"]["retry_count"] == 3
+        assert result["retry_counts"].get("extract_data", 0) == 0
+        assert result["handled_failures"][0]["decision"] == "skip"
 
     @pytest.mark.asyncio
-    async def test_handle_error_different_node(
+    async def test_missing_feedback_is_recorded_as_abort(
         self, base_state: dict[str, Any]
     ) -> None:
-        """Test that retry counts are per-node."""
-        base_state["current_step"] = "resolve_entities"
+        """No decision must never be read as permission to continue."""
+        base_state["human_feedback"] = None
+
+        result = await handle_error(base_state)
+
+        assert result["handled_failures"][0]["decision"] == "abort"
+
+    @pytest.mark.asyncio
+    async def test_retry_counts_are_per_node(
+        self, base_state: dict[str, Any]
+    ) -> None:
+        """A failure in one node must not spend another node's budget."""
+        base_state["failure"] = {**base_state["failure"], "node": "resolve_entities"}
         base_state["retry_counts"] = {"extract_data": 3}
 
         result = await handle_error(base_state)
 
         assert result["retry_counts"]["resolve_entities"] == 1
-        assert "interrupt_data" not in result
+        assert result["retry_counts"]["extract_data"] == 3
 
-    @pytest.mark.asyncio
-    async def test_handle_error_increments_existing_count(
-        self, base_state: dict[str, Any]
+
+class TestBuildErrorInterrupt:
+    """Tests for the payload the error gate shows a human."""
+
+    @pytest.fixture
+    def state(self) -> dict[str, Any]:
+        return {
+            "failure": {
+                "node": "extract_data",
+                "error": "orders failed on batch 3",
+                "error_class": "DataQualityError",
+                "disposition": "escalate",
+                "context": {"rows_discarded": 2000},
+            },
+            "retry_counts": {"extract_data": 1},
+            "errors": ["a", "b", "c", "d", "e", "f", "g"],
+        }
+
+    def test_names_the_failed_step_and_the_error(self, state: dict[str, Any]) -> None:
+        from src.orchestrator.nodes.human_nodes import build_error_interrupt
+
+        payload = build_error_interrupt(state)
+
+        assert payload["node"] == "handle_error"
+        assert "extract_data" in payload["title"]
+        assert payload["data"]["failed_node"] == "extract_data"
+        assert payload["data"]["error"] == "orders failed on batch 3"
+        assert payload["data"]["error_class"] == "DataQualityError"
+        assert payload["data"]["attempts"] == 1
+        assert payload["data"]["context"]["rows_discarded"] == 2000
+
+    def test_offers_retry_skip_and_abort(self, state: dict[str, Any]) -> None:
+        from src.orchestrator.nodes.human_nodes import build_error_interrupt
+
+        options = build_error_interrupt(state)["data"]["options"]
+
+        assert [o["decision"] for o in options] == ["retry", "skip", "abort"]
+
+    def test_skip_option_says_where_the_run_would_resume(
+        self, state: dict[str, Any]
     ) -> None:
-        """Test that existing retry counts are incremented."""
-        base_state["retry_counts"] = {"extract_data": 1}
+        """"Skip" sounds harmless; the wording has to say what it costs."""
+        from src.orchestrator.nodes.human_nodes import build_error_interrupt
 
-        result = await handle_error(base_state)
+        options = build_error_interrupt(state)["data"]["options"]
+        skip = next(o for o in options if o["decision"] == "skip")
 
-        assert result["retry_counts"]["extract_data"] == 2
+        # extract_data's successor per NODE_SUCCESSOR.
+        assert "resolve_entities" in skip["detail"]
+        assert "incomplete" in skip["detail"].lower()
 
-    @pytest.mark.asyncio
-    async def test_handle_error_preserves_errors(
-        self, base_state: dict[str, Any]
-    ) -> None:
-        """Test that errors are preserved in result."""
-        result = await handle_error(base_state)
+    def test_recent_errors_are_capped(self, state: dict[str, Any]) -> None:
+        from src.orchestrator.nodes.human_nodes import build_error_interrupt
 
-        assert result["errors"] == ["Something went wrong"]
-
-    @pytest.mark.asyncio
-    async def test_handle_error_max_attempts_is_three(
-        self, base_state: dict[str, Any]
-    ) -> None:
-        """Test that max attempts is 3 (checked at count=3)."""
-        # Start at count=0
-        base_state["retry_counts"] = {}
-        base_state["current_step"] = "test_node"
-
-        # First call -> count=1
-        result = await handle_error(base_state)
-        assert result["retry_counts"]["test_node"] == 1
-
-        # Second call at count=1 -> count=2
-        base_state["retry_counts"] = {"test_node": 1}
-        result = await handle_error(base_state)
-        assert result["retry_counts"]["test_node"] == 2
-
-        # Third call at count=2 -> interrupt
-        base_state["retry_counts"] = {"test_node": 2}
-        result = await handle_error(base_state)
-        assert result["retry_counts"]["test_node"] == 3
-        assert "interrupt_data" in result
+        assert build_error_interrupt(state)["data"]["recent_errors"] == [
+            "c", "d", "e", "f", "g",
+        ]

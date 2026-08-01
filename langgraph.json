@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "merge_engine": "./src/orchestrator/graph.py:graph"
+  },
+  "env": ".env"
+}

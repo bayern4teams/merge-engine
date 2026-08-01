@@ -14,12 +14,19 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from typing import TypedDict, Annotated, Dict, Any, List
+import operator
+
 from langgraph.graph import StateGraph, END
+from langgraph.types import RetryPolicy
+
+from src.orchestrator.utils.retry import TransientError, classify_exception
 
 from src.orchestrator.nodes import (
     parse_request,
     discover_schemas,
     analyze_dependencies,
+    plan_scope,
     extract_data,
     resolve_entities,
     has_low_confidence_clusters,
@@ -27,88 +34,518 @@ from src.orchestrator.nodes import (
     map_fields,
     has_unmapped_fields,
     load_data_node,
-    flag_origins_node,
+    update_extraction_state_node,
     human_review_deps,
+    human_review_scope,
     human_review_matches,
     human_review_mappings,
     human_final_approval,
     handle_error,
 )
+from src.orchestrator.nodes.preflight import preflight
 
 logger = logging.getLogger("merge-engine.orchestrator.graph")
 
-# Node names for interrupt configuration
+# Node names for interrupt configuration. handle_error is listed last and
+# kept out of GATE_PRODUCER: it is a gate the pipeline hopes never to reach,
+# not a step in the normal review sequence.
 HITL_NODES = [
     "human_review_deps",
+    "human_review_scope",
     "human_review_matches",
     "human_review_mappings",
     "human_final_approval",
+    "handle_error",
 ]
+
+# The four gates a healthy run passes through, for UI stepper purposes.
+REVIEW_GATES = HITL_NODES[:-1]
+
+
+def _is_transient(exc: Exception) -> bool:
+    """Retry predicate for LangGraph's RetryPolicy.
+
+    Classification happens here rather than at each raise site so a raw
+    driver exception that nobody thought to wrap still gets judged on its
+    merits instead of defaulting to "retry forever" or "never retry".
+    """
+    return isinstance(classify_exception(exc), TransientError)
+
+
+# Anything touching a database or the LLM API can fail for reasons that have
+# nothing to do with the request — a dropped connection, a rate limit, a
+# failover. Those get retried with exponential backoff and jitter; every
+# other failure class falls straight through to the error gate, because
+# retrying a syntax error three times only delays the message.
+NETWORK_RETRY = RetryPolicy(
+    max_attempts=3,
+    initial_interval=1.0,
+    backoff_factor=2.0,
+    max_interval=30.0,
+    jitter=True,
+    retry_on=_is_transient,
+)
+
+# Where each fallible node goes when it succeeds. The error gate reads this
+# to offer "skip": continue from the failure as if that node had produced
+# nothing, rather than forcing the whole run to be abandoned.
+NODE_SUCCESSOR = {
+    "preflight": "parse_request",
+    "parse_request": "discover_schemas",
+    "discover_schemas": "analyze_dependencies",
+    "analyze_dependencies": "human_review_deps",
+    "extract_data": "resolve_entities",
+    "resolve_entities": "unify_entities",
+    "unify_entities": "map_fields",
+    "map_fields": "human_final_approval",
+    "load_data": "update_extraction_state",
+}
+
+# Which node produced the data a gate reviews. "retry" at a gate re-runs that
+# node with the user's written reason injected into its prompt.
+GATE_PRODUCER = {
+    "human_review_deps": "analyze_dependencies",
+    "human_review_scope": "plan_scope",
+    "human_review_matches": "resolve_entities",
+    "human_review_mappings": "map_fields",
+}
+
+# A user can send the same gate back this many times before the graph moves on
+# regardless — otherwise a retry loop never terminates.
+MAX_GATE_RETRIES = 3
+
+
+def _gate_router(gate: str, forward: str):
+    """Build the conditional-edge router for one HITL gate.
+
+    The four decisions a gate accepts:
+
+    ``approve`` / ``edit``
+        Continue to ``forward``. (Edits are already merged into state by
+        ``WorkflowManager.resume_workflow`` before the graph resumes.)
+    ``retry``
+        Go back to the node that produced this gate's data and run it again
+        with the user's reason as extra prompt context.
+    ``reject`` / ``abort``
+        End the run. Nothing further executes and nothing is written.
+
+    Absent or unrecognised feedback continues forward, preserving the
+    behaviour of runs that predate the richer decision vocabulary.
+    """
+    producer = GATE_PRODUCER.get(gate)
+
+    def route(state: dict[str, Any]) -> str:
+        feedback = state.get("human_feedback") or {}
+        decision = str(feedback.get("decision") or "").strip().lower()
+
+        # Legacy shape: {"approved": bool} with no decision verb.
+        if not decision and "approved" in feedback:
+            decision = "approve" if feedback.get("approved") else "reject"
+
+        if decision in ("reject", "abort"):
+            logger.info("Gate '%s' rejected by user — ending run.", gate)
+            return "abort"
+
+        if decision == "retry" and producer:
+            attempts = (state.get("gate_retry_counts") or {}).get(gate, 0)
+            if attempts > MAX_GATE_RETRIES:
+                logger.warning(
+                    "Gate '%s' retried %d times (limit %d) — continuing "
+                    "forward instead of looping again.",
+                    gate, attempts, MAX_GATE_RETRIES,
+                )
+                return "forward"
+            logger.info(
+                "Gate '%s' sent back to '%s' (attempt %d).",
+                gate, producer, attempts,
+            )
+            return "retry"
+
+        return "forward"
+
+    route.__name__ = f"route_{gate}"
+    return route
+
+
+def _has_open_failure(state: dict[str, Any], node: str) -> bool:
+    """Did `node` just record a failure that no human has dispositioned yet?"""
+    failure = state.get("failure") or {}
+    return bool(failure) and failure.get("node") == node
+
+
+def _failure_route(state: dict[str, Any], node: str) -> str | None:
+    """Decide what an open failure on `node` means for the run.
+
+    The failure's ``disposition`` is what distinguishes the two cases:
+
+    ``escalate``
+        The run *could* continue without this step, so a human gets to
+        decide — retry it, skip it knowing the output is incomplete, or
+        abandon the run.
+    ``fail``
+        The run cannot work at all: an unreachable database, refused
+        credentials, a destination we may not write to. There is nothing to
+        retry from inside the run and nothing safe to skip, so it ends here
+        rather than offering a gate whose only honest answer is "abort".
+    """
+    if not _has_open_failure(state, node):
+        return None
+    failure = state.get("failure") or {}
+    detail = str(failure.get("error", ""))[:200]
+    if str(failure.get("disposition", "escalate")).lower() == "fail":
+        logger.error("Node '%s' failed unrecoverably: %s", node, detail)
+        return "abort"
+    logger.error("Node '%s' failed: %s — routing to the error gate.", node, detail)
+    return "error"
+
+
+def _fallible_router(node: str, forward: str):
+    """Route a node onward, to the error gate, or straight to the end.
+
+    A node that cannot finish its work records a structured ``failure`` and
+    returns normally; this router turns that into a stop. The alternative —
+    letting the node log and continue — is what allowed a half-extracted
+    table to be merged as though it were complete.
+    """
+
+    def route(state: dict[str, Any]) -> str:
+        return _failure_route(state, node) or "continue"
+
+    route.__name__ = f"route_after_{node}"
+    return route
+
+
+def _error_gate_router(state: dict[str, Any]) -> str:
+    """Route out of the error gate on the user's decision.
+
+    ``retry`` re-runs the node that failed, ``skip`` continues from its
+    successor without its output, and anything else ends the run. Absent
+    feedback aborts rather than continues: the run is already known to be
+    incomplete, so guessing "carry on" is the one option that can silently
+    produce a wrong merge.
+
+    Reads the *handled* failure rather than ``state["failure"]``: this runs
+    after ``handle_error``, which deliberately clears ``failure`` so that
+    re-running the failing node is not immediately re-caught by its own
+    router. The decision and the node it applies to travel together in
+    ``handled_failures`` instead.
+    """
+    handled = state.get("handled_failures") or []
+    latest = handled[-1] if handled else {}
+    failed_node = latest.get("node") or ""
+    decision = str(latest.get("decision") or "").strip().lower()
+
+    if decision == "retry" and failed_node:
+        attempts = (state.get("retry_counts") or {}).get(failed_node, 0)
+        if attempts > MAX_GATE_RETRIES:
+            logger.warning(
+                "Node '%s' retried %d times (limit %d) — aborting instead of "
+                "looping.", failed_node, attempts, MAX_GATE_RETRIES,
+            )
+            return "abort"
+        logger.info("Error gate: retrying '%s' (attempt %d).", failed_node, attempts)
+        return failed_node
+
+    if decision == "skip" and failed_node in NODE_SUCCESSOR:
+        successor = NODE_SUCCESSOR[failed_node]
+        logger.warning(
+            "Error gate: skipping failed node '%s' and continuing at '%s'. "
+            "The run is knowingly incomplete.", failed_node, successor,
+        )
+        return successor
+
+    logger.info("Error gate: aborting run after failure in '%s'.", failed_node)
+    return "abort"
+
+
+def _scope_router(state: dict[str, Any]) -> str:
+    """Show the scope gate only for a scoped merge with a plan to confirm.
+
+    An unscoped run, or one whose planning produced nothing to restrict, goes
+    straight to extraction — the gate is never entered, so it never interrupts.
+    """
+    merge_scope = state.get("merge_scope") or {}
+    scope_plan = state.get("scope_plan") or {}
+    has_plan = bool((scope_plan.get("entities") or {}))
+    if merge_scope.get("active") and has_plan:
+        return "review"
+    return "continue"
+
+
+def _resolve_entities_router(state: dict[str, Any]) -> str:
+    """Error check first, then the existing low-confidence review decision."""
+    failed = _failure_route(state, "resolve_entities")
+    if failed:
+        return failed
+    return "review" if has_low_confidence_clusters(state) else "continue"
+
+
+def _map_fields_router(state: dict[str, Any]) -> str:
+    """Error check first, then the existing unmapped-fields review decision."""
+    failed = _failure_route(state, "map_fields")
+    if failed:
+        return failed
+    return "review" if has_unmapped_fields(state) else "continue"
+
+
+def _error_gate_destinations() -> dict[str, str]:
+    """Every node the error gate can hand control back to."""
+    destinations: dict[str, str] = {"abort": END}
+    for node, successor in NODE_SUCCESSOR.items():
+        destinations[node] = node
+        destinations[successor] = successor
+    return destinations
 
 
 def _build_builder() -> StateGraph:
     """Build the raw StateGraph (nodes + edges) without compiling."""
-    builder = StateGraph(dict)
+    builder = StateGraph(MergeState)
 
     # ── Add all nodes ───────────────────────────────────────────────
-    builder.add_node("parse_request", parse_request)
-    builder.add_node("discover_schemas", discover_schemas)
-    builder.add_node("analyze_dependencies", analyze_dependencies)
+    # Every node that reaches out to a database or the LLM carries the
+    # network retry policy. Pure-compute nodes (unify_entities) and the
+    # HITL gates deliberately do not: retrying them cannot help.
+    builder.add_node("preflight", preflight, retry_policy=NETWORK_RETRY)
+    builder.add_node("parse_request", parse_request, retry_policy=NETWORK_RETRY)
+    builder.add_node("discover_schemas", discover_schemas, retry_policy=NETWORK_RETRY)
+    builder.add_node(
+        "analyze_dependencies", analyze_dependencies, retry_policy=NETWORK_RETRY
+    )
     builder.add_node("human_review_deps", human_review_deps)
-    builder.add_node("extract_data", extract_data)
-    builder.add_node("resolve_entities", resolve_entities)
+    # Scope planning for a "merge everything about Nova" request. Carries the
+    # network retry policy because it probes the origins for candidate subject
+    # rows to show at the confirmation gate.
+    builder.add_node("plan_scope", plan_scope, retry_policy=NETWORK_RETRY)
+    builder.add_node("human_review_scope", human_review_scope)
+    builder.add_node("extract_data", extract_data, retry_policy=NETWORK_RETRY)
+    builder.add_node("resolve_entities", resolve_entities, retry_policy=NETWORK_RETRY)
     builder.add_node("human_review_matches", human_review_matches)
     builder.add_node("unify_entities", unify_entity_groups)
-    builder.add_node("map_fields", map_fields)
+    builder.add_node("map_fields", map_fields, retry_policy=NETWORK_RETRY)
     builder.add_node("human_review_mappings", human_review_mappings)
     builder.add_node("human_final_approval", human_final_approval)
-    builder.add_node("load_data", load_data_node)
-    builder.add_node("flag_origins", flag_origins_node)
+    builder.add_node("load_data", load_data_node, retry_policy=NETWORK_RETRY)
+    builder.add_node("update_extraction_state", update_extraction_state_node)
     builder.add_node("handle_error", handle_error)
 
     # ── Main flow edges ─────────────────────────────────────────────
-    builder.set_entry_point("parse_request")
+    # Preflight runs before anything else so an unreachable database or a
+    # read-only destination fails in seconds, not five minutes into an
+    # extraction that was never going to be loadable.
+    builder.set_entry_point("preflight")
 
-    builder.add_edge("parse_request", "discover_schemas")
-    builder.add_edge("discover_schemas", "analyze_dependencies")
-    builder.add_edge("analyze_dependencies", "human_review_deps")
-    builder.add_edge("human_review_deps", "extract_data")
-    builder.add_edge("extract_data", "resolve_entities")
+    # Every fallible node routes through its own error check. A node that
+    # records a `failure` stops the run at the error gate instead of
+    # continuing with partial output.
+    for node in (
+        "preflight", "parse_request", "discover_schemas",
+        "analyze_dependencies", "extract_data", "unify_entities", "load_data",
+    ):
+        forward = NODE_SUCCESSOR[node]
+        builder.add_conditional_edges(
+            node,
+            _fallible_router(node, forward),
+            {"continue": forward, "error": "handle_error", "abort": END},
+        )
 
     # Conditional: low-confidence entity matches -> human review
     builder.add_conditional_edges(
         "resolve_entities",
-        has_low_confidence_clusters,
-        {True: "human_review_matches", False: "unify_entities"},
+        _resolve_entities_router,
+        {
+            "error": "handle_error",
+            "abort": END,
+            "review": "human_review_matches",
+            "continue": "unify_entities",
+        },
     )
-
-    builder.add_edge("human_review_matches", "unify_entities")
-    builder.add_edge("unify_entities", "map_fields")
 
     # Conditional: unmapped fields -> human review
     builder.add_conditional_edges(
         "map_fields",
-        has_unmapped_fields,
-        {True: "human_review_mappings", False: "human_final_approval"},
+        _map_fields_router,
+        {
+            "error": "handle_error",
+            "abort": END,
+            "review": "human_review_mappings",
+            "continue": "human_final_approval",
+        },
     )
 
-    builder.add_edge("human_review_mappings", "human_final_approval")
-    builder.add_edge("human_final_approval", "load_data")
-    builder.add_edge("load_data", "flag_origins")
-    builder.add_edge("flag_origins", END)
+    # ── Gate routing ────────────────────────────────────────────────
+    # Every HITL gate is a real decision point: approve/edit continues,
+    # retry sends the work back to the node that produced it, and
+    # reject ends the run without writing anything.
+    # Dependency review forwards into scope planning rather than straight to
+    # extraction. For an unscoped merge, plan_scope is a no-op and its router
+    # sends the run on to extraction, so the added hop costs nothing.
+    builder.add_conditional_edges(
+        "human_review_deps",
+        _gate_router("human_review_deps", "plan_scope"),
+        {"forward": "plan_scope", "retry": "analyze_dependencies", "abort": END},
+    )
+    # After planning, a scoped merge stops at the scope-confirmation gate; an
+    # unscoped one skips straight to extraction (the gate is never entered, so
+    # it never interrupts — the same auto-skip the match/mapping gates use).
+    builder.add_conditional_edges(
+        "plan_scope",
+        _scope_router,
+        {"review": "human_review_scope", "continue": "extract_data"},
+    )
+    builder.add_conditional_edges(
+        "human_review_scope",
+        _gate_router("human_review_scope", "extract_data"),
+        {"forward": "extract_data", "retry": "plan_scope", "abort": END},
+    )
+    builder.add_conditional_edges(
+        "human_review_matches",
+        _gate_router("human_review_matches", "unify_entities"),
+        {"forward": "unify_entities", "retry": "resolve_entities", "abort": END},
+    )
+    builder.add_conditional_edges(
+        "human_review_mappings",
+        _gate_router("human_review_mappings", "human_final_approval"),
+        {"forward": "human_final_approval", "retry": "map_fields", "abort": END},
+    )
+    # Final approval has no producer to retry — it either loads or it doesn't.
+    # load_data_node independently refuses to write unless load_approval is
+    # True, so a mis-route can never turn a rejection into a write.
+    builder.add_conditional_edges(
+        "human_final_approval",
+        _gate_router("human_final_approval", "load_data"),
+        {"forward": "load_data", "retry": "load_data", "abort": END},
+    )
+
+    builder.add_edge("update_extraction_state", END)
 
     # ── Error routing ───────────────────────────────────────────────
-    # NOTE: Error routing conditional edges are NOT added here because
-    # StateGraph(dict) uses an overwrite reducer that only keeps what
-    # nodes return. Adding conditional edges that route "continue" back
-    # to the same node causes state loss (the original fields like
-    # user_request are lost after the first node runs).
-    #
-    # Each node handles errors internally by returning them in the
-    # "errors" list, and the orchestrator workflow_manager.py tracks
-    # and logs errors appropriately.
+    # The error gate is a real HITL stop. It shows what failed, where, and
+    # how many attempts were made, then routes on the user's decision:
+    # retry that node, skip it and continue knowingly incomplete, or abort.
+    builder.add_conditional_edges(
+        "handle_error", _error_gate_router, _error_gate_destinations(),
+    )
 
     return builder
+
+class MergeState(TypedDict):
+    user_request: str
+    run_id: str
+
+    target_entities: List[Any]
+    # Subset of target_entities the user actually named/asked for, as opposed to
+    # types a wildcard rule (e.g. "Company Wildcards") merely inferred. Added
+    # 2026-07-30 (remediation #1, merge-engine-remediation-1-to-6 in project
+    # memory) so extract_data can escalate a missing EXPLICIT entity (a real gap)
+    # while only warning on a missing INFERRED one (a wildcard guessed wrong).
+    explicit_target_entities: List[Any]
+    # Inferred (non-explicit) entity types that had no source table anywhere and
+    # were dropped without escalating -- set by extract_data.py, surfaced in the
+    # reconciliation report / data-quality scorecard (remediation #6).
+    dropped_inferred_entities: List[Any]
+    # Set by parse_request when the request targets one named organisation
+    # ("all information about Nova"): {active, subject, scope_type}. When
+    # active, scope planning, extraction and dedup all restrict to the subject.
+    merge_scope: Dict[str, Any]
+    origins: List[Dict[str, Any]]
+    destination: Dict[str, Any]
+
+    llm_config: Dict[str, Any]
+    extraction_config: Dict[str, Any]
+
+    schemas: Dict[str, Any]
+    dependency_tree: Dict[str, Any]
+    # Set by analyze_dependencies when the LLM call fails and it falls back
+    # to a flat (unordered) dependency tree, so a human sees the tree is
+    # unverified rather than mistaking it for a real analysis.
+    dependency_analysis_warning: str
+    extraction_order: List[Any]
+
+    # Which source tables hold each entity, chosen by the LLM over the FULL
+    # table catalog and confirmed by the human at the dependency gate:
+    # {entity: [{origin_id, table, confidence, reason, source}]}. Empty means
+    # extraction falls back to the alias-name heuristic.
+    entity_tables: Dict[str, Any]
+    table_selection_notes: str
+
+    # Built by plan_scope for a scoped merge: how to restrict each entity's
+    # tables to the subject — {subject, subject_entity, entities: {entity:
+    # [{origin_id, table, mode: match|link, columns, ...}]}}. Empty for an
+    # unscoped merge, in which case extraction reads whole tables as before.
+    scope_plan: Dict[str, Any]
+
+    # Phase O — decisions a saved profile pins so a re-run is a re-run.
+    # {entity: {blocking_keys, unique_id_fields, deterministic_id_fields,
+    #           strictness}} (O.2; deterministic_id_fields added in Phase 3.1
+    # of merge-engine-remediation-1-to-6 — operator-declared identity keys
+    # like a customer_ref that settle a match/non-match directly)
+    matching_rules: Dict[str, Any]
+    # {field: [rule, ...]} survivorship, "_default" covers the rest (O.3)
+    conflict_policy: Dict[str, Any]
+    # Name of the profile this run was started from, "" when ad-hoc (O.4)
+    profile_name: str
+
+    # When True, extraction ignores any tracked watermark and re-reads every
+    # table in full. Set for a fresh run (a new/uncompleted profile) or the
+    # explicit "Full re-merge" toggle — the answer to "I deleted rows from the
+    # destination and want them back", which an incremental run cannot give.
+    force_full_extraction: bool
+
+    extracted_data: Dict[str, Any]
+    # Watermarks observed during extraction this run, keyed by
+    # "{origin_id}:{table_name}" -> {watermark_column, watermark_kind,
+    # last_value, rows_extracted}. Written to merge_engine_extraction_state
+    # by update_extraction_state_node after a successful load.
+    extraction_watermarks: Annotated[Dict[str, Any], operator.or_]
+
+    # ⚠️ IMPORTANT: these must be merge-safe
+    entity_clusters: Annotated[Dict[str, Any], operator.or_]
+    # Per-entity resolution audit numbers ({entity: {auto_matched,
+    # auto_excluded, llm_scored, total_records, clusters_formed}}) so the
+    # HITL gates can show what the system decided without review.
+    resolution_stats: Annotated[Dict[str, Any], operator.or_]
+    unified_entities: Annotated[Dict[str, Any], operator.or_]
+    field_mappings: Annotated[Dict[str, Any], operator.or_]
+    unmapped_fields: Annotated[Dict[str, Any], operator.or_]
+
+    # Replace semantics (no reducer): the only writer (map_fields) already
+    # copies-and-extends the prior list, and the mapping review gate must be
+    # able to REMOVE cancelled proposals on resume — an add reducer would
+    # duplicate and never delete.
+    pending_schema_changes: List[Any]
+
+    human_feedback: Any
+    load_approval: Any
+
+    # How many times the user has sent each gate back for rework, keyed by
+    # gate node name. Bounded by MAX_GATE_RETRIES so a retry can't loop forever.
+    gate_retry_counts: Dict[str, int]
+    # Free-text reason the user gave when rejecting a gate's output, keyed by
+    # the PRODUCING node name. That node injects it into its LLM prompt on the
+    # rerun so the second attempt actually differs from the first.
+    retry_hints: Dict[str, str]
+
+    errors: Annotated[List[Any], operator.add]
+
+    # The single open failure that stopped the pipeline, if any:
+    # {node, error, error_class, disposition, context, attempt}. A node that
+    # cannot finish its work sets this and returns; the router turns it into
+    # a stop at the error gate. Cleared when a human dispositions it, with
+    # the original appended to `handled_failures` for the audit trail.
+    # Replace semantics (no reducer) — it must be clearable.
+    failure: Dict[str, Any]
+    handled_failures: Annotated[List[Any], operator.add]
+
+    # What preflight checked and what it found, so a run that stopped before
+    # reading any data can say exactly which check failed.
+    preflight_report: Dict[str, Any]
+
+    retry_counts: Dict[str, int]
+    interrupt_data: Any
+
+    # Per-entity audit numbers built by load_data_node; also written to
+    # logs/run_reports/<run_id>.json
+    reconciliation_report: Dict[str, Any]
 
 
 def build_graph(checkpointer: Any = None) -> Any:
@@ -170,6 +607,8 @@ def get_initial_state(
     config: Any = None,
     origins: list[dict[str, Any]] | None = None,
     destination: dict[str, Any] | None = None,
+    run_id: str = "",
+    conflict_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create the initial state dict for a new workflow.
 
@@ -191,6 +630,11 @@ def get_initial_state(
     destination : dict, optional
         Destination database configuration from the UI.
         {type, host, port, user, password, database, schema}
+    conflict_policy : dict, optional
+        Per-field survivorship override (Phase 5, O.3) supplied directly by
+        the caller for this run — e.g. from ``WorkflowStart.conflict_policy``.
+        Takes effect ahead of a saved profile's pinned ``conflict_policy``,
+        since ``apply_profile`` only fills a key the state hasn't already set.
 
     Returns
     -------
@@ -202,24 +646,45 @@ def get_initial_state(
         llm_config = _load_llm_config(config_path)
         return {
             "user_request": user_request,
+            "run_id": run_id,
             "target_entities": [],
+            "explicit_target_entities": [],
+            "merge_scope": {"active": False, "subject": "", "scope_type": "none"},
             "origins": origins,
             "destination": destination,
-            "llm_config": llm_config,
+            # run_id rides along so every LLM call can be attributed to this
+            # run in the cost ledger (O.5) — without it every run reports zero.
+            "llm_config": {**llm_config, "run_id": run_id},
             "extraction_config": {
                 "default_batch_size": 1000,
             },
             "schemas": {},
             "dependency_tree": {},
+            "dependency_analysis_warning": "",
             "extraction_order": [],
+            "entity_tables": {},
+            "table_selection_notes": "",
+            "scope_plan": {},
+            "matching_rules": {},
+            "conflict_policy": conflict_policy or {},
+            "profile_name": "",
+            "force_full_extraction": False,
             "extracted_data": {},
+            "extraction_watermarks": {},
             "entity_clusters": {},
+            "resolution_stats": {},
             "unified_entities": {},
             "field_mappings": {},
+            "unmapped_fields": {},
             "pending_schema_changes": [],
             "human_feedback": None,
             "load_approval": None,
+            "gate_retry_counts": {},
+            "retry_hints": {},
             "errors": [],
+            "failure": {},
+            "handled_failures": [],
+            "preflight_report": {},
             "retry_counts": {},
             "interrupt_data": None,
         }
@@ -252,28 +717,50 @@ def get_initial_state(
             "api_key": config.llm.api_key,
             "base_url": config.llm.base_url,
             "temperature": config.llm.temperature,
+            "structured_output": config.llm.structured_output,
+            "entity_resolution_enabled": config.llm.entity_resolution_enabled,
+            "field_mapping_enabled": config.llm.field_mapping_enabled,
         }
 
         return {
             "user_request": user_request,
+            "run_id": run_id,
             "target_entities": [],
+            "explicit_target_entities": [],
+            "merge_scope": {"active": False, "subject": "", "scope_type": "none"},
             "origins": origins_list,
             "destination": destination_dict,
-            "llm_config": llm_config,
+            "llm_config": {**llm_config, "run_id": run_id},
             "extraction_config": {
                 "default_batch_size": config.extraction.default_batch_size,
             },
             "schemas": {},
             "dependency_tree": {},
+            "dependency_analysis_warning": "",
             "extraction_order": [],
+            "entity_tables": {},
+            "table_selection_notes": "",
+            "scope_plan": {},
+            "matching_rules": {},
+            "conflict_policy": {},
+            "profile_name": "",
+            "force_full_extraction": False,
             "extracted_data": {},
+            "extraction_watermarks": {},
             "entity_clusters": {},
+            "resolution_stats": {},
             "unified_entities": {},
             "field_mappings": {},
+            "unmapped_fields": {},
             "pending_schema_changes": [],
             "human_feedback": None,
             "load_approval": None,
+            "gate_retry_counts": {},
+            "retry_hints": {},
             "errors": [],
+            "failure": {},
+            "handled_failures": [],
+            "preflight_report": {},
             "retry_counts": {},
             "interrupt_data": None,
         }
@@ -300,9 +787,13 @@ def _load_llm_config(config_path: str | None) -> dict[str, Any]:
         return {
             "provider": cfg.llm.provider,
             "model": cfg.llm.model,
+            "fallback_models": cfg.llm.fallback_models,
             "api_key": cfg.llm.api_key,
             "base_url": cfg.llm.base_url,
             "temperature": cfg.llm.temperature,
+            "structured_output": cfg.llm.structured_output,
+            "entity_resolution_enabled": cfg.llm.entity_resolution_enabled,
+            "field_mapping_enabled": cfg.llm.field_mapping_enabled,
         }
     except Exception:
         # Return placeholder -- LLM will be configured via env vars
@@ -312,6 +803,9 @@ def _load_llm_config(config_path: str | None) -> dict[str, Any]:
             "api_key": "",
             "base_url": None,
             "temperature": 0.0,
+            "structured_output": True,
+            "entity_resolution_enabled": True,
+            "field_mapping_enabled": True,
         }
 
 

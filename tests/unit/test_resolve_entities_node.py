@@ -8,6 +8,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.orchestrator.nodes.resolve_entities import resolve_entities, has_low_confidence_clusters
+from src.orchestrator.spool import clusters_for
+
+
+@pytest.fixture(autouse=True)
+def _spool_isolation(tmp_path, monkeypatch):
+    """Each test gets its own spool: clusters and unified records live there."""
+    import src.orchestrator.spool as spool_mod
+
+    monkeypatch.setattr(spool_mod, "SPOOL_DIR", tmp_path / "spool")
+    yield
 
 
 class TestResolveEntities:
@@ -69,7 +79,7 @@ class TestResolveEntities:
             result = await resolve_entities(base_state)
 
         assert "company" in result["entity_clusters"]
-        assert len(result["entity_clusters"]["company"]) == 2
+        assert len(clusters_for(result, "company")) == 2
         assert not result["errors"]
 
     @pytest.mark.asyncio
@@ -86,7 +96,7 @@ class TestResolveEntities:
             result = await resolve_entities(base_state)
 
         # person has no records, so it's set to [] and impl is not called for it
-        assert result["entity_clusters"]["person"] == []
+        assert clusters_for(result, "person") == []
         # company has records so impl IS called once for company
         assert mock_impl.call_count == 1
         # Verify person was not passed to impl (only company was)
@@ -109,8 +119,8 @@ class TestResolveEntities:
         ):
             result = await resolve_entities(base_state)
 
-        assert result["entity_clusters"]["company"] == []
-        assert result["entity_clusters"]["person"] == []
+        assert clusters_for(result, "company") == []
+        assert clusters_for(result, "person") == []
         assert len(result["errors"]) == 1
         assert "person" in result["errors"][0]
         assert "failed" in result["errors"][0].lower()
@@ -164,7 +174,7 @@ class TestResolveEntities:
         ):
             result = await resolve_entities(base_state)
 
-        assert len(result["entity_clusters"]["company"]) == 3
+        assert len(clusters_for(result, "company")) == 3
 
     @pytest.mark.asyncio
     async def test_resolve_entities_stats_logged(
@@ -177,7 +187,7 @@ class TestResolveEntities:
         ):
             result = await resolve_entities(base_state)
 
-        clusters = result["entity_clusters"]["company"]
+        clusters = clusters_for(result, "company")
         assert len(clusters) == 2
 
     @pytest.mark.asyncio
@@ -201,7 +211,7 @@ class TestResolveEntities:
         ):
             result = await resolve_entities(base_state)
 
-        assert len(result["entity_clusters"]["company"]) == 2
+        assert len(clusters_for(result, "company")) == 2
 
     @pytest.mark.asyncio
     async def test_resolve_entities_with_no_records_key(
@@ -211,8 +221,8 @@ class TestResolveEntities:
         base_state["extracted_data"] = {}
 
         result = await resolve_entities(base_state)
-        assert result["entity_clusters"]["company"] == []
-        assert result["entity_clusters"]["person"] == []
+        assert clusters_for(result, "company") == []
+        assert clusters_for(result, "person") == []
 
 
 class TestHasLowConfidenceClusters:

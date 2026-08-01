@@ -1,0 +1,36 @@
+{
+  "cases": [
+    {
+      "id": "ets-01-basic",
+      "input": {
+        "target_entities": ["person", "product"],
+        "table_catalog": "=== Origin: pg_main (postgresql) ===\n  public.customers [400 rows] — customer_id, first_name, last_name, email, phone\n  public.rentals [8000 rows] — rental_id, customer_id, product_id, rental_date\n  public.products [250 rows] — product_id, sku, name, price\n  public.product_log [9000 rows] — log_id, product_id, changed_at, old_price"
+      },
+      "expected": {
+        "entity_tables_must_include": {
+          "person": [["pg_main", "public.customers"]],
+          "product": [["pg_main", "public.products"]]
+        },
+        "entity_tables_must_exclude": {
+          "person": [["pg_main", "public.rentals"]],
+          "product": [["pg_main", "public.product_log"]]
+        }
+      }
+    },
+    {
+      "id": "ets-02-cross-origin-alias",
+      "input": {
+        "target_entities": ["person"],
+        "table_catalog": "=== Origin: crm (postgresql) ===\n  public.contacts [820 rows] — contact_id, given_name, family_name, work_email, phone\n=== Origin: mongo_app (mongodb) ===\n  sample_mflix.users [185 rows] — _id, name, email, password\n  sample_mflix.comments [50304 rows] — _id, name, email, movie_id, text, date"
+      },
+      "expected": {
+        "entity_tables_must_include": {
+          "person": [["crm", "public.contacts"], ["mongo_app", "sample_mflix.users"]]
+        },
+        "entity_tables_must_exclude": {
+          "person": [["mongo_app", "sample_mflix.comments"]]
+        }
+      }
+    }
+  ]
+}

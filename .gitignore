@@ -27,18 +27,32 @@ env/
 !.env.example
 
 # Secrets & sensitive config
-config/config.secrets.yaml
-config/*.secret.yaml
+config/
 
 # Logs
 logs/
 *.log
 
+# Real seed-data dumps for the sample origin/destination containers — these
+# are multi-GB SQL files (sample_databases/origin2_sample/Experience_modified.sql
+# alone is 3.4GB), not source. Never belongs in git; distribute separately if
+# needed (Git LFS, object storage, etc).
+sample_databases/
+
 # Data & fixtures (large files)
+# NOT a blanket `*.json` — that silently blocked package.json/package-lock.json/
+# tsconfig.json under src/ui/frontend/ from ever being tracked, meaning a fresh
+# clone had no way to `npm install` (see TECHNICAL_README.md §18.1). Scope json
+# ignores to the specific generated/transient files, not the whole repo.
 data/
 *.csv
-*.json
 !tests/fixtures/
+# Generated verification/test-run output, not source
+docs/verification/*.json
+tests/integration/test_*_report.json
+tests/integration/test_report.json
+# Transient import-progress state for the sample-DB seed scripts
+**/.import_progress.json
 
 # OS
 .DS_Store
@@ -58,6 +72,7 @@ htmlcov/
 
 # Docker
 *.pid
+docker/langfuse.env
 
 # Gradio cache
 .gradio/
@@ -69,3 +84,28 @@ htmlcov/
 tmp/
 temp/
 *.tmp
+
+# Langgraph
+.langgraph_api/
+
+# Tool-generated caches/logs, not source
+.agents/
+.playwright-mcp/
+.tokensave/
+.claude/settings.local.json
+
+# keep graph outputs, skip heavy/local-only files
+graphify-out/cache/            # optional: commit for shared extraction speed, skip to keep repo small
+graphify-out/manifest.json     # mtime-based, invalid after git clone — always gitignore this
+graphify-out/cost.json         # local token tracking, not useful to share
+# Per-run scratch: DuckDB spools and scale-test measurements are local only
+logs/spool/
+logs/scale/
+
+# Saved run profiles hold no secrets (passwords are stripped on save), but
+# they name a specific person's databases, so they stay local by default.
+config/profiles/
+
+# Node / frontend
+node_modules/
+*.tsbuildinfo

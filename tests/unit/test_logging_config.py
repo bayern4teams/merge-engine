@@ -45,6 +45,7 @@ class TestSetupLogging:
         """Console handler should be added."""
         with patch("logging.getLogger") as mock_get_logger:
             mock_logger = MagicMock()
+            mock_logger.handlers = []
             mock_get_logger.return_value = mock_logger
             setup_logging()
             # Check that addHandler was called for console handler
@@ -64,6 +65,7 @@ class TestSetupLogging:
         log_file = str(tmp_path / "test.log")
         with patch("logging.getLogger") as mock_get_logger:
             mock_logger = MagicMock()
+            mock_logger.handlers = []
             mock_get_logger.return_value = mock_logger
             setup_logging(log_file=log_file)
             # Should have both console and file handlers
@@ -74,6 +76,7 @@ class TestSetupLogging:
         log_file = str(tmp_path / "subdir" / "nested" / "test.log")
         with patch("logging.getLogger") as mock_get_logger:
             mock_logger = MagicMock()
+            mock_logger.handlers = []
             mock_get_logger.return_value = mock_logger
             setup_logging(log_file=log_file)
             assert Path(tmp_path / "subdir" / "nested").exists()
@@ -82,6 +85,7 @@ class TestSetupLogging:
         """JSON mode should use JSONFormatter."""
         with patch("logging.getLogger") as mock_get_logger:
             mock_logger = MagicMock()
+            mock_logger.handlers = []
             mock_get_logger.return_value = mock_logger
             setup_logging(json=True)
             # Check handler was added with JSON formatter

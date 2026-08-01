@@ -1,7 +1,7 @@
 """
 Unit tests for map_fields helper functions.
 
-Tests _heuristic_match and _map_type_to_databricks.
+Tests _heuristic_match and _map_type_generic.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import pytest
 
 from src.mcp_server.tools.map_fields import (
     _heuristic_match,
-    _map_type_to_databricks,
+    _map_type_generic,
 )
 
 
@@ -98,76 +98,76 @@ class TestHeuristicMatch:
         assert _heuristic_match("", "name") >= 0.0
 
 
-class TestMapTypeToDatabricks:
-    """Tests for the _map_type_to_databricks helper."""
+class TestMapTypeGeneric:
+    """Tests for the _map_type_generic helper."""
 
     def test_string_types(self) -> None:
-        """String-like types should map to STRING."""
-        assert _map_type_to_databricks("STRING") == "STRING"
-        assert _map_type_to_databricks("VARCHAR") == "STRING"
-        assert _map_type_to_databricks("TEXT") == "STRING"
+        """String-like types should map to TEXT."""
+        assert _map_type_generic("STRING") == "TEXT"
+        assert _map_type_generic("VARCHAR") == "TEXT"
+        assert _map_type_generic("TEXT") == "TEXT"
 
     def test_integer_types(self) -> None:
         """Integer types should map correctly."""
-        assert _map_type_to_databricks("INTEGER") == "INTEGER"
-        assert _map_type_to_databricks("BIGINT") == "BIGINT"
-        assert _map_type_to_databricks("SMALLINT") == "INTEGER"
+        assert _map_type_generic("INTEGER") == "INTEGER"
+        assert _map_type_generic("BIGINT") == "BIGINT"
+        assert _map_type_generic("SMALLINT") == "INTEGER"
 
     def test_decimal_types(self) -> None:
-        """Decimal types should map to DECIMAL."""
-        assert _map_type_to_databricks("DECIMAL") == "DECIMAL(19,4)"
+        """Decimal types should map to DOUBLE PRECISION."""
+        assert _map_type_generic("DECIMAL") == "DOUBLE PRECISION"
 
     def test_float_types(self) -> None:
         """Float types should map correctly."""
-        assert _map_type_to_databricks("REAL") == "FLOAT"
-        assert _map_type_to_databricks("DOUBLE") == "DOUBLE"
+        assert _map_type_generic("REAL") == "DOUBLE PRECISION"
+        assert _map_type_generic("DOUBLE") == "DOUBLE PRECISION"
 
     def test_boolean_types(self) -> None:
         """Boolean types should map to BOOLEAN."""
-        assert _map_type_to_databricks("BOOLEAN") == "BOOLEAN"
+        assert _map_type_generic("BOOLEAN") == "BOOLEAN"
 
     def test_timestamp_types(self) -> None:
         """Timestamp types should map to TIMESTAMP."""
-        assert _map_type_to_databricks("TIMESTAMP") == "TIMESTAMP"
-        assert _map_type_to_databricks("TIMESTAMPTZ") == "TIMESTAMP"
+        assert _map_type_generic("TIMESTAMP") == "TIMESTAMP"
+        assert _map_type_generic("TIMESTAMPTZ") == "TIMESTAMP"
 
     def test_date_time_types(self) -> None:
         """Date and time types should map correctly."""
-        assert _map_type_to_databricks("DATE") == "DATE"
-        assert _map_type_to_databricks("TIME") == "STRING"
+        assert _map_type_generic("DATE") == "DATE"
+        assert _map_type_generic("TIME") == "TEXT"
 
     def test_json_types(self) -> None:
-        """JSON types should map to STRING."""
-        assert _map_type_to_databricks("JSON") == "STRING"
-        assert _map_type_to_databricks("JSONB") == "STRING"
+        """JSON types should map to TEXT."""
+        assert _map_type_generic("JSON") == "TEXT"
+        assert _map_type_generic("JSONB") == "TEXT"
 
     def test_special_types(self) -> None:
         """Special types should map correctly."""
-        assert _map_type_to_databricks("UUID") == "STRING"
-        assert _map_type_to_databricks("BYTEA") == "STRING"
+        assert _map_type_generic("UUID") == "TEXT"
+        assert _map_type_generic("BYTEA") == "TEXT"
 
     def test_complex_types(self) -> None:
-        """Complex types should map to STRING."""
-        assert _map_type_to_databricks("OBJECT") == "STRING"
-        assert _map_type_to_databricks("ARRAY") == "STRING"
+        """Complex types should map to TEXT."""
+        assert _map_type_generic("OBJECT") == "TEXT"
+        assert _map_type_generic("ARRAY") == "TEXT"
 
     def test_unknown_type_defaults_to_string(self) -> None:
-        """Unknown types should default to STRING."""
-        assert _map_type_to_databricks("UNKNOWN") == "STRING"
-        assert _map_type_to_databricks("CLOB") == "STRING"
-        assert _map_type_to_databricks("GEOMETRY") == "STRING"
+        """Unknown types should default to TEXT."""
+        assert _map_type_generic("UNKNOWN") == "TEXT"
+        assert _map_type_generic("CLOB") == "TEXT"
+        assert _map_type_generic("GEOMETRY") == "TEXT"
 
     def test_case_insensitive(self) -> None:
         """Type mapping should be case-insensitive."""
-        assert _map_type_to_databricks("string") == "STRING"
-        assert _map_type_to_databricks("varchar") == "STRING"
-        assert _map_type_to_databricks("Integer") == "INTEGER"
-        assert _map_type_to_databricks("boolean") == "BOOLEAN"
+        assert _map_type_generic("string") == "TEXT"
+        assert _map_type_generic("varchar") == "TEXT"
+        assert _map_type_generic("Integer") == "INTEGER"
+        assert _map_type_generic("boolean") == "BOOLEAN"
 
     def test_mixed_case(self) -> None:
         """Mixed case types should be handled."""
-        assert _map_type_to_databricks("VaRcHaR") == "STRING"
-        assert _map_type_to_databricks("InTeGeR") == "INTEGER"
+        assert _map_type_generic("VaRcHaR") == "TEXT"
+        assert _map_type_generic("InTeGeR") == "INTEGER"
 
 
 class TestHeuristicMatchEdgeCases:

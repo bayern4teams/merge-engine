@@ -103,8 +103,8 @@ class TestDiscoverSchemas:
         self, base_state: dict[str, Any]
     ) -> None:
         """Test discover_schemas handles partial failure (one origin fails)."""
-        async def side_effect_fn(origin_id: str) -> dict[str, Any]:
-            if origin_id == "postgres_main":
+        async def side_effect_fn(origin: dict[str, Any]) -> dict[str, Any]:
+            if origin.get("id") == "postgres_main":
                 return {
                     "tables": [
                         {"name": "customers", "columns": [], "foreign_keys": [], "sample_row": {}}
@@ -208,8 +208,8 @@ class TestDiscoverSchemas:
         ):
             result = await discover_schemas(base_state)
 
-        # Should use empty string as origin_id
-        assert "" in result["schemas"]
+        # Should default to "unknown" as origin_id
+        assert "unknown" in result["schemas"]
 
     @pytest.mark.asyncio
     async def test_discover_schemas_multiple_tables(

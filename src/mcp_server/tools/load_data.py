@@ -23,11 +23,62 @@ from src.utils.id_utils import generate_uuid
 logger = logging.getLogger("merge-engine.tools.load_data")
 
 
+def _translate_foreign_keys(
+    records: list[dict[str, Any]],
+    foreign_keys: dict[str, str],
+    cluster_lookup_for_table: dict[str, dict[str, str]],
+) -> int:
+    """Rewrite FK columns from source ids to the referenced rows' cluster ids.
+
+    Must run on already-transformed records (dest-column keys) — ``foreign_keys``
+    names destination columns like ``industry_id``, which do not exist on a raw
+    record keyed by its origin field name (``sourceCategory``).
+
+    A parent row is written under its cluster id, not the source id a child
+    record's raw field carries, so an untranslated FK points at a row that does
+    not exist and Postgres rejects the whole (atomic) load. An id with no known
+    cluster is nulled rather than left dangling: the child row is still worth
+    keeping, the unresolvable link is not.
+
+    ``referenced_table`` missing from ``cluster_lookup_for_table`` entirely
+    means the caller never resolved it to an entity type — that's genuinely
+    unknown, so the value is left for the database to judge. But a table
+    that *was* resolved and simply has zero clusters (an entity type with no
+    records extracted this run, e.g. a source array field like technology's
+    "categories" that was never its own extracted entity) means every value
+    pointing at it is unconditionally unresolvable — nulling it is not a
+    guess, it's the only correct answer, and leaving it as-is guarantees the
+    exact FK violation this function exists to prevent.
+    """
+    translated = 0
+    for record in records:
+        for column, referenced_table in foreign_keys.items():
+            value = record.get(column)
+            if value is None or value == "":
+                continue
+            if referenced_table not in cluster_lookup_for_table:
+                continue
+            lookup = cluster_lookup_for_table[referenced_table]
+            resolved = lookup.get(str(value))
+            if resolved is not None:
+                if resolved != value:
+                    record[column] = resolved
+                    translated += 1
+            else:
+                record[column] = None
+                translated += 1
+    return translated
+
+
 async def load_data_impl(
     entity_type: str,
     records: list[dict[str, Any]],
     mapping: dict[str, Any] | None = None,
     destination_config: dict[str, Any] | None = None,
+    table_name: str | None = None,
+    connector: Any = None,
+    foreign_keys: dict[str, str] | None = None,
+    cluster_lookup_by_table: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Upsert unified records into the PostgreSQL destination.
 
@@ -42,6 +93,11 @@ async def load_data_impl(
         {source_field: {"dest_column": str, "confidence": float, ...}, ...}
     destination_config : dict, optional
         Destination connection config. If None, uses the global config.
+    connector : optional
+        An already-open destination connector to write through. The caller
+        passes one when several entities must land in a single transaction —
+        creating a fresh connector per entity would give each its own
+        connection, and therefore its own independent commit.
 
     Returns
     -------
@@ -68,13 +124,16 @@ async def load_data_impl(
             "failed": 0,
         }
 
-    try:
-        connector = _get_destination_connector(destination_config)
-    except Exception as exc:
-        raise PermanentError(f"Failed to create destination connector: {exc}") from exc
+    if connector is None:
+        try:
+            connector = _get_destination_connector(destination_config)
+        except Exception as exc:
+            raise PermanentError(
+                f"Failed to create destination connector: {exc}"
+            ) from exc
 
     # Get the destination table name — use entity_type as default (dynamic)
-    dest_table = entity_type
+    dest_table = table_name or entity_type
     logger.debug("Destination table: %s", dest_table)
 
     # Transform records using mapping
@@ -82,12 +141,24 @@ async def load_data_impl(
     transformed_records = _transform_records(records, mapping, dest_table)
     logger.debug("Transformed %d records", len(transformed_records))
 
+    if foreign_keys and cluster_lookup_by_table:
+        translated = _translate_foreign_keys(
+            transformed_records, foreign_keys, cluster_lookup_by_table
+        )
+        if translated:
+            logger.info(
+                "Entity '%s': resolved %d foreign-key value(s) to their "
+                "referenced rows' destination ids.", entity_type, translated,
+            )
+
     # Build provenance tracking
     for rec in transformed_records:
         rec["_loaded_at"] = _get_timestamp()
         rec["_source_count"] = rec.get("_source_count", 1)
 
     try:
+        if hasattr(connector, "ensure_table"):
+            connector.ensure_table(dest_table)
         logger.debug("Calling connector.load_batch: table=%s, records=%d", dest_table, len(transformed_records))
         result = connector.load_batch(
             table_name=dest_table,
@@ -103,6 +174,8 @@ async def load_data_impl(
             "inserted": result.get("inserted", len(records)),
             "updated": result.get("updated", 0),
             "failed": 0,
+            "type_coercions_attempted": result.get("type_coercions_attempted", 0),
+            "type_coercion_failures": result.get("type_coercion_failures", 0),
         }
     except Exception as exc:
         logger.error("Load failed for entity '%s': %s", entity_type, exc)
@@ -185,12 +258,12 @@ def _transform_records(
 
         if mapping:
             for src_field, field_info in mapping.items():
-                dest_col = field_info.get("dest_column", src_field)
+                dest_col = field_info.get("dest_column") or src_field
                 value = rec.get(src_field)
 
-                # Skip fields requiring schema changes (not yet added)
-                if field_info.get("requires_schema_change"):
-                    continue
+                # Fields requiring schema changes are included too — the
+                # columns are added by _apply_schema_changes before load,
+                # and load_batch drops any column the table still lacks.
 
                 # Serialize conflict data to JSON string
                 if isinstance(value, dict) and "conflicts" in value:
@@ -198,7 +271,12 @@ def _transform_records(
                 elif isinstance(value, dict) and "conflict" in value:
                     value = json.dumps(value["conflict"], default=str)
 
-                t_rec[dest_col] = value
+                # Coalesce many-to-one mappings (e.g. company_name AND
+                # org_title both -> name): a record from one origin lacks
+                # the other origin's source field, and that absent (None)
+                # value must not clobber a value already mapped in.
+                if value is not None or dest_col not in t_rec:
+                    t_rec[dest_col] = value
         else:
             # No mapping — pass through non-internal fields
             for key, value in rec.items():
@@ -206,9 +284,13 @@ def _transform_records(
                     continue
                 t_rec[key] = value
 
-        # Ensure universal UUID key exists
-        if "id" not in t_rec:
-            t_rec["id"] = rec.get("_cluster_id", rec.get("id", generate_uuid()))
+        # Ensure universal UUID key exists and is non-null. A mapping like
+        # person_id -> id leaves id None for records whose origin doesn't
+        # have that source field (NOT NULL PK violation on insert).
+        if t_rec.get("id") is None:
+            t_rec["id"] = (
+                rec.get("_cluster_id") or rec.get("id") or generate_uuid()
+            )
 
         # Add provenance metadata
         source_ids = []

@@ -34,6 +34,7 @@ async def discover_schemas(state: dict[str, Any]) -> dict[str, Any]:
     origins = state.get("origins", [])
     schemas: dict[str, Any] = {}
     errors: list[str] = list(state.get("errors", []))
+    failed_origins: list[str] = []
 
     logger.debug("Processing %d origins", len(origins))
 
@@ -59,14 +60,38 @@ async def discover_schemas(state: dict[str, Any]) -> dict[str, Any]:
             msg = f"Schema discovery failed for origin '{origin_id}': {exc}"
             logger.error(msg, exc_info=True)
             errors.append(msg)
+            failed_origins.append(origin_id)
 
     logger.debug("Total schemas collected: %d", len(schemas))
     logger.debug("Total errors: %d", len(errors))
+
+    # An origin whose schema never loaded contributes nothing to the merge.
+    # Continuing silently is how a two-origin request quietly becomes a
+    # one-origin one and still reports success.
+    failure: dict[str, Any] = {}
+    if failed_origins:
+        failure = {
+            "node": "discover_schemas",
+            "error": (
+                f"Could not read the schema of {len(failed_origins)} of "
+                f"{len(origins)} origin(s): {', '.join(failed_origins)}. "
+                "Merging now would silently leave their data out."
+            ),
+            "error_class": "PermanentError",
+            "disposition": "escalate",
+            "context": {
+                "failed_origins": failed_origins,
+                "succeeded_origins": sorted(schemas.keys()),
+            },
+        }
+        logger.error("discover_schemas failing loudly: %s", failure["error"])
+
     logger.debug("EXIT discover_schemas")
 
     return {
         "schemas": schemas,
         "errors": errors,
+        "failure": failure,
         "origins": state.get("origins", []),
         "destination": state.get("destination", {}),
         "llm_config": state.get("llm_config", {}),

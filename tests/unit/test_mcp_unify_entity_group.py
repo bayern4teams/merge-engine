@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -17,17 +17,12 @@ class TestUnifyEntityGroupImpl:
     """Tests for unify_entity_group_impl."""
 
     @pytest.fixture
-    def mock_config(self) -> MagicMock:
-        """Mock config with origins and priorities."""
-        config = MagicMock()
-        origin1 = MagicMock()
-        origin1.id = "postgres_main"
-        origin1.priority = 10
-        origin2 = MagicMock()
-        origin2.id = "mongo_analytics"
-        origin2.priority = 5
-        config.origins = [origin1, origin2]
-        return config
+    def sample_origins(self) -> list[dict[str, Any]]:
+        """Sample origins with priorities."""
+        return [
+            {"id": "postgres_main", "priority": 10},
+            {"id": "mongo_analytics", "priority": 5},
+        ]
 
     @pytest.fixture
     def sample_cluster_records(self) -> list[dict[str, Any]]:
@@ -49,17 +44,14 @@ class TestUnifyEntityGroupImpl:
 
     @pytest.mark.asyncio
     async def test_unify_entity_group_success(
-        self, sample_cluster_records: list[dict[str, Any]]
+        self, sample_cluster_records: list[dict[str, Any]], sample_origins: list[dict[str, Any]]
     ) -> None:
         """Test successful entity unification."""
-        with patch(
-            "src.mcp_server.server._get_config",
-        ) as mock_get_config:
-            mock_get_config.return_value = MagicMock()
-            result = await unify_entity_group_impl(
-                cluster_id="cluster-1",
-                records=sample_cluster_records,
-            )
+        result = await unify_entity_group_impl(
+            cluster_id="cluster-1",
+            records=sample_cluster_records,
+            origins=sample_origins,
+        )
 
         assert result["cluster_id"] == "cluster-1"
         assert "unified_record" in result
@@ -76,11 +68,7 @@ class TestUnifyEntityGroupImpl:
             {"_origin_id": "a", "name": "Alice", "email": None},
             {"_origin_id": "b", "name": "Alice", "email": "alice@example.com"},
         ]
-        with patch(
-            "src.mcp_server.server._get_config",
-        ) as mock_get_config:
-            mock_get_config.return_value = MagicMock()
-            result = await unify_entity_group_impl("c1", records)
+        result = await unify_entity_group_impl("c1", records)
 
         assert "null_filled_fields" in result
         assert "email" in result["null_filled_fields"]
@@ -95,20 +83,12 @@ class TestUnifyEntityGroupImpl:
             {"_origin_id": "mongo_analytics", "name": "Alice S.", "email": "alice@mongo.com"},
             {"_origin_id": "postgres_main", "name": "Alice Smith", "email": "alice@pg.com"},
         ]
-        mock_config = MagicMock()
-        origin1 = MagicMock()
-        origin1.id = "postgres_main"
-        origin1.priority = 10
-        origin2 = MagicMock()
-        origin2.id = "mongo_analytics"
-        origin2.priority = 5
-        mock_config.origins = [origin1, origin2]
+        origins = [
+            {"id": "postgres_main", "priority": 10},
+            {"id": "mongo_analytics", "priority": 5},
+        ]
 
-        with patch(
-            "src.mcp_server.server._get_config",
-            return_value=mock_config,
-        ):
-            result = await unify_entity_group_impl("c1", records)
+        result = await unify_entity_group_impl("c1", records, origins=origins)
 
         # postgres_main has higher priority (10 > 5)
         assert len(result["conflicts"]) > 0
@@ -128,11 +108,7 @@ class TestUnifyEntityGroupImpl:
             {"_origin_id": "a", "name": "Alice", "email": "alice@example.com"},
             {"_origin_id": "b", "name": "Alice", "email": "alice@example.com"},
         ]
-        with patch(
-            "src.mcp_server.server._get_config",
-        ) as mock_get_config:
-            mock_get_config.return_value = MagicMock()
-            result = await unify_entity_group_impl("c1", records)
+        result = await unify_entity_group_impl("c1", records)
 
         assert len(result["conflicts"]) == 0
         assert result["unified_record"]["name"] == "Alice"
@@ -147,11 +123,7 @@ class TestUnifyEntityGroupImpl:
             {"_origin_id": "a", "_cluster_id": "c1", "name": "Alice"},
             {"_origin_id": "b", "_cluster_id": "c1", "name": "Alice"},
         ]
-        with patch(
-            "src.mcp_server.server._get_config",
-        ) as mock_get_config:
-            mock_get_config.return_value = MagicMock()
-            result = await unify_entity_group_impl("c1", records)
+        result = await unify_entity_group_impl("c1", records)
 
         # _origin_id should not appear in unified record values
         # but _cluster_id should be set by the function
@@ -166,11 +138,7 @@ class TestUnifyEntityGroupImpl:
             {"_origin_id": "a", "name": None, "email": None},
             {"_origin_id": "b", "name": None, "email": None},
         ]
-        with patch(
-            "src.mcp_server.server._get_config",
-        ) as mock_get_config:
-            mock_get_config.return_value = MagicMock()
-            result = await unify_entity_group_impl("c1", records)
+        result = await unify_entity_group_impl("c1", records)
 
         # All-null fields should be skipped
         assert "name" not in result["unified_record"]
@@ -181,11 +149,7 @@ class TestUnifyEntityGroupImpl:
         self, sample_cluster_records: list[dict[str, Any]]
     ) -> None:
         """Test that source count reflects number of unique origins."""
-        with patch(
-            "src.mcp_server.server._get_config",
-        ) as mock_get_config:
-            mock_get_config.return_value = MagicMock()
-            result = await unify_entity_group_impl("c1", sample_cluster_records)
+        result = await unify_entity_group_impl("c1", sample_cluster_records)
 
         assert result["source_count"] == 2
 

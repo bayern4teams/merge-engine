@@ -38,6 +38,7 @@ class TestDiscoverSchemaImpl:
     ) -> None:
         """Test successful schema discovery."""
         mock_connector = MagicMock()
+        mock_connector.close = AsyncMock()
         mock_connector.discover_schema = AsyncMock(return_value={
             "tables": [
                 {
@@ -70,6 +71,7 @@ class TestDiscoverSchemaImpl:
     ) -> None:
         """Test discovery with multiple tables."""
         mock_connector = MagicMock()
+        mock_connector.close = AsyncMock()
         mock_connector.discover_schema = AsyncMock(return_value={
             "tables": [
                 {
@@ -140,6 +142,7 @@ class TestDiscoverSchemaImpl:
     async def test_discover_schema_connector_error(self, valid_origin_config: dict[str, Any]) -> None:
         """Test handling of connector discovery failure."""
         mock_connector = MagicMock()
+        mock_connector.close = AsyncMock()
         mock_connector.discover_schema = AsyncMock(
             side_effect=Exception("Connection refused")
         )
@@ -165,6 +168,7 @@ class TestDiscoverSchemaImpl:
             },
         }
         mock_connector = MagicMock()
+        mock_connector.close = AsyncMock()
         mock_connector.discover_schema = AsyncMock(return_value={
             "tables": [
                 {
@@ -238,6 +242,8 @@ class TestDiscoverSchemaHandler:
         mock_config.origins = [mock_origin]
 
         mock_conn = MagicMock()
+
+        mock_conn.close = AsyncMock()
         mock_conn.discover_schema = AsyncMock(return_value={
             "tables": [],
             "origin_id": "test_origin",

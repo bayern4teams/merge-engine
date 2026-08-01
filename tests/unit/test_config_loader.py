@@ -88,6 +88,17 @@ class TestLLMConfig:
         config = LLMConfig(model="gpt-4", api_key="test-key", temperature=0.7)
         assert config.temperature == 0.7
 
+    def test_fallback_models_defaults_to_empty_list(self):
+        config = LLMConfig(model="gpt-4", api_key="test-key")
+        assert config.fallback_models == []
+
+    def test_fallback_models_accepted_in_order(self):
+        config = LLMConfig(
+            model="gpt-4", api_key="test-key",
+            fallback_models=["gpt-4-mini", "gpt-3.5"],
+        )
+        assert config.fallback_models == ["gpt-4-mini", "gpt-3.5"]
+
 
 class TestRetryConfig:
     """Tests for RetryConfig Pydantic model."""

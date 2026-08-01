@@ -74,8 +74,22 @@ def setup_logging(
             datefmt="%Y-%m-%dT%H:%M:%S",
         )
 
-    # Console handler
-    console_handler = logging.StreamHandler(sys.stdout)
+    # Console handler.
+    #
+    # Windows consoles default to a legacy codepage (cp1252), and the log
+    # format uses "—" plus messages containing "→". Encoding those raises
+    # UnicodeEncodeError inside logging, which prints a "--- Logging error ---"
+    # traceback for the line *instead of* the line — so the noise replaces the
+    # information. Reconfiguring the stream to UTF-8 with replacement keeps
+    # every record readable on any console.
+    stream = sys.stdout
+    try:
+        stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        # Not a reconfigurable text stream (pytest capture, a pipe); the
+        # handler still works, it just keeps the platform default.
+        pass
+    console_handler = logging.StreamHandler(stream)
     console_handler.setFormatter(console_fmt)
     console_handler.setLevel(log_level)
     stdlib_logger.addHandler(console_handler)

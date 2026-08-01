@@ -9,13 +9,26 @@ Called both by MCP server dispatch and directly by orchestrator nodes.
 
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Any
 
 from src.mcp_server.connectors import create_connector
-from src.orchestrator.utils.retry import TransientError, PermanentError
+from src.orchestrator.utils.retry import (
+    MergeEngineError,
+    PermanentError,
+    TransientError,
+)
 
 logger = logging.getLogger("merge-engine.tools.extract_data")
+
+
+def _accepts_pk_columns(connector: Any) -> bool:
+    """Does this connector's extract() take a pk_columns argument?"""
+    try:
+        return "pk_columns" in inspect.signature(connector.extract).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 async def extract_data_impl(
@@ -25,6 +38,8 @@ async def extract_data_impl(
     batch_size: int = 1000,
     cursor: str | None = None,
     filter: dict[str, Any] | None = None,
+    watermark: dict[str, Any] | None = None,
+    pk_columns: list[str] | None = None,
 ) -> dict[str, Any]:
     """Extract rows from an origin with batch pagination.
 
@@ -42,6 +57,13 @@ async def extract_data_impl(
         Pagination cursor for next batch.
     filter : dict, optional
         Additional filter conditions.
+    watermark : dict, optional
+        ``{"column": str, "since": Any, "kind": "numeric"|"timestamp"}`` for
+        incremental extraction pushdown (see connectors/watermark.py).
+    pk_columns : list[str], optional
+        Primary key columns. Combined with the watermark these give the
+        connector a unique ordering to seek on, so batch N costs the same as
+        batch 1 instead of re-walking every earlier row.
 
     Returns
     -------
@@ -54,8 +76,8 @@ async def extract_data_impl(
             "origin_ids": [...],
         }
     """
-    logger.debug("ENTER extract_data_impl: origin_id=%s, table=%s, columns=%s, batch_size=%d, cursor=%s",
-                  origin_config.get("id"), table_name, columns, batch_size, cursor)
+    logger.debug("ENTER extract_data_impl: origin_id=%s, table=%s, columns=%s, batch_size=%d, cursor=%s, watermark=%s",
+                  origin_config.get("id"), table_name, columns, batch_size, cursor, watermark)
     origin_id = origin_config.get("id", "unknown")
     origin_type = origin_config.get("type", "postgres")
     connection = origin_config.get("connection", {})
@@ -71,22 +93,35 @@ async def extract_data_impl(
         raise ValueError("origin_config must have 'connection' dict")
 
     logger.debug("Creating connector for type: %s", origin_type)
+    connector = None
     try:
         connector = create_connector(origin_type, connection)
         logger.debug("Calling connector.extract: table=%s, columns=%s, batch_size=%d",
                       table_name, columns, batch_size)
-        result = await connector.extract(
-            table_name=table_name,
-            columns=columns,
-            filter=filter,
-            batch_size=batch_size,
-            cursor=cursor,
-        )
+        extract_kwargs: dict[str, Any] = {
+            "table_name": table_name,
+            "columns": columns,
+            "filter": filter,
+            "batch_size": batch_size,
+            "cursor": cursor,
+            "watermark": watermark,
+        }
+        # Not every connector seeks on a primary key (MongoDB orders by _id,
+        # which is already unique), so only pass it where it is accepted.
+        if pk_columns and _accepts_pk_columns(connector):
+            extract_kwargs["pk_columns"] = pk_columns
+        result = await connector.extract(**extract_kwargs)
         result["origin_id"] = origin_id
         result["table_name"] = table_name
         logger.debug("extract_data_impl completed: rows=%d, total_count=%d",
                       len(result.get("rows", [])), result.get("total_count", 0))
         return result
+    except MergeEngineError:
+        # Already classified — re-wrapping would flatten its disposition, and
+        # a DataQualityError that arrives at the gate as "permanent" loses the
+        # retry/skip choice the user is entitled to make.
+        logger.error("Extraction failed for %s.%s", origin_id, table_name)
+        raise
     except Exception as exc:
         logger.error(
             "Extraction failed for %s.%s: %s", origin_id, table_name, exc
@@ -94,6 +129,12 @@ async def extract_data_impl(
         raise PermanentError(
             f"Extraction failed for origin '{origin_id}', table '{table_name}': {exc}"
         ) from exc
+    finally:
+        # Sockets left open here outlive the caller's event loop, which the
+        # workflow manager closes between HITL gates — the next loop then dies
+        # on the orphaned transports (WinError 995 on Windows).
+        if connector is not None:
+            await connector.close()
 
 
 async def extract_data_handler(arguments: dict[str, Any]) -> dict[str, Any]:

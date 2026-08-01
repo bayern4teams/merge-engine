@@ -7,7 +7,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.orchestrator.nodes.extract_data import extract_data, _find_entity_tables, _table_matches_entity
+from src.orchestrator.nodes.extract_data import (
+    extract_data,
+    _chunked_filters,
+    _find_entity_tables,
+    _table_matches_entity,
+    _MAX_IN_FILTER_VALUES,
+)
+from src.orchestrator.spool import entity_rows
 from src.orchestrator.utils.retry import TransientError
 
 
@@ -22,10 +29,15 @@ class TestTableMatchesEntity:
         """Test entity type found within table name."""
         assert _table_matches_entity("person_data", "public.person_data", "person") is True
 
-    def test_full_name_truncation(self) -> None:
-        """Test that only the last part of full_name (table) is matched."""
-        # full_name splits on '.' and takes last part
-        assert _table_matches_entity("people", "schema.people", "person") is False
+    def test_irregular_plural_alias(self) -> None:
+        """Irregular plurals/synonyms match via the shared alias groups."""
+        assert _table_matches_entity("people", "schema.people", "person") is True
+        assert _table_matches_entity("organizations", "public.organizations", "company") is True
+
+    def test_concept_table_does_not_leak_via_token(self) -> None:
+        """A table that IS a known concept never token-matches another entity."""
+        assert _table_matches_entity("org_founders", "public.org_founders", "company") is False
+        assert _table_matches_entity("org_founders", "public.org_founders", "founder") is True
 
     def test_plural_s_form(self) -> None:
         """Test plural 's' form matching."""
@@ -140,6 +152,19 @@ class TestFindEntityTables:
         assert len(result) == 2
 
 
+@pytest.fixture(autouse=True)
+def _spool_isolation(tmp_path, monkeypatch):
+    """Give every test its own spool directory.
+
+    Extraction now writes rows to logs/spool/<run_id>.duckdb; without this
+    the tests would share files with each other and with real runs.
+    """
+    import src.orchestrator.spool as spool_mod
+
+    monkeypatch.setattr(spool_mod, "SPOOL_DIR", tmp_path / "spool")
+    yield
+
+
 class TestExtractData:
     """Tests for the extract_data node."""
 
@@ -222,7 +247,7 @@ class TestExtractData:
             result = await extract_data(base_state)
 
         assert "company" in result["extracted_data"]
-        assert len(result["extracted_data"]["company"]) == 2
+        assert len(entity_rows(result, "company")) == 2
         assert not result["errors"]
 
     @pytest.mark.asyncio
@@ -250,11 +275,11 @@ class TestExtractData:
         ):
             result = await extract_data(base_state)
 
-        for row in result["extracted_data"]["company"]:
+        for row in entity_rows(result, "company"):
             assert row["_origin_id"] == "postgres_main"
             assert row["_origin_table"] == "public.company"
 
-        for row in result["extracted_data"]["person"]:
+        for row in entity_rows(result, "person"):
             assert row["_origin_id"] == "postgres_main"
             assert row["_origin_table"] == "public.person"
 
@@ -282,14 +307,86 @@ class TestExtractData:
         ):
             result = await extract_data(base_state)
 
-        assert "company" not in result["extracted_data"] or result["extracted_data"].get("company", []) == []
+        assert entity_rows(result, "company") == []
         assert len(result["errors"]) == 2  # One per entity with no tables
+        # Default (no explicit_target_entities in state): both entities are
+        # treated as explicit, so both escalate.
+        assert result["failure"]["error_class"] == "DataQualityError"
+        assert result["failure"]["disposition"] == "escalate"
+        assert set(result["failure"]["context"]["missing_entities"]) == {"company", "person"}
+        assert result["failure"]["context"]["dropped_inferred_entities"] == []
+
+    @pytest.mark.asyncio
+    async def test_extract_data_inferred_missing_warns_not_escalates(
+        self, base_state: dict[str, Any]
+    ) -> None:
+        """remediation #1 (2026-07-30): a wildcard-INFERRED entity with no
+        source table must not abort the run -- only an EXPLICITLY requested
+        one may. This is the fix for the old unconditional 'product' wildcard
+        turning a valid company-only corpus into a hard error."""
+        base_state["schemas"] = {
+            "postgres_main": {
+                "tables": [
+                    {
+                        "name": "orders",
+                        "full_name": "public.orders",
+                        "columns": [],
+                        "foreign_keys": [],
+                    }
+                ]
+            }
+        }
+        # Neither company nor person is explicit -- both were wildcard-inferred.
+        base_state["explicit_target_entities"] = []
+
+        with patch(
+            "src.orchestrator.nodes.extract_data.extract_data_impl",
+            AsyncMock(return_value={"rows": [], "next_cursor": None}),
+        ):
+            result = await extract_data(base_state)
+
+        assert entity_rows(result, "company") == []
+        assert result["failure"] == {}  # no escalation
+        assert set(result["dropped_inferred_entities"]) == {"company", "person"}
+
+    @pytest.mark.asyncio
+    async def test_extract_data_explicit_missing_still_escalates(
+        self, base_state: dict[str, Any]
+    ) -> None:
+        """A mix: 'company' was explicitly requested and has no table (a real
+        gap, must escalate); 'person' was only inferred and has no table
+        either (must be silently dropped, not escalated)."""
+        base_state["schemas"] = {
+            "postgres_main": {
+                "tables": [
+                    {
+                        "name": "orders",
+                        "full_name": "public.orders",
+                        "columns": [],
+                        "foreign_keys": [],
+                    }
+                ]
+            }
+        }
+        base_state["explicit_target_entities"] = ["company"]
+
+        with patch(
+            "src.orchestrator.nodes.extract_data.extract_data_impl",
+            AsyncMock(return_value={"rows": [], "next_cursor": None}),
+        ):
+            result = await extract_data(base_state)
+
+        assert result["failure"]["error_class"] == "DataQualityError"
+        assert result["failure"]["disposition"] == "escalate"
+        assert result["failure"]["context"]["missing_entities"] == ["company"]
+        assert result["failure"]["context"]["dropped_inferred_entities"] == ["person"]
+        assert result["dropped_inferred_entities"] == ["person"]
 
     @pytest.mark.asyncio
     async def test_extract_data_transient_error(
         self, base_state: dict[str, Any]
     ) -> None:
-        """Test handling of transient errors during extraction."""
+        """A failure mid-table records the error and stops the run."""
         call_count = [0]
 
         async def side_effect(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -304,8 +401,8 @@ class TestExtractData:
         ):
             result = await extract_data(base_state)
 
-        # Should have logged the error but not crash
-        assert any("Transient error" in e for e in result["errors"])
+        assert any("Rate limit exceeded" in e for e in result["errors"])
+        assert result["failure"]["node"] == "extract_data"
 
     @pytest.mark.asyncio
     async def test_extract_data_generic_error(
@@ -322,7 +419,70 @@ class TestExtractData:
             result = await extract_data(base_state)
 
         assert len(result["errors"]) >= 2
-        assert any("Extraction failed" in e for e in result["errors"])
+        assert any("Connection lost" in e for e in result["errors"])
+
+    @pytest.mark.asyncio
+    async def test_partial_table_is_discarded_not_merged(
+        self, base_state: dict[str, Any]
+    ) -> None:
+        """The core M.4 contract: half a table must never look like all of it.
+
+        Keeping the rows that did arrive is what let an interrupted
+        extraction merge as though the table were complete — a wrong answer
+        delivered with full confidence.
+        """
+        calls = [0]
+
+        async def fail_on_second_batch(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            calls[0] += 1
+            if calls[0] == 1:
+                return {"rows": [{"id": 1}, {"id": 2}], "next_cursor": "p2"}
+            raise Exception("Connection lost")
+
+        with patch(
+            "src.orchestrator.nodes.extract_data.extract_data_impl",
+            side_effect=fail_on_second_batch,
+        ):
+            result = await extract_data(base_state)
+
+        for entity_type in result["extracted_data"]:
+            rows = entity_rows(result, entity_type)
+            assert rows == [], (
+                f"entity '{entity_type}' kept {len(rows)} partially-extracted "
+                "row(s) from a table that failed"
+            )
+        assert result["failure"]["error_class"] == "DataQualityError"
+        assert result["failure"]["context"]["failed_tables"]
+        assert result["failure"]["context"]["failed_tables"][0]["rows_discarded"] == 2
+
+    @pytest.mark.asyncio
+    async def test_failed_table_does_not_advance_its_watermark(
+        self, base_state: dict[str, Any]
+    ) -> None:
+        """Advancing past rows never read would lose them on the next run."""
+        async def always_fail(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            raise Exception("Connection lost")
+
+        with patch(
+            "src.orchestrator.nodes.extract_data.extract_data_impl",
+            side_effect=always_fail,
+        ):
+            result = await extract_data(base_state)
+
+        assert result["extraction_watermarks"] == {}
+
+    @pytest.mark.asyncio
+    async def test_successful_extraction_records_no_failure(
+        self, base_state: dict[str, Any]
+    ) -> None:
+        """The happy path must leave `failure` empty, or the router stops it."""
+        with patch(
+            "src.orchestrator.nodes.extract_data.extract_data_impl",
+            AsyncMock(return_value={"rows": [{"id": 1}], "next_cursor": None}),
+        ):
+            result = await extract_data(base_state)
+
+        assert result["failure"] == {}
 
     @pytest.mark.asyncio
     async def test_extract_data_cursor_pagination(
@@ -379,7 +539,7 @@ class TestExtractData:
 
         # Should have extracted (0 rows) but not errored
         assert "company" in result["extracted_data"]
-        assert result["extracted_data"]["company"] == []
+        assert entity_rows(result, "company") == []
 
     @pytest.mark.asyncio
     async def test_extract_data_default_batch_size(
@@ -463,3 +623,350 @@ class TestExtractData:
         assert "company" in result["extracted_data"]
         assert "person" in result["extracted_data"]
         assert mock_extract_data_impl.call_count == 2  # Once per entity
+
+class TestWatermarkTypeCoercion:
+    """Numeric watermarks from the TEXT tracking column must be re-typed."""
+
+    @pytest.mark.asyncio
+    async def test_numeric_last_value_coerced_to_int(self) -> None:
+        state = {
+            "extraction_order": ["company"],
+            "dependency_tree": {"company": []},
+            "schemas": {
+                "origin_1": {
+                    "tables": [{
+                        "name": "companies",
+                        "full_name": "public.companies",
+                        "columns": [{"name": "company_id"}],
+                        "watermark_column": "company_id",
+                        "watermark_kind": "numeric",
+                    }],
+                },
+            },
+            "origins": [{"id": "origin_1", "type": "postgres", "connection": {}}],
+            "destination": {"type": "postgresql"},
+            "extraction_config": {"default_batch_size": 10},
+        }
+
+        dest = MagicMock()
+        dest.get_extraction_state.return_value = {"last_value": "1149"}
+
+        captured: dict[str, Any] = {}
+
+        async def fake_extract(**kwargs):
+            captured.update(kwargs)
+            return {"rows": [], "next_cursor": None}
+
+        with patch(
+            "src.orchestrator.nodes.extract_data._get_destination_connector",
+            return_value=dest,
+        ), patch(
+            "src.orchestrator.nodes.extract_data.extract_data_impl",
+            side_effect=fake_extract,
+        ):
+            await extract_data(state)
+
+        assert captured["watermark"] == {
+            "column": "company_id", "since": 1149, "kind": "numeric",
+        }
+        assert isinstance(captured["watermark"]["since"], int)
+
+
+class TestScopedExtraction:
+    """A scoped merge extracts the subject's rows first, then only its links."""
+
+    def _state(self) -> dict[str, Any]:
+        return {
+            "run_id": "scoped_test",
+            "extraction_order": ["company", "person"],
+            "dependency_tree": {"company": [], "person": ["company"]},
+            "schemas": {
+                "crm": {
+                    "tables": [
+                        {"name": "companies", "full_name": "public.companies",
+                         "columns": [{"name": "id"}, {"name": "name"}],
+                         "primary_key": ["id"], "foreign_keys": []},
+                        {"name": "employees", "full_name": "public.employees",
+                         "columns": [{"name": "id"}, {"name": "full_name"}, {"name": "company_id"}],
+                         "primary_key": ["id"],
+                         "foreign_keys": [{"column": "company_id", "ref_table": "companies", "ref_column": "id"}]},
+                    ],
+                },
+            },
+            "entity_tables": {
+                "company": [{"origin_id": "crm", "table": "public.companies"}],
+                "person": [{"origin_id": "crm", "table": "public.employees"}],
+            },
+            "origins": [{"id": "crm", "type": "postgres", "connection": {"host": "h"}}],
+            "destination": {"type": "postgresql"},
+            "extraction_config": {"default_batch_size": 100},
+            "merge_scope": {"active": True, "subject": "Nova", "scope_type": "company"},
+            "scope_plan": {
+                "subject": "Nova", "subject_entity": "company",
+                "entities": {
+                    "company": [{"origin_id": "crm", "table": "public.companies",
+                                 "mode": "match", "columns": ["name"]}],
+                    "person": [{"origin_id": "crm", "table": "public.employees",
+                                "mode": "link", "columns": ["company_id"],
+                                "link_entity": "company"}],
+                },
+            },
+        }
+
+    @pytest.mark.asyncio
+    async def test_two_phase_link_uses_collected_subject_ids(self) -> None:
+        calls: list[dict[str, Any]] = []
+
+        async def fake_extract(**kwargs):
+            calls.append({"table": kwargs["table_name"], "filter": kwargs.get("filter")})
+            if kwargs["table_name"] == "public.companies":
+                return {"rows": [{"id": 10, "name": "Nova"}, {"id": 11, "name": "Nova Labs"}],
+                        "next_cursor": None}
+            return {"rows": [{"id": 1, "full_name": "A", "company_id": 10}], "next_cursor": None}
+
+        with patch(
+            "src.orchestrator.nodes.extract_data._get_destination_connector",
+            return_value=MagicMock(get_extraction_state=MagicMock(return_value=None)),
+        ), patch(
+            "src.orchestrator.nodes.extract_data.extract_data_impl",
+            side_effect=fake_extract,
+        ):
+            result = await extract_data(self._state())
+
+        company_call = next(c for c in calls if c["table"] == "public.companies")
+        person_call = next(c for c in calls if c["table"] == "public.employees")
+        # Phase 1: company matched by name substring.
+        assert company_call["filter"] == {"name": {"op": "ilike", "value": "Nova"}}
+        # Phase 2: employees restricted to the two company ids just collected.
+        assert person_call["filter"] == {"company_id": {"op": "in", "value": [10, 11]}}
+        assert result.get("failure", {}) == {}
+
+    @pytest.mark.asyncio
+    async def test_link_via_junction_two_hop(self) -> None:
+        """A link_via plan reads the junction, then the entity by its keys."""
+        state = self._state()
+        state["dependency_tree"] = {"company": [], "person": ["company"]}
+        state["scope_plan"]["entities"]["person"] = [{
+            "origin_id": "crm", "table": "public.people", "mode": "link_via",
+            "columns": ["person_id"], "via_table": "public.jobs",
+            "via_from_column": "company_id", "via_to_column": "person_id",
+        }]
+        state["entity_tables"]["person"] = [{"origin_id": "crm", "table": "public.people"}]
+        state["schemas"]["crm"]["tables"].append({
+            "name": "people", "full_name": "public.people",
+            "columns": [{"name": "person_id"}, {"name": "full_name"}],
+            "primary_key": ["person_id"], "foreign_keys": [],
+        })
+        state["schemas"]["crm"]["tables"] = [
+            t for t in state["schemas"]["crm"]["tables"]
+            if t["full_name"] != "public.employees"
+        ]
+
+        calls: list[dict[str, Any]] = []
+
+        async def fake_extract(**kwargs):
+            calls.append({"table": kwargs["table_name"], "filter": kwargs.get("filter")})
+            if kwargs["table_name"] == "public.companies":
+                return {"rows": [{"id": 10, "name": "Nova"}], "next_cursor": None}
+            if kwargs["table_name"] == "public.jobs":
+                # jobs for company 10 point at person 1 and 2
+                return {"rows": [{"person_id": 1}, {"person_id": 2}], "next_cursor": None}
+            return {"rows": [{"person_id": 1, "full_name": "A"}], "next_cursor": None}
+
+        with patch(
+            "src.orchestrator.nodes.extract_data._get_destination_connector",
+            return_value=MagicMock(get_extraction_state=MagicMock(return_value=None)),
+        ), patch(
+            "src.orchestrator.nodes.extract_data.extract_data_impl",
+            side_effect=fake_extract,
+        ):
+            await extract_data(state)
+
+        jobs_call = next(c for c in calls if c["table"] == "public.jobs")
+        people_call = next(c for c in calls if c["table"] == "public.people")
+        # The junction was filtered by the company id...
+        assert jobs_call["filter"] == {"company_id": {"op": "in", "value": [10]}}
+        # ...and people by the person ids the junction yielded.
+        assert people_call["filter"] == {"person_id": {"op": "in", "value": [1, 2]}}
+
+    @pytest.mark.asyncio
+    async def test_no_subject_rows_means_dependents_are_skipped(self) -> None:
+        calls: list[dict[str, Any]] = []
+
+        async def fake_extract(**kwargs):
+            calls.append(kwargs["table_name"])
+            # The subject matches nothing.
+            return {"rows": [], "next_cursor": None}
+
+        with patch(
+            "src.orchestrator.nodes.extract_data._get_destination_connector",
+            return_value=MagicMock(get_extraction_state=MagicMock(return_value=None)),
+        ), patch(
+            "src.orchestrator.nodes.extract_data.extract_data_impl",
+            side_effect=fake_extract,
+        ):
+            await extract_data(self._state())
+
+        # companies was queried; employees was NOT (no subject ids to link on,
+        # and extracting it unfiltered would pull in every company's staff).
+        assert "public.companies" in calls
+        assert "public.employees" not in calls
+
+    @pytest.mark.asyncio
+    async def test_a_large_linked_id_list_is_split_across_several_calls(self) -> None:
+        """The real bug this guards against: a live Boeing run's link_via
+        filter carried ~35,000 person ids in one IN (...) list and ClickHouse's
+        HTTP interface rejected the query outright ('Field value too long').
+        The extraction must instead issue several smaller-filter calls."""
+        state = self._state()
+        many_ids = list(range(1, 1201))  # > 2 * _MAX_IN_FILTER_VALUES
+
+        calls: list[dict[str, Any]] = []
+
+        async def fake_extract(**kwargs):
+            calls.append({"table": kwargs["table_name"], "filter": kwargs.get("filter")})
+            if kwargs["table_name"] == "public.companies":
+                # One matched company, but "linking" it produces a huge
+                # employee id set (mirrors a real large-employer Boeing run).
+                return {"rows": [{"id": i, "name": "Nova"} for i in many_ids],
+                        "next_cursor": None}
+            filt = kwargs.get("filter") or {}
+            ids_here = filt.get("company_id", {}).get("value", [])
+            return {
+                "rows": [{"id": i, "full_name": f"P{i}", "company_id": i} for i in ids_here],
+                "next_cursor": None,
+            }
+
+        with patch(
+            "src.orchestrator.nodes.extract_data._get_destination_connector",
+            return_value=MagicMock(get_extraction_state=MagicMock(return_value=None)),
+        ), patch(
+            "src.orchestrator.nodes.extract_data.extract_data_impl",
+            side_effect=fake_extract,
+        ):
+            result = await extract_data(state)
+
+        employee_calls = [c for c in calls if c["table"] == "public.employees"]
+        # Split into multiple calls, none exceeding the chunk size...
+        assert len(employee_calls) > 1
+        for c in employee_calls:
+            assert len(c["filter"]["company_id"]["value"]) <= _MAX_IN_FILTER_VALUES
+        # ...and every id across all chunks was covered, none dropped.
+        all_queried_ids = {
+            v for c in employee_calls for v in c["filter"]["company_id"]["value"]
+        }
+        assert all_queried_ids == set(many_ids)
+        assert result.get("failure", {}) == {}
+
+
+class TestChunkedFilters:
+    """Unit tests for _chunked_filters in isolation (Phase 7 fix: a scoped
+    merge's linked-id filter can be too large for one ClickHouse HTTP query)."""
+
+    def test_none_passes_through_unchanged(self) -> None:
+        assert _chunked_filters(None) == [None]
+
+    def test_a_small_in_filter_is_not_split(self) -> None:
+        f = {"company_id": {"op": "in", "value": [1, 2, 3]}}
+        assert _chunked_filters(f, chunk_size=500) == [f]
+
+    def test_an_ilike_filter_is_never_split_regardless_of_size(self) -> None:
+        f = {"name": {"op": "ilike", "value": "Boeing"}}
+        assert _chunked_filters(f, chunk_size=2) == [f]
+
+    def test_a_large_in_filter_is_split_into_equal_chunks(self) -> None:
+        f = {"id": {"op": "in", "value": list(range(10))}}
+        chunks = _chunked_filters(f, chunk_size=3)
+        assert len(chunks) == 4
+        assert [c["id"]["value"] for c in chunks] == [
+            [0, 1, 2], [3, 4, 5], [6, 7, 8], [9],
+        ]
+        # Every id covered exactly once, in order, none dropped or duplicated.
+        assert [v for c in chunks for v in c["id"]["value"]] == list(range(10))
+
+    def test_exactly_at_the_boundary_is_not_split(self) -> None:
+        f = {"id": {"op": "in", "value": list(range(5))}}
+        assert _chunked_filters(f, chunk_size=5) == [f]
+
+    def test_one_over_the_boundary_is_split(self) -> None:
+        f = {"id": {"op": "in", "value": list(range(6))}}
+        chunks = _chunked_filters(f, chunk_size=5)
+        assert len(chunks) == 2
+
+
+class TestForceFullExtraction:
+    """`force_full_extraction` re-reads every table, ignoring the watermark.
+
+    This is the fix for the reported bug: deleting rows from the destination
+    left the origin's high-water mark in place, so the next run extracted
+    nothing new and the destination stayed empty. A fresh run must ignore it.
+    """
+
+    def _state(self, force: bool) -> dict[str, Any]:
+        return {
+            "extraction_order": ["company"],
+            "dependency_tree": {"company": []},
+            "schemas": {
+                "origin_1": {
+                    "tables": [{
+                        "name": "companies",
+                        "full_name": "public.companies",
+                        "columns": [{"name": "company_id"}],
+                        "watermark_column": "company_id",
+                        "watermark_kind": "numeric",
+                    }],
+                },
+            },
+            "origins": [{"id": "origin_1", "type": "postgres", "connection": {}}],
+            "destination": {"type": "postgresql"},
+            "extraction_config": {"default_batch_size": 10},
+            "force_full_extraction": force,
+        }
+
+    @pytest.mark.asyncio
+    async def test_fresh_run_ignores_the_watermark(self) -> None:
+        dest = MagicMock()
+        dest.get_extraction_state.return_value = {"last_value": "1149"}
+        captured: dict[str, Any] = {}
+
+        async def fake_extract(**kwargs):
+            captured.update(kwargs)
+            return {"rows": [], "next_cursor": None}
+
+        with patch(
+            "src.orchestrator.nodes.extract_data._get_destination_connector",
+            return_value=dest,
+        ), patch(
+            "src.orchestrator.nodes.extract_data.extract_data_impl",
+            side_effect=fake_extract,
+        ):
+            await extract_data(self._state(force=True))
+
+        # No watermark pushed down, and the tracking table is never even read.
+        assert captured["watermark"] is None
+        dest.get_extraction_state.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_incremental_run_still_uses_the_watermark(self) -> None:
+        dest = MagicMock()
+        dest.get_extraction_state.return_value = {"last_value": "1149"}
+        captured: dict[str, Any] = {}
+
+        async def fake_extract(**kwargs):
+            captured.update(kwargs)
+            return {"rows": [], "next_cursor": None}
+
+        with patch(
+            "src.orchestrator.nodes.extract_data._get_destination_connector",
+            return_value=dest,
+        ), patch(
+            "src.orchestrator.nodes.extract_data.extract_data_impl",
+            side_effect=fake_extract,
+        ):
+            await extract_data(self._state(force=False))
+
+        # Default behaviour is unchanged: the watermark is read and pushed down.
+        assert captured["watermark"] == {
+            "column": "company_id", "since": 1149, "kind": "numeric",
+        }
+        dest.get_extraction_state.assert_called_once()

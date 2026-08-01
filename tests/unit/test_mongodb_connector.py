@@ -120,14 +120,39 @@ class TestEnsureClient:
             assert connector._db_name == "mydb"
 
     @pytest.mark.asyncio
-    async def test_raises_on_missing_uri(self):
-        """_ensure_client should raise ValueError when URI is empty."""
+    async def test_raises_when_neither_uri_nor_host(self):
+        """_ensure_client should raise ValueError when URI and host are both absent."""
         from src.mcp_server.connectors.mongodb import MongoDBConnector
 
         connector = MongoDBConnector({"connection": {}})
 
-        with pytest.raises(ValueError, match="MongoDB connection URI is required"):
+        with pytest.raises(ValueError, match="requires either a uri or a host"):
             await connector._ensure_client()
+
+    @pytest.mark.asyncio
+    async def test_builds_uri_from_host_fields(self):
+        """_ensure_client should build a URI from host/port/user/password/database."""
+        from src.mcp_server.connectors.mongodb import MongoDBConnector
+
+        connector = MongoDBConnector(
+            {
+                "connection": {
+                    "host": "localhost",
+                    "port": 27017,
+                    "user": "admin",
+                    "password": "p@ss word",
+                    "database": "mflix",
+                }
+            }
+        )
+
+        with patch("src.mcp_server.connectors.mongodb.AsyncMongoClient") as mock_cls:
+            mock_cls.return_value = AsyncMock()
+            await connector._ensure_client()
+
+        uri = mock_cls.call_args[0][0]
+        assert uri == "mongodb://admin:p%40ss+word@localhost:27017/"
+        assert connector._db_name == "mflix"
 
     @pytest.mark.asyncio
     async def test_handles_db_with_query_params(self):
@@ -201,14 +226,17 @@ def _make_async_iter(items):
 
 
 def _make_mock_find_result(coll, docs):
-    """Create a mock find() result that supports .limit() chaining and async iteration.
+    """Create a mock find() result supporting .sort()/.limit() chaining.
 
-    The source code calls: collection.find(...).limit(...)
-    So find() returns an object where limit() returns the same iterable.
+    The source code calls: collection.find(...).sort("_id", 1).limit(...)
+    The sort is not decoration — `$gt: last_id` only reads "the next page"
+    if the documents come back in _id order — so the mock has to chain it
+    the same way a real cursor does.
     """
     async_iter_obj = _make_async_iter(docs)
-    
+
     find_result = MagicMock()
+    find_result.sort = MagicMock(return_value=find_result)
     find_result.limit = MagicMock(return_value=find_result)
     find_result.__aiter__ = MagicMock(return_value=async_iter_obj)
     coll.find = MagicMock(return_value=find_result)

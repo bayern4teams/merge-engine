@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import Any
 
 import clickhouse_connect
@@ -82,6 +84,27 @@ class ClickHouseDestinationConnector:
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         self.close()
+
+    @contextmanager
+    def atomic(self, dry_run: bool = False):
+        """Not a real transaction — ClickHouse has no cross-table rollback.
+
+        Deliberately *not* silently pretending: the caller relies on this to
+        undo a partial merge, and here it cannot. Saying so in the log is
+        the difference between a known limitation and a data-loss surprise.
+        A staging-table-plus-EXCHANGE implementation is the real fix and is
+        not built yet (see TODO.md, Phase M.5).
+        """
+        if dry_run:
+            raise NotImplementedError(
+                "Dry-run loads are not supported for a ClickHouse "
+                "destination: there is no transaction to roll back."
+            )
+        logger.warning(
+            "ClickHouse destination: this load is NOT atomic. A failure "
+            "part-way through will leave earlier entities written."
+        )
+        yield self
 
     # ── Schema Inspection ─────────────────────────────────────────────
 
@@ -157,6 +180,42 @@ class ClickHouseDestinationConnector:
             logger.warning("Failed to list tables: %s", exc)
             return []
 
+    def read_entity_rows(
+        self,
+        table_name: str,
+        limit: int = 1000,
+        name_columns: list[str] | None = None,
+        subject: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Read existing destination rows, optionally narrowed to a subject.
+
+        Destination-dedup counterpart of the PostgreSQL method — see its
+        docstring. Best-effort and bounded; a failure yields an empty list.
+        """
+        client = self._ensure_client()
+        try:
+            where = ""
+            params: dict[str, Any] = {}
+            cols = [c for c in (name_columns or []) if c]
+            if subject and cols:
+                clauses = []
+                for i, c in enumerate(cols):
+                    clauses.append(f"toString(`{c}`) ILIKE {{s{i}:String}}")
+                    params[f"s{i}"] = f"%{subject}%"
+                where = " WHERE " + " OR ".join(clauses)
+            result = client.query(
+                f"SELECT * FROM `{self._database}`.`{table_name}`{where} "
+                f"LIMIT {int(limit)}",
+                params,
+            )
+            names = result.column_names
+            return [dict(zip(names, row)) for row in result.result_rows]
+        except Exception as exc:
+            logger.warning(
+                "Could not read destination rows from %s: %s", table_name, exc
+            )
+            return []
+
     def table_exists(self, table_name: str) -> bool:
         """Check if a table exists in the database.
 
@@ -204,6 +263,114 @@ class ClickHouseDestinationConnector:
             return len(result.result_rows) > 0
         except Exception:
             return False
+
+    # ── Extraction State Tracking (incremental watermark extraction) ──
+
+    def ensure_extraction_state(self) -> None:
+        """Create the extraction-state tracking table if it doesn't exist.
+
+        One row per (origin_id, table_name) — O(number of tables), not
+        O(number of rows). ReplacingMergeTree keyed on last_extracted_at so
+        FINAL reads return the latest state per table even before a merge.
+        """
+        client = self._ensure_client()
+        client.command(f"""
+            CREATE TABLE IF NOT EXISTS `{self._database}`.`merge_engine_extraction_state` (
+                origin_id String,
+                table_name String,
+                watermark_column Nullable(String),
+                watermark_kind Nullable(String),
+                last_value Nullable(String),
+                last_run_id Nullable(String),
+                last_extracted_at DateTime,
+                rows_extracted_last_run Int64
+            ) ENGINE = ReplacingMergeTree(last_extracted_at)
+            ORDER BY (origin_id, table_name)
+        """)
+
+    def get_extraction_state(self, origin_id: str, table_name: str) -> dict[str, Any] | None:
+        """Fetch the tracked extraction state for one (origin, table), or None."""
+        self.ensure_extraction_state()
+        client = self._ensure_client()
+        result = client.query(
+            f"""
+            SELECT watermark_column, watermark_kind, last_value, last_run_id, rows_extracted_last_run
+            FROM `{self._database}`.`merge_engine_extraction_state` FINAL
+            WHERE origin_id = {{origin_id:String}} AND table_name = {{table_name:String}}
+            """,
+            parameters={"origin_id": origin_id, "table_name": table_name},
+        )
+        if not result.result_rows:
+            return None
+        row = result.result_rows[0]
+        return {
+            "watermark_column": row[0],
+            "watermark_kind": row[1],
+            "last_value": row[2],
+            "last_run_id": row[3],
+            "rows_extracted_last_run": row[4],
+        }
+
+    def update_extraction_state(
+        self,
+        origin_id: str,
+        table_name: str,
+        watermark_column: str | None,
+        watermark_kind: str | None,
+        last_value: str | None,
+        run_id: str,
+        rows_extracted: int,
+    ) -> None:
+        """Insert the new extraction state after a successful load for one table.
+
+        ReplacingMergeTree deduplicates by (origin_id, table_name) on merge;
+        get_extraction_state uses FINAL so the latest row always wins.
+        """
+        self.ensure_extraction_state()
+        client = self._ensure_client()
+        client.insert(
+            "merge_engine_extraction_state",
+            [[
+                origin_id, table_name, watermark_column, watermark_kind,
+                last_value, run_id, datetime.now(timezone.utc), rows_extracted,
+            ]],
+            column_names=[
+                "origin_id", "table_name", "watermark_column", "watermark_kind",
+                "last_value", "last_run_id", "last_extracted_at", "rows_extracted_last_run",
+            ],
+            database=self._database,
+        )
+
+    def clear_extraction_state(
+        self, origin_id: str | None = None, table_name: str | None = None
+    ) -> int:
+        """Forget tracked watermarks so the next run re-extracts in full.
+
+        See the PostgreSQL destination's docstring for the why. ClickHouse has
+        no row count from a delete and deletes are mutations, so this issues an
+        ``ALTER TABLE ... DELETE`` and returns -1 (unknown count) on success.
+        """
+        self.ensure_extraction_state()
+        client = self._ensure_client()
+        clauses: list[str] = []
+        params: dict[str, Any] = {}
+        if origin_id is not None:
+            clauses.append("origin_id = {origin_id:String}")
+            params["origin_id"] = origin_id
+        if table_name is not None:
+            clauses.append("table_name = {table_name:String}")
+            params["table_name"] = table_name
+        where = " AND ".join(clauses) if clauses else "1=1"
+        client.command(
+            f"ALTER TABLE `{self._database}`.`merge_engine_extraction_state` "
+            f"DELETE WHERE {where}",
+            parameters=params,
+        )
+        logger.info(
+            "Cleared extraction-state for a full re-merge (origin=%s, table=%s)",
+            origin_id, table_name,
+        )
+        return -1
 
     # ── Data Loading ──────────────────────────────────────────────────
 

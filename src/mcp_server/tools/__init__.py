@@ -19,16 +19,16 @@ from src.mcp_server.tools.extract_data import (
     extract_data_impl,
     extract_data_handler,
 )
-from src.mcp_server.tools.mark_imported import (
-    mark_imported_impl,
-    mark_imported_handler,
-)
 from src.mcp_server.tools.resolve_entities import (
     resolve_entities_impl,
 )
 from src.mcp_server.tools.unify_entity_group import (
     unify_entity_group_impl,
     unify_entity_group_handler,
+)
+from src.mcp_server.tools.select_entity_tables import (
+    select_entity_tables_impl,
+    select_entity_tables_handler,
 )
 from src.mcp_server.tools.map_fields import (
     map_fields_impl,
@@ -44,11 +44,11 @@ __all__ = [
     "discover_schema_handler",
     "extract_data_impl",
     "extract_data_handler",
-    "mark_imported_impl",
-    "mark_imported_handler",
     "resolve_entities_impl",
     "unify_entity_group_impl",
     "unify_entity_group_handler",
+    "select_entity_tables_impl",
+    "select_entity_tables_handler",
     "map_fields_impl",
     "map_fields_handler",
     "load_data_impl",

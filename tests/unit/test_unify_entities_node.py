@@ -8,6 +8,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.orchestrator.nodes.unify_entities import unify_entity_groups
+from src.orchestrator.spool import clusters_for, unified_for
+
+
+@pytest.fixture(autouse=True)
+def _spool_isolation(tmp_path, monkeypatch):
+    """Each test gets its own spool: clusters and unified records live there."""
+    import src.orchestrator.spool as spool_mod
+
+    monkeypatch.setattr(spool_mod, "SPOOL_DIR", tmp_path / "spool")
+    yield
 
 
 class TestUnifyEntityGroups:
@@ -85,8 +95,8 @@ class TestUnifyEntityGroups:
             result = await unify_entity_groups(base_state)
 
         assert "company" in result["unified_entities"]
-        assert len(result["unified_entities"]["company"]) == 1
-        unified = result["unified_entities"]["company"][0]
+        assert len(unified_for(result, "company")) == 1
+        unified = unified_for(result, "company")[0]
         assert unified["id"] == "cluster-1"
         assert unified["_entity_type"] == "company"
         assert not result["errors"]
@@ -102,7 +112,7 @@ class TestUnifyEntityGroups:
         ):
             result = await unify_entity_groups(base_state)
 
-        unified = result["unified_entities"]["company"][0]
+        unified = unified_for(result, "company")[0]
         assert unified["id"] == "cluster-1"
 
     @pytest.mark.asyncio
@@ -116,7 +126,7 @@ class TestUnifyEntityGroups:
         ):
             result = await unify_entity_groups(base_state)
 
-        unified = result["unified_entities"]["company"][0]
+        unified = unified_for(result, "company")[0]
         assert "_conflicts" in unified
         assert len(unified["_conflicts"]) == 1
 
@@ -131,7 +141,7 @@ class TestUnifyEntityGroups:
         ):
             result = await unify_entity_groups(base_state)
 
-        unified = result["unified_entities"]["company"][0]
+        unified = unified_for(result, "company")[0]
         assert "_null_filled" in unified
         assert "phone" in unified["_null_filled"]
 
@@ -155,7 +165,7 @@ class TestUnifyEntityGroups:
             result = await unify_entity_groups(base_state)
 
         # Cluster skipped because no matching records found
-        assert len(result["unified_entities"]["company"]) == 0
+        assert len(unified_for(result, "company")) == 0
         mock_impl.assert_not_called()
 
     @pytest.mark.asyncio
@@ -172,7 +182,7 @@ class TestUnifyEntityGroups:
         ):
             result = await unify_entity_groups(base_state)
 
-        assert result["unified_entities"]["company"] == []
+        assert unified_for(result, "company") == []
         assert len(result["errors"]) == 1
         assert "Unify failed" in result["errors"][0]
 
@@ -208,7 +218,7 @@ class TestUnifyEntityGroups:
         ) as mock_impl:
             result = await unify_entity_groups(base_state)
 
-        assert len(result["unified_entities"]["company"]) == 0
+        assert len(unified_for(result, "company")) == 0
         mock_impl.assert_not_called()
 
     @pytest.mark.asyncio
@@ -251,7 +261,7 @@ class TestUnifyEntityGroups:
         ):
             result = await unify_entity_groups(base_state)
 
-        assert len(result["unified_entities"]["company"]) == 2
+        assert len(unified_for(result, "company")) == 2
 
     @pytest.mark.asyncio
     async def test_unify_entity_groups_no_target_entities(
@@ -271,7 +281,7 @@ class TestUnifyEntityGroups:
         base_state["entity_clusters"]["company"] = []
 
         result = await unify_entity_groups(base_state)
-        assert result["unified_entities"]["company"] == []
+        assert unified_for(result, "company") == []
 
     @pytest.mark.asyncio
     async def test_unify_entity_groups_record_lookup_by_origin_id(

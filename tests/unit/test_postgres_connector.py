@@ -165,7 +165,7 @@ class TestEnsureEngine:
             mock_create.assert_called_once()
             call_args = mock_create.call_args
             url = call_args[0][0]
-            assert "postgresql+psycopg2" in url
+            assert "postgresql+asyncpg" in url
             assert "testuser:testpass@localhost:5432/testdb" in url
 
     @pytest.mark.asyncio
@@ -270,22 +270,21 @@ class TestDiscoverSchema:
         table_result = make_single_result(table_rows)
 
         # discover_schema calls engine.connect() once for tables query.
-        # Since there are 2 tables, it will try to connect for each, but columns/FK/sample fail silently.
+        # Since there are 2 tables, it will try to connect for each, but columns/FK/PK/sample fail silently.
         # We need 1 connection for the tables query; subsequent calls return empty results.
         engine = MagicMock()
-        # discover_schema: 1 call for tables, then for each table: 3 more calls (cols, fk, sample)
-        # For 2 tables with 3 calls each = 7 total. Use side_effect for all.
-        all_results = [table_result] + [make_single_result([]) for _ in range(7)]
+        # discover_schema: 1 call for tables, then for each table: 4 more calls (cols, fk, pk, sample)
+        # For 2 tables with 4 calls each = 9 total. Use side_effect for all.
+        all_results = [table_result] + [make_single_result([]) for _ in range(8)]
 
         async_conn = AsyncMock()
         async_conn.execute = AsyncMock(side_effect=all_results)
         async_conn.commit = AsyncMock()
 
-        # discover_schema only calls engine.connect() once at first
-        # Actually looking at source: it opens one connection for tables query,
-        # then for each table it opens 3 more connections (cols, fk, sample).
-        # With 2 tables, that's 1 + 2*3 = 7 connections needed.
-        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn)] * 7)
+        # discover_schema opens one connection for tables query, then for
+        # each table it opens 4 more connections (cols, fk, pk, sample).
+        # With 2 tables, that's 1 + 2*4 = 9 connections needed.
+        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn)] * 9)
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
 
@@ -309,17 +308,18 @@ class TestDiscoverSchema:
             {"column_name": "bio", "data_type": "text", "is_nullable": "YES", "character_maximum_length": None},
         ])
         fk_result = make_single_result([])
+        pk_result = make_single_result([])
         sample_result = make_single_result([], fetchone_val=None)
 
-        # 1 tables + 1 cols + 1 fk + 1 sample = 4 connections
-        all_results = [table_result, col_result, fk_result, sample_result]
+        # 1 tables + 1 cols + 1 fk + 1 pk + 1 sample = 5 connections
+        all_results = [table_result, col_result, fk_result, pk_result, sample_result]
 
         async_conn = AsyncMock()
         async_conn.execute = AsyncMock(side_effect=all_results)
         async_conn.commit = AsyncMock()
 
         engine = MagicMock()
-        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn)] * 4)
+        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn)] * 5)
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
 
@@ -350,16 +350,17 @@ class TestDiscoverSchema:
                 "ref_column": "id",
             }
         ])
+        pk_result = make_single_result([])
         sample_result = make_single_result([], fetchone_val=None)
 
-        all_results = [table_result, col_result, fk_result, sample_result]
+        all_results = [table_result, col_result, fk_result, pk_result, sample_result]
 
         async_conn = AsyncMock()
         async_conn.execute = AsyncMock(side_effect=all_results)
         async_conn.commit = AsyncMock()
 
         engine = MagicMock()
-        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn)] * 4)
+        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn)] * 5)
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
 
@@ -379,18 +380,19 @@ class TestDiscoverSchema:
         table_result = make_single_result([{"table_schema": "public", "table_name": "users"}])
         col_result = make_single_result([])
         fk_result = make_single_result([])
+        pk_result = make_single_result([])
         sample_result = make_single_result([], fetchone_val={
             "id": 1, "name": "Alice", "email": "alice@example.com"
         })
 
-        all_results = [table_result, col_result, fk_result, sample_result]
+        all_results = [table_result, col_result, fk_result, pk_result, sample_result]
 
         async_conn = AsyncMock()
         async_conn.execute = AsyncMock(side_effect=all_results)
         async_conn.commit = AsyncMock()
 
         engine = MagicMock()
-        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn)] * 4)
+        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn)] * 5)
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
 
@@ -436,16 +438,17 @@ class TestDiscoverSchema:
             {"column_name": "id", "data_type": "integer", "is_nullable": "NO", "character_maximum_length": None},
         ])
         fk_result = make_single_result([])
+        pk_result = make_single_result([])
         sample_result = make_single_result([], fetchone_val=None)
 
-        all_results = [table_result, col_result, fk_result, sample_result]
+        all_results = [table_result, col_result, fk_result, pk_result, sample_result]
 
         async_conn = AsyncMock()
         async_conn.execute = AsyncMock(side_effect=all_results)
         async_conn.commit = AsyncMock()
 
         engine = MagicMock()
-        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn)] * 4)
+        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn)] * 5)
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
 
@@ -478,7 +481,9 @@ class TestExtract:
         async_conn.commit = AsyncMock()
 
         engine = MagicMock()
-        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn)])
+        # extract() opens two separate connections: one for the count query,
+        # one for the data query.
+        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn), make_async_cm(async_conn)])
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
 
@@ -503,7 +508,7 @@ class TestExtract:
         async_conn.commit = AsyncMock()
 
         engine = MagicMock()
-        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn)])
+        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn), make_async_cm(async_conn)])
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
 
@@ -527,7 +532,7 @@ class TestExtract:
         async_conn.commit = AsyncMock()
 
         engine = MagicMock()
-        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn)])
+        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn), make_async_cm(async_conn)])
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
 
@@ -554,7 +559,7 @@ class TestExtract:
         async_conn.commit = AsyncMock()
 
         engine = MagicMock()
-        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn)])
+        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn), make_async_cm(async_conn)])
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
 
@@ -580,7 +585,7 @@ class TestExtract:
         async_conn.commit = AsyncMock()
 
         engine = MagicMock()
-        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn)])
+        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn), make_async_cm(async_conn)])
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
 
@@ -605,7 +610,7 @@ class TestExtract:
         async_conn.commit = AsyncMock()
 
         engine = MagicMock()
-        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn)])
+        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn), make_async_cm(async_conn)])
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
 
@@ -629,7 +634,7 @@ class TestExtract:
         async_conn.commit = AsyncMock()
 
         engine = MagicMock()
-        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn)])
+        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn), make_async_cm(async_conn)])
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
 
@@ -652,7 +657,7 @@ class TestExtract:
         async_conn.commit = AsyncMock()
 
         engine = MagicMock()
-        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn)])
+        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn), make_async_cm(async_conn)])
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
 
@@ -667,67 +672,6 @@ class TestExtract:
 # =============================================================================
 # mark_imported() tests
 # =============================================================================
-
-class TestMarkImported:
-    """Tests for mark_imported method."""
-
-    @pytest.mark.asyncio
-    async def test_marks_rows_imported(self, postgres_config):
-        """mark_imported should set _imported = TRUE for given IDs."""
-        from src.mcp_server.connectors.postgres import PostgresConnector
-
-        async_conn = AsyncMock()
-        async_conn.execute = AsyncMock()
-        async_conn.commit = AsyncMock()
-
-        engine = MagicMock()
-        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn)])
-        connector = PostgresConnector(postgres_config)
-        connector._engine = engine
-
-        result = await connector.mark_imported("users", ["id_1", "id_2", "id_3"])
-
-        assert result is True
-        async_conn.commit.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_mark_imported_empty_ids(self, postgres_config):
-        """mark_imported should return True immediately for empty ID list."""
-        from src.mcp_server.connectors.postgres import PostgresConnector
-
-        async_conn = AsyncMock()
-        async_conn.execute = AsyncMock()
-        async_conn.commit = AsyncMock()
-
-        engine = MagicMock()
-        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn)])
-        connector = PostgresConnector(postgres_config)
-        connector._engine = engine
-
-        result = await connector.mark_imported("users", [])
-
-        assert result is True
-
-    @pytest.mark.asyncio
-    async def test_mark_imported_defaults_to_public_schema(self, postgres_config):
-        """mark_imported should prefix with 'public' when no schema."""
-        from src.mcp_server.connectors.postgres import PostgresConnector
-
-        async_conn = AsyncMock()
-        async_conn.execute = AsyncMock()
-        async_conn.commit = AsyncMock()
-
-        engine = MagicMock()
-        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn)])
-        connector = PostgresConnector(postgres_config)
-        connector._engine = engine
-
-        await connector.mark_imported("users", ["id_1"])
-
-        call_args = async_conn.execute.call_args
-        sql = str(call_args[0][0])
-        assert "public.users" in sql
-
 
 # =============================================================================
 # _map_sql_type() tests

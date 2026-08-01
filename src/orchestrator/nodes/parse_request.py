@@ -8,30 +8,11 @@ entity types the user wants to import.
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any
 
 from src.llm import LLMClient, PROMPT_TEMPLATES
 
 logger = logging.getLogger("merge-engine.orchestrator.parse_request")
-
-
-def _safe_format(template: str, **kwargs: Any) -> str:
-    """Format a template string, handling JSON examples with curly braces.
-    
-    The prompt templates contain JSON examples with curly braces that would
-    be misinterpreted by str.format(). We escape all braces except the known
-    placeholder, then do a simple string replacement.
-    """
-    # Escape all curly braces first
-    escaped = template.replace("{", "{{").replace("}}", "}}}")
-    # Un-escape the known placeholder
-    escaped = escaped.replace("{{{{user_request}}}}", "{user_request}")
-    try:
-        return escaped.format(**kwargs)
-    except (KeyError, IndexError, ValueError):
-        # If formatting fails, do a simple string replacement instead
-        return template.replace("{user_request}", str(kwargs.get("user_request", "")))
 
 
 async def parse_request(state: dict[str, Any]) -> dict[str, Any]:
@@ -57,40 +38,75 @@ async def parse_request(state: dict[str, Any]) -> dict[str, Any]:
     llm_config: dict[str, Any] = state["llm_config"]
 
     client = LLMClient(llm_config)
-    prompt_template = PROMPT_TEMPLATES.get("request_parsing", "")
+    prompts = PROMPT_TEMPLATES.get("request_parsing", {})
+    system_prompt = prompts.get("system", "")
+    human_template = prompts.get("human", "")
 
-    if not prompt_template:
+    if not system_prompt or not human_template:
         logger.warning("request_parsing prompt not found, using fallback")
-        prompt_template = (
-            "Extract entity types from this request as a JSON array: {user_request}"
-        )
+        system_prompt = system_prompt or "You extract entity types from user requests. Return only JSON."
+        human_template = human_template or "Extract entity types from this request as JSON: {user_request}"
 
-    user_prompt = _safe_format(prompt_template, user_request=user_request)
-    logger.debug("Prompt template loaded (%d chars, truncated to %d)", len(user_prompt), min(len(user_prompt), 500))
+    user_prompt = human_template.replace("{user_request}", user_request)
+    logger.debug("Prompt loaded (%d chars, truncated to %d)", len(user_prompt), min(len(user_prompt), 500))
     logger.debug("User prompt (first 500 chars): %s", user_prompt[:500])
 
     try:
         logger.debug("Calling LLMClient.call_json()")
         result = await client.call_json(
-            system_prompt="You extract entity types from user requests. Return only JSON.",
+            system_prompt=system_prompt,
             user_prompt=user_prompt,
         )
         logger.debug("LLM response received: type=%s, repr=%.300s", type(result).__name__, repr(result))
-        # Handle both list and dict response formats
-        if isinstance(result, list):
-            target_entities = result
-        elif isinstance(result, dict):
-            # LLM may return {"entities": [...]} or similar
-            target_entities = result.get("entities", result.get("target_entities", []))
-        else:
-            target_entities = []
+        target_entities = result.get("entity_types", []) if isinstance(result, dict) else []
+
+        # Widened breadth (2026-07-30, remediation #1 in
+        # merge-engine-remediation-1-to-6): distinguish types the user actually
+        # asked for from types a wildcard rule merely inferred. Downstream,
+        # extract_data.py uses this to decide whether a missing source table is
+        # a hard failure (explicit) or a silent skip (inferred) -- the old
+        # unconditional "product" wildcard used to turn every company-only
+        # corpus into a hard error. Default to target_entities when the key is
+        # absent (e.g. an older saved profile / a model that ignores the new
+        # instruction) so behaviour degrades to "everything is explicit", which
+        # is the strictest/safest fallback, not a silent widening of failures.
+        explicit_target_entities = (
+            result.get("explicit_entity_types", target_entities)
+            if isinstance(result, dict)
+            else []
+        )
+        if not isinstance(explicit_target_entities, list):
+            explicit_target_entities = target_entities
+        # explicit_entity_types must be a subset of entity_types by contract;
+        # enforce it defensively in case the LLM's output violates its own contract.
+        explicit_target_entities = [e for e in explicit_target_entities if e in target_entities]
+
+        # A request about one named organisation ("all information about Nova")
+        # scopes the whole merge to that subject. Everything downstream that
+        # filters — scope planning, extraction, destination dedup — reads this.
+        # An empty/"none" scope preserves the original whole-table behaviour.
+        subject = str(result.get("subject", "")).strip() if isinstance(result, dict) else ""
+        scope_type = str(result.get("scope_type", "none")).strip().lower() if isinstance(result, dict) else "none"
+        merge_scope = {
+            "active": bool(subject) and scope_type not in ("", "none"),
+            "subject": subject,
+            "scope_type": scope_type or "none",
+        }
 
         logger.debug("Extracted target_entities: %s", target_entities)
-        logger.info("Parsed request: entities = %s", target_entities)
+        logger.debug("Extracted explicit_target_entities: %s", explicit_target_entities)
+        logger.info(
+            "Parsed request: entities = %s, explicit = %s, scope = %s",
+            target_entities,
+            explicit_target_entities,
+            f"{scope_type}:{subject!r}" if merge_scope["active"] else "none",
+        )
         # Return ALL required state fields to prevent state loss with
         # StateGraph(dict) which uses an overwrite reducer.
         return {
             "target_entities": target_entities,
+            "explicit_target_entities": explicit_target_entities,
+            "merge_scope": merge_scope,
             "origins": state.get("origins", []),
             "destination": state.get("destination", {}),
             "llm_config": state.get("llm_config", {}),
@@ -117,6 +133,8 @@ async def parse_request(state: dict[str, Any]) -> dict[str, Any]:
         # Return ALL required fields to prevent state loss with StateGraph(dict)
         return {
             "target_entities": [],
+            "explicit_target_entities": [],
+            "merge_scope": {"active": False, "subject": "", "scope_type": "none"},
             "errors": [f"Request parsing failed: {exc}"],
             "origins": state.get("origins", []),
             "destination": state.get("destination", {}),

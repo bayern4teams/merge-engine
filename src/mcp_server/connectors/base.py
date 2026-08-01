@@ -63,6 +63,7 @@ class BaseConnector(ABC):
         filter: dict[str, Any] | None = None,
         batch_size: int = 1000,
         cursor: str | None = None,
+        watermark: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Extract rows from a table/collection with pagination.
 
@@ -73,11 +74,19 @@ class BaseConnector(ABC):
         columns : list[str]
             Columns to retrieve. Use ``["*"]`` for all.
         filter : dict, optional
-            Additional filter conditions, e.g. ``{"_imported": False}``.
+            Additional equality filter conditions.
         batch_size : int
             Maximum rows per batch.
         cursor : str, optional
             Pagination cursor (OFFSET for SQL, ``_id`` for MongoDB).
+        watermark : dict, optional
+            ``{"column": str, "since": Any, "kind": "numeric"|"timestamp"}``.
+            When given, pushes an incremental ``> since`` filter down into
+            the query and orders by that column so the caller can read the
+            new high-water mark off the last extracted row. Origins are
+            never written to — incremental state lives in the destination's
+            ``merge_engine_extraction_state`` tracking table, not on origin
+            rows (see connectors/watermark.py).
 
         Returns
         -------
@@ -89,29 +98,6 @@ class BaseConnector(ABC):
                 "next_cursor": str | None,    # cursor for next batch
                 "origin_ids": [...],          # original row identifiers
             }
-        """
-
-    # ── Import Flagging ───────────────────────────────────────────────
-
-    @abstractmethod
-    async def mark_imported(
-        self,
-        table_name: str,
-        ids: list[str],
-    ) -> bool:
-        """Flag extracted rows as imported.
-
-        Parameters
-        ----------
-        table_name : str
-            Table or collection name.
-        ids : list[str]
-            Original row identifiers to mark.
-
-        Returns
-        -------
-        bool
-            True on success.
         """
 
     # ── Lifecycle ─────────────────────────────────────────────────────

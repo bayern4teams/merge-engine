@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web-app",
+      "runtimeExecutable": "C:/Users/rezas/miniconda3/envs/na180/python.exe",
+      "runtimeArgs": ["-m", "src.main", "--mode", "gradio", "--port", "7860"],
+      "port": 7860
+    }
+  ]
+}

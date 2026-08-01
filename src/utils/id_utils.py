@@ -7,8 +7,25 @@ for entity tracking throughout the merge pipeline.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from typing import Any
+
+
+def deterministic_uuid(*parts: Any) -> str:
+    """Derive a stable 32-char hex id from the given parts.
+
+    Same parts in, same id out — across processes and across runs. Used for
+    entity cluster ids so re-running the pipeline over unchanged data updates
+    the same destination rows instead of inserting fresh ones (the cluster id
+    becomes the destination primary key when a record has no better id).
+
+    The digest is truncated to 32 hex chars and stamped with the UUID version
+    and variant bits, so it satisfies ``validate_uuid`` exactly like a random
+    ``generate_uuid()`` value does.
+    """
+    digest = hashlib.sha256("\x1f".join(str(p) for p in parts).encode("utf-8")).digest()
+    return str(uuid.UUID(bytes=digest[:16], version=4).hex)
 
 
 def generate_uuid() -> str:

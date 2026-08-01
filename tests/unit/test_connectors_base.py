@@ -18,7 +18,6 @@ class TestBaseConnector:
         """BaseConnector should have all required abstract methods."""
         assert hasattr(BaseConnector, "discover_schema")
         assert hasattr(BaseConnector, "extract")
-        assert hasattr(BaseConnector, "mark_imported")
         assert hasattr(BaseConnector, "close")
 
     def test_abstract_methods_required(self):
@@ -135,10 +134,3 @@ class TestBaseConnector:
         assert "batch_size" in params
         assert "cursor" in params
 
-    def test_mark_imported_signature(self):
-        """mark_imported should have correct signature."""
-        import inspect
-        sig = inspect.signature(BaseConnector.mark_imported)
-        params = list(sig.parameters.keys())
-        assert "table_name" in params
-        assert "ids" in params

@@ -74,6 +74,7 @@ async def discover_schema_impl(origin_config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("origin_config must have 'connection' dict")
 
     logger.debug("Creating connector for type: %s", origin_type)
+    connector = None
     try:
         connector = create_connector(origin_type, connection)
         logger.debug("Connector created, calling discover_schema()")
@@ -89,6 +90,9 @@ async def discover_schema_impl(origin_config: dict[str, Any]) -> dict[str, Any]:
         raise PermanentError(
             f"Schema discovery failed for origin '{origin_id}': {exc}"
         ) from exc
+    finally:
+        if connector is not None:
+            await connector.close()
 
 
 async def discover_schema_handler(arguments: dict[str, Any]) -> dict[str, Any]:

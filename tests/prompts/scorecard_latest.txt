@@ -1,0 +1,62 @@
+Contract checks OK for: request_parsing, dependency_analysis, entity_table_selection, scope_planning, entity_resolution, field_mapping
+
+Model: openai/qwen3.6-flash-2026-04-16
+
+── request_parsing ──
+  ✓ rp-01-single-company
+  ✓ rp-02-company-and-person
+  ✓ rp-03-implied-person
+  ✓ rp-04-everything
+  ✓ rp-05-everything-except
+  ✓ rp-06-persian
+  ✓ rp-07-mixed-language
+  ✓ rp-08-no-entity
+  ✓ rp-09-filters-ignored
+  ✓ rp-10-plural-ambiguity
+  ✓ rp-11-accounts-orders
+  ✓ rp-12-address
+  ✓ rp-13-company-wildcard
+  ✓ rp-14-explicit-subset
+  score: 14/14  malformed-JSON: 0  avg latency: 6473 ms
+
+── dependency_analysis ──
+  ✓ da-01-person-depends-on-company
+  ✓ da-02-three-level-chain
+  score: 2/2  malformed-JSON: 0  avg latency: 6344 ms
+
+── entity_table_selection ──
+  ✓ ets-01-basic
+  ✓ ets-02-cross-origin-alias
+  score: 2/2  malformed-JSON: 0  avg latency: 6492 ms
+
+── scope_planning ──
+  ✓ sp-01-basic-link
+  ✓ sp-02-link-via-junction
+  score: 2/2  malformed-JSON: 0  avg latency: 8785 ms
+
+── entity_resolution ──
+  ✓ er-01-abbreviated-company
+  ✓ er-02-transliterated-person
+  ✓ er-03-shared-generic-word
+  ✓ er-04-same-name-different-person
+  ✓ er-05-strong-identifier-wins
+  ✓ er-06-typo-name-same-context
+  ✓ er-07-batch-mixed
+  ✓ er-08-nickname-formal-match
+  ✓ er-09-generic-name-different-branch
+  ✓ er-10-name-changed-after-merger
+  ✓ er-11-conflicting-identifier-beats-name
+  score: 11/11  malformed-JSON: 0  avg latency: 7145 ms
+
+── field_mapping ──
+  ✓ fm-01-company-semantic-renames
+  ✓ fm-02-person-semantic-renames
+  ✓ fm-03-genuinely-new-column
+  ✓ fm-04-sample-values-beat-names
+  ✓ fm-05-cryptic-abbreviations
+  ✓ fm-06-two-letter-name-sample-values-decide
+  ✓ fm-07-numeric-vs-text-disambiguation
+  ✓ fm-08-genuinely-unmappable-new-column
+  score: 8/8  malformed-JSON: 0  avg latency: 6262 ms
+
+TOTAL failures: 0

@@ -94,6 +94,40 @@ class TestMapFields:
         assert not result["errors"]
 
     @pytest.mark.asyncio
+    async def test_map_fields_collects_unmapped_fields(
+        self, base_state: dict[str, Any]
+    ) -> None:
+        """Test that low-confidence unmapped fields are collected under the entity type."""
+        mock_impl = AsyncMock(return_value={
+            "field_mapping": {
+                "name": {"dest_column": "name", "confidence": 0.98},
+            },
+            "schema_changes": [],
+            "unmapped_fields": [
+                {
+                    "field": "phone",
+                    "confidence": 0.4,
+                    "suggested_column": "phone_number",
+                    "reason": "Low confidence match; requires human review",
+                }
+            ],
+        })
+        with patch(
+            "src.orchestrator.nodes.map_fields_node.map_fields_impl",
+            mock_impl,
+        ):
+            result = await map_fields(base_state)
+
+        assert result["unmapped_fields"]["company"] == [
+            {
+                "field": "phone",
+                "confidence": 0.4,
+                "suggested_column": "phone_number",
+                "reason": "Low confidence match; requires human review",
+            }
+        ]
+
+    @pytest.mark.asyncio
     async def test_map_fields_collects_schema_changes(
         self, base_state: dict[str, Any], mock_map_fields_impl: AsyncMock
     ) -> None:
@@ -253,6 +287,50 @@ class TestMapFields:
         assert "company" in result["field_mappings"]
 
     @pytest.mark.asyncio
+    async def test_wider_sampling_finds_a_field_absent_from_the_first_five(
+        self, base_state: dict[str, Any], mock_map_fields_impl: AsyncMock
+    ) -> None:
+        """Phase 4.3: a field only present starting at record 6+ must still
+        be discovered — the old 5-record window silently dropped it."""
+        records = [
+            {"id": f"cluster-{i}", "name": f"Company {i}"} for i in range(10)
+        ]
+        records[7]["middle_name"] = "Q"
+        base_state["unified_entities"] = {"company": records}
+
+        with patch(
+            "src.orchestrator.nodes.map_fields_node.map_fields_impl",
+            mock_map_fields_impl,
+        ):
+            await map_fields(base_state)
+
+        unified_schema = mock_map_fields_impl.call_args.kwargs["unified_schema"]
+        assert "middle_name" in unified_schema
+        assert unified_schema["middle_name"]["sample_values"] == ["Q"]
+
+    @pytest.mark.asyncio
+    async def test_field_types_from_first_non_null_value_not_first_record(
+        self, base_state: dict[str, Any], mock_map_fields_impl: AsyncMock
+    ) -> None:
+        """Phase 4.3: a field whose first-seen record has a null value must
+        not be stuck typed as NoneType once a real value appears later."""
+        records = [
+            {"id": "cluster-1", "name": "Acme", "revenue": None},
+            {"id": "cluster-2", "name": "Beta", "revenue": 42.0},
+        ]
+        base_state["unified_entities"] = {"company": records}
+
+        with patch(
+            "src.orchestrator.nodes.map_fields_node.map_fields_impl",
+            mock_map_fields_impl,
+        ):
+            await map_fields(base_state)
+
+        unified_schema = mock_map_fields_impl.call_args.kwargs["unified_schema"]
+        assert unified_schema["revenue"]["type"] == "float"
+        assert unified_schema["revenue"]["sample_values"] == [42.0]
+
+    @pytest.mark.asyncio
     async def test_map_fields_default_table_name(
         self, base_state: dict[str, Any], mock_map_fields_impl: AsyncMock
     ) -> None:
@@ -340,3 +418,21 @@ class TestHasUnmappedFields:
             "pending_schema_changes": [{"column": "x"}],
         }
         assert has_unmapped_fields(state) is True
+
+    def test_true_with_unmapped_fields(self) -> None:
+        """Test returns True when an entity has low-confidence unmapped fields."""
+        state = {
+            "pending_schema_changes": [],
+            "unmapped_fields": {
+                "company": [{"field": "phone", "confidence": 0.4}],
+            },
+        }
+        assert has_unmapped_fields(state) is True
+
+    def test_false_with_empty_unmapped_fields(self) -> None:
+        """Test returns False when unmapped_fields entities have empty lists."""
+        state = {
+            "pending_schema_changes": [],
+            "unmapped_fields": {"company": []},
+        }
+        assert has_unmapped_fields(state) is False

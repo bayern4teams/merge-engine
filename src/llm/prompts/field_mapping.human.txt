@@ -1,0 +1,9 @@
+Entity type: {entity_type}
+
+## Destination table schema ({dest_table})
+{destination_schema}
+
+## Source fields needing a decision
+{source_fields_block}
+
+Output:

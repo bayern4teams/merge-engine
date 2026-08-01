@@ -1,0 +1,28 @@
+{
+  "stage": "dependency_analysis",
+  "description": "Golden schema scenarios. Score = every expected_edge (dependent -> prerequisite) present in dependency_tree, and no expected_absent edge present.",
+  "cases": [
+    {
+      "id": "da-01-person-depends-on-company",
+      "input": {
+        "target_entities": ["company", "person"],
+        "schema_info": "\n=== Origin: origin_1 (postgres) ===\n\n  Table: public.companies\n    Columns: company_id, org_title, industry, city, created_at\n\n  Table: public.people\n    Columns: person_id, name_full, email_addr, employer_id, created_at\n    FK: public.people.employer_id -> public.companies.company_id\n    Sample: {person_id=1, name_full='Sara Ahmadi', employer_id=3}"
+      },
+      "expected": {
+        "expected_edges": [["person", "company"]],
+        "expected_absent": [["company", "person"]]
+      }
+    },
+    {
+      "id": "da-02-three-level-chain",
+      "input": {
+        "target_entities": ["company", "person", "order"],
+        "schema_info": "\n=== Origin: origin_1 (postgres) ===\n\n  Table: public.companies\n    Columns: company_id, name\n\n  Table: public.people\n    Columns: person_id, name, company_id\n    FK: public.people.company_id -> public.companies.company_id\n\n  Table: public.orders\n    Columns: order_id, buyer_id, seller_company_id, total\n    FK: public.orders.buyer_id -> public.people.person_id\n    FK: public.orders.seller_company_id -> public.companies.company_id"
+      },
+      "expected": {
+        "expected_edges": [["person", "company"], ["order", "person"], ["order", "company"]],
+        "expected_absent": [["company", "order"], ["company", "person"]]
+      }
+    }
+  ]
+}

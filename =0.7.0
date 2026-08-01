@@ -1,5 +1,0 @@
-Requirement already satisfied: clickhouse-connect in /home/bayern/Documents/miniconda3/envs/data/lib/python3.13/site-packages (1.1.1)
-Requirement already satisfied: certifi in /home/bayern/Documents/miniconda3/envs/data/lib/python3.13/site-packages (from clickhouse-connect) (2026.4.22)
-Requirement already satisfied: urllib3>=1.26 in /home/bayern/Documents/miniconda3/envs/data/lib/python3.13/site-packages (from clickhouse-connect) (2.7.0)
-Requirement already satisfied: zstandard in /home/bayern/Documents/miniconda3/envs/data/lib/python3.13/site-packages (from clickhouse-connect) (0.25.0)
-Requirement already satisfied: lz4 in /home/bayern/Documents/miniconda3/envs/data/lib/python3.13/site-packages (from clickhouse-connect) (4.4.5)
