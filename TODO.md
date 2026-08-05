@@ -1774,3 +1774,78 @@ the new `portability` check). All four investigation tools, the run-by-run/
 platform config split, and both from-scratch paths (venv, Docker) are
 live-verified against real data, not mocks. Still at the **BRANCH CREATION
 GATE** — none of B1-B5 have started.
+
+## Part 2 — Branch creation gate passed (2026-08-05)
+
+The user gave explicit go-ahead to proceed past the branch creation gate,
+with four additional instructions: update every document, recreate
+`docs/plans/ONLY_PLAN_TO_IMPLEMENT.md`, update `docs/INDEX.md`, add
+branch-discipline instructions for the implementing agent, do a file-
+management pass, create all five branches with `Branch_Plan.md` + `TODO.md`
+each (enriched with resource links per branch), and commit everything to
+`main` **before** any branch was created.
+
+- [x] Removed a superseded root-level scratch file, `test_phase0_bugs.py` —
+  a standalone print-based verification script from before Phase 0's real
+  test suite existed. Confirmed real pytest coverage for the same bugs
+  (BUG A's `new_column`/`allow_schema_changes` contract) already exists in
+  `tests/unit/test_mapping_gate.py`, `test_hybrid_llm_paths.py`,
+  `test_conflict_tiebreaks.py`, `test_human_nodes.py`, `test_api.py`, and
+  `tests/integration/test_edge_cases.py` before deleting — not silently
+  dropping coverage.
+- [x] Added a "Branch discipline" section to `CLAUDE.md` (~24 lines): stay
+  checked out on your branch, read its own `Branch_Plan.md`/`TODO.md` as
+  the authoritative spec, only modify owned files, update that branch's
+  `TODO.md` live. This directly addresses the reported problem — an
+  implementing agent that doesn't know to stay on its assigned branch.
+- [x] Recreated `docs/plans/ONLY_PLAN_TO_IMPLEMENT.md` (2,192 lines) as the
+  synced, in-repo copy of the full harness-foundation plan: Phase 0/Part
+  1.5/Part 1.6 sections kept as the *design* record (with a status banner
+  and per-part "✅ COMPLETE, see TODO.md" notes — this file, not the plan
+  doc, is the *execution* record and wins when the two disagree), the
+  stale hardcoded-conda standing-constraint line corrected to match
+  Part 1.6.C's actual portability fix, and the full Part 2 branch specs
+  (B1-B5), cross-branch rules (R1-R11), and integration order kept intact
+  for verbatim copying into each branch's own `Branch_Plan.md`.
+- [x] Updated `docs/INDEX.md`'s `plans/` section to point at the restored
+  file instead of the "removed as redundant" note left over from the
+  user's earlier deletion of the file's *previous* incarnation.
+  `scripts/lint_docs.py` re-run clean (exit 0) against the new file's
+  large number of `file:line` citations and cross-links.
+- [x] Committed everything accumulated on `main` since the v1 checkpoint
+  (`2a48845`) — all of Phase 0, Part 1.5, and Part 1.6, plus the four
+  items above — as one checkpoint commit, **before** creating any branch,
+  per the user's explicit ordering instruction. Verified no secrets were
+  swept in first: `.env` and `.claude/settings.local.json` (the flagged
+  §0.10 `dashscope` token) confirmed gitignored and untracked; the only
+  tracked `.claude/` file, `launch.json`, already sanitized in Part 1.6.C;
+  `config/config.yaml` confirmed zero diff. Landed as `main` commit
+  `e269a5f` — 218 files changed, +21,559/-7,916.
+- [x] Created all five branches from `e269a5f`, each with its own
+  `Branch_Plan.md` (that branch's task breakdown + ownership table +
+  acceptance gates + the full R1-R11 cross-branch rules, copied verbatim
+  from `ONLY_PLAN_TO_IMPLEMENT.md`, plus a **Resources** section per branch
+  with real documentation/paper links not in the original plan text —
+  DSPy/langgraph-swarm/Great Expectations/Splink/desbordante/Ditto/
+  collective-ER docs) and its own scoped `TODO.md` (checkbox items in
+  dependency order, each with a concrete live-verification note, replacing
+  the inherited root `TODO.md` on that branch only — `main`'s own
+  `TODO.md` is unaffected), committed as that branch's first commit, then
+  returned to `main` before starting the next branch — exactly the
+  READ-THIS-FIRST procedure in the plan. Verified live: `git branch -v`
+  shows all five branches each one commit ahead of `main`, `main` itself
+  clean (0 changed files) after returning to it.
+
+| Branch | First commit | Owns |
+|---|---|---|
+| `feat/dspy-prompt-layer` (B1) | `9466057` | `src/llm/**`, `src/llm/prompts/**`, `tests/prompts/**` |
+| `feat/planner-swarm` (B2) | `659ef91` | `nodes/parse_request.py`, `nodes/analyze_dependencies.py`, `nodes/plan_scope.py`, new `src/orchestrator/planning/**`, `state/planner.py` |
+| `feat/quality-lineage` (B3) | `619af30` | new `nodes/validate_data.py`, `tools/data_quality.py`, `orchestrator/utils/lineage.py`, `state/quality.py`, `state/lineage.py`, `Gates.tsx` quality/lineage panels |
+| `feat/matching-precision` (B4) | `5344190` | new `tools/identity_profile.py`, `tools/relational_evidence.py`, `tools/splink_matcher.py`; scoring/evidence half of `resolve_entities.py`; `state/matching.py`; matching-rules API/UI fields |
+| `chore/harness-ratchet` (B5) | `aceb988` | `CLAUDE.md`, `AGENTS.md`, `docs/**`, `.claude/**`, `scripts/lint_*.py`, `scripts/check.py`, `.pre-commit-config.yaml`, CI config |
+
+Integration order (unchanged from the plan): **B5 → B3 → B1 → B4 → B2**,
+rebasing every remaining branch after each merge. **None of B1-B5 have
+begun implementation work** — branch creation only. Per the plan's own
+instruction, implementation does not start on any branch until the user
+says which one.
