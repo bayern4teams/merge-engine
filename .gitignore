@@ -109,3 +109,8 @@ config/profiles/
 # Node / frontend
 node_modules/
 *.tsbuildinfo
+
+# Per-branch git worktrees (each a full checkout for a parallel agent) —
+# nested under the repo root so they never touch a parent folder, but they
+# are not repo content and must never be tracked or committed.
+.worktrees/
