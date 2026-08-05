@@ -8,15 +8,14 @@ connection.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-from pytest import raises
-
 
 # =============================================================================
 # Fixtures
 # =============================================================================
+
 
 @pytest.fixture
 def databricks_config():
@@ -50,6 +49,7 @@ def mock_cursor():
 # =============================================================================
 # Constructor & Lifecycle tests
 # =============================================================================
+
 
 @pytest.mark.skip(reason="Skipped per user request - databricks tests excluded from test suite")
 class TestDatabricksConnectorInit:
@@ -91,6 +91,7 @@ class TestDatabricksConnectorInit:
 # =============================================================================
 # _ensure_connection tests
 # =============================================================================
+
 
 @pytest.mark.skip(reason="Skipped per user request - databricks tests excluded from test suite")
 class TestEnsureConnection:
@@ -138,6 +139,7 @@ class TestEnsureConnection:
 # close() tests
 # =============================================================================
 
+
 @pytest.mark.skip(reason="Skipped per user request - databricks tests excluded from test suite")
 class TestClose:
     """Tests for the close() method."""
@@ -169,6 +171,7 @@ class TestClose:
 # get_table_schema() tests
 # =============================================================================
 
+
 @pytest.mark.skip(reason="Skipped per user request - databricks tests excluded from test suite")
 class TestGetTableSchema:
     """Tests for get_table_schema method."""
@@ -199,7 +202,9 @@ class TestGetTableSchema:
         assert schema["primary_key"] == "id"
 
     @pytest.mark.asyncio
-    async def test_uses_correct_qualified_name(self, databricks_config, mock_connection, mock_cursor):
+    async def test_uses_correct_qualified_name(
+        self, databricks_config, mock_connection, mock_cursor
+    ):
         """get_table_schema should use catalog.schema.table qualified name."""
         from src.mcp_server.connectors.databricks import DatabricksConnector
 
@@ -229,7 +234,9 @@ class TestGetTableSchema:
         assert schema["primary_key"] == "id"
 
     @pytest.mark.asyncio
-    async def test_closes_cursor_on_completion(self, databricks_config, mock_connection, mock_cursor):
+    async def test_closes_cursor_on_completion(
+        self, databricks_config, mock_connection, mock_cursor
+    ):
         """get_table_schema should close the cursor after use."""
         from src.mcp_server.connectors.databricks import DatabricksConnector
 
@@ -245,6 +252,7 @@ class TestGetTableSchema:
 # =============================================================================
 # load_batch() tests
 # =============================================================================
+
 
 @pytest.mark.skip(reason="Skipped per user request - databricks tests excluded from test suite")
 class TestLoadBatch:
@@ -286,7 +294,9 @@ class TestLoadBatch:
         mock_cursor.execute.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_load_batch_uses_upsert_key(self, databricks_config, mock_connection, mock_cursor):
+    async def test_load_batch_uses_upsert_key(
+        self, databricks_config, mock_connection, mock_cursor
+    ):
         """load_batch should use upsert_key for MERGE condition."""
         from src.mcp_server.connectors.databricks import DatabricksConnector
 
@@ -302,7 +312,9 @@ class TestLoadBatch:
         assert "target.user_id = source.user_id" in sql
 
     @pytest.mark.asyncio
-    async def test_load_batch_micro_batches_of_500(self, databricks_config, mock_connection, mock_cursor):
+    async def test_load_batch_micro_batches_of_500(
+        self, databricks_config, mock_connection, mock_cursor
+    ):
         """load_batch should process records in micro-batches of 500."""
         from src.mcp_server.connectors.databricks import DatabricksConnector
 
@@ -319,7 +331,9 @@ class TestLoadBatch:
         assert mock_cursor.execute.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_load_batch_uses_qualified_table_name(self, databricks_config, mock_connection, mock_cursor):
+    async def test_load_batch_uses_qualified_table_name(
+        self, databricks_config, mock_connection, mock_cursor
+    ):
         """load_batch should use catalog.schema.table qualified name."""
         from src.mcp_server.connectors.databricks import DatabricksConnector
 
@@ -371,6 +385,7 @@ class TestLoadBatch:
 # add_column() tests
 # =============================================================================
 
+
 @pytest.mark.skip(reason="Skipped per user request - databricks tests excluded from test suite")
 class TestAddColumn:
     """Tests for add_column method."""
@@ -412,8 +427,9 @@ class TestAddColumn:
     @pytest.mark.asyncio
     async def test_add_column_handles_error(self, databricks_config, mock_connection, mock_cursor):
         """add_column should return False on Databricks error."""
-        from src.mcp_server.connectors.databricks import DatabricksConnector
         from databricks.sql.exc import Error as DatabricksError
+
+        from src.mcp_server.connectors.databricks import DatabricksConnector
 
         connector = DatabricksConnector(databricks_config)
         connector._connection = mock_connection
@@ -430,12 +446,15 @@ class TestAddColumn:
 # extend_schema_batch() tests
 # =============================================================================
 
+
 @pytest.mark.skip(reason="Skipped per user request - databricks tests excluded from test suite")
 class TestExtendSchemaBatch:
     """Tests for extend_schema_batch method."""
 
     @pytest.mark.asyncio
-    async def test_extends_schema_multiple_changes(self, databricks_config, mock_connection, mock_cursor):
+    async def test_extends_schema_multiple_changes(
+        self, databricks_config, mock_connection, mock_cursor
+    ):
         """extend_schema_batch should execute multiple ALTER TABLE statements."""
         from src.mcp_server.connectors.databricks import DatabricksConnector
 
@@ -455,10 +474,13 @@ class TestExtendSchemaBatch:
         assert mock_cursor.execute.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_extend_schema_batch_counts_failures(self, databricks_config, mock_connection, mock_cursor):
+    async def test_extend_schema_batch_counts_failures(
+        self, databricks_config, mock_connection, mock_cursor
+    ):
         """extend_schema_batch should count failed additions."""
-        from src.mcp_server.connectors.databricks import DatabricksConnector
         from databricks.sql.exc import Error as DatabricksError
+
+        from src.mcp_server.connectors.databricks import DatabricksConnector
 
         connector = DatabricksConnector(databricks_config)
         connector._connection = mock_connection
@@ -478,7 +500,9 @@ class TestExtendSchemaBatch:
         assert result["failed"] == 1
 
     @pytest.mark.asyncio
-    async def test_extend_schema_batch_closes_cursor(self, databricks_config, mock_connection, mock_cursor):
+    async def test_extend_schema_batch_closes_cursor(
+        self, databricks_config, mock_connection, mock_cursor
+    ):
         """extend_schema_batch should close cursor after completion."""
         from src.mcp_server.connectors.databricks import DatabricksConnector
 
@@ -492,7 +516,9 @@ class TestExtendSchemaBatch:
         mock_cursor.close.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_extend_schema_batch_empty_changes(self, databricks_config, mock_connection, mock_cursor):
+    async def test_extend_schema_batch_empty_changes(
+        self, databricks_config, mock_connection, mock_cursor
+    ):
         """extend_schema_batch should handle empty changes list."""
         from src.mcp_server.connectors.databricks import DatabricksConnector
 
@@ -506,7 +532,9 @@ class TestExtendSchemaBatch:
         mock_cursor.execute.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_extend_schema_batch_uses_backticks(self, databricks_config, mock_connection, mock_cursor):
+    async def test_extend_schema_batch_uses_backticks(
+        self, databricks_config, mock_connection, mock_cursor
+    ):
         """extend_schema_batch should wrap column name in backticks."""
         from src.mcp_server.connectors.databricks import DatabricksConnector
 

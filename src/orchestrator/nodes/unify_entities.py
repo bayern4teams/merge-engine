@@ -37,29 +37,34 @@ async def unify_entity_groups(state: dict[str, Any]) -> dict[str, Any]:
     logger.debug("ENTER unify_entity_groups")
     logger.debug("State keys: %s", list(state.keys()))
     entity_clusters: dict[str, list[dict]] = state.get("entity_clusters", {})
-    extracted_data: dict[str, list[dict]] = state.get("extracted_data", {})
     target_entities: list[str] = state.get("target_entities", [])
     origins: list[dict] = state.get("origins", [])
     # Per-field survivorship rules (Phase O.3). Absent means the historical
     # priority -> completeness -> recency chain, so an unconfigured run
     # behaves exactly as it did before profiles existed.
     conflict_policy: dict = state.get("conflict_policy") or {}
-    errors: list[str] = list(state.get("errors", []))
+    # Only THIS call's own errors (Phase 0 Sec 0.8) - see load_data_node's
+    # identical fix for why seeding with the existing history double-counted
+    # it through operator.add's reducer.
+    errors: list[str] = []
     unified_entities: dict[str, list[dict]] = dict(state.get("unified_entities", {}))
 
     logger.debug("target_entities: %s", target_entities)
     logger.debug("entity_clusters keys: %s", list(entity_clusters.keys()))
 
     run_id = str(state.get("run_id") or "unknown")
-    total_clusters = sum(
-        collection_count(entity_clusters, e) for e in entity_clusters
-    )
+    total_clusters = sum(collection_count(entity_clusters, e) for e in entity_clusters)
     logger.debug("Total clusters across all entities: %d", total_clusters)
 
     for entity_type in target_entities:
         clusters = clusters_for(state, entity_type)
         all_records = entity_rows(state, entity_type)
-        logger.debug("Processing entity '%s': %d clusters, %d records", entity_type, len(clusters), len(all_records))
+        logger.debug(
+            "Processing entity '%s': %d clusters, %d records",
+            entity_type,
+            len(clusters),
+            len(all_records),
+        )
 
         # Build record lookup by origin_id
         record_lookup: dict[str, dict] = {}
@@ -73,7 +78,12 @@ async def unify_entity_groups(state: dict[str, Any]) -> dict[str, Any]:
         for cluster_idx, cluster in enumerate(clusters):
             cluster_id = cluster.get("cluster_id", "")
             record_ids = cluster.get("record_ids", [])
-            logger.debug("  Cluster %d (%s): %d records", cluster_idx, cluster_id[:12] if cluster_id else "?", len(record_ids))
+            logger.debug(
+                "  Cluster %d (%s): %d records",
+                cluster_idx,
+                cluster_id[:12] if cluster_id else "?",
+                len(record_ids),
+            )
 
             # Look up actual records
             cluster_records = []
@@ -83,13 +93,13 @@ async def unify_entity_groups(state: dict[str, Any]) -> dict[str, Any]:
                     cluster_records.append(rec)
 
             if not cluster_records:
-                logger.warning(
-                    "Cluster '%s' has no matching records, skipping.", cluster_id
-                )
+                logger.warning("Cluster '%s' has no matching records, skipping.", cluster_id)
                 continue
 
             try:
-                logger.debug("    Calling unify_entity_group_impl for cluster '%s'", cluster_id[:12])
+                logger.debug(
+                    "    Calling unify_entity_group_impl for cluster '%s'", cluster_id[:12]
+                )
                 result = await unify_entity_group_impl(
                     cluster_id=cluster_id,
                     records=cluster_records,
@@ -132,9 +142,7 @@ async def unify_entity_groups(state: dict[str, Any]) -> dict[str, Any]:
 
         # The merged records go to the spool. Measured on a 2,284-record
         # merge, this channel alone was 69.6% of every checkpoint written.
-        unified_entities[entity_type] = store_unified(
-            run_id, entity_type, unified_records
-        )
+        unified_entities[entity_type] = store_unified(run_id, entity_type, unified_records)
         logger.debug("Entity '%s': %d unified records", entity_type, len(unified_records))
 
         logger.info(
@@ -151,23 +159,11 @@ async def unify_entity_groups(state: dict[str, Any]) -> dict[str, Any]:
     logger.debug("Total errors: %d", len(errors))
     logger.debug("EXIT unify_entity_groups")
 
+    # Only the keys this node actually computes (Phase 0 Sec 0.8) - a key it
+    # omits is left untouched by LangGraph's per-key TypedDict state update,
+    # not cleared.
     return {
         "unified_entities": unified_entities,
         "errors": errors,
-        "origins": state.get("origins", []),
-        "destination": state.get("destination", {}),
-        "llm_config": state.get("llm_config", {}),
-        "extraction_config": state.get("extraction_config", {}),
-        "target_entities": target_entities,
-        "schemas": state.get("schemas", {}),
-        "dependency_tree": state.get("dependency_tree", {}),
-        "extraction_order": state.get("extraction_order", []),
-        "extracted_data": extracted_data,
-        "entity_clusters": entity_clusters,
-        "field_mappings": state.get("field_mappings", {}),
-        "pending_schema_changes": state.get("pending_schema_changes", []),
-        "human_feedback": state.get("human_feedback"),
-        "load_approval": state.get("load_approval"),
-        "retry_counts": state.get("retry_counts", {}),
         "interrupt_data": None,
     }

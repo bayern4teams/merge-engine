@@ -1,0 +1,78 @@
+# Phase 0 Sec 0.3: the local enforcement layer. `pre-commit>=3.6.0` has been
+# a declared dev dependency with no config file to run - this is that config.
+#
+# Every hook here either mirrors `python scripts/check.py lint`/`types`/`arch`
+# (so a commit and CI can never disagree) or encodes a rule from a real past
+# failure in this repo (see each local hook's docstring in scripts/hooks/).
+#
+# Install once per clone: pre-commit install
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.2
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: detect-private-key
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+        exclude: ^tests/fixtures/.*\.json$
+
+  - repo: local
+    hooks:
+      - id: mypy-ratchet
+        name: mypy (ratcheted against mypy-baseline.txt)
+        entry: python scripts/check.py types
+        language: system
+        pass_filenames: false
+        types: [python]
+
+      - id: lint-arch
+        name: architectural lint (layering, no module-scope compile, ENTER/EXIT)
+        entry: python scripts/lint_arch.py
+        language: system
+        pass_filenames: false
+        types: [python]
+
+      - id: lint-docs
+        name: doc-rot check (broken links, stale file:line citations)
+        entry: python scripts/lint_docs.py
+        language: system
+        pass_filenames: false
+        files: ^(docs/.*\.md|CLAUDE\.md)$
+
+      - id: lint-portability
+        name: portability guard (no hardcoded conda/na180 paths in instructional files)
+        entry: python scripts/lint_portability.py
+        language: system
+        pass_filenames: false
+
+      - id: no-blanket-json-ignore
+        name: .gitignore must not blanket-ignore *.json
+        entry: python -m scripts.hooks.no_blanket_json_ignore
+        language: system
+        files: ^\.gitignore$
+
+      - id: no-sample-databases-commit
+        name: sample_databases/ must never be committed
+        entry: python -m scripts.hooks.no_sample_databases_commit
+        language: system
+        pass_filenames: true
+
+      - id: no-str-format-on-prompts
+        name: prompt substitution must be .replace(), never .format()
+        entry: python -m scripts.hooks.no_str_format_on_prompts
+        language: system
+        types: [python]
+
+      - id: no-new-bare-except-pass
+        name: "no newly added 'except Exception: pass'"
+        entry: python -m scripts.hooks.no_new_bare_except_pass
+        language: system
+        types: [python]

@@ -1034,7 +1034,7 @@ unit-tested, only the live seed is deferred).
 New work (planned 2026-07-25) from a repo-evaluation request: the user collected
 20+ open-source projects (entity resolution, MDM, ETL, schema mapping, data
 quality, lineage, conflict-free merging) and asked which could upgrade/replace
-parts of merge-engine. Full verdict + design in `docs/PHASE_Q_PLAN.md`. Four
+parts of merge-engine. Full verdict + design in `docs/plans/PHASE_Q_PLAN.md`. Four
 libraries adopted (**Splink**, **Great Expectations**, **sqlglot lineage**),
 the rest documented as rejected with reasons. This phase also completes the
 deferred P.7 (rich seed across 3 live origins including MongoDB).
@@ -1229,7 +1229,7 @@ Splink as a per-entity selectable engine behind the (currently dead)
   _match` + `estimate_u_using_random_sampling` + EM. Take pairwise
   `match_probability`, then feed those scores into the EXISTING
   `_build_clusters(...)` (`:1210`).
-- [ ] **Preserve the 8 project invariants** (full list in `docs/PHASE_Q_PLAN.md`):
+- [ ] **Preserve the 8 project invariants** (full list in `docs/plans/PHASE_Q_PLAN.md`):
   three-way decision + `pending_merge_candidates` band; deterministic reusable
   cluster ids via the existing `_assign_cluster_id` (`:1182`); the three
   anti-over-merge guards (`_has_conflicting_identity`, `_only_partial_name_
@@ -1293,7 +1293,7 @@ anyone reading the repo without memory access.
   this check).
 
 ### Phase 7 — Boeing live verification (real 34,782-record `experience`,
-2,941+1,270,564-row origin `Company` tables — see `docs/
+2,941+1,270,564-row origin `Company` tables — see `docs/diagnostics/
 BOEING_APP_VS_MANUAL_DIAGNOSIS.md`)
 
 Eight real bugs found and fixed, each only visible at real-world scale — none
@@ -1349,7 +1349,7 @@ re-verified against this fixed pipeline.
   `llm-model-fallback-chain` memory for the current 9-model chain.
 
 ### Performance backlog (found, deliberately not fixed — speed is a stated
-future priority, see `docs/PERFORMANCE_BOTTLENECKS.md`)
+future priority, see `docs/diagnostics/PERFORMANCE_BOTTLENECKS.md`)
 - [ ] Entity-cluster partitioning (`_build_clusters` in `resolve_entities.py`)
   is the dominant runtime cost — unguarded O(n²) per connected component,
   no size cap. Strongest evidence of the five bottlenecks found; start here.
@@ -1361,3 +1361,416 @@ future priority, see `docs/PERFORMANCE_BOTTLENECKS.md`)
   (~70 round-trips for Boeing's 34,782-id case).
 - [ ] No mid-run resume — a failed `load_data` step means the next run redoes
   ALL entity clustering from zero.
+
+## Phase 0 — Harness foundation on `main` (2026-08-03 → 2026-08-05)
+
+Full detail in `docs/verification/BASELINE_V1.md` (the authoritative
+before/after numbers every later branch is measured against) and project
+memories `merge-engine-phase0-bug-fixes.md` /
+`merge-engine-harness-phase0-0.1-to-0.3.md`. Summary here for anyone reading
+the repo without memory access. Source plan:
+`C:\Users\rezas\.claude\plans\hidden-growing-wilkes.md` (§PHASE 0 / §PART 1.5).
+
+### §0.0 — Destination-correctness bugs (fixed first; they invalidated the baseline)
+- [x] BUG A — destination schema mutation (43 columns where the contract says
+  14): `field_mapping.system.txt` rewritten to `map`/`skip` only (no
+  `new_column`), `map_fields_impl(allow_schema_changes=False)` is now a hard
+  gate, `_apply_schema_changes` is a load-time backstop, regression test
+  pins `company` at exactly 14 columns. Verified live: 14, not 43.
+- [x] BUG B — `company.name`/`legal_name` NULL rows: camelCase-aware
+  heuristic tier (`entityName`→`name`, `fullName`→`legal_name`) plus the
+  rewritten prompt's worked examples. Verified live: `count(name)` 23/23
+  (100%), was 16/31.
+- [x] BUG C0-C3 — matcher was structurally blind to identity, not just
+  under-tuned: C0 canonical comparison projection (compare a uniform
+  `{name, domain, ticker, ...}` view, not raw intersected field names) +
+  surrogate-key exclusion + type-aware comparison levels; C1 block-purge
+  degrades instead of annihilating (and counts every purged pair into
+  `uncompared_pairs` — the honesty invariant); C2 adds domain/ticker/tax-id
+  deterministic blocking, exempt from purging; C3 canonical projection fixes
+  cross-origin field-name divergence in blocking. Verified live:
+  `candidate_pairs > 0` for `company` (was 0 at n=31).
+- [x] BUG D.1-D.4 — throughput (`docs/verification/CLUSTERING_PROFILE.md`):
+  profiled before optimizing; hoisted the two dict comprehensions inside
+  `_partition_component`'s inner loop; added a yield point in
+  `_build_clusters` (UI no longer freezes 10-30 min with zero feedback);
+  parallelized `discover_schemas.py` (independent origins) and
+  `map_fields_node.py` (pre-fetched schemas instead of one shared
+  connection) via `asyncio.gather`.
+- [x] BUG D.5-D.7 — see Part 1.5 below (implemented later in the same
+  session, listed here for completeness against the plan's own numbering).
+
+### §0.1-0.9 — Substrate (all live-verified, `python scripts/check.py all` → 9/9)
+- [x] 0.1 Dependency truth: `pyproject.toml` reconciled against
+  `requirements.txt`; every future branch's dependency pre-declared as an
+  extras group (`dspy`, `splink`, `dq`, `lineage`, `swarm`, `perf`).
+- [x] 0.2 `scripts/check.py` — one verification command (ruff, ruff-format,
+  mypy ratchet, arch lint, doc lint, unit+integration tests, frontend
+  typecheck+build, matcher eval gate).
+- [x] 0.3 Pre-commit hooks live (`ruff`, `mypy` ratchet, plus 5 project-
+  specific local hooks, each traceable to a real past failure —
+  `no-blanket-json-ignore`, `no-sample-databases-commit`,
+  `no-str-format-on-prompts`, `no-new-bare-except-pass`,
+  `no-import-time-graph-compile`). Server CI on `git.n4t.com` still
+  unreachable — documented honestly in `docs/decisions/0003-server-ci-unreachable.md`
+  rather than pretending it exists.
+- [x] 0.4 `CLAUDE.md` (≤100 lines, every line traceable to a real failure),
+  `AGENTS.md`, `docs/INDEX.md`, `docs/` restructured into
+  `architecture/`/`decisions/`/`plans/`/`verification/`/`diagnostics/`;
+  `scripts/lint_docs.py` for broken-link/stale-`file:line` detection.
+- [x] 0.5 `scripts/lint_arch.py` — layering (`api`→`orchestrator`→`tools`→
+  `connectors`→`utils`), no module-level mutable state in
+  `mcp_server/tools/`, no import-time graph compile, ENTER/EXIT logging
+  convention. Baseline ratchet: 17 → 15 entries after §0.8's de-globalization.
+- [x] 0.6 `docs/verification/BUDGETS.yaml` (machine-checkable performance
+  contract) + per-node `timings` written into every run report;
+  `drive_app.py --assert-budgets` compares a live run against it.
+- [x] 0.7 `pytest-xdist` worker isolation (`MERGE_ENGINE_HISTORY_PATH` keyed
+  per-worker); `patch_server_config` converted to a save/restore fixture;
+  `unit`/`integration`/`live`/`slow` markers.
+- [x] 0.9 Frontend build story documented in `CLAUDE.md` — a fresh clone has
+  no UI until `npm run build`; `dist/` deliberately stays gitignored.
+- [ ] 0.10 Secret hygiene: `.claude/settings.local.json` was flagged as
+  containing what looks like a live `dashscope` bearer token — **flagged
+  only, not rotated**, per standing instruction this is the user's call.
+- [x] 0.11 `docs/verification/BASELINE_V1.md` recorded (test suite, matcher
+  eval, prompt-contract harness, live Boeing run — all four re-measured
+  against the model actually configured, not the stale checked-in
+  scorecard).
+
+### §0.8 — Conflict-proof the shared seams (this session's primary Phase 0 work)
+- [x] `get_initial_state` legacy-config bugs fixed (missing
+  `fallback_models`, hardcoded `conflict_policy`).
+- [x] `LLMClient` cache-before-parse bug fixed (a malformed response no
+  longer gets cached and served forever).
+- [x] Dead code removed (`_error_router`, duplicate `MergeState` class).
+- [x] Lazy graph compile via module `__getattr__` (was compiling on every
+  import).
+- [x] Quadratic `errors` accumulation fixed across 8 node files — each node
+  now returns only its own new errors; `operator.add`'s reducer preserves
+  history, not the node re-returning the whole list every step.
+- [x] Passthrough bloat removed from the same 8 files.
+- [x] `_LAST_BLOCKING_STATS`/`_LAST_CLUSTERING_STATS` module globals in
+  `resolve_entities.py` de-globalized — stats now thread through
+  caller-owned dicts. This is what makes §0.0 D.4's parallelism safe.
+
+### Phase 0 exit — honest result
+`compare_to_golden.py boeing` after all of §0.0-§0.8: **0.9% overall row
+parity** (31/3,427), below the stale `BUDGETS.yaml` floor of 12.0% (v1's
+pre-fix number, over a narrower entity scope). Reported exactly as measured,
+not smoothed — full root-cause table (per-entity, not a bare number) in
+`BASELINE_V1.md` §4c. `BUDGETS.yaml`'s floor deliberately left unchanged
+pending an explicit user decision, per the project's "not a mechanical
+update" rule.
+
+## Part 1.5 — Speed and Langfuse observability rebuild (2026-08-04 → 2026-08-05)
+
+Lands on `main`, before the branch-creation gate, for the same
+conflict-avoidance reason as Phase 0: touches `resolve_entities.py`,
+`map_fields_node.py`, `client.py`, `workflow_manager.py` that 3-5 future
+branches would otherwise edit at once, and every branch's verification cycle
+pays whatever the full run time is. Full detail:
+`docs/verification/BASELINE_V1.md` §6/§8,
+`docs/diagnostics/BOEING_SPEED_REPORT_2026-08-04.md`.
+
+### §A — Scoring-path waste removal (provably zero precision risk)
+- [x] A.0 `scripts/diagnostics/profile_resolve.py` — the falsifiable
+  measurement harness: runs `resolve_entities_impl` heuristic-only against
+  real ClickHouse data, dumps the full cluster structure to JSON as a
+  byte-identical acceptance baseline, profiles with cProfile.
+- [x] A.1 Precompute canonical projections once per record instead of up to
+  ~6× per pair (the single biggest win — ~350M substring comparisons down
+  to ~1,500 for `technology`).
+- [x] A.2 `_fit_match_model` now returns its comparison vectors instead of
+  discarding them; the scoring loop indexes into them instead of rebuilding.
+- [x] A.3 Hoisted 3 function-local imports (`fellegi_sunter` constants) out
+  of per-pair/per-field code paths (order 5-10M executions/entity type).
+- [x] A.4 Hoisted `_record_id` out of the O(n²) blocking double loop (the
+  same defect BUG D.2 had already fixed elsewhere in the file).
+- [x] A.5 Cached `_best_name_field` per record inside the A.1 projection
+  table.
+- [x] A.6 Fixed a latent unbounded-expansion bug in the comparison budget
+  check (moved the check inside the inner loop; a `full:dom:` block could
+  otherwise expand to hundreds of millions of tuples with no ceiling).
+- [x] A.7 `estimate_model`'s M-step fix (byte-identical cluster output
+  proven via `profile_resolve.py --check`; isolated CPU cost for
+  `technology` fell 121.78s → 32.02s).
+- [x] Verification: `profile_resolve.py --check` byte-identical for
+  `technology` and `experience`; `tests.eval.score` unchanged (precision
+  1.0000, recall 0.9950); `check.py all` 9/9.
+
+### §B — Parallelism (scheduling only; results unchanged)
+- [x] B.1 `map_fields`: `asyncio.gather` across entity types, pre-fetching
+  destination schemas instead of sharing one connection inside the loop.
+  Order-dependent accumulators (`pending_schema_changes`, `errors`) merged
+  back in `target_entities` order to keep determinism.
+- [ ] B.2 `extract_data` chunk parallelization — **deliberately NOT
+  implemented.** Scoped, then found to carry more correctness risk than
+  initially estimated: `table_failed` triggers a position-based
+  `spool.truncate_after(...)` rollback that assumes strict write ordering;
+  concurrent chunk fetches racing straight into spool appends could violate
+  that. The only safe fix (gather-then-sequential-merge) trades away the
+  node's current constant-memory guarantee for a measured ~1% payoff
+  (`extract_data` is 24s of a 2442s run). Deprioritized, not abandoned —
+  revisit only if a future baseline shows extraction as a real bottleneck.
+- [x] B.3 `resolve_entities`: true multiprocessing for the CPU-bound core.
+  `_resolve_core` extracted as a synchronous, module-level, picklable
+  function (blocking → model fit → scoring), dispatched via
+  `ProcessPoolExecutor` per entity type; LLM adjudication and clustering
+  stay in the parent process. Confirmed live (not just in isolation): the
+  app log shows `experience`/`technology`/`company_relation` entering
+  `resolve_entities_impl` within the same second, all logging
+  `dispatched=process_pool`. Largest single contributor to
+  `resolve_entities`'s 2.44x speedup (1994.84s → 818.75s).
+
+### §C — Langfuse observability, rebuilt to show the whole graph
+- [x] C.0 Root-caused (not theorized) why the trace didn't show the graph:
+  Defect 1 — `client.py`'s `trace_config()` **replaced** the ambient
+  LangChain callback config instead of merging into it, detaching every LLM
+  generation from its parent node span and dropping `langgraph_node`
+  metadata. Defect 2 — HITL resumes each ran their own top-level `astream()`
+  with no shared handler wiring, fragmenting one run into 3 root traces.
+- [x] C.1 Stack/SDK compatibility smoke test: confirmed `langfuse==4.13.2`
+  SDK round-trips against the pinned `langfuse:3` server images before
+  changing anything.
+- [x] C.2 Fixed Defect 1 — callbacks inherited (not replaced) when an
+  ambient LangGraph callback manager exists; metadata merged, not
+  overwritten. Generations now nest correctly under their node span.
+- [x] C.3 Fixed Defect 2 — `rehydrate_workflow` rebuilds the same traced
+  config `start_workflow` does (factored into one shared helper);
+  `update_state`/`get_state` calls no longer carry callbacks (only
+  `astream` does). One session = one trace across every HITL resume.
+  Verified live: exactly one trace for a 5-HITL-gate run.
+- [x] C.4 Custom `resolve.<entity>.{blocking,fit_model,scoring,clustering}`
+  phase spans via Langfuse's own `start_as_current_observation` API (raw
+  OpenTelemetry spans were tried first and verified NOT to export — the
+  Langfuse span processor filters by instrumentation-scope allowlist).
+  `extract.<table>`/`load.<table>` spans deliberately scoped out (same
+  judgment call as B.2 — extraction is ~1% of run time; not worth the diff).
+- [x] C.5 `scripts/diagnostics/verify_langfuse_trace.py` — 6 automated
+  assertions against the real Langfuse API (one trace per run, every node
+  has a span, every generation has a non-null parent + model + token usage,
+  custom phase spans present, durations within tolerance of the run
+  report). Replaces two pre-existing pseudo-checks that could never fail.
+- [x] C.6 Langfuse `flush()` wired into FastAPI shutdown and the end of
+  every `_run_workflow`/`_continue_workflow`; retry-after-late-stack-start
+  fix so tracing isn't permanently dead for a process's lifetime if the
+  Langfuse stack comes up after the app does.
+
+### §D.5-D.7 — the remaining throughput items, implemented after A/B/C
+- [x] D.5 Scoring-path exact short-circuits in `_string_similarity_cached`:
+  boolean "used" array instead of `list.remove()` (O(1) vs O(n) per match),
+  plus a provably-exact `difflib` skip (Ratcliff/Obershelp's own
+  `ratio = 2M/T` bound proves `seq` can't beat an already-sufficient
+  `jaccard`, so the expensive `get_matching_blocks()` call is skipped, never
+  approximated). Verified byte-identical via `profile_resolve.py --check`.
+- [x] D.6 ClickHouse chunked-extraction round-trips replaced with a
+  scratch-table + JOIN approach (was ~70 sequential `IN (...)` round-trips
+  for Boeing's 34,782-id case).
+- [x] D.7 Mid-run resume: `logs/spool/_resolve_cache.duckdb`
+  (`resolve_cache` table, keyed by content hash of the input records) caches
+  clustering results across runs. Confirmed live: 40 real cache entries
+  written across every entity type during the final Boeing run.
+
+### Final re-verification (2026-08-05, `thread_id=wf_f9b095bf`) — all of D.5-D.7 + B.3 + C.6 together
+- [x] Full Boeing run: `resolve_entities` 818.75s (was 1994.84s, **2.44x**),
+  `map_fields` 93.48s (was 543.78s, **5.8x**), total wall time **23.4 min**
+  (was 50.7 min).
+- [x] Correctness unchanged: parity 0.9% (identical to Phase 0's baseline,
+  confirmed via a direct `compare_to_golden.py` read, not the driver's
+  cached line); `tests.eval.score` precision/recall unchanged; zero
+  Tracebacks/`[ERROR]`/`[CRITICAL]`/Langfuse warnings in the app log.
+- [x] `verify_langfuse_trace.py wf_f9b095bf`: 6/6 assertions pass. Required
+  one test-script fix (not an app bug): B.3's process-pool dispatch
+  collapsed the 3 separate `.blocking`/`.fit_model`/`.scoring` spans into
+  one `.match` span (a worker process has no event loop to hold open 3
+  async span context managers on — timings now ride as span attributes
+  instead), so the script's phase-name assertion was updated to match.
+- [x] `python scripts/check.py all` → 9/9; 1,325 tests passing.
+
+**Part 1.5 exit — this is the pipeline's fully-verified state**: every item
+from Phase 0 §0.0's BUG D list (D.1-D.7) and Part 1.5's A/B.1/B.3/C sections
+are implemented and live-verified. B.2 remains deliberately deferred
+(documented correctness-risk trade-off above). Per the plan's own
+instruction, this is a **hard stop at the BRANCH CREATION GATE** — the five
+feature branches (B1 dspy, B2 planner-swarm, B3 quality-lineage, B4
+matching-precision, B5 harness-ratchet) have not been started and will not
+be until the user gives explicit go-ahead.
+
+## Part 1.6 — Configurability, investigation UI, and cross-platform portability (2026-08-05)
+
+Also lands on `main` before the branch gate, for the same reason as Phase 0
+and Part 1.5: touches `src/api/main.py`, `src/orchestrator/graph.py`,
+`workflow_manager.py`, `resolve_entities.py`'s node, and `Dockerfile` — files
+3-5 branches would otherwise edit at once. Driven by four decisions the user
+made explicitly: venv+Docker for portability, all four investigation tools,
+config split into an Advanced panel (run-by-run) + Settings page (platform),
+and Docker/venv smoke as the CI enforcement target.
+
+### §A — Run-by-run + platform configuration surface
+- [x] A.1 Layered config model: `config/platform_overrides.yaml` (gitignored,
+  new) deep-merged over the committed `config.yaml`, then `${ENV_VAR}`
+  resolution — `load_config()`/`load_raw_config_dict()` in
+  `src/utils/config_loader.py`. Takes effect on the *next run*, no restart:
+  confirmed live by editing `retry.max_attempts` via the Settings page and
+  reading it back through both `GET /api/config` and the real
+  `load_config()` path a fresh run uses.
+- [x] A.2 `GET /api/config` (effective config + per-key provenance —
+  `override`/`env`/`file` — secrets always stripped) and
+  `PUT /api/config/platform` (diff-against-baseline save — editing one field
+  no longer silently pins every other resolved value, a real bug caught live
+  in the browser and fixed before shipping).
+- [x] A.3 UI: `AdvancedPanel.tsx` (model/temperature/batch-size overrides,
+  matching strictness, LLM-toggle checkboxes, per-gate auto-approve) on the
+  Pipeline screen; `SettingsScreen.tsx` (new "Settings" tab) for platform
+  defaults + a read-only `.env` presence check (values never shown).
+- [x] A.4 The previously-dead `matching_rules` surface made live:
+  `get_initial_state` threads `matching_rules`/`run_config` overrides into
+  `llm_config`/`extraction_config` (only the keys actually set — a partial
+  override never resets the rest); `_matching_rules_for()` in
+  `nodes/resolve_entities.py` adds a `"_default"` fallback (same convention
+  `conflict_policy` already used) so a rule submitted before
+  `target_entities` exists still reaches every entity type.
+  New state key `auto_approve_gates`: a gate in that list resumes itself via
+  the existing `resume_workflow` path from inside
+  `_finalize_stream_status` — reuses 100% of the tested HITL machinery,
+  cascades gate-to-gate as each resume's own stream ends, validated against
+  `REVIEW_GATES` (`handle_error` can never be one, both at the API layer and
+  in `WorkflowManager.start_workflow`).
+  **Live-verified** with a real scoped ClickHouse→PostgreSQL run
+  (`wf_a93e5822`, Nova subject, `matching_rules={"_default":
+  {"strictness":"strict"}}`, `auto_approve_gates=`all 5 review gates): the
+  app log shows `human_review_deps` and `human_review_scope` both
+  auto-resumed with **zero** manual `/feedback` calls
+  ("auto-approving gate ... no human reviewed this checkpoint"), and
+  `strictness=strict (auto_match=0.98)` reached every one of 7 real entity
+  types (`company`, `address`, `location`, `experience`, `technology`,
+  `contact`, `company_relation`). New tests:
+  `tests/unit/test_matching_rules_and_policy.py`'s
+  `TestMatchingRulesOverridePath`/`TestMatchingRulesDefaultFallback`/
+  `TestRunConfigOverrides`/`TestAutoApproveGatesThreading` (15 new cases,
+  62/62 passing).
+
+### §B — Investigation UI (all four tools; read-only, `InvestigateScreen.tsx`)
+- [x] B.1 Match & cluster inspector — `GET /api/workflow/{id}/matches`
+  (`WorkflowManager.get_match_inspection`, reads straight from the
+  checkpoint, works for a completed run same as an active one) +
+  materialised cluster membership via the spool. Live: real
+  `resolution_stats` for all 10 entity types of the completed
+  `wf_f9b095bf` Boeing run, `company`'s stats matching
+  `BASELINE_V1.md` exactly (`candidate_pairs: 411`); graceful "spool
+  cleaned up" message when cluster data no longer exists but the
+  checkpoint's own stats still do.
+- [x] B.2 Run trace & cost timeline — `GET /api/workflow/{id}/timeline`
+  wraps the existing `logs/run_reports/<id>.json` + cost ledger. Live: real
+  per-node bars for `wf_f9b095bf` (`resolve_entities` 818.8s, matching
+  §8 of `BASELINE_V1.md` exactly).
+- [x] B.3 Schema & data explorer — `sample_table_rows()` in
+  `src/ui/components/db_discovery.py` (new), bounded to 200 rows,
+  identifier-validated (rejected a live SQL-injection-shaped table name
+  during testing) via `POST /api/explore/sample`. Live: real rows sampled
+  from ClickHouse `origin1.Company`.
+- [x] B.4 Run comparison / reconciliation — `GET /api/runs/diff/golden/{subject}`
+  wraps `compare_to_golden.py` as a subprocess (same pattern
+  `drive_app.py --assert-budgets` already used). Live: Boeing → 0.9% overall
+  parity, all 11 tables, matching `BASELINE_V1.md` §4c exactly; unknown
+  subject correctly 404s.
+  All four verified twice — once via `TestClient` against real ClickHouse/
+  PostgreSQL/run-report data, once again through real clicks in the actual
+  browser UI after a full app restart to load the new routes.
+
+### §C — Cross-platform portability (venv + Docker)
+- [x] C.1 De-hardcoded `na180`/conda-absolute paths from the two genuinely
+  *instructional* surfaces — `CLAUDE.md`, `.claude/launch.json`.
+  Deliberately left untouched: `TODO.md`, `docs/plans/PHASE_Q_PLAN.md`,
+  `docs/verification/{SCORING_PROFILE,BASELINE_PRE_CHANGE}.md` — these are
+  append-only historical records (profiling output with real captured
+  frames, dated checklists), not instructions; rewriting them would be
+  revisionist. `scripts/lint_portability.py` encodes exactly this
+  distinction in its own `_SCANNED_GLOBS` list.
+- [x] C.2 `scripts/bootstrap.py` (new): plain-venv, no conda anywhere in its
+  own logic — creates `.venv/`, `pip install -e ".[dev,perf]"`, builds the
+  frontend if `npm` is on PATH, copies `.env.example`→`.env`.
+  `.python-version` (3.11), `.env.example` (every env var the app actually
+  reads, grepped for real — `LLM_API_KEY`, `LANGFUSE_*`,
+  `MERGE_ENGINE_HISTORY_PATH`, `MERGE_ENGINE_DISABLE_RESOLVE_CACHE`),
+  `docker/langfuse.env.example` (the previously-undocumented Langfuse
+  bootstrap secrets template). **Live-verified end to end**: ran
+  `scripts/bootstrap.py` for real, then booted the app from the freshly
+  created `D:\...\.venv\Scripts\python.exe` (zero na180 involvement) and
+  confirmed it served the real React SPA.
+- [x] C.3 Rewrote `Dockerfile` — the previous version could not actually run
+  the app (referenced removed Gradio, defaulted to the broken `--mode
+  both`, never ran `npm run build`, so it would have booted to the
+  `{"status":"api-only"}` stub). New 3-stage build (`node:22-slim` frontend
+  stage → `python:3.11-slim` dep builder → slim runtime), `HEALTHCHECK`,
+  non-root user. Added `.dockerignore` (didn't exist — the old Dockerfile's
+  `COPY src/ src/` would have baked in `.env`/`logs/`/`config/profiles/` if
+  present) and `docker/app-compose.yml` (app-only; origins/destination are
+  entered live through the UI, not modelled as compose services, so this
+  file's only job is running the container with the right env file and a
+  `host.docker.internal` alias for reaching the separately-run Langfuse
+  stack). **A real bug was found and fixed by the live boot test, not
+  invented**: `src/main.py` bound uvicorn to `127.0.0.1` unconditionally —
+  works for every native run, but Docker's `-p` port-forwarding cannot
+  reach a container's own loopback, so the published port accepted a TCP
+  connection and then returned nothing. Fixed with a
+  `MERGE_ENGINE_HOST` env var (default `127.0.0.1`, unchanged for every
+  non-Docker invocation; the Dockerfile sets it to `0.0.0.0`). **Live-verified
+  after the fix**: `docker build` succeeded, the container reported
+  `healthy`, and `curl` against the published port returned the real
+  `<title>merge-engine</title>` SPA plus a working `/api/workflow/active`
+  response.
+- [x] C.4 `scripts/lint_portability.py` (new) — hardcoded-path guard (path-
+  shaped patterns only, not a bare word match, after a real false-positive
+  was found and fixed: the guard was initially flagging the word "na180"
+  inside its own explanatory comments) + a completeness check that
+  `.env.example`/`.python-version`/`scripts/bootstrap.py`/`Dockerfile`/
+  `.dockerignore` all exist. Wired into `scripts/check.py portability`
+  (part of `check.py all`) and as a new `.pre-commit-config.yaml` hook.
+  Live-verified against a seeded real violation (correctly failed) and the
+  clean tree (correctly passed).
+
+### §D — CI/CD + branch-conflict re-audit
+- [x] D.1 `git.n4t.com` re-checked per ADR 0003's own revisit trigger — a
+  real change since the ADR was written (port 443 now answers, previously
+  timed out) but not the change that matters: `curl` gets an unrelated
+  `Server: Kestrel` 404 (no Gitea/Forgejo/GitLab signature), while the
+  actual git protocol `origin` uses (SSH) still times out and
+  `git ls-remote origin` still fails. Server-side CI is still genuinely
+  blocked; documented precisely in
+  `docs/decisions/0003-server-ci-unreachable.md` rather than either
+  declaring the gap closed or ignoring the new data point. Prepared (not
+  live-verified — cannot be, no reachable runner) `.gitea/workflows/ci.yml`
+  running `check.py all` plus scripted versions of C.2/C.3's exact live boot
+  tests, ready to activate the moment a runner exists.
+- [x] D.2 Re-audited the six §0.8 conflict seams against the current tree.
+  Four hold, verified with assertions not by eye: `errors` hygiene (spot-
+  checked `resolve_entities.py`'s node — still returns only its own new
+  errors), arch-lint baseline unchanged at 15 (zero new violations from all
+  of Part 1.6's edits), no `pyproject.toml`/`requirements.txt` edits this
+  part (per R4). **Two do not exist and never did**: `NODE_SPECS` (a
+  declarative node-wiring table) and `REPORT_CONTRIBUTORS` (a pluggable
+  report-section registry) were part of the original plan's *aspirational*
+  §0.8 design table but were never actually built — `graph.py` still wires
+  all 17 nodes with inline `add_node`/`add_conditional_edges` calls, and
+  `build_reconciliation_report` (`load_data.py`) is still one function
+  body. This means R3 ("extend through registries, never through shared
+  function bodies... if you find yourself editing build_reconciliation_
+  report's body, stop") is currently unenforceable as written — there is no
+  registry to redirect a future branch to. Flagged honestly rather than
+  silently built (a real refactor of both, out of scope for an audit) or
+  silently ignored: **whichever of B2 (new nodes)/B3 (new report sections)
+  starts first should build the specific registry it needs**, not assume
+  one already exists.
+- [x] D.3 Re-ran `pre-commit run --all-files` against the entire current
+  tree — all 14 hooks (including the new `lint-portability` hook) passed
+  cleanly, which itself is evidence none of Part 1.6's file moves/renames
+  broke a hook's glob matching. Spot-verified `no-new-bare-except-pass`
+  still blocks a deliberately seeded bad pattern (exit 1, correct message).
+
+**Part 1.6 exit**: `python scripts/check.py all` → 10/10 (9 original +
+the new `portability` check). All four investigation tools, the run-by-run/
+platform config split, and both from-scratch paths (venv, Docker) are
+live-verified against real data, not mocks. Still at the **BRANCH CREATION
+GATE** — none of B1-B5 have started.

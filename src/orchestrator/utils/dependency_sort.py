@@ -8,7 +8,6 @@ dependency tree, ensuring prerequisite entities are processed first.
 from __future__ import annotations
 
 from collections import deque
-from typing import Any
 
 
 def topological_sort(dependency_tree: dict[str, list[str]]) -> list[str]:
@@ -68,9 +67,7 @@ def topological_sort(dependency_tree: dict[str, list[str]]) -> list[str]:
     if len(result) != len(all_nodes):
         # Find nodes involved in cycles for a clearer error
         cyclic = sorted(n for n in all_nodes if n not in set(result))
-        raise ValueError(
-            f"Circular dependency detected among entities: {cyclic}"
-        )
+        raise ValueError(f"Circular dependency detected among entities: {cyclic}")
 
     return result
 

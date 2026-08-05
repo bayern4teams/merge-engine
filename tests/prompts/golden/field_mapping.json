@@ -54,7 +54,7 @@
       }
     },
     {
-      "id": "fm-03-genuinely-new-column",
+      "id": "fm-03-genuinely-unmappable-numeric",
       "input": {
         "entity_type": "company",
         "dest_table": "companies",
@@ -69,7 +69,7 @@
         ]
       },
       "expected": {
-        "esg_risk_score": {"action": "new_column"},
+        "esg_risk_score": {"action": "skip"},
         "org_title": {"action": "map", "dest_column": "name"}
       }
     },
@@ -162,7 +162,7 @@
       }
     },
     {
-      "id": "fm-08-genuinely-unmappable-new-column",
+      "id": "fm-08-genuinely-unmappable-is-skipped",
       "input": {
         "entity_type": "person",
         "dest_table": "people",
@@ -178,7 +178,32 @@
         ]
       },
       "expected": {
-        "linkedin_url": {"action": "new_column"}
+        "linkedin_url": {"action": "skip"}
+      }
+    },
+    {
+      "id": "fm-09-camelcase-origin-names",
+      "input": {
+        "entity_type": "company",
+        "dest_table": "company",
+        "destination_schema": [
+          {"name": "id", "type": "TEXT"},
+          {"name": "name", "type": "TEXT"},
+          {"name": "legal_name", "type": "TEXT"},
+          {"name": "website", "type": "TEXT"},
+          {"name": "description", "type": "TEXT"},
+          {"name": "_source_ids", "type": "TEXT"}
+        ],
+        "fields": [
+          {"name": "entityName", "type": "str", "sample_values": ["Boeing Defense & Space Group", "Boeing Capital Corporation"]},
+          {"name": "fullName", "type": "str", "sample_values": ["Boeing (China) Investment Co., Ltd.", "Boeing United Kingdom Limited"]},
+          {"name": "companyID", "type": "str", "sample_values": ["ba34c3bb1541495295e82f2", "c71f0a9e22884d1a9f0e77b"]}
+        ]
+      },
+      "expected": {
+        "entityName": {"action": "map", "dest_column": "name"},
+        "fullName": {"action": "map", "dest_column": "legal_name"},
+        "companyID": {"action": "skip"}
       }
     }
   ]

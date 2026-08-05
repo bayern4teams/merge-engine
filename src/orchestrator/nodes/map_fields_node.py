@@ -7,13 +7,12 @@ and unmapped fields for human review.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
-from src.mcp_server.tools.map_fields import _map_type_generic, map_fields_impl
+from src.mcp_server.tools.map_fields import map_fields_impl
 from src.orchestrator.spool import unified_for
-from src.mcp_server.connectors import create_connector
-from src.orchestrator.utils.retry import TransientError
 from src.orchestrator.utils.retry_hints import with_retry_hint
 
 logger = logging.getLogger("merge-engine.orchestrator.map_fields")
@@ -48,7 +47,10 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
     unified_entities: dict[str, list[dict]] = state.get("unified_entities", {})
     destination = state.get("destination")
     target_entities: list[str] = state.get("target_entities", [])
-    errors: list[str] = list(state.get("errors", []))
+    # Only THIS call's own errors (Phase 0 Sec 0.8) - see load_data_node's
+    # identical fix for why seeding with the existing history double-counted
+    # it through operator.add's reducer.
+    errors: list[str] = []
     field_mappings: dict[str, dict] = dict(state.get("field_mappings", {}))
     pending_schema_changes: list[dict] = list(state.get("pending_schema_changes", []))
     unmapped_fields: dict[str, list] = dict(state.get("unmapped_fields", {}))
@@ -74,14 +76,27 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
     available_dest_tables: list[str] = []
     try:
         from src.mcp_server.tools.load_data import _get_destination_connector
+
         dest_connector = _get_destination_connector(
             destination if isinstance(destination, dict) else None
         )
         available_dest_tables = dest_connector.list_tables()
-        logger.debug("Discovered %d destination tables: %s", len(available_dest_tables), available_dest_tables)
+        logger.debug(
+            "Discovered %d destination tables: %s",
+            len(available_dest_tables),
+            available_dest_tables,
+        )
     except Exception as exc:
         logger.warning("Could not discover destination tables: %s", exc)
 
+    # ── Phase 1: sequential prep (Part 1.5 B.1) ────────────────────────
+    # Everything here is either pure CPU (the unified-schema scan) or the
+    # ONE shared resource that must not be touched concurrently:
+    # dest_connector.get_table_schema(). A psycopg2/databricks connection
+    # is not safe for concurrent use, so every schema read happens here,
+    # up front, before any `await map_fields_impl(...)`. Once this loop
+    # finishes, nothing below touches dest_connector again.
+    llm_tasks: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
     for entity_type in target_entities:
         records = unified_for(state, entity_type)
         logger.debug("Processing entity '%s': %d unified records", entity_type, len(records))
@@ -91,7 +106,11 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
             continue
 
         # Get destination table schema
-        dest_table = dest_tables.get(entity_type, entity_type) if isinstance(dest_tables, dict) else entity_type
+        dest_table = (
+            dest_tables.get(entity_type, entity_type)
+            if isinstance(dest_tables, dict)
+            else entity_type
+        )
         if available_dest_tables:
             resolved = resolve_dest_table(entity_type, available_dest_tables)
             if resolved:
@@ -126,11 +145,14 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
             for key, value in rec.items():
                 if key.startswith("_"):
                     continue
-                info = unified_schema.setdefault(key, {
-                    "type": "NoneType",
-                    "sample_value": None,
-                    "sample_values": [],
-                })
+                info = unified_schema.setdefault(
+                    key,
+                    {
+                        "type": "NoneType",
+                        "sample_value": None,
+                        "sample_values": [],
+                    },
+                )
                 if value is None:
                     continue
                 if info["type"] == "NoneType":
@@ -151,81 +173,117 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
         # of 15 and 13 columns. Re-asking would reintroduce exactly that.
         pinned_mapping = (state.get("field_mappings") or {}).get(entity_type)
         if pinned_mapping and state.get("profile_name"):
-            # The mapping says which destination column each field goes to,
-            # but says nothing about whether that column EXISTS. Against a
-            # fresh destination it does not, and skipping this left a table
-            # with one column instead of nine — the pinned mapping produced a
-            # *worse* schema than deriving it. So the columns still have to be
-            # reconciled against the live destination on every run.
-            existing = {
-                str(c.get("name", "")).lower() for c in dest_columns
-            }
-            schema_changes = []
+            # A pinned mapping says which destination column each field goes
+            # to, but says nothing about whether that column EXISTS. The
+            # destination schema is a fixed contract, so a pinned target that
+            # is not there is dropped to unmapped rather than created — a
+            # profile pinned before that rule existed must not smuggle columns
+            # back in.
+            existing = {str(c.get("name", "")).lower() for c in dest_columns}
+            reconciled: dict[str, Any] = {}
+            dropped: list[dict[str, Any]] = []
             for source_field, target in pinned_mapping.items():
-                column = (
-                    target.get("dest_column")
-                    if isinstance(target, dict) else target
-                )
-                if not column or str(column).lower() in existing:
+                column = target.get("dest_column") if isinstance(target, dict) else target
+                if column and str(column).lower() in existing:
+                    reconciled[source_field] = target
                     continue
-                schema_changes.append({
-                    "table": dest_table,
-                    "column": column,
-                    "data_type": _map_type_generic(
-                        unified_schema.get(source_field, {}).get(
-                            "type", "STRING"
-                        )
-                    ),
-                })
-            pending_schema_changes.extend(schema_changes)
-            field_mappings[entity_type] = pinned_mapping
+                dropped.append(
+                    {
+                        "field": source_field,
+                        "confidence": 0.0,
+                        "suggested_column": column or None,
+                        "reason": (
+                            f"Pinned mapping targets column '{column}', which does "
+                            f"not exist in '{dest_table}'; destination schema is "
+                            f"authoritative"
+                        ),
+                    }
+                )
+            field_mappings[entity_type] = reconciled
+            unmapped_fields[entity_type] = dropped
             logger.info(
-                "Reusing pinned field mapping for '%s' (%d fields, %d column(s) "
-                "to create) from profile %r",
-                entity_type, len(pinned_mapping), len(schema_changes),
+                "Reusing pinned field mapping for '%s' (%d fields kept, %d "
+                "dropped as missing destination columns) from profile %r",
+                entity_type,
+                len(reconciled),
+                len(dropped),
                 state.get("profile_name"),
             )
             continue
 
-        try:
-            logger.debug("Calling map_fields_impl for entity '%s'", entity_type)
-            result = await map_fields_impl(
+        llm_tasks.append((entity_type, unified_schema, dest_schema_info))
+
+    # ── Phase 2: the actual LLM round-trips, concurrent (Part 1.5 B.1) ─
+    # These are independent per-entity LLM calls with no shared state left
+    # to touch (dest_connector was fully drained in Phase 1) — wall time
+    # was sum(latency), now max(latency). `return_exceptions=True` so one
+    # entity's failure degrades to that entity's error entry, matching the
+    # per-entity try/except semantics this replaces, rather than cancelling
+    # its siblings.
+    logger.debug("Dispatching %d field-mapping LLM call(s) concurrently", len(llm_tasks))
+    llm_results = await asyncio.gather(
+        *(
+            map_fields_impl(
                 entity_type=entity_type,
                 unified_schema=unified_schema,
                 destination_schema=dest_schema_info,
-                llm_config=with_retry_hint(
-                    state.get("llm_config") or None, state, "map_fields"
-                ),
+                llm_config=with_retry_hint(state.get("llm_config") or None, state, "map_fields"),
             )
-            logger.debug("map_fields_impl result keys: %s", list(result.keys()))
+            for entity_type, unified_schema, dest_schema_info in llm_tasks
+        ),
+        return_exceptions=True,
+    )
 
-            mapping = result.get("field_mapping", {})
-            field_mappings[entity_type] = mapping
-            logger.debug("Field mapping for '%s': %d mappings", entity_type, len(mapping))
-            for mname, mval in mapping.items():
-                logger.debug("  Mapping '%s': requires_schema_change=%s", mname, mval.get("requires_schema_change", False))
-
-            schema_changes = result.get("schema_changes", [])
-            pending_schema_changes.extend(schema_changes)
-            logger.debug("Schema changes: %d", len(schema_changes))
-
-            unmapped = result.get("unmapped_fields", [])
-            unmapped_fields[entity_type] = unmapped
-            logger.debug("Unmapped fields: %d", len(unmapped))
-
-            logger.info(
-                "Field mapping for '%s': %d mapped, %d unmapped, %d schema changes",
-                entity_type,
-                len([m for m in mapping.values() if not m.get("requires_schema_change")]),
-                len(unmapped),
-                len(schema_changes),
-            )
-
-        except Exception as exc:
-            msg = f"Field mapping failed for '{entity_type}': {exc}"
-            logger.error(msg, exc_info=True)
+    # ── Phase 3: sequential merge, in target_entities order ────────────
+    # `asyncio.gather` preserves input order (same pattern as
+    # discover_schemas.py's D.4.1 parallelization), so llm_results lines up
+    # 1:1 with llm_tasks. Merging here — not inside the gather — keeps
+    # pending_schema_changes/errors ordering deterministic across runs,
+    # exactly as it was when this loop ran strictly sequentially.
+    for (entity_type, _unified_schema, _dest_schema_info), outcome in zip(
+        llm_tasks, llm_results, strict=True
+    ):
+        # isinstance(..., Exception), not BaseException: matches the original
+        # bare `except Exception` this replaces — a genuine BaseException
+        # (e.g. CancelledError) must still propagate, not be swallowed as
+        # "this entity's mapping failed".
+        if isinstance(outcome, Exception):
+            msg = f"Field mapping failed for '{entity_type}': {outcome}"
+            logger.error(msg, exc_info=outcome)
             errors.append(msg)
             field_mappings[entity_type] = {}
+            continue
+        if isinstance(outcome, BaseException):
+            raise outcome
+
+        result = outcome
+        logger.debug("map_fields_impl result keys: %s", list(result.keys()))
+
+        mapping = result.get("field_mapping", {})
+        field_mappings[entity_type] = mapping
+        logger.debug("Field mapping for '%s': %d mappings", entity_type, len(mapping))
+        for mname, mval in mapping.items():
+            logger.debug(
+                "  Mapping '%s': requires_schema_change=%s",
+                mname,
+                mval.get("requires_schema_change", False),
+            )
+
+        schema_changes = result.get("schema_changes", [])
+        pending_schema_changes.extend(schema_changes)
+        logger.debug("Schema changes: %d", len(schema_changes))
+
+        unmapped = result.get("unmapped_fields", [])
+        unmapped_fields[entity_type] = unmapped
+        logger.debug("Unmapped fields: %d", len(unmapped))
+
+        logger.info(
+            "Field mapping for '%s': %d mapped, %d unmapped, %d schema changes",
+            entity_type,
+            len([m for m in mapping.values() if not m.get("requires_schema_change")]),
+            len(unmapped),
+            len(schema_changes),
+        )
 
     logger.debug("Total field_mappings: %d", len(field_mappings))
     logger.debug("Total pending_schema_changes: %d", len(pending_schema_changes))
@@ -233,25 +291,14 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
     logger.debug("Total errors: %d", len(errors))
     logger.debug("EXIT map_fields")
 
+    # Only the keys this node actually computes (Phase 0 Sec 0.8) - a key it
+    # omits is left untouched by LangGraph's per-key TypedDict state update,
+    # not cleared.
     return {
         "field_mappings": field_mappings,
         "pending_schema_changes": pending_schema_changes,
         "unmapped_fields": unmapped_fields,
         "errors": errors,
-        "origins": state.get("origins", []),
-        "destination": state.get("destination", {}),
-        "llm_config": state.get("llm_config", {}),
-        "extraction_config": state.get("extraction_config", {}),
-        "target_entities": target_entities,
-        "schemas": state.get("schemas", {}),
-        "dependency_tree": state.get("dependency_tree", {}),
-        "extraction_order": state.get("extraction_order", []),
-        "extracted_data": state.get("extracted_data", {}),
-        "entity_clusters": state.get("entity_clusters", {}),
-        "unified_entities": unified_entities,
-        "human_feedback": state.get("human_feedback"),
-        "load_approval": state.get("load_approval"),
-        "retry_counts": state.get("retry_counts", {}),
         "interrupt_data": None,
     }
 
@@ -266,7 +313,4 @@ def has_unmapped_fields(state: dict[str, Any]) -> bool:
         return True
 
     # If any entity has low-confidence unmapped fields, human review is needed
-    if any(unmapped_fields.get(entity_type) for entity_type in unmapped_fields):
-        return True
-
-    return False
+    return any(unmapped_fields.get(entity_type) for entity_type in unmapped_fields)

@@ -13,7 +13,7 @@ be about." It is consumed by:
 Widened 2026-07-30 (remediation #1 in `merge-engine-remediation-1-to-6`, project
 memory) from an original fixed 7-type enum that capped "all information about X"
 to company/person/product and left 8 of an 11-table-family destination schema
-permanently unreachable — see `docs/BOEING_APP_VS_MANUAL_DIAGNOSIS.md` and its
+permanently unreachable — see `docs/diagnostics/BOEING_APP_VS_MANUAL_DIAGNOSIS.md` and its
 Airbus/Lockheed siblings for the live evidence (identical root cause on all 3
 real-world subjects).
 
@@ -60,12 +60,16 @@ CANONICAL_ENTITY_TYPES: dict[str, str] = {
 # so tests and prompt-golden updates can distinguish "the original cap" from "what
 # the widening added" without re-deriving the split from prose.
 ORIGINAL_SEVEN: tuple[str, ...] = (
-    "person", "company", "product", "country", "address", "account", "order",
+    "person",
+    "company",
+    "product",
+    "country",
+    "address",
+    "account",
+    "order",
 )
 
-WIDENED_TYPES: tuple[str, ...] = tuple(
-    t for t in CANONICAL_ENTITY_TYPES if t not in ORIGINAL_SEVEN
-)
+WIDENED_TYPES: tuple[str, ...] = tuple(t for t in CANONICAL_ENTITY_TYPES if t not in ORIGINAL_SEVEN)
 
 # "All information about <Company>" should expand to every concept that can
 # plausibly describe a company and the people/data attached to it — i.e.

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.mcp_server.tools.plan_scope import plan_scope_impl, _heuristic_plan
+from src.mcp_server.tools.plan_scope import _heuristic_plan, plan_scope_impl
 from src.orchestrator.nodes.plan_scope import plan_scope
 
 
@@ -23,12 +23,15 @@ def _schemas() -> dict[str, Any]:
             "origin_type": "postgres",
             "tables": [
                 {
-                    "name": "companies", "full_name": "public.companies",
+                    "name": "companies",
+                    "full_name": "public.companies",
                     "columns": [{"name": "id"}, {"name": "name"}, {"name": "industry"}],
-                    "foreign_keys": [], "primary_key": ["id"],
+                    "foreign_keys": [],
+                    "primary_key": ["id"],
                 },
                 {
-                    "name": "employees", "full_name": "public.employees",
+                    "name": "employees",
+                    "full_name": "public.employees",
                     "columns": [{"name": "id"}, {"name": "full_name"}, {"name": "company_id"}],
                     "foreign_keys": [
                         {"column": "company_id", "ref_table": "companies", "ref_column": "id"}
@@ -36,7 +39,8 @@ def _schemas() -> dict[str, Any]:
                     "primary_key": ["id"],
                 },
                 {
-                    "name": "products", "full_name": "public.products",
+                    "name": "products",
+                    "full_name": "public.products",
                     "columns": [{"name": "id"}, {"name": "title"}, {"name": "company_id"}],
                     "foreign_keys": [
                         {"column": "company_id", "ref_table": "companies", "ref_column": "id"}
@@ -49,14 +53,18 @@ def _schemas() -> dict[str, Any]:
             "origin_type": "clickhouse",
             "tables": [
                 {
-                    "name": "organizations", "full_name": "organizations",
+                    "name": "organizations",
+                    "full_name": "organizations",
                     "columns": [{"name": "org_id"}, {"name": "org_name"}],
-                    "foreign_keys": [], "primary_key": ["org_id"],
+                    "foreign_keys": [],
+                    "primary_key": ["org_id"],
                 },
                 {
-                    "name": "people", "full_name": "people",
+                    "name": "people",
+                    "full_name": "people",
                     "columns": [{"name": "person_id"}, {"name": "name"}, {"name": "org_id"}],
-                    "foreign_keys": [], "primary_key": ["person_id"],
+                    "foreign_keys": [],
+                    "primary_key": ["person_id"],
                 },
             ],
         },
@@ -101,15 +109,31 @@ class TestHeuristicPlan:
             "crm": {
                 "origin_type": "postgres",
                 "tables": [
-                    {"name": "companies", "full_name": "public.companies",
-                     "columns": [{"name": "id"}, {"name": "name"}],
-                     "primary_key": ["id"], "foreign_keys": []},
-                    {"name": "people", "full_name": "public.people",
-                     "columns": [{"name": "person_id"}, {"name": "full_name"}],
-                     "primary_key": ["person_id"], "foreign_keys": []},
-                    {"name": "jobs", "full_name": "public.jobs",
-                     "columns": [{"name": "job_id"}, {"name": "person_id"}, {"name": "company_id"}],
-                     "primary_key": ["job_id"], "foreign_keys": []},
+                    {
+                        "name": "companies",
+                        "full_name": "public.companies",
+                        "columns": [{"name": "id"}, {"name": "name"}],
+                        "primary_key": ["id"],
+                        "foreign_keys": [],
+                    },
+                    {
+                        "name": "people",
+                        "full_name": "public.people",
+                        "columns": [{"name": "person_id"}, {"name": "full_name"}],
+                        "primary_key": ["person_id"],
+                        "foreign_keys": [],
+                    },
+                    {
+                        "name": "jobs",
+                        "full_name": "public.jobs",
+                        "columns": [
+                            {"name": "job_id"},
+                            {"name": "person_id"},
+                            {"name": "company_id"},
+                        ],
+                        "primary_key": ["job_id"],
+                        "foreign_keys": [],
+                    },
                 ],
             },
         }
@@ -126,9 +150,11 @@ class TestPlanScopeImpl:
     @pytest.mark.asyncio
     async def test_llm_disabled_uses_heuristic(self) -> None:
         out = await plan_scope_impl(
-            subject="Nova", subject_entity="company",
+            subject="Nova",
+            subject_entity="company",
             target_entities=["company", "person", "product"],
-            schemas=_schemas(), llm_config=None,
+            schemas=_schemas(),
+            llm_config=None,
         )
         assert out["llm_used"] is False
         assert out["scope_plan"]["subject"] == "Nova"
@@ -139,16 +165,30 @@ class TestPlanScopeImpl:
         llm_reply = {
             "entities": {
                 "company": [
-                    {"origin_id": "crm_origin", "table": "companies",
-                     "mode": "match", "columns": ["name"], "reason": "own record"},
+                    {
+                        "origin_id": "crm_origin",
+                        "table": "companies",
+                        "mode": "match",
+                        "columns": ["name"],
+                        "reason": "own record",
+                    },
                 ],
                 "person": [
-                    {"origin_id": "crm_origin", "table": "employees",
-                     "mode": "link", "columns": ["company_id"],
-                     "link_entity": "company", "reason": "works there"},
+                    {
+                        "origin_id": "crm_origin",
+                        "table": "employees",
+                        "mode": "link",
+                        "columns": ["company_id"],
+                        "link_entity": "company",
+                        "reason": "works there",
+                    },
                     # A hallucinated table that must be dropped.
-                    {"origin_id": "crm_origin", "table": "ghost_table",
-                     "mode": "link", "columns": ["company_id"]},
+                    {
+                        "origin_id": "crm_origin",
+                        "table": "ghost_table",
+                        "mode": "link",
+                        "columns": ["company_id"],
+                    },
                 ],
             },
             "notes": "looks clean",
@@ -157,11 +197,13 @@ class TestPlanScopeImpl:
         client.call_json = AsyncMock(return_value=llm_reply)
 
         prompts = {"scope_planning": {"system": "sys {subject}", "human": "h {table_catalog}"}}
-        with patch("src.llm.LLMClient", return_value=client), patch(
-            "src.llm.PROMPT_TEMPLATES", prompts
+        with (
+            patch("src.llm.LLMClient", return_value=client),
+            patch("src.llm.PROMPT_TEMPLATES", prompts),
         ):
             out = await plan_scope_impl(
-                subject="Nova", subject_entity="company",
+                subject="Nova",
+                subject_entity="company",
                 target_entities=["company", "person", "product"],
                 schemas=_schemas(),
                 llm_config={"model": "x", "scope_planning_enabled": True},
@@ -180,11 +222,13 @@ class TestPlanScopeImpl:
         client = AsyncMock()
         client.call_json = AsyncMock(side_effect=Exception("boom"))
         prompts = {"scope_planning": {"system": "s", "human": "h"}}
-        with patch("src.llm.LLMClient", return_value=client), patch(
-            "src.llm.PROMPT_TEMPLATES", prompts
+        with (
+            patch("src.llm.LLMClient", return_value=client),
+            patch("src.llm.PROMPT_TEMPLATES", prompts),
         ):
             out = await plan_scope_impl(
-                subject="Nova", subject_entity="company",
+                subject="Nova",
+                subject_entity="company",
                 target_entities=["company", "person"],
                 schemas=_schemas(),
                 llm_config={"model": "x"},
@@ -225,6 +269,7 @@ class TestPlanScopeNode:
 class TestScopeGate:
     def test_router_reviews_active_plan(self) -> None:
         from src.orchestrator.graph import _scope_router
+
         state = {
             "merge_scope": {"active": True, "subject": "Nova", "scope_type": "company"},
             "scope_plan": {"entities": {"company": [{"table": "x"}]}},
@@ -233,23 +278,41 @@ class TestScopeGate:
 
     def test_router_continues_when_inactive(self) -> None:
         from src.orchestrator.graph import _scope_router
+
         assert _scope_router({"merge_scope": {"active": False}, "scope_plan": {}}) == "continue"
 
     def test_router_continues_when_no_plan(self) -> None:
         from src.orchestrator.graph import _scope_router
+
         state = {"merge_scope": {"active": True}, "scope_plan": {"entities": {}}}
         assert _scope_router(state) == "continue"
 
     def test_interrupt_payload_shape(self) -> None:
         from src.orchestrator.nodes.human_nodes import _build_scope_interrupt
+
         plan = {
-            "subject": "Nova", "subject_entity": "company",
+            "subject": "Nova",
+            "subject_entity": "company",
             "candidates": [{"origin_id": "crm", "fields": {"name": "Nova Labs"}}],
             "entities": {
-                "company": [{"origin_id": "crm", "table": "companies",
-                             "mode": "match", "columns": ["name"], "reason": "own"}],
-                "person": [{"origin_id": "crm", "table": "employees",
-                            "mode": "link", "columns": ["company_id"], "reason": "fk"}],
+                "company": [
+                    {
+                        "origin_id": "crm",
+                        "table": "companies",
+                        "mode": "match",
+                        "columns": ["name"],
+                        "reason": "own",
+                    }
+                ],
+                "person": [
+                    {
+                        "origin_id": "crm",
+                        "table": "employees",
+                        "mode": "link",
+                        "columns": ["company_id"],
+                        "reason": "fk",
+                    }
+                ],
             },
         }
         out = _build_scope_interrupt(plan)
@@ -261,6 +324,7 @@ class TestScopeGate:
     @pytest.mark.asyncio
     async def test_gate_interrupts_without_feedback(self) -> None:
         from src.orchestrator.nodes.human_nodes import human_review_scope
+
         state = {"scope_plan": {"subject": "Nova", "entities": {}}}
         out = await human_review_scope(state)
         assert "interrupt_data" in out
@@ -269,6 +333,7 @@ class TestScopeGate:
     @pytest.mark.asyncio
     async def test_gate_applies_edited_plan_on_resume(self) -> None:
         from src.orchestrator.nodes.human_nodes import human_review_scope
+
         edited = {"subject": "Nova", "entities": {"company": []}, "candidates": []}
         state = {
             "scope_plan": {"subject": "Nova", "entities": {}},

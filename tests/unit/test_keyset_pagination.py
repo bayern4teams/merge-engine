@@ -49,7 +49,8 @@ class TestCursorRoundTrip:
         cursor = encode_cursor(keyset_values=["2022-02-16 02:30:53+00:00", 4501])
 
         assert decode_cursor(cursor)["keyset"] == [
-            "2022-02-16 02:30:53+00:00", 4501,
+            "2022-02-16 02:30:53+00:00",
+            4501,
         ]
 
     def test_row_count_rides_along_so_it_is_computed_once(self) -> None:
@@ -73,7 +74,9 @@ class TestCursorRoundTrip:
 
     def test_absent_cursor_starts_at_the_beginning(self) -> None:
         assert decode_cursor(None) == {
-            "keyset": None, "offset": 0, "total_count": None,
+            "keyset": None,
+            "offset": 0,
+            "total_count": None,
             "boundary_seen": 0,
         }
 
@@ -110,7 +113,8 @@ class TestAsyncpgTypeBinding:
         assert "AS TEXT" in placeholder
 
     @pytest.mark.parametrize(
-        "value", ["2022-02-16 02:30:53", "2022-02-16T02:30:53", "2022-02-16"],
+        "value",
+        ["2022-02-16 02:30:53", "2022-02-16T02:30:53", "2022-02-16"],
     )
     def test_naive_timestamps_cast_to_timestamp(self, value: str) -> None:
         """A naive column compared to a timestamptz would shift by the

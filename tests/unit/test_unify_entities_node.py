@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from src.orchestrator.nodes.unify_entities import unify_entity_groups
-from src.orchestrator.spool import clusters_for, unified_for
+from src.orchestrator.spool import unified_for
 
 
 @pytest.fixture(autouse=True)
@@ -67,21 +67,23 @@ class TestUnifyEntityGroups:
     @pytest.fixture
     def mock_unify_impl(self) -> AsyncMock:
         """Mock unify_entity_group_impl."""
-        return AsyncMock(return_value={
-            "unified_record": {
-                "name": "Acme Corp",
-                "email": "info@acme.com",
-                "sources": ["postgres_main", "mongo_analytics"],
-            },
-            "conflicts": [
-                {
-                    "field": "name",
-                    "values": ["Acme Corp", "Acme Corporation"],
-                    "resolution": "first",
-                }
-            ],
-            "null_filled_fields": ["phone"],
-        })
+        return AsyncMock(
+            return_value={
+                "unified_record": {
+                    "name": "Acme Corp",
+                    "email": "info@acme.com",
+                    "sources": ["postgres_main", "mongo_analytics"],
+                },
+                "conflicts": [
+                    {
+                        "field": "name",
+                        "values": ["Acme Corp", "Acme Corporation"],
+                        "resolution": "first",
+                    }
+                ],
+                "null_filled_fields": ["phone"],
+            }
+        )
 
     @pytest.mark.asyncio
     async def test_unify_entity_groups_success(
@@ -150,17 +152,17 @@ class TestUnifyEntityGroups:
         self, base_state: dict[str, Any]
     ) -> None:
         """Test that clusters with no matching records are skipped."""
-        base_state["entity_clusters"]["company"][0]["record_ids"] = [
-            "nonexistent:table:1"
-        ]
+        base_state["entity_clusters"]["company"][0]["record_ids"] = ["nonexistent:table:1"]
 
         with patch(
             "src.orchestrator.nodes.unify_entities.unify_entity_group_impl",
-            AsyncMock(return_value={
-                "unified_record": {},
-                "conflicts": [],
-                "null_filled_fields": [],
-            }),
+            AsyncMock(
+                return_value={
+                    "unified_record": {},
+                    "conflicts": [],
+                    "null_filled_fields": [],
+                }
+            ),
         ) as mock_impl:
             result = await unify_entity_groups(base_state)
 
@@ -173,6 +175,7 @@ class TestUnifyEntityGroups:
         self, base_state: dict[str, Any]
     ) -> None:
         """Test handling of unification failure."""
+
         async def failing_impl(*args: Any, **kwargs: Any) -> dict[str, Any]:
             raise Exception("Unification service error")
 
@@ -190,7 +193,11 @@ class TestUnifyEntityGroups:
     async def test_unify_entity_groups_preserves_existing_errors(
         self, base_state: dict[str, Any], mock_unify_impl: AsyncMock
     ) -> None:
-        """Test that existing errors are preserved."""
+        """Existing errors survive a call to this node via MergeState's real
+        operator.add reducer, not because the node re-returns the old
+        history itself (Phase 0 Sec 0.8 - see analyze_dependencies' test of
+        the same name for why the previous version of this test asserted
+        the actual bug)."""
         base_state["errors"] = ["pre-existing error"]
 
         with patch(
@@ -199,7 +206,9 @@ class TestUnifyEntityGroups:
         ):
             result = await unify_entity_groups(base_state)
 
-        assert "pre-existing error" in result["errors"]
+        assert "pre-existing error" not in result.get("errors", [])
+        combined = base_state["errors"] + result.get("errors", [])
+        assert "pre-existing error" in combined
 
     @pytest.mark.asyncio
     async def test_unify_entity_groups_no_records_in_cluster(
@@ -210,11 +219,13 @@ class TestUnifyEntityGroups:
 
         with patch(
             "src.orchestrator.nodes.unify_entities.unify_entity_group_impl",
-            AsyncMock(return_value={
-                "unified_record": {},
-                "conflicts": [],
-                "null_filled_fields": [],
-            }),
+            AsyncMock(
+                return_value={
+                    "unified_record": {},
+                    "conflicts": [],
+                    "null_filled_fields": [],
+                }
+            ),
         ) as mock_impl:
             result = await unify_entity_groups(base_state)
 
@@ -222,9 +233,7 @@ class TestUnifyEntityGroups:
         mock_impl.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_unify_entity_groups_multiple_clusters(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_unify_entity_groups_multiple_clusters(self, base_state: dict[str, Any]) -> None:
         """Test multiple clusters for the same entity."""
         base_state["entity_clusters"]["company"] = [
             {
@@ -237,13 +246,15 @@ class TestUnifyEntityGroups:
             },
         ]
         # Also add matching records
-        base_state["extracted_data"]["company"].append({
-            "id": 2,
-            "name": "Beta Inc",
-            "_origin_id": "mongo_analytics",
-            "_origin_table": "companies",
-            "_origin_id_row": "2",
-        })
+        base_state["extracted_data"]["company"].append(
+            {
+                "id": 2,
+                "name": "Beta Inc",
+                "_origin_id": "mongo_analytics",
+                "_origin_table": "companies",
+                "_origin_id_row": "2",
+            }
+        )
 
         mock_call_count = [0]
 
@@ -264,9 +275,7 @@ class TestUnifyEntityGroups:
         assert len(unified_for(result, "company")) == 2
 
     @pytest.mark.asyncio
-    async def test_unify_entity_groups_no_target_entities(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_unify_entity_groups_no_target_entities(self, base_state: dict[str, Any]) -> None:
         """Test with empty target_entities."""
         base_state["target_entities"] = []
 
@@ -274,9 +283,7 @@ class TestUnifyEntityGroups:
         assert result["unified_entities"] == {}
 
     @pytest.mark.asyncio
-    async def test_unify_entity_groups_entity_no_clusters(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_unify_entity_groups_entity_no_clusters(self, base_state: dict[str, Any]) -> None:
         """Test entity with no clusters produces empty unified list."""
         base_state["entity_clusters"]["company"] = []
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from src.llm import LLMClient, PROMPT_TEMPLATES
+from src.llm import PROMPT_TEMPLATES, LLMClient
 
 logger = logging.getLogger("merge-engine.orchestrator.parse_request")
 
@@ -44,11 +44,17 @@ async def parse_request(state: dict[str, Any]) -> dict[str, Any]:
 
     if not system_prompt or not human_template:
         logger.warning("request_parsing prompt not found, using fallback")
-        system_prompt = system_prompt or "You extract entity types from user requests. Return only JSON."
-        human_template = human_template or "Extract entity types from this request as JSON: {user_request}"
+        system_prompt = (
+            system_prompt or "You extract entity types from user requests. Return only JSON."
+        )
+        human_template = (
+            human_template or "Extract entity types from this request as JSON: {user_request}"
+        )
 
     user_prompt = human_template.replace("{user_request}", user_request)
-    logger.debug("Prompt loaded (%d chars, truncated to %d)", len(user_prompt), min(len(user_prompt), 500))
+    logger.debug(
+        "Prompt loaded (%d chars, truncated to %d)", len(user_prompt), min(len(user_prompt), 500)
+    )
     logger.debug("User prompt (first 500 chars): %s", user_prompt[:500])
 
     try:
@@ -57,7 +63,9 @@ async def parse_request(state: dict[str, Any]) -> dict[str, Any]:
             system_prompt=system_prompt,
             user_prompt=user_prompt,
         )
-        logger.debug("LLM response received: type=%s, repr=%.300s", type(result).__name__, repr(result))
+        logger.debug(
+            "LLM response received: type=%s, repr=%.300s", type(result).__name__, repr(result)
+        )
         target_entities = result.get("entity_types", []) if isinstance(result, dict) else []
 
         # Widened breadth (2026-07-30, remediation #1 in
@@ -71,9 +79,7 @@ async def parse_request(state: dict[str, Any]) -> dict[str, Any]:
         # instruction) so behaviour degrades to "everything is explicit", which
         # is the strictest/safest fallback, not a silent widening of failures.
         explicit_target_entities = (
-            result.get("explicit_entity_types", target_entities)
-            if isinstance(result, dict)
-            else []
+            result.get("explicit_entity_types", target_entities) if isinstance(result, dict) else []
         )
         if not isinstance(explicit_target_entities, list):
             explicit_target_entities = target_entities
@@ -86,7 +92,11 @@ async def parse_request(state: dict[str, Any]) -> dict[str, Any]:
         # filters — scope planning, extraction, destination dedup — reads this.
         # An empty/"none" scope preserves the original whole-table behaviour.
         subject = str(result.get("subject", "")).strip() if isinstance(result, dict) else ""
-        scope_type = str(result.get("scope_type", "none")).strip().lower() if isinstance(result, dict) else "none"
+        scope_type = (
+            str(result.get("scope_type", "none")).strip().lower()
+            if isinstance(result, dict)
+            else "none"
+        )
         merge_scope = {
             "active": bool(subject) and scope_type not in ("", "none"),
             "subject": subject,
@@ -101,56 +111,32 @@ async def parse_request(state: dict[str, Any]) -> dict[str, Any]:
             explicit_target_entities,
             f"{scope_type}:{subject!r}" if merge_scope["active"] else "none",
         )
-        # Return ALL required state fields to prevent state loss with
-        # StateGraph(dict) which uses an overwrite reducer.
+        # Only the keys this node actually computes - a key a node omits is
+        # left untouched by LangGraph (verified: TypedDict state update is
+        # per-key replace, not StateGraph(dict) whole-state overwrite; that
+        # was true at some earlier point in this project's history but isn't
+        # what's compiled today). Returning the rest back unchanged used to
+        # also re-append the entire `errors` history through its
+        # operator.add reducer on every single call - quadratic growth over
+        # a long-running graph (Phase 0 Sec 0.8).
         return {
             "target_entities": target_entities,
             "explicit_target_entities": explicit_target_entities,
             "merge_scope": merge_scope,
-            "origins": state.get("origins", []),
-            "destination": state.get("destination", {}),
-            "llm_config": state.get("llm_config", {}),
-            "extraction_config": state.get("extraction_config", {}),
-            "schemas": state.get("schemas", {}),
-            "dependency_tree": state.get("dependency_tree", {}),
-            "extraction_order": state.get("extraction_order", []),
-            "extracted_data": state.get("extracted_data", {}),
-            "entity_clusters": state.get("entity_clusters", {}),
-            "unified_entities": state.get("unified_entities", {}),
-            "field_mappings": state.get("field_mappings", {}),
-            "pending_schema_changes": state.get("pending_schema_changes", []),
-            "human_feedback": state.get("human_feedback"),
-            "load_approval": state.get("load_approval"),
-            "errors": state.get("errors", []),
-            "retry_counts": state.get("retry_counts", {}),
             "interrupt_data": None,
         }
 
     except Exception as exc:
         logger.error("Failed to parse request: %s", exc, exc_info=True)
         logger.error("Exception type: %s, exception class: %s", type(exc).__name__, exc.__class__)
-        # Fallback: return empty list to let downstream nodes handle gracefully
-        # Return ALL required fields to prevent state loss with StateGraph(dict)
+        # Fallback: let downstream nodes handle an empty entity list
+        # gracefully. Only the new error is returned, not the accumulated
+        # history (see the success path's comment above).
         return {
             "target_entities": [],
             "explicit_target_entities": [],
             "merge_scope": {"active": False, "subject": "", "scope_type": "none"},
             "errors": [f"Request parsing failed: {exc}"],
-            "origins": state.get("origins", []),
-            "destination": state.get("destination", {}),
-            "llm_config": state.get("llm_config", {}),
-            "extraction_config": state.get("extraction_config", {}),
-            "schemas": {},
-            "dependency_tree": {},
-            "extraction_order": [],
-            "extracted_data": {},
-            "entity_clusters": {},
-            "unified_entities": {},
-            "field_mappings": {},
-            "pending_schema_changes": [],
-            "human_feedback": state.get("human_feedback"),
-            "load_approval": state.get("load_approval"),
-            "retry_counts": {},
             "interrupt_data": None,
         }
     finally:

@@ -6,8 +6,6 @@ Tests _record_id, _normalize, and _compute_heuristic_confidence.
 
 from __future__ import annotations
 
-import pytest
-
 from src.mcp_server.tools.resolve_entities import (
     _compute_heuristic_confidence,
     _normalize,

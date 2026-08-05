@@ -1,7 +1,7 @@
 """Keyset (seek) pagination cursors shared by every origin connector.
 
 ``OFFSET n LIMIT m`` makes a full table scan quadratic: to return rows
-40,000,000–40,001,000 the database must first walk past forty million rows,
+40,000,000-40,001,000 the database must first walk past forty million rows,
 and it does that again for every subsequent batch. On the 43M-row cell_towers
 table that is the difference between a merge that finishes and one that does
 not.
@@ -83,7 +83,10 @@ def decode_cursor(cursor: str | None) -> dict[str, Any]:
     previous offset-only implementation still resume correctly.
     """
     empty: dict[str, Any] = {
-        "keyset": None, "offset": 0, "total_count": None, "boundary_seen": 0,
+        "keyset": None,
+        "offset": 0,
+        "total_count": None,
+        "boundary_seen": 0,
     }
     if cursor is None:
         return empty
@@ -94,8 +97,10 @@ def decode_cursor(cursor: str | None) -> dict[str, Any]:
 
     if text.lstrip("-").isdigit():
         return {
-            "keyset": None, "offset": int(text),
-            "total_count": None, "boundary_seen": 0,
+            "keyset": None,
+            "offset": int(text),
+            "total_count": None,
+            "boundary_seen": 0,
         }
 
     try:
@@ -114,9 +119,7 @@ def decode_cursor(cursor: str | None) -> dict[str, Any]:
     }
 
 
-def keyset_is_unique(
-    keyset: list[str] | None, pk_columns: list[str] | None
-) -> bool:
+def keyset_is_unique(keyset: list[str] | None, pk_columns: list[str] | None) -> bool:
     """Can this ordering key be trusted to identify a row uniquely?
 
     Only a declared primary key proves it. When the keyset contains every PK
@@ -137,9 +140,7 @@ def key_of(row: dict[str, Any], keyset: list[str]) -> list[Any]:
     return [_jsonable(row.get(column)) for column in keyset]
 
 
-def assert_key_unique(
-    rows: list[dict[str, Any]], keyset: list[str], table_name: str
-) -> None:
+def assert_key_unique(rows: list[dict[str, Any]], keyset: list[str], table_name: str) -> None:
     """Fail loudly if a key we were told is unique turns out not to be.
 
     The fast path uses a strict ``>``, which is only correct when no two rows

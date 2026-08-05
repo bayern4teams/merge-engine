@@ -8,74 +8,82 @@ Command Line Options:
   --table       Select specific table to import (e.g., 'Company')
 """
 
-import os
-import sys
-import json
-import glob
-import re
 import argparse
-from tqdm import tqdm
+import glob
+import json
+import os
+import re
+import sys
+
 import clickhouse_connect
+from tqdm import tqdm
 
 # Ensure UTF-8 output on Windows console
-if hasattr(sys.stdout, 'reconfigure'):
-    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 PROGRESS_FILE = os.path.join("sample_databases", ".import_progress.json")
+
 
 def log(msg):
     print(msg, flush=True)
 
+
 def load_progress() -> dict:
     if os.path.exists(PROGRESS_FILE):
         try:
-            with open(PROGRESS_FILE, 'r', encoding='utf-8') as f:
+            with open(PROGRESS_FILE, encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             return {}
     return {}
 
+
 def save_progress(progress: dict):
     os.makedirs(os.path.dirname(PROGRESS_FILE), exist_ok=True)
-    with open(PROGRESS_FILE, 'w', encoding='utf-8') as f:
+    with open(PROGRESS_FILE, "w", encoding="utf-8") as f:
         json.dump(progress, f, indent=2)
+
 
 def wipe_progress():
     if os.path.exists(PROGRESS_FILE):
         os.remove(PROGRESS_FILE)
         log("Wiped local import progress file.")
 
+
 def mark_file_completed(filename: str):
     prog = load_progress()
     prog[filename] = {"completed": True, "offset": -1}
     save_progress(prog)
+
 
 def update_file_offset(filename: str, offset: int, rows_inserted: int):
     prog = load_progress()
     prog[filename] = {"completed": False, "offset": offset, "rows": rows_inserted}
     save_progress(prog)
 
+
 def is_file_completed(filename: str) -> bool:
     prog = load_progress()
     return prog.get(filename, {}).get("completed", False)
+
 
 def get_file_resume_offset(filename: str) -> int:
     prog = load_progress()
     off = prog.get(filename, {}).get("offset", 0)
     return off if off > 0 else 0
 
+
 def get_client():
     return clickhouse_connect.get_client(
-        host='localhost',
-        port=8190,
-        username='default',
-        password='pass'
+        host="localhost", port=8190, username="default", password="pass"
     )
+
 
 def fix_quotes(text: str) -> str:
     # 1. Protect double backslashes \\
     t = text.replace(r"\\", "__ESCAPED_BACKSLASH__")
-    
+
     # 2. Standardize \'\' and \' to ''
     t = t.replace(r"\'\'", "''").replace(r"\'", "''")
 
@@ -85,42 +93,41 @@ def fix_quotes(text: str) -> str:
     # 4. Restore double backslashes
     return t.replace("__ESCAPED_BACKSLASH__", r"\\")
 
+
 def extract_tuples(text: str):
     tuples = []
     start = -1
     in_quote = False
     i = 0
     n = len(text)
-    
+
     while i < n:
         char = text[i]
         if char == "'":
-            if in_quote and i + 1 < n and text[i+1] == "'":
+            if in_quote and i + 1 < n and text[i + 1] == "'":
                 i += 2
                 continue
             in_quote = not in_quote
             i += 1
             continue
-            
+
         if not in_quote:
-            if char == '(' and start == -1:
+            if char == "(" and start == -1:
                 start = i
-            elif char == ')' and start != -1:
+            elif char == ")" and start != -1:
                 next_i = i + 1
-                while next_i < n and text[next_i] in ' \t\r\n':
+                while next_i < n and text[next_i] in " \t\r\n":
                     next_i += 1
-                if next_i < n and text[next_i] in (',', ';'):
-                    tuples.append(text[start:i+1])
+                if next_i < n and text[next_i] in (",", ";"):
+                    tuples.append(text[start : i + 1])
                     start = -1
                     i = next_i
         i += 1
 
-    if start != -1:
-        remaining = text[start:]
-    else:
-        remaining = text[i:]
-        
+    remaining = text[start:] if start != -1 else text[i:]
+
     return tuples, remaining
+
 
 def setup_databases(client, fresh: bool = False):
     if fresh:
@@ -133,6 +140,7 @@ def setup_databases(client, fresh: bool = False):
     client.command("CREATE DATABASE IF NOT EXISTS origin1")
     client.command("CREATE DATABASE IF NOT EXISTS origin2")
     log("Databases origin1 and origin2 ready.")
+
 
 def create_origin2_schemas(client):
     log("Creating origin2 schemas...")
@@ -217,37 +225,46 @@ def create_origin2_schemas(client):
     """)
     log("origin2 schemas ready.")
 
+
 def parse_origin1_by_starters(filepath):
     statements = []
     current_buffer = []
-    starters = ("CREATE TABLE", "INSERT INTO", "DROP TABLE", "ALTER TABLE", "USE ", "CREATE DATABASE")
+    starters = (
+        "CREATE TABLE",
+        "INSERT INTO",
+        "DROP TABLE",
+        "ALTER TABLE",
+        "USE ",
+        "CREATE DATABASE",
+    )
 
-    with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+    with open(filepath, encoding="utf-8", errors="replace") as f:
         for line in f:
             stripped = line.strip()
-            if not stripped or stripped.startswith('--'):
+            if not stripped or stripped.startswith("--"):
                 continue
-            
+
             is_starter = False
             for st in starters:
                 if stripped.upper().startswith(st):
                     is_starter = True
                     break
-            
+
             if is_starter and current_buffer:
                 stmt_text = "".join(current_buffer).strip()
                 if stmt_text:
                     statements.append(fix_quotes(stmt_text))
                 current_buffer = []
-            
+
             current_buffer.append(line)
-        
+
         if current_buffer:
             stmt_text = "".join(current_buffer).strip()
             if stmt_text:
                 statements.append(fix_quotes(stmt_text))
 
     return statements
+
 
 def import_origin1(client, filepath, force_fresh=False):
     filename = os.path.basename(filepath)
@@ -272,11 +289,14 @@ def import_origin1(client, filepath, force_fresh=False):
 
     if errors == 0:
         mark_file_completed(filename)
-        log(f"Finished origin1 import cleanly with 0 errors.")
+        log("Finished origin1 import cleanly with 0 errors.")
     else:
         log(f"Completed origin1 import with {errors} errors.")
 
-def stream_import_sql_file(client, filepath, database=None, batch_tuple_count=2000, force_fresh=False):
+
+def stream_import_sql_file(
+    client, filepath, database=None, batch_tuple_count=2000, force_fresh=False
+):
     filename = os.path.basename(filepath)
     file_size = os.path.getsize(filepath)
 
@@ -287,16 +307,16 @@ def stream_import_sql_file(client, filepath, database=None, batch_tuple_count=20
     if database:
         client.command(f"USE {database}")
 
-    log(f"\nStream importing {filename} ({file_size / (1024*1024):.2f} MB)...")
+    log(f"\nStream importing {filename} ({file_size / (1024 * 1024):.2f} MB)...")
     resume_offset = 0 if force_fresh else get_file_resume_offset(filename)
 
-    with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+    with open(filepath, encoding="utf-8", errors="replace") as f:
         first_line = f.readline()
 
         # Large single-INSERT file with progress bar and resume
         header = first_line.strip()
         if "VALUES" in header:
-            header = header[:header.index("VALUES") + 6]
+            header = header[: header.index("VALUES") + 6]
             f.seek(0)
             f.readline()
 
@@ -308,17 +328,23 @@ def stream_import_sql_file(client, filepath, database=None, batch_tuple_count=20
         batch_tuples = []
         total_inserted = 0
 
-        with tqdm(total=file_size, initial=f.tell(), unit='B', unit_scale=True, desc=f"Streaming {filename}") as pbar:
+        with tqdm(
+            total=file_size,
+            initial=f.tell(),
+            unit="B",
+            unit_scale=True,
+            desc=f"Streaming {filename}",
+        ) as pbar:
             while True:
                 current_tell = f.tell()
-                chunk = f.read(4 * 1024 * 1024) # 4 MB chunk
+                chunk = f.read(4 * 1024 * 1024)  # 4 MB chunk
                 if not chunk:
                     break
-                pbar.update(len(chunk.encode('utf-8', errors='replace')))
+                pbar.update(len(chunk.encode("utf-8", errors="replace")))
 
                 chunk_fixed = fix_quotes(chunk)
                 chunk_buffer += chunk_fixed
-                
+
                 tups, chunk_buffer = extract_tuples(chunk_buffer)
                 batch_tuples.extend(tups)
 
@@ -347,6 +373,7 @@ def stream_import_sql_file(client, filepath, database=None, batch_tuple_count=20
         mark_file_completed(filename)
         log(f"Finished streaming {filename} (Total inserted: {total_inserted} rows).")
 
+
 def report_table_counts(client):
     log("\n================ LIVE VERIFICATION RESULTS ================")
     for db in ["origin1", "origin2"]:
@@ -363,12 +390,27 @@ def report_table_counts(client):
         except Exception as e:
             log(f"Could not fetch tables for {db}: {e}")
 
+
 def main():
     parser = argparse.ArgumentParser(description="Import sample_databases into ClickHouse")
-    parser.add_argument("--fresh", action="store_true", help="Start fresh by dropping databases (or specific table) and progress state")
-    parser.add_argument("--resume", action="store_true", help="Resume from saved progress state (default)")
-    parser.add_argument("--database", "-d", choices=["origin1", "origin2", "all"], default="all", help="Database to import (default: all)")
-    parser.add_argument("--table", "-t", type=str, default=None, help="Filter specific table file to import")
+    parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Start fresh by dropping databases (or specific table) and progress state",
+    )
+    parser.add_argument(
+        "--resume", action="store_true", help="Resume from saved progress state (default)"
+    )
+    parser.add_argument(
+        "--database",
+        "-d",
+        choices=["origin1", "origin2", "all"],
+        default="all",
+        help="Database to import (default: all)",
+    )
+    parser.add_argument(
+        "--table", "-t", type=str, default=None, help="Filter specific table file to import"
+    )
     args = parser.parse_args()
 
     client = get_client()
@@ -382,14 +424,14 @@ def main():
             if target_tbl.lower() in key.lower():
                 progress.pop(key, None)
         save_progress(progress)
-        
+
         # Truncate table in target DB if it exists
         dbs_to_check = ["origin2", "origin1"] if args.database == "all" else [args.database]
         for db in dbs_to_check:
             try:
                 client.command(f"TRUNCATE TABLE IF EXISTS {db}.{target_tbl}")
                 log(f"Truncated table {db}.{target_tbl}")
-            except Exception as e:
+            except Exception:
                 pass
         setup_databases(client, fresh=False)
     else:
@@ -403,23 +445,38 @@ def main():
         for fpath in origin1_files:
             if args.table:
                 target_tbl = args.table.lower().replace("_modified", "").replace(".sql", "").strip()
-                base_tbl = os.path.basename(fpath).lower().replace("_modified", "").replace(".sql", "").strip()
+                base_tbl = (
+                    os.path.basename(fpath)
+                    .lower()
+                    .replace("_modified", "")
+                    .replace(".sql", "")
+                    .strip()
+                )
                 if target_tbl != base_tbl:
                     continue
             stream_import_sql_file(client, fpath, database="origin1", force_fresh=args.fresh)
 
     # 2. Import origin2 if selected
     if args.database in ["origin2", "all"]:
-        origin2_files = sorted(glob.glob("D:/transfer/merging/sample_databases/origin2_sample/*.sql"))
+        origin2_files = sorted(
+            glob.glob("D:/transfer/merging/sample_databases/origin2_sample/*.sql")
+        )
         for fpath in origin2_files:
             if args.table:
                 target_tbl = args.table.lower().replace("_modified", "").replace(".sql", "").strip()
-                base_tbl = os.path.basename(fpath).lower().replace("_modified", "").replace(".sql", "").strip()
+                base_tbl = (
+                    os.path.basename(fpath)
+                    .lower()
+                    .replace("_modified", "")
+                    .replace(".sql", "")
+                    .strip()
+                )
                 if target_tbl != base_tbl:
                     continue
             stream_import_sql_file(client, fpath, database="origin2", force_fresh=args.fresh)
 
     report_table_counts(client)
+
 
 if __name__ == "__main__":
     main()

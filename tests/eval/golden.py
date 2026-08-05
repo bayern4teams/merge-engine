@@ -27,8 +27,9 @@ from __future__ import annotations
 
 import csv
 import random
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 _DATA = Path(__file__).parent / "pagila_staff.csv"
 
@@ -59,9 +60,17 @@ def _record(row: dict[str, str], origin: str = "pg", suffix: str = "") -> dict[s
 # ── Corruptions that preserve identity ───────────────────────────────
 
 _NICKNAMES = {
-    "Robert": "Bob", "William": "Bill", "Richard": "Rick", "Michael": "Mike",
-    "Elizabeth": "Liz", "Katherine": "Kate", "Thomas": "Tom", "Joseph": "Joe",
-    "Christopher": "Chris", "Jennifer": "Jenny", "Patricia": "Pat",
+    "Robert": "Bob",
+    "William": "Bill",
+    "Richard": "Rick",
+    "Michael": "Mike",
+    "Elizabeth": "Liz",
+    "Katherine": "Kate",
+    "Thomas": "Tom",
+    "Joseph": "Joe",
+    "Christopher": "Chris",
+    "Jennifer": "Jenny",
+    "Patricia": "Pat",
 }
 
 
@@ -70,7 +79,7 @@ def _typo(text: str, rng: random.Random) -> str:
     if len(text) < 4:
         return text
     i = rng.randrange(1, len(text) - 2)
-    return text[:i] + text[i + 1] + text[i] + text[i + 2:]
+    return text[:i] + text[i + 1] + text[i] + text[i + 2 :]
 
 
 def _reformat_email(email: str, rng: random.Random) -> str:

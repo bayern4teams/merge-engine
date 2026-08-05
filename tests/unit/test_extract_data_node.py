@@ -8,11 +8,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.orchestrator.nodes.extract_data import (
-    extract_data,
+    _MAX_IN_FILTER_VALUES,
     _chunked_filters,
     _find_entity_tables,
+    _scratch_filter,
     _table_matches_entity,
-    _MAX_IN_FILTER_VALUES,
+    extract_data,
 )
 from src.orchestrator.spool import entity_rows
 from src.orchestrator.utils.retry import TransientError
@@ -122,7 +123,7 @@ class TestFindEntityTables:
                         "foreign_keys": [],
                     }
                 ]
-            }
+            },
         }
         result = _find_entity_tables("customer", schemas)
         assert len(result) == 1
@@ -211,13 +212,15 @@ class TestExtractData:
     @pytest.fixture
     def mock_extract_data_impl(self) -> AsyncMock:
         """Mock extract_data_impl."""
-        return AsyncMock(return_value={
-            "rows": [
-                {"id": 1, "name": "Acme Corp"},
-                {"id": 2, "name": "Beta Inc"},
-            ],
-            "next_cursor": None,
-        })
+        return AsyncMock(
+            return_value={
+                "rows": [
+                    {"id": 1, "name": "Acme Corp"},
+                    {"id": 2, "name": "Beta Inc"},
+                ],
+                "next_cursor": None,
+            }
+        )
 
     def _make_fresh_mock(self) -> AsyncMock:
         """Create a mock that returns fresh row dicts on each call to avoid mutation overlap."""
@@ -251,9 +254,7 @@ class TestExtractData:
         assert not result["errors"]
 
     @pytest.mark.asyncio
-    async def test_extract_data_tags_origin_metadata(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_extract_data_tags_origin_metadata(self, base_state: dict[str, Any]) -> None:
         """Test that extracted rows get origin metadata tags."""
         call_counter = [0]
 
@@ -284,9 +285,7 @@ class TestExtractData:
             assert row["_origin_table"] == "public.person"
 
     @pytest.mark.asyncio
-    async def test_extract_data_no_tables_found(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_extract_data_no_tables_found(self, base_state: dict[str, Any]) -> None:
         """Test extraction when no tables match the entity."""
         base_state["schemas"] = {
             "postgres_main": {
@@ -383,9 +382,7 @@ class TestExtractData:
         assert result["dropped_inferred_entities"] == ["person"]
 
     @pytest.mark.asyncio
-    async def test_extract_data_transient_error(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_extract_data_transient_error(self, base_state: dict[str, Any]) -> None:
         """A failure mid-table records the error and stops the run."""
         call_count = [0]
 
@@ -405,10 +402,9 @@ class TestExtractData:
         assert result["failure"]["node"] == "extract_data"
 
     @pytest.mark.asyncio
-    async def test_extract_data_generic_error(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_extract_data_generic_error(self, base_state: dict[str, Any]) -> None:
         """Test handling of generic errors during extraction."""
+
         async def fail_side_effect(*args: Any, **kwargs: Any) -> dict[str, Any]:
             raise Exception("Connection lost")
 
@@ -422,9 +418,7 @@ class TestExtractData:
         assert any("Connection lost" in e for e in result["errors"])
 
     @pytest.mark.asyncio
-    async def test_partial_table_is_discarded_not_merged(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_partial_table_is_discarded_not_merged(self, base_state: dict[str, Any]) -> None:
         """The core M.4 contract: half a table must never look like all of it.
 
         Keeping the rows that did arrive is what let an interrupted
@@ -460,6 +454,7 @@ class TestExtractData:
         self, base_state: dict[str, Any]
     ) -> None:
         """Advancing past rows never read would lose them on the next run."""
+
         async def always_fail(*args: Any, **kwargs: Any) -> dict[str, Any]:
             raise Exception("Connection lost")
 
@@ -485,25 +480,21 @@ class TestExtractData:
         assert result["failure"] == {}
 
     @pytest.mark.asyncio
-    async def test_extract_data_cursor_pagination(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_extract_data_cursor_pagination(self, base_state: dict[str, Any]) -> None:
         """Test that extraction uses cursor for pagination."""
         # Track calls by table_name since entity_type is not passed to extract_data_impl
         call_counts = {}  # table_name -> count
         call_details = {}  # table_name -> list of cursors used
 
-        async def track_calls(
-            *args: Any, **kwargs: Any
-        ) -> dict[str, Any]:
+        async def track_calls(*args: Any, **kwargs: Any) -> dict[str, Any]:
             table_name = kwargs.get("table_name", args[1] if len(args) > 1 else "unknown")
             cursor = kwargs.get("cursor")
-            
+
             call_counts[table_name] = call_counts.get(table_name, 0) + 1
             if table_name not in call_details:
                 call_details[table_name] = []
             call_details[table_name].append(cursor)
-            
+
             if cursor is None:
                 return {
                     "rows": [{"id": 1, "name": "First"}],
@@ -524,12 +515,12 @@ class TestExtractData:
         for table, count in call_counts.items():
             assert count == 2, f"Expected 2 calls for {table}, got {count}"
             # First call has no cursor, second call has cursor
-            assert call_details[table] == [None, "page2"], f"Unexpected cursor sequence for {table}: {call_details[table]}"
+            assert call_details[table] == [None, "page2"], (
+                f"Unexpected cursor sequence for {table}: {call_details[table]}"
+            )
 
     @pytest.mark.asyncio
-    async def test_extract_data_empty_batch_stops_loop(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_extract_data_empty_batch_stops_loop(self, base_state: dict[str, Any]) -> None:
         """Test that empty batch with no next_cursor stops extraction."""
         with patch(
             "src.orchestrator.nodes.extract_data.extract_data_impl",
@@ -556,9 +547,7 @@ class TestExtractData:
         assert mock_extract_data_impl.called
 
     @pytest.mark.asyncio
-    async def test_extract_data_column_star_when_empty(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_extract_data_column_star_when_empty(self, base_state: dict[str, Any]) -> None:
         """Test that '*' columns used when table has no columns."""
         base_state["schemas"] = {
             "postgres_main": {
@@ -598,7 +587,11 @@ class TestExtractData:
     async def test_extract_data_preserves_existing_errors(
         self, base_state: dict[str, Any], mock_extract_data_impl: AsyncMock
     ) -> None:
-        """Test that existing errors are preserved."""
+        """Existing errors survive a call to this node via MergeState's real
+        operator.add reducer, not because the node re-returns the old
+        history itself (Phase 0 Sec 0.8 - see analyze_dependencies' test of
+        the same name for why the previous version of this test asserted
+        the actual bug)."""
         base_state["errors"] = ["pre-existing"]
 
         with patch(
@@ -607,7 +600,9 @@ class TestExtractData:
         ):
             result = await extract_data(base_state)
 
-        assert "pre-existing" in result["errors"]
+        assert "pre-existing" not in result.get("errors", [])
+        combined = base_state["errors"] + result.get("errors", [])
+        assert "pre-existing" in combined
 
     @pytest.mark.asyncio
     async def test_extract_data_all_entities_processed(
@@ -624,6 +619,7 @@ class TestExtractData:
         assert "person" in result["extracted_data"]
         assert mock_extract_data_impl.call_count == 2  # Once per entity
 
+
 class TestWatermarkTypeCoercion:
     """Numeric watermarks from the TEXT tracking column must be re-typed."""
 
@@ -634,13 +630,15 @@ class TestWatermarkTypeCoercion:
             "dependency_tree": {"company": []},
             "schemas": {
                 "origin_1": {
-                    "tables": [{
-                        "name": "companies",
-                        "full_name": "public.companies",
-                        "columns": [{"name": "company_id"}],
-                        "watermark_column": "company_id",
-                        "watermark_kind": "numeric",
-                    }],
+                    "tables": [
+                        {
+                            "name": "companies",
+                            "full_name": "public.companies",
+                            "columns": [{"name": "company_id"}],
+                            "watermark_column": "company_id",
+                            "watermark_kind": "numeric",
+                        }
+                    ],
                 },
             },
             "origins": [{"id": "origin_1", "type": "postgres", "connection": {}}],
@@ -657,17 +655,22 @@ class TestWatermarkTypeCoercion:
             captured.update(kwargs)
             return {"rows": [], "next_cursor": None}
 
-        with patch(
-            "src.orchestrator.nodes.extract_data._get_destination_connector",
-            return_value=dest,
-        ), patch(
-            "src.orchestrator.nodes.extract_data.extract_data_impl",
-            side_effect=fake_extract,
+        with (
+            patch(
+                "src.orchestrator.nodes.extract_data._get_destination_connector",
+                return_value=dest,
+            ),
+            patch(
+                "src.orchestrator.nodes.extract_data.extract_data_impl",
+                side_effect=fake_extract,
+            ),
         ):
             await extract_data(state)
 
         assert captured["watermark"] == {
-            "column": "company_id", "since": 1149, "kind": "numeric",
+            "column": "company_id",
+            "since": 1149,
+            "kind": "numeric",
         }
         assert isinstance(captured["watermark"]["since"], int)
 
@@ -683,13 +686,30 @@ class TestScopedExtraction:
             "schemas": {
                 "crm": {
                     "tables": [
-                        {"name": "companies", "full_name": "public.companies",
-                         "columns": [{"name": "id"}, {"name": "name"}],
-                         "primary_key": ["id"], "foreign_keys": []},
-                        {"name": "employees", "full_name": "public.employees",
-                         "columns": [{"name": "id"}, {"name": "full_name"}, {"name": "company_id"}],
-                         "primary_key": ["id"],
-                         "foreign_keys": [{"column": "company_id", "ref_table": "companies", "ref_column": "id"}]},
+                        {
+                            "name": "companies",
+                            "full_name": "public.companies",
+                            "columns": [{"name": "id"}, {"name": "name"}],
+                            "primary_key": ["id"],
+                            "foreign_keys": [],
+                        },
+                        {
+                            "name": "employees",
+                            "full_name": "public.employees",
+                            "columns": [
+                                {"name": "id"},
+                                {"name": "full_name"},
+                                {"name": "company_id"},
+                            ],
+                            "primary_key": ["id"],
+                            "foreign_keys": [
+                                {
+                                    "column": "company_id",
+                                    "ref_table": "companies",
+                                    "ref_column": "id",
+                                }
+                            ],
+                        },
                     ],
                 },
             },
@@ -702,13 +722,26 @@ class TestScopedExtraction:
             "extraction_config": {"default_batch_size": 100},
             "merge_scope": {"active": True, "subject": "Nova", "scope_type": "company"},
             "scope_plan": {
-                "subject": "Nova", "subject_entity": "company",
+                "subject": "Nova",
+                "subject_entity": "company",
                 "entities": {
-                    "company": [{"origin_id": "crm", "table": "public.companies",
-                                 "mode": "match", "columns": ["name"]}],
-                    "person": [{"origin_id": "crm", "table": "public.employees",
-                                "mode": "link", "columns": ["company_id"],
-                                "link_entity": "company"}],
+                    "company": [
+                        {
+                            "origin_id": "crm",
+                            "table": "public.companies",
+                            "mode": "match",
+                            "columns": ["name"],
+                        }
+                    ],
+                    "person": [
+                        {
+                            "origin_id": "crm",
+                            "table": "public.employees",
+                            "mode": "link",
+                            "columns": ["company_id"],
+                            "link_entity": "company",
+                        }
+                    ],
                 },
             },
         }
@@ -720,16 +753,21 @@ class TestScopedExtraction:
         async def fake_extract(**kwargs):
             calls.append({"table": kwargs["table_name"], "filter": kwargs.get("filter")})
             if kwargs["table_name"] == "public.companies":
-                return {"rows": [{"id": 10, "name": "Nova"}, {"id": 11, "name": "Nova Labs"}],
-                        "next_cursor": None}
+                return {
+                    "rows": [{"id": 10, "name": "Nova"}, {"id": 11, "name": "Nova Labs"}],
+                    "next_cursor": None,
+                }
             return {"rows": [{"id": 1, "full_name": "A", "company_id": 10}], "next_cursor": None}
 
-        with patch(
-            "src.orchestrator.nodes.extract_data._get_destination_connector",
-            return_value=MagicMock(get_extraction_state=MagicMock(return_value=None)),
-        ), patch(
-            "src.orchestrator.nodes.extract_data.extract_data_impl",
-            side_effect=fake_extract,
+        with (
+            patch(
+                "src.orchestrator.nodes.extract_data._get_destination_connector",
+                return_value=MagicMock(get_extraction_state=MagicMock(return_value=None)),
+            ),
+            patch(
+                "src.orchestrator.nodes.extract_data.extract_data_impl",
+                side_effect=fake_extract,
+            ),
         ):
             result = await extract_data(self._state())
 
@@ -746,20 +784,29 @@ class TestScopedExtraction:
         """A link_via plan reads the junction, then the entity by its keys."""
         state = self._state()
         state["dependency_tree"] = {"company": [], "person": ["company"]}
-        state["scope_plan"]["entities"]["person"] = [{
-            "origin_id": "crm", "table": "public.people", "mode": "link_via",
-            "columns": ["person_id"], "via_table": "public.jobs",
-            "via_from_column": "company_id", "via_to_column": "person_id",
-        }]
+        state["scope_plan"]["entities"]["person"] = [
+            {
+                "origin_id": "crm",
+                "table": "public.people",
+                "mode": "link_via",
+                "columns": ["person_id"],
+                "via_table": "public.jobs",
+                "via_from_column": "company_id",
+                "via_to_column": "person_id",
+            }
+        ]
         state["entity_tables"]["person"] = [{"origin_id": "crm", "table": "public.people"}]
-        state["schemas"]["crm"]["tables"].append({
-            "name": "people", "full_name": "public.people",
-            "columns": [{"name": "person_id"}, {"name": "full_name"}],
-            "primary_key": ["person_id"], "foreign_keys": [],
-        })
+        state["schemas"]["crm"]["tables"].append(
+            {
+                "name": "people",
+                "full_name": "public.people",
+                "columns": [{"name": "person_id"}, {"name": "full_name"}],
+                "primary_key": ["person_id"],
+                "foreign_keys": [],
+            }
+        )
         state["schemas"]["crm"]["tables"] = [
-            t for t in state["schemas"]["crm"]["tables"]
-            if t["full_name"] != "public.employees"
+            t for t in state["schemas"]["crm"]["tables"] if t["full_name"] != "public.employees"
         ]
 
         calls: list[dict[str, Any]] = []
@@ -773,12 +820,15 @@ class TestScopedExtraction:
                 return {"rows": [{"person_id": 1}, {"person_id": 2}], "next_cursor": None}
             return {"rows": [{"person_id": 1, "full_name": "A"}], "next_cursor": None}
 
-        with patch(
-            "src.orchestrator.nodes.extract_data._get_destination_connector",
-            return_value=MagicMock(get_extraction_state=MagicMock(return_value=None)),
-        ), patch(
-            "src.orchestrator.nodes.extract_data.extract_data_impl",
-            side_effect=fake_extract,
+        with (
+            patch(
+                "src.orchestrator.nodes.extract_data._get_destination_connector",
+                return_value=MagicMock(get_extraction_state=MagicMock(return_value=None)),
+            ),
+            patch(
+                "src.orchestrator.nodes.extract_data.extract_data_impl",
+                side_effect=fake_extract,
+            ),
         ):
             await extract_data(state)
 
@@ -798,12 +848,15 @@ class TestScopedExtraction:
             # The subject matches nothing.
             return {"rows": [], "next_cursor": None}
 
-        with patch(
-            "src.orchestrator.nodes.extract_data._get_destination_connector",
-            return_value=MagicMock(get_extraction_state=MagicMock(return_value=None)),
-        ), patch(
-            "src.orchestrator.nodes.extract_data.extract_data_impl",
-            side_effect=fake_extract,
+        with (
+            patch(
+                "src.orchestrator.nodes.extract_data._get_destination_connector",
+                return_value=MagicMock(get_extraction_state=MagicMock(return_value=None)),
+            ),
+            patch(
+                "src.orchestrator.nodes.extract_data.extract_data_impl",
+                side_effect=fake_extract,
+            ),
         ):
             await extract_data(self._state())
 
@@ -828,8 +881,7 @@ class TestScopedExtraction:
             if kwargs["table_name"] == "public.companies":
                 # One matched company, but "linking" it produces a huge
                 # employee id set (mirrors a real large-employer Boeing run).
-                return {"rows": [{"id": i, "name": "Nova"} for i in many_ids],
-                        "next_cursor": None}
+                return {"rows": [{"id": i, "name": "Nova"} for i in many_ids], "next_cursor": None}
             filt = kwargs.get("filter") or {}
             ids_here = filt.get("company_id", {}).get("value", [])
             return {
@@ -837,12 +889,15 @@ class TestScopedExtraction:
                 "next_cursor": None,
             }
 
-        with patch(
-            "src.orchestrator.nodes.extract_data._get_destination_connector",
-            return_value=MagicMock(get_extraction_state=MagicMock(return_value=None)),
-        ), patch(
-            "src.orchestrator.nodes.extract_data.extract_data_impl",
-            side_effect=fake_extract,
+        with (
+            patch(
+                "src.orchestrator.nodes.extract_data._get_destination_connector",
+                return_value=MagicMock(get_extraction_state=MagicMock(return_value=None)),
+            ),
+            patch(
+                "src.orchestrator.nodes.extract_data.extract_data_impl",
+                side_effect=fake_extract,
+            ),
         ):
             result = await extract_data(state)
 
@@ -852,9 +907,7 @@ class TestScopedExtraction:
         for c in employee_calls:
             assert len(c["filter"]["company_id"]["value"]) <= _MAX_IN_FILTER_VALUES
         # ...and every id across all chunks was covered, none dropped.
-        all_queried_ids = {
-            v for c in employee_calls for v in c["filter"]["company_id"]["value"]
-        }
+        all_queried_ids = {v for c in employee_calls for v in c["filter"]["company_id"]["value"]}
         assert all_queried_ids == set(many_ids)
         assert result.get("failure", {}) == {}
 
@@ -879,7 +932,10 @@ class TestChunkedFilters:
         chunks = _chunked_filters(f, chunk_size=3)
         assert len(chunks) == 4
         assert [c["id"]["value"] for c in chunks] == [
-            [0, 1, 2], [3, 4, 5], [6, 7, 8], [9],
+            [0, 1, 2],
+            [3, 4, 5],
+            [6, 7, 8],
+            [9],
         ]
         # Every id covered exactly once, in order, none dropped or duplicated.
         assert [v for c in chunks for v in c["id"]["value"]] == list(range(10))
@@ -892,6 +948,67 @@ class TestChunkedFilters:
         f = {"id": {"op": "in", "value": list(range(6))}}
         chunks = _chunked_filters(f, chunk_size=5)
         assert len(chunks) == 2
+
+
+class TestScratchFilter:
+    """Unit tests for _scratch_filter (Part 1.5 D.6): a large ClickHouse
+    linked-id filter gets one scratch-table subquery instead of many
+    chunked IN(...) round-trips. Every non-ClickHouse or small-list path
+    must fall back to (None, None) -- meaning "use _chunked_filters" --
+    unchanged."""
+
+    async def test_non_clickhouse_origin_returns_none(self) -> None:
+        origin = {"type": "postgres", "connection": {}}
+        big_list = list(range(_MAX_IN_FILTER_VALUES + 1))
+        result_filter, cleanup = await _scratch_filter(origin, "id", big_list)
+        assert result_filter is None
+        assert cleanup is None
+
+    async def test_small_list_returns_none_even_for_clickhouse(self) -> None:
+        origin = {"type": "clickhouse", "connection": {}}
+        small_list = list(range(_MAX_IN_FILTER_VALUES))
+        result_filter, cleanup = await _scratch_filter(origin, "id", small_list)
+        assert result_filter is None
+        assert cleanup is None
+
+    async def test_clickhouse_large_list_builds_in_scratch_filter(self) -> None:
+        origin = {"type": "clickhouse", "connection": {}}
+        big_list = list(range(_MAX_IN_FILTER_VALUES + 1))
+        mock_connector = MagicMock()
+        mock_connector.create_id_scratch_table = AsyncMock(return_value="merge_engine_scratch_x")
+        mock_connector.drop_scratch_table = AsyncMock()
+        mock_connector.close = AsyncMock()
+
+        with patch(
+            "src.orchestrator.nodes.extract_data.ClickHouseConnector", return_value=mock_connector
+        ):
+            result_filter, cleanup = await _scratch_filter(origin, "company_id", big_list)
+
+        assert result_filter == {
+            "company_id": {"op": "in_scratch", "value": "merge_engine_scratch_x"}
+        }
+        mock_connector.create_id_scratch_table.assert_awaited_once_with(big_list)
+
+        assert cleanup is not None
+        await cleanup()
+        mock_connector.drop_scratch_table.assert_awaited_once_with("merge_engine_scratch_x")
+        mock_connector.close.assert_awaited_once()
+
+    async def test_scratch_table_creation_failure_degrades_to_none(self) -> None:
+        # Setup failing must never be the thing that breaks extraction --
+        # the caller falls back to _chunked_filters.
+        origin = {"type": "clickhouse", "connection": {}}
+        big_list = list(range(_MAX_IN_FILTER_VALUES + 1))
+        mock_connector = MagicMock()
+        mock_connector.create_id_scratch_table = AsyncMock(side_effect=RuntimeError("no space"))
+
+        with patch(
+            "src.orchestrator.nodes.extract_data.ClickHouseConnector", return_value=mock_connector
+        ):
+            result_filter, cleanup = await _scratch_filter(origin, "id", big_list)
+
+        assert result_filter is None
+        assert cleanup is None
 
 
 class TestForceFullExtraction:
@@ -908,13 +1025,15 @@ class TestForceFullExtraction:
             "dependency_tree": {"company": []},
             "schemas": {
                 "origin_1": {
-                    "tables": [{
-                        "name": "companies",
-                        "full_name": "public.companies",
-                        "columns": [{"name": "company_id"}],
-                        "watermark_column": "company_id",
-                        "watermark_kind": "numeric",
-                    }],
+                    "tables": [
+                        {
+                            "name": "companies",
+                            "full_name": "public.companies",
+                            "columns": [{"name": "company_id"}],
+                            "watermark_column": "company_id",
+                            "watermark_kind": "numeric",
+                        }
+                    ],
                 },
             },
             "origins": [{"id": "origin_1", "type": "postgres", "connection": {}}],
@@ -933,12 +1052,15 @@ class TestForceFullExtraction:
             captured.update(kwargs)
             return {"rows": [], "next_cursor": None}
 
-        with patch(
-            "src.orchestrator.nodes.extract_data._get_destination_connector",
-            return_value=dest,
-        ), patch(
-            "src.orchestrator.nodes.extract_data.extract_data_impl",
-            side_effect=fake_extract,
+        with (
+            patch(
+                "src.orchestrator.nodes.extract_data._get_destination_connector",
+                return_value=dest,
+            ),
+            patch(
+                "src.orchestrator.nodes.extract_data.extract_data_impl",
+                side_effect=fake_extract,
+            ),
         ):
             await extract_data(self._state(force=True))
 
@@ -956,17 +1078,22 @@ class TestForceFullExtraction:
             captured.update(kwargs)
             return {"rows": [], "next_cursor": None}
 
-        with patch(
-            "src.orchestrator.nodes.extract_data._get_destination_connector",
-            return_value=dest,
-        ), patch(
-            "src.orchestrator.nodes.extract_data.extract_data_impl",
-            side_effect=fake_extract,
+        with (
+            patch(
+                "src.orchestrator.nodes.extract_data._get_destination_connector",
+                return_value=dest,
+            ),
+            patch(
+                "src.orchestrator.nodes.extract_data.extract_data_impl",
+                side_effect=fake_extract,
+            ),
         ):
             await extract_data(self._state(force=False))
 
         # Default behaviour is unchanged: the watermark is read and pushed down.
         assert captured["watermark"] == {
-            "column": "company_id", "since": 1149, "kind": "numeric",
+            "column": "company_id",
+            "since": 1149,
+            "kind": "numeric",
         }
         dest.get_extraction_state.assert_called_once()

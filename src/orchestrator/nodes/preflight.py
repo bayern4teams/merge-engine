@@ -16,6 +16,7 @@ checks stop the pipeline.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import shutil
 from pathlib import Path
@@ -44,7 +45,7 @@ _PROBE_TABLE = "_merge_engine_preflight_probe"
 class _Check:
     """One preflight result: what was tested, whether it passed, and why."""
 
-    __slots__ = ("name", "ok", "detail", "blocking")
+    __slots__ = ("blocking", "detail", "name", "ok")
 
     def __init__(self, name: str, ok: bool, detail: str = "", blocking: bool = True) -> None:
         self.name = name
@@ -101,10 +102,8 @@ def _probe_clickhouse(cfg: dict[str, Any]) -> None:
     try:
         client.query("SELECT 1")
     finally:
-        try:
+        with contextlib.suppress(Exception):
             client.close()
-        except Exception:
-            pass
 
 
 def _probe_mongodb(cfg: dict[str, Any]) -> None:
@@ -138,8 +137,7 @@ def _probe_reachable(db_type: str, cfg: dict[str, Any]) -> None:
     probe = _PROBES.get((db_type or "").lower())
     if probe is None:
         raise UserInputError(
-            f"Unsupported database type '{db_type}'. "
-            f"Supported: {', '.join(sorted(set(_PROBES)))}."
+            f"Unsupported database type '{db_type}'. Supported: {', '.join(sorted(set(_PROBES)))}."
         )
     probe(cfg)
 
@@ -165,12 +163,8 @@ def _probe_postgres_writable(cfg: dict[str, Any]) -> None:
     try:
         conn.autocommit = False
         with conn.cursor() as cur:
-            cur.execute(
-                f'CREATE TABLE "{schema}"."{_PROBE_TABLE}" (id integer)'
-            )
-            cur.execute(
-                f'INSERT INTO "{schema}"."{_PROBE_TABLE}" (id) VALUES (1)'
-            )
+            cur.execute(f'CREATE TABLE "{schema}"."{_PROBE_TABLE}" (id integer)')
+            cur.execute(f'INSERT INTO "{schema}"."{_PROBE_TABLE}" (id) VALUES (1)')
         conn.rollback()
     finally:
         conn.close()
@@ -197,10 +191,8 @@ def _probe_clickhouse_writable(cfg: dict[str, Any]) -> None:
         client.command(f"INSERT INTO {database}.{_PROBE_TABLE} VALUES (1)")
         client.command(f"DROP TABLE IF EXISTS {database}.{_PROBE_TABLE}")
     finally:
-        try:
+        with contextlib.suppress(Exception):
             client.close()
-        except Exception:
-            pass
 
 
 def _probe_writable(db_type: str, cfg: dict[str, Any]) -> None:
@@ -248,13 +240,16 @@ def _check_disk_space() -> _Check:
         free = shutil.disk_usage(target).free
     except Exception as exc:
         return _Check(
-            "disk space", False,
-            f"Could not determine free disk space: {exc}", blocking=False,
+            "disk space",
+            False,
+            f"Could not determine free disk space: {exc}",
+            blocking=False,
         )
     free_mb = free // (1024 * 1024)
     if free < _MIN_FREE_BYTES:
         return _Check(
-            "disk space", False,
+            "disk space",
+            False,
             f"Only {free_mb} MB free where checkpoints and run reports are "
             f"written; at least {_MIN_FREE_BYTES // (1024 * 1024)} MB is "
             "needed for the run to be resumable.",
@@ -278,22 +273,31 @@ async def preflight(state: dict[str, Any]) -> dict[str, Any]:
     llm_config = state.get("llm_config") or {}
 
     # ── The request itself ──────────────────────────────────────────
-    checks.append(_Check(
-        "merge request", bool(user_request),
-        "" if user_request else
-        "No merge request was given, so there is nothing to interpret.",
-    ))
-    checks.append(_Check(
-        "origins configured", bool(origins),
-        f"{len(origins)} origin(s)" if origins else
-        "No origin databases are configured, so there is nothing to read.",
-    ))
-    checks.append(_Check(
-        "destination configured", bool(destination.get("type")),
-        f"{destination.get('type')} → {destination.get('database', '?')}"
-        if destination.get("type") else
-        "No destination database is configured, so there is nowhere to write.",
-    ))
+    checks.append(
+        _Check(
+            "merge request",
+            bool(user_request),
+            "" if user_request else "No merge request was given, so there is nothing to interpret.",
+        )
+    )
+    checks.append(
+        _Check(
+            "origins configured",
+            bool(origins),
+            f"{len(origins)} origin(s)"
+            if origins
+            else "No origin databases are configured, so there is nothing to read.",
+        )
+    )
+    checks.append(
+        _Check(
+            "destination configured",
+            bool(destination.get("type")),
+            f"{destination.get('type')} → {destination.get('database', '?')}"
+            if destination.get("type")
+            else "No destination database is configured, so there is nowhere to write.",
+        )
+    )
 
     # ── Origin reachability ─────────────────────────────────────────
     # Every origin is probed even after one fails, so the user sees the full
@@ -303,16 +307,17 @@ async def preflight(state: dict[str, Any]) -> dict[str, Any]:
         origin_type = origin.get("type", "") if isinstance(origin, dict) else ""
         label = f"origin '{origin_id}' reachable"
         try:
-            await asyncio.to_thread(
-                _probe_reachable, origin_type, _connection_of(origin)
-            )
+            await asyncio.to_thread(_probe_reachable, origin_type, _connection_of(origin))
             checks.append(_Check(label, True, f"{origin_type}"))
         except Exception as exc:
             classified = classify_exception(exc)
-            checks.append(_Check(
-                label, False,
-                f"{type(classified).__name__}: {classified}",
-            ))
+            checks.append(
+                _Check(
+                    label,
+                    False,
+                    f"{type(classified).__name__}: {classified}",
+                )
+            )
 
     # ── Destination reachability and write permission ───────────────
     dest_type = destination.get("type", "")
@@ -322,44 +327,62 @@ async def preflight(state: dict[str, Any]) -> dict[str, Any]:
             checks.append(_Check("destination reachable", True, dest_type))
         except Exception as exc:
             classified = classify_exception(exc)
-            checks.append(_Check(
-                "destination reachable", False,
-                f"{type(classified).__name__}: {classified}",
-            ))
+            checks.append(
+                _Check(
+                    "destination reachable",
+                    False,
+                    f"{type(classified).__name__}: {classified}",
+                )
+            )
         else:
             # Only worth testing writes once we know we can connect at all.
             try:
                 await asyncio.to_thread(_probe_writable, dest_type, destination)
-                checks.append(_Check(
-                    "destination writable", True,
-                    "may create tables and insert rows",
-                ))
+                checks.append(
+                    _Check(
+                        "destination writable",
+                        True,
+                        "may create tables and insert rows",
+                    )
+                )
             except Exception as exc:
                 classified = classify_exception(exc)
-                checks.append(_Check(
-                    "destination writable", False,
-                    f"Cannot create tables in the destination — the merge "
-                    f"would fail at the very last step. {classified}",
-                ))
+                checks.append(
+                    _Check(
+                        "destination writable",
+                        False,
+                        f"Cannot create tables in the destination — the merge "
+                        f"would fail at the very last step. {classified}",
+                    )
+                )
 
     # ── LLM reachability ────────────────────────────────────────────
     try:
         await _probe_llm(llm_config)
-        checks.append(_Check(
-            "LLM reachable", True,
-            f"{llm_config.get('provider', '?')}/{llm_config.get('model', '?')}",
-        ))
-    except asyncio.TimeoutError:
-        checks.append(_Check(
-            "LLM reachable", False,
-            f"No response within {_LLM_TIMEOUT_S}s from "
-            f"{llm_config.get('base_url') or 'the configured endpoint'}.",
-        ))
+        checks.append(
+            _Check(
+                "LLM reachable",
+                True,
+                f"{llm_config.get('provider', '?')}/{llm_config.get('model', '?')}",
+            )
+        )
+    except TimeoutError:
+        checks.append(
+            _Check(
+                "LLM reachable",
+                False,
+                f"No response within {_LLM_TIMEOUT_S}s from "
+                f"{llm_config.get('base_url') or 'the configured endpoint'}.",
+            )
+        )
     except Exception as exc:
-        checks.append(_Check(
-            "LLM reachable", False,
-            f"{type(classify_exception(exc)).__name__}: {exc}",
-        ))
+        checks.append(
+            _Check(
+                "LLM reachable",
+                False,
+                f"{type(classify_exception(exc)).__name__}: {exc}",
+            )
+        )
 
     checks.append(_check_disk_space())
 
@@ -377,7 +400,8 @@ async def preflight(state: dict[str, Any]) -> dict[str, Any]:
         logger.log(
             logging.INFO if check.ok else logging.ERROR,
             "preflight %-28s %s%s",
-            check.name, "OK" if check.ok else "FAILED",
+            check.name,
+            "OK" if check.ok else "FAILED",
             f" — {check.detail}" if check.detail else "",
         )
 

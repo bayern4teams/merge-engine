@@ -25,9 +25,9 @@ import logging
 from typing import Any
 
 from src.mcp_server.tools.select_entity_tables import (
-    build_table_catalog,
     _known_tables,
     _resolve_table,
+    build_table_catalog,
 )
 from src.orchestrator.utils.entity_aliases import concept_matches
 
@@ -101,15 +101,19 @@ def _heuristic_plan(
             if entity == subject_entity:
                 if not is_subject_table:
                     continue
-                match_cols = [
-                    c for c in cols if _is_name_column(c)
-                ] or ([cols[1]] if len(cols) > 1 else cols[:1])
+                match_cols = [c for c in cols if _is_name_column(c)] or (
+                    [cols[1]] if len(cols) > 1 else cols[:1]
+                )
                 if match_cols:
-                    plan[entity].append({
-                        "origin_id": origin_id, "table": full,
-                        "mode": "match", "columns": match_cols[:2],
-                        "reason": "subject entity's own record (heuristic)",
-                    })
+                    plan[entity].append(
+                        {
+                            "origin_id": origin_id,
+                            "table": full,
+                            "mode": "match",
+                            "columns": match_cols[:2],
+                            "reason": "subject entity's own record (heuristic)",
+                        }
+                    )
                 continue
 
             # Dependent entity: only include a table that plausibly holds this
@@ -128,29 +132,35 @@ def _heuristic_plan(
                         link_col = lower[c]
                         break
             if link_col:
-                plan[entity].append({
-                    "origin_id": origin_id, "table": full,
-                    "mode": "link", "columns": [link_col],
-                    "link_entity": subject_entity,
-                    "reason": "links to the subject entity (heuristic)",
-                })
+                plan[entity].append(
+                    {
+                        "origin_id": origin_id,
+                        "table": full,
+                        "mode": "link",
+                        "columns": [link_col],
+                        "link_entity": subject_entity,
+                        "reason": "links to the subject entity (heuristic)",
+                    }
+                )
                 continue
 
             # No direct link: look for a junction table (jobs / employment)
             # that ties this entity to the subject — "people who work at Nova".
-            via = _find_junction(
-                schemas, origin_id, table, subject_entity, entity
-            )
+            via = _find_junction(schemas, origin_id, table, subject_entity, entity)
             if via:
-                plan[entity].append({
-                    "origin_id": origin_id, "table": full,
-                    "mode": "link_via", "columns": [via["entity_key"]],
-                    "link_entity": subject_entity,
-                    "via_table": via["via_table"],
-                    "via_from_column": via["from_column"],
-                    "via_to_column": via["to_column"],
-                    "reason": f"linked to the subject via {via['via_table']} (heuristic)",
-                })
+                plan[entity].append(
+                    {
+                        "origin_id": origin_id,
+                        "table": full,
+                        "mode": "link_via",
+                        "columns": [via["entity_key"]],
+                        "link_entity": subject_entity,
+                        "via_table": via["via_table"],
+                        "via_from_column": via["from_column"],
+                        "via_to_column": via["to_column"],
+                        "reason": f"linked to the subject via {via['via_table']} (heuristic)",
+                    }
+                )
 
     return plan
 
@@ -170,7 +180,7 @@ def _find_junction(
     the person — into an extractable filter.
     """
     entity_pk = None
-    for c in (entity_table.get("primary_key") or []):
+    for c in entity_table.get("primary_key") or []:
         if c:
             entity_pk = c
             break
@@ -229,7 +239,8 @@ def _sanitize_plan(
             if resolved is None:
                 logger.warning(
                     "Scope plan named a table not in any schema: %s.%s — dropped.",
-                    origin_id, table,
+                    origin_id,
+                    table,
                 )
                 continue
             mode = str(item.get("mode") or "").strip().lower()
@@ -258,7 +269,8 @@ def _sanitize_plan(
                 if not (via_table and from_col and to_col):
                     logger.warning(
                         "Scope plan link_via for %s is missing its junction "
-                        "(via_table/from/to) — dropped.", resolved,
+                        "(via_table/from/to) — dropped.",
+                        resolved,
                     )
                     continue
                 # Resolve the junction table name against the schema too.
@@ -303,7 +315,7 @@ async def plan_scope_impl(
     if not subject or not target_entities or not schemas or not llm_enabled:
         return _wrap(floor, "", False)
 
-    from src.llm import LLMClient, PROMPT_TEMPLATES
+    from src.llm import PROMPT_TEMPLATES, LLMClient
 
     prompts = PROMPT_TEMPLATES.get("scope_planning", {})
     system_prompt = prompts.get("system", "")
@@ -314,8 +326,7 @@ async def plan_scope_impl(
 
     catalog = build_table_catalog(schemas, include_foreign_keys=True)
     user_prompt = (
-        human_template
-        .replace("{subject}", subject)
+        human_template.replace("{subject}", subject)
         .replace("{subject_entity}", subject_entity)
         .replace("{target_entities}", json.dumps(target_entities))
         .replace("{table_catalog}", catalog)
@@ -323,9 +334,7 @@ async def plan_scope_impl(
 
     try:
         client = LLMClient(llm_config)
-        result = await client.call_json(
-            system_prompt=system_prompt, user_prompt=user_prompt
-        )
+        result = await client.call_json(system_prompt=system_prompt, user_prompt=user_prompt)
         proposed = result.get("entities", {}) if isinstance(result, dict) else {}
         notes = str(result.get("notes", "")) if isinstance(result, dict) else ""
         clean = _sanitize_plan(proposed, target_entities, subject_entity, schemas)
@@ -333,9 +342,7 @@ async def plan_scope_impl(
         # If the model returned nothing usable for any entity, the heuristic
         # floor is a better answer than an empty plan that extracts nothing.
         if not any(clean.values()):
-            logger.warning(
-                "LLM scope plan had no usable entries; falling back to heuristic."
-            )
+            logger.warning("LLM scope plan had no usable entries; falling back to heuristic.")
             return _wrap(floor, notes or "LLM plan empty; used heuristic.", False)
 
         # Fill in entities the model skipped from the floor, so a partial answer
@@ -346,13 +353,15 @@ async def plan_scope_impl(
 
         logger.info(
             "Scope plan for %r: %s",
-            subject, {e: len(v) for e, v in clean.items()},
+            subject,
+            {e: len(v) for e, v in clean.items()},
         )
         return _wrap(clean, notes, True)
 
     except Exception as exc:
         logger.warning(
-            "LLM scope planning failed (%s); using the heuristic scope plan.", exc,
+            "LLM scope planning failed (%s); using the heuristic scope plan.",
+            exc,
         )
         return _wrap(floor, f"LLM scope planning unavailable: {exc}", False)
 
@@ -403,21 +412,26 @@ async def probe_subject_candidates(
                 batch_size=_PROBE_PER_TABLE,
                 filter=filt,
             )
-        except Exception as exc:  # noqa: BLE001 — preview must not break the run
+        except Exception as exc:
             logger.warning(
                 "Scope probe skipped %s.%s: %s",
-                entry.get("origin_id"), entry.get("table"), exc,
+                entry.get("origin_id"),
+                entry.get("table"),
+                exc,
             )
             continue
         for row in (result.get("rows") or [])[:_PROBE_PER_TABLE]:
-            candidates.append({
-                "origin_id": entry.get("origin_id"),
-                "table": entry.get("table"),
-                "fields": {
-                    k: v for k, v in row.items()
-                    if not str(k).startswith("_") and v not in (None, "")
-                },
-            })
+            candidates.append(
+                {
+                    "origin_id": entry.get("origin_id"),
+                    "table": entry.get("table"),
+                    "fields": {
+                        k: v
+                        for k, v in row.items()
+                        if not str(k).startswith("_") and v not in (None, "")
+                    },
+                }
+            )
             if len(candidates) >= _PROBE_TOTAL:
                 break
     logger.info("Scope probe found %d candidate subject row(s)", len(candidates))

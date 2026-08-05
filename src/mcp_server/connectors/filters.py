@@ -9,6 +9,11 @@ membership in a set of subject ids — so the contract is widened to:
     {column: {"op": "eq",    "value": v}}   → equals
     {column: {"op": "ilike", "value": v}}   → case-insensitive substring
     {column: {"op": "in",    "value": [..]}}→ membership
+    {column: {"op": "in_scratch", "value": name}} → membership via a scratch
+        table (Part 1.5 D.6; ClickHouse-only, built by
+        ClickHouseConnector.create_id_scratch_table — ``name`` is a table
+        name, not a value list, so it is exempt from the "in" op's
+        list/empty-list handling below)
 
 This module turns either shape into a flat list of canonical conditions; each
 connector renders them in its own dialect (named binds for PostgreSQL, typed
@@ -20,7 +25,7 @@ from __future__ import annotations
 
 from typing import Any
 
-_VALID_OPS = ("eq", "ilike", "in")
+_VALID_OPS = ("eq", "ilike", "in", "in_scratch")
 
 
 def normalize_filter(filter: dict[str, Any] | None) -> list[dict[str, Any]]:

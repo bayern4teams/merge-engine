@@ -6,8 +6,6 @@ Tests _heuristic_match and _map_type_generic.
 
 from __future__ import annotations
 
-import pytest
-
 from src.mcp_server.tools.map_fields import (
     _heuristic_match,
     _map_type_generic,
@@ -90,7 +88,7 @@ class TestHeuristicMatch:
 
     def test_one_empty_string(self) -> None:
         """One empty and one non-empty - empty normalizes to empty string.
-        
+
         After normalization: "" vs "name" -> both strip non-alnum -> "" vs "name"
         Empty string is contained in any string, so score is 0.8
         """
@@ -196,8 +194,9 @@ class TestHeuristicMatchEdgeCases:
         assert _heuristic_match(long1, long2) == 1.0
 
     def test_non_alphanumeric_characters(self) -> None:
-        """Non-alphanumeric characters should be handled."""
-        assert _heuristic_match("field@name", "field_name") == 0.0
+        """Non-alphanumeric separators tokenize the same as underscores, so
+        this is a confident word-level match, not a non-match."""
+        assert _heuristic_match("field@name", "field_name") >= 0.85
 
     def test_leading_trailing_whitespace(self) -> None:
         """Whitespace in field names should be normalized."""

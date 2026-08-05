@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from src.orchestrator.nodes.map_fields_node import (
-    map_fields,
     has_unmapped_fields,
+    map_fields,
 )
 
 
@@ -58,23 +58,41 @@ class TestMapFields:
     @pytest.fixture
     def mock_map_fields_impl(self) -> AsyncMock:
         """Mock map_fields_impl."""
-        return AsyncMock(return_value={
-            "field_mapping": {
-                "name": {"dest_column": "name", "confidence": 0.98, "requires_schema_change": False},
-                "email": {"dest_column": "email", "confidence": 0.95, "requires_schema_change": False},
-                "phone": {"dest_column": "phone_number", "confidence": 0.88, "requires_schema_change": False},
-                "address": {"dest_column": None, "confidence": 0.0, "requires_schema_change": True},
-            },
-            "schema_changes": [
-                {
-                    "column": "address",
-                    "data_type": "VARCHAR",
-                    "table": "merged_companies",
-                    "entity_type": "company",
-                }
-            ],
-            "unmapped_fields": [],
-        })
+        return AsyncMock(
+            return_value={
+                "field_mapping": {
+                    "name": {
+                        "dest_column": "name",
+                        "confidence": 0.98,
+                        "requires_schema_change": False,
+                    },
+                    "email": {
+                        "dest_column": "email",
+                        "confidence": 0.95,
+                        "requires_schema_change": False,
+                    },
+                    "phone": {
+                        "dest_column": "phone_number",
+                        "confidence": 0.88,
+                        "requires_schema_change": False,
+                    },
+                    "address": {
+                        "dest_column": None,
+                        "confidence": 0.0,
+                        "requires_schema_change": True,
+                    },
+                },
+                "schema_changes": [
+                    {
+                        "column": "address",
+                        "data_type": "VARCHAR",
+                        "table": "merged_companies",
+                        "entity_type": "company",
+                    }
+                ],
+                "unmapped_fields": [],
+            }
+        )
 
     @pytest.mark.asyncio
     async def test_map_fields_success(
@@ -94,24 +112,24 @@ class TestMapFields:
         assert not result["errors"]
 
     @pytest.mark.asyncio
-    async def test_map_fields_collects_unmapped_fields(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_map_fields_collects_unmapped_fields(self, base_state: dict[str, Any]) -> None:
         """Test that low-confidence unmapped fields are collected under the entity type."""
-        mock_impl = AsyncMock(return_value={
-            "field_mapping": {
-                "name": {"dest_column": "name", "confidence": 0.98},
-            },
-            "schema_changes": [],
-            "unmapped_fields": [
-                {
-                    "field": "phone",
-                    "confidence": 0.4,
-                    "suggested_column": "phone_number",
-                    "reason": "Low confidence match; requires human review",
-                }
-            ],
-        })
+        mock_impl = AsyncMock(
+            return_value={
+                "field_mapping": {
+                    "name": {"dest_column": "name", "confidence": 0.98},
+                },
+                "schema_changes": [],
+                "unmapped_fields": [
+                    {
+                        "field": "phone",
+                        "confidence": 0.4,
+                        "suggested_column": "phone_number",
+                        "reason": "Low confidence match; requires human review",
+                    }
+                ],
+            }
+        )
         with patch(
             "src.orchestrator.nodes.map_fields_node.map_fields_impl",
             mock_impl,
@@ -144,19 +162,19 @@ class TestMapFields:
         assert change["data_type"] == "VARCHAR"
 
     @pytest.mark.asyncio
-    async def test_map_fields_skips_empty_entity(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_map_fields_skips_empty_entity(self, base_state: dict[str, Any]) -> None:
         """Test that entities with no unified records are skipped."""
         base_state["unified_entities"]["company"] = []
 
         with patch(
             "src.orchestrator.nodes.map_fields_node.map_fields_impl",
-            AsyncMock(return_value={
-                "field_mapping": {},
-                "schema_changes": [],
-                "unmapped_fields": [],
-            }),
+            AsyncMock(
+                return_value={
+                    "field_mapping": {},
+                    "schema_changes": [],
+                    "unmapped_fields": [],
+                }
+            ),
         ) as mock_impl:
             result = await map_fields(base_state)
 
@@ -164,10 +182,9 @@ class TestMapFields:
         mock_impl.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_map_fields_mapping_failure(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_map_fields_mapping_failure(self, base_state: dict[str, Any]) -> None:
         """Test handling of mapping failure."""
+
         async def failing_impl(*args: Any, **kwargs: Any) -> dict[str, Any]:
             raise Exception("Mapping service error")
 
@@ -185,7 +202,11 @@ class TestMapFields:
     async def test_map_fields_preserves_existing_errors(
         self, base_state: dict[str, Any], mock_map_fields_impl: AsyncMock
     ) -> None:
-        """Test that existing errors are preserved."""
+        """Existing errors survive a call to this node via MergeState's real
+        operator.add reducer, not because the node re-returns the old
+        history itself (Phase 0 Sec 0.8 - see analyze_dependencies' test of
+        the same name for why the previous version of this test asserted
+        the actual bug)."""
         base_state["errors"] = ["pre-existing"]
 
         with patch(
@@ -194,7 +215,9 @@ class TestMapFields:
         ):
             result = await map_fields(base_state)
 
-        assert "pre-existing" in result["errors"]
+        assert "pre-existing" not in result.get("errors", [])
+        combined = base_state["errors"] + result.get("errors", [])
+        assert "pre-existing" in combined
 
     @pytest.mark.asyncio
     async def test_map_fields_dict_destination(
@@ -219,6 +242,7 @@ class TestMapFields:
         self, base_state: dict[str, Any], mock_map_fields_impl: AsyncMock
     ) -> None:
         """Test with object-style destination config."""
+
         class MockDestination:
             type = "postgresql"
             tables = {"company": "object_table"}
@@ -255,9 +279,7 @@ class TestMapFields:
         self, base_state: dict[str, Any], mock_map_fields_impl: AsyncMock
     ) -> None:
         """Test that existing schema changes are preserved."""
-        base_state["pending_schema_changes"] = [
-            {"column": "existing_col", "data_type": "TEXT"}
-        ]
+        base_state["pending_schema_changes"] = [{"column": "existing_col", "data_type": "TEXT"}]
 
         with patch(
             "src.orchestrator.nodes.map_fields_node.map_fields_impl",
@@ -273,9 +295,7 @@ class TestMapFields:
         self, base_state: dict[str, Any], mock_map_fields_impl: AsyncMock
     ) -> None:
         """Test that existing field mappings are preserved."""
-        base_state["field_mappings"] = {
-            "existing_entity": {"field1": {"dest_column": "col1"}}
-        }
+        base_state["field_mappings"] = {"existing_entity": {"field1": {"dest_column": "col1"}}}
 
         with patch(
             "src.orchestrator.nodes.map_fields_node.map_fields_impl",
@@ -292,9 +312,7 @@ class TestMapFields:
     ) -> None:
         """Phase 4.3: a field only present starting at record 6+ must still
         be discovered — the old 5-record window silently dropped it."""
-        records = [
-            {"id": f"cluster-{i}", "name": f"Company {i}"} for i in range(10)
-        ]
+        records = [{"id": f"cluster-{i}", "name": f"Company {i}"} for i in range(10)]
         records[7]["middle_name"] = "Q"
         base_state["unified_entities"] = {"company": records}
 

@@ -14,11 +14,9 @@ import logging
 from typing import Any
 
 from mcp.server import Server
-from mcp.server.models import InitializationOptions
-from mcp.types import Tool, TextContent
+from mcp.types import TextContent, Tool
 
 from src.mcp_server.connectors import create_connector
-from src.utils.config_loader import load_config
 
 logger = logging.getLogger("merge-engine.mcp_server")
 
@@ -269,20 +267,22 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
 # ── Tool Handler Registry ─────────────────────────────────────────────
 
-# Import all tool handlers and register them
-from src.mcp_server.tools import (
+# Import all tool handlers and register them. Deliberately not at the top of
+# the file: src.mcp_server.tools imports back from this module's package at
+# import time in some tool submodules, so moving this above the handler
+# functions it registers below risks a circular import (noqa: E402).
+from src.mcp_server.tools import (  # noqa: E402
     discover_schema_handler,
     extract_data_handler,
+    load_data_handler,
+    map_fields_handler,
     resolve_entities_impl,
     unify_entity_group_handler,
-    map_fields_handler,
-    load_data_handler,
 )
 
 
 async def _extend_schema_handler(arguments: dict[str, Any]) -> dict[str, Any]:
     """Handler for extend_schema tool."""
-    from src.mcp_server.connectors import create_connector
     from src.mcp_server.server import _get_config
     from src.orchestrator.utils.retry import PermanentError
 

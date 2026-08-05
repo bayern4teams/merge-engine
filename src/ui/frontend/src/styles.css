@@ -851,3 +851,133 @@ textarea:focus {
   margin-top: 2px;
   flex-shrink: 0;
 }
+
+/* ── Advanced panel (Part 1.6.A run-by-run overrides) ────────────────────── */
+
+.advanced-panel {
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.advanced-panel > summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  opacity: 0.85;
+  list-style: none;
+}
+
+.advanced-panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced-panel > summary::before {
+  content: "▸ ";
+}
+
+.advanced-panel[open] > summary::before {
+  content: "▾ ";
+}
+
+.advanced-body {
+  margin-top: 12px;
+}
+
+.gate-toggle-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px 16px;
+  margin-top: 8px;
+}
+
+.gate-toggle {
+  margin-top: 0;
+}
+
+@media (max-width: 720px) {
+  .gate-toggle-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Settings screen (Part 1.6.A) ─────────────────────────────────────── */
+
+.provenance-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  opacity: 0.8;
+  background: var(--surface-2, rgba(127, 127, 127, 0.12));
+}
+
+/* ── Investigate screen (Part 1.6.B) ─────────────────────────────────────── */
+
+.code-block {
+  background: var(--surface-2, rgba(127, 127, 127, 0.08));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.timeline-row {
+  display: grid;
+  grid-template-columns: 160px 1fr 70px;
+  align-items: center;
+  gap: 10px;
+}
+
+.timeline-bar-track {
+  background: var(--surface-2, rgba(127, 127, 127, 0.12));
+  border-radius: 4px;
+  height: 10px;
+  overflow: hidden;
+}
+
+.timeline-bar {
+  background: var(--accent, #4f7cff);
+  height: 100%;
+  border-radius: 4px;
+}
+
+.chip-clickable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.chip-active {
+  background: var(--accent, #4f7cff);
+  color: white;
+}
+
+.sample-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.78rem;
+}
+
+.sample-table th,
+.sample-table td {
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  text-align: left;
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sample-table th {
+  background: var(--surface-2, rgba(127, 127, 127, 0.08));
+  position: sticky;
+  top: 0;
+}

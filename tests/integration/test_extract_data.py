@@ -22,8 +22,7 @@ class TestExtractDataIntegration:
     ) -> None:
         """Test that extraction with cursor-based pagination works end-to-end."""
         sample_rows = [
-            {"id": i, "name": f"Company {i}", "email": f"comp{i}@test.com"}
-            for i in range(1, 21)
+            {"id": i, "name": f"Company {i}", "email": f"comp{i}@test.com"} for i in range(1, 21)
         ]
 
         mock_conn = mock_connector_factory(extract_rows=sample_rows, extract_total=20)
@@ -64,10 +63,7 @@ class TestExtractDataIntegration:
         postgres_origin_config: dict[str, Any],
     ) -> None:
         """Test extraction where all data fits in a single batch."""
-        sample_rows = [
-            {"id": i, "name": f"Item {i}"}
-            for i in range(1, 6)
-        ]
+        sample_rows = [{"id": i, "name": f"Item {i}"} for i in range(1, 6)]
 
         mock_conn = mock_connector_factory(extract_rows=sample_rows, extract_total=5)
 
@@ -108,9 +104,7 @@ class TestExtractDataIntegration:
     ) -> None:
         """Test that connector exceptions are wrapped as PermanentError."""
         mock_conn = mock_connector_factory()
-        mock_conn.extract = AsyncMock(
-            side_effect=ConnectionError("Database unreachable")
-        )
+        mock_conn.extract = AsyncMock(side_effect=ConnectionError("Database unreachable"))
 
         with patch("src.mcp_server.tools.extract_data.create_connector") as mock_create:
             mock_create.return_value = mock_conn
@@ -131,10 +125,7 @@ class TestExtractDataIntegration:
         postgres_origin_config: dict[str, Any],
     ) -> None:
         """Test extraction passes filter to connector correctly."""
-        sample_rows = [
-            {"id": i, "name": f"Item {i}", "_imported": False}
-            for i in range(1, 4)
-        ]
+        sample_rows = [{"id": i, "name": f"Item {i}", "_imported": False} for i in range(1, 4)]
 
         mock_conn = mock_connector_factory(extract_rows=sample_rows, extract_total=3)
 
@@ -161,10 +152,7 @@ class TestExtractDataIntegration:
         postgres_origin_config: dict[str, Any],
     ) -> None:
         """Test that batch_size is passed through to the connector."""
-        sample_rows = [
-            {"id": i, "name": f"Item {i}"}
-            for i in range(1, 11)
-        ]
+        sample_rows = [{"id": i, "name": f"Item {i}"} for i in range(1, 11)]
 
         mock_conn = mock_connector_factory(extract_rows=sample_rows, extract_total=10)
 

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.orchestrator.nodes.resolve_entities import resolve_entities, has_low_confidence_clusters
+from src.orchestrator.nodes.resolve_entities import has_low_confidence_clusters, resolve_entities
 from src.orchestrator.spool import clusters_for
 
 
@@ -47,25 +47,27 @@ class TestResolveEntities:
     @pytest.fixture
     def mock_resolve_impl(self) -> AsyncMock:
         """Mock resolve_entities_impl."""
-        return AsyncMock(return_value={
-            "clusters": [
-                {
-                    "cluster_id": "cluster-1",
-                    "record_ids": ["postgres_main:companies:1", "mongo_analytics:companies:2"],
-                    "match_confidence": 0.85,
-                    "required_human_review": False,
-                },
-                {
-                    "cluster_id": "cluster-2",
-                    "record_ids": ["postgres_main:companies:3"],
-                    "match_confidence": 1.0,
-                    "required_human_review": False,
-                },
-            ],
-            "total_records": 3,
-            "auto_matched": 1,
-            "llm_scored": 1,
-        })
+        return AsyncMock(
+            return_value={
+                "clusters": [
+                    {
+                        "cluster_id": "cluster-1",
+                        "record_ids": ["postgres_main:companies:1", "mongo_analytics:companies:2"],
+                        "match_confidence": 0.85,
+                        "required_human_review": False,
+                    },
+                    {
+                        "cluster_id": "cluster-2",
+                        "record_ids": ["postgres_main:companies:3"],
+                        "match_confidence": 1.0,
+                        "required_human_review": False,
+                    },
+                ],
+                "total_records": 3,
+                "auto_matched": 1,
+                "llm_scored": 1,
+            }
+        )
 
     @pytest.mark.asyncio
     async def test_resolve_entities_success(
@@ -83,15 +85,20 @@ class TestResolveEntities:
         assert not result["errors"]
 
     @pytest.mark.asyncio
-    async def test_resolve_entities_no_records_skipped(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_resolve_entities_no_records_skipped(self, base_state: dict[str, Any]) -> None:
         """Test that entities with no records are skipped."""
         base_state["extracted_data"]["person"] = []
 
         with patch(
             "src.orchestrator.nodes.resolve_entities.resolve_entities_impl",
-            AsyncMock(return_value={"clusters": [], "total_records": 0, "auto_matched": 0, "llm_scored": 0}),
+            AsyncMock(
+                return_value={
+                    "clusters": [],
+                    "total_records": 0,
+                    "auto_matched": 0,
+                    "llm_scored": 0,
+                }
+            ),
         ) as mock_impl:
             result = await resolve_entities(base_state)
 
@@ -104,10 +111,9 @@ class TestResolveEntities:
         assert call_kwargs["entity_type"] == "company"
 
     @pytest.mark.asyncio
-    async def test_resolve_entities_resolution_failure(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_resolve_entities_resolution_failure(self, base_state: dict[str, Any]) -> None:
         """Test handling of resolution failure for one entity."""
+
         async def failing_impl(*args: Any, **kwargs: Any) -> dict[str, Any]:
             if kwargs.get("entity_type") == "person":
                 raise Exception("Resolution service unavailable")
@@ -129,7 +135,11 @@ class TestResolveEntities:
     async def test_resolve_entities_preserves_existing_errors(
         self, base_state: dict[str, Any], mock_resolve_impl: AsyncMock
     ) -> None:
-        """Test that existing errors are preserved."""
+        """Existing errors survive a call to this node via MergeState's real
+        operator.add reducer, not because the node re-returns the old
+        history itself (Phase 0 Sec 0.8 - see analyze_dependencies' test of
+        the same name for why the previous version of this test asserted
+        the actual bug)."""
         base_state["errors"] = ["pre-existing error"]
 
         with patch(
@@ -138,12 +148,12 @@ class TestResolveEntities:
         ):
             result = await resolve_entities(base_state)
 
-        assert "pre-existing error" in result["errors"]
+        assert "pre-existing error" not in result.get("errors", [])
+        combined = base_state["errors"] + result.get("errors", [])
+        assert "pre-existing error" in combined
 
     @pytest.mark.asyncio
-    async def test_resolve_entities_empty_target_entities(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_resolve_entities_empty_target_entities(self, base_state: dict[str, Any]) -> None:
         """Test with no target entities."""
         base_state["target_entities"] = []
         base_state["extracted_data"] = {}
@@ -157,16 +167,33 @@ class TestResolveEntities:
         self, base_state: dict[str, Any]
     ) -> None:
         """Test resolution producing multiple clusters."""
-        mock_multi = AsyncMock(return_value={
-            "clusters": [
-                {"cluster_id": "c1", "record_ids": ["r1", "r2"], "match_confidence": 0.9, "required_human_review": False},
-                {"cluster_id": "c2", "record_ids": ["r3"], "match_confidence": 1.0, "required_human_review": False},
-                {"cluster_id": "c3", "record_ids": ["r4", "r5"], "match_confidence": 0.5, "required_human_review": True},
-            ],
-            "total_records": 5,
-            "auto_matched": 2,
-            "llm_scored": 2,
-        })
+        mock_multi = AsyncMock(
+            return_value={
+                "clusters": [
+                    {
+                        "cluster_id": "c1",
+                        "record_ids": ["r1", "r2"],
+                        "match_confidence": 0.9,
+                        "required_human_review": False,
+                    },
+                    {
+                        "cluster_id": "c2",
+                        "record_ids": ["r3"],
+                        "match_confidence": 1.0,
+                        "required_human_review": False,
+                    },
+                    {
+                        "cluster_id": "c3",
+                        "record_ids": ["r4", "r5"],
+                        "match_confidence": 0.5,
+                        "required_human_review": True,
+                    },
+                ],
+                "total_records": 5,
+                "auto_matched": 2,
+                "llm_scored": 2,
+            }
+        )
 
         with patch(
             "src.orchestrator.nodes.resolve_entities.resolve_entities_impl",
@@ -195,15 +222,27 @@ class TestResolveEntities:
         self, base_state: dict[str, Any]
     ) -> None:
         """Test resolution with only single-record clusters."""
-        mock_single = AsyncMock(return_value={
-            "clusters": [
-                {"cluster_id": "c1", "record_ids": ["r1"], "match_confidence": 1.0, "required_human_review": False},
-                {"cluster_id": "c2", "record_ids": ["r2"], "match_confidence": 1.0, "required_human_review": False},
-            ],
-            "total_records": 2,
-            "auto_matched": 2,
-            "llm_scored": 0,
-        })
+        mock_single = AsyncMock(
+            return_value={
+                "clusters": [
+                    {
+                        "cluster_id": "c1",
+                        "record_ids": ["r1"],
+                        "match_confidence": 1.0,
+                        "required_human_review": False,
+                    },
+                    {
+                        "cluster_id": "c2",
+                        "record_ids": ["r2"],
+                        "match_confidence": 1.0,
+                        "required_human_review": False,
+                    },
+                ],
+                "total_records": 2,
+                "auto_matched": 2,
+                "llm_scored": 0,
+            }
+        )
 
         with patch(
             "src.orchestrator.nodes.resolve_entities.resolve_entities_impl",
@@ -214,15 +253,160 @@ class TestResolveEntities:
         assert len(clusters_for(result, "company")) == 2
 
     @pytest.mark.asyncio
-    async def test_resolve_entities_with_no_records_key(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_resolve_entities_with_no_records_key(self, base_state: dict[str, Any]) -> None:
         """Test when extracted_data doesn't have entity type key."""
         base_state["extracted_data"] = {}
 
         result = await resolve_entities(base_state)
         assert clusters_for(result, "company") == []
         assert clusters_for(result, "person") == []
+
+
+class TestProcessPoolDispatch:
+    """Unit tests for Part 1.5 B.3's pool-creation gating in the node.
+
+    ProcessPoolExecutor itself is mocked throughout -- these tests assert
+    *when* a pool is created and passed down, not the real multiprocessing
+    behaviour (covered live in docs/verification/PROCESS_POOL_PROFILE.md).
+    """
+
+    @pytest.fixture
+    def base_state(self) -> dict[str, Any]:
+        return {
+            "target_entities": ["company", "person"],
+            "extracted_data": {
+                "company": [{"id": 1, "name": "Acme Corp"}, {"id": 2, "name": "Acme Corporation"}],
+                "person": [{"id": 1, "name": "John Doe"}, {"id": 2, "name": "Jane Smith"}],
+            },
+            "entity_clusters": {},
+            "errors": [],
+        }
+
+    @pytest.fixture
+    def mock_resolve_impl(self) -> AsyncMock:
+        return AsyncMock(
+            return_value={
+                "clusters": [
+                    {
+                        "cluster_id": "cluster-1",
+                        "record_ids": ["o1:t:1"],
+                        "match_confidence": 1.0,
+                        "required_human_review": False,
+                    }
+                ],
+                "total_records": 1,
+                "auto_matched": 1,
+                "llm_scored": 0,
+            }
+        )
+
+    @pytest.fixture
+    def two_large_entities_state(self) -> dict[str, Any]:
+        big_a = [{"id": i, "name": f"Company {i}"} for i in range(600)]
+        big_b = [{"id": i, "name": f"Org {i}"} for i in range(600)]
+        return {
+            "target_entities": ["company", "person"],
+            "extracted_data": {"company": big_a, "person": big_b},
+            "entity_clusters": {},
+            "errors": [],
+        }
+
+    @pytest.fixture
+    def one_large_one_small_state(self) -> dict[str, Any]:
+        big = [{"id": i, "name": f"Company {i}"} for i in range(600)]
+        small = [{"id": 1, "name": "Jane"}, {"id": 2, "name": "Jane S"}]
+        return {
+            "target_entities": ["company", "person"],
+            "extracted_data": {"company": big, "person": small},
+            "entity_clusters": {},
+            "errors": [],
+        }
+
+    async def test_pool_created_when_two_entities_qualify(
+        self, two_large_entities_state: dict[str, Any], mock_resolve_impl: AsyncMock
+    ) -> None:
+        with (
+            patch(
+                "src.orchestrator.nodes.resolve_entities.resolve_entities_impl", mock_resolve_impl
+            ),
+            patch("src.orchestrator.nodes.resolve_entities.ProcessPoolExecutor") as mock_pool_cls,
+        ):
+            mock_pool = mock_pool_cls.return_value
+            await resolve_entities(two_large_entities_state)
+
+        mock_pool_cls.assert_called_once()
+        mock_pool.shutdown.assert_called_once_with(wait=True)
+        # Every dispatched call was handed the pool instance.
+        for call in mock_resolve_impl.call_args_list:
+            assert call.kwargs["process_pool"] is mock_pool
+
+    async def test_no_pool_when_only_one_entity_qualifies(
+        self, one_large_one_small_state: dict[str, Any], mock_resolve_impl: AsyncMock
+    ) -> None:
+        with (
+            patch(
+                "src.orchestrator.nodes.resolve_entities.resolve_entities_impl", mock_resolve_impl
+            ),
+            patch("src.orchestrator.nodes.resolve_entities.ProcessPoolExecutor") as mock_pool_cls,
+        ):
+            await resolve_entities(one_large_one_small_state)
+
+        mock_pool_cls.assert_not_called()
+        for call in mock_resolve_impl.call_args_list:
+            assert call.kwargs["process_pool"] is None
+
+    async def test_no_pool_when_all_entities_small(
+        self, base_state: dict[str, Any], mock_resolve_impl: AsyncMock
+    ) -> None:
+        with (
+            patch(
+                "src.orchestrator.nodes.resolve_entities.resolve_entities_impl", mock_resolve_impl
+            ),
+            patch("src.orchestrator.nodes.resolve_entities.ProcessPoolExecutor") as mock_pool_cls,
+        ):
+            await resolve_entities(base_state)
+
+        mock_pool_cls.assert_not_called()
+
+    async def test_pool_creation_failure_degrades_to_inline_for_every_entity(
+        self, two_large_entities_state: dict[str, Any], mock_resolve_impl: AsyncMock
+    ) -> None:
+        with (
+            patch(
+                "src.orchestrator.nodes.resolve_entities.resolve_entities_impl", mock_resolve_impl
+            ),
+            patch(
+                "src.orchestrator.nodes.resolve_entities.ProcessPoolExecutor",
+                side_effect=RuntimeError("no worker processes available"),
+            ),
+        ):
+            result = await resolve_entities(two_large_entities_state)
+
+        # Must not crash the run -- both entities still resolved, inline.
+        assert clusters_for(result, "company") != [] or clusters_for(result, "person") != []
+        for call in mock_resolve_impl.call_args_list:
+            assert call.kwargs["process_pool"] is None
+
+    async def test_pool_always_shut_down_even_when_dispatch_raises(
+        self, two_large_entities_state: dict[str, Any]
+    ) -> None:
+        async def raising_impl(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            raise RuntimeError("worker crashed")
+
+        with (
+            patch(
+                "src.orchestrator.nodes.resolve_entities.resolve_entities_impl",
+                side_effect=raising_impl,
+            ),
+            patch("src.orchestrator.nodes.resolve_entities.ProcessPoolExecutor") as mock_pool_cls,
+        ):
+            mock_pool = mock_pool_cls.return_value
+            result = await resolve_entities(two_large_entities_state)
+
+        mock_pool.shutdown.assert_called_once_with(wait=True)
+        # gather's return_exceptions=True means both entities' failures land
+        # as per-entity errors, not an unhandled exception.
+        assert len(result["errors"]) == 2
 
 
 class TestHasLowConfidenceClusters:

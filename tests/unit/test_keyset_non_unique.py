@@ -34,7 +34,7 @@ class TestDecoratorPreservesSignature:
 
     def test_async_wrapper_keeps_the_wrapped_signature(self) -> None:
         @retry_on_transient(max_attempts=2)
-        async def extract(self, table_name, pk_columns=None):  # noqa: ANN001
+        async def extract(self, table_name, pk_columns=None):
             return pk_columns
 
         params = inspect.signature(extract).parameters
@@ -45,14 +45,14 @@ class TestDecoratorPreservesSignature:
 
     def test_sync_wrapper_keeps_the_wrapped_signature(self) -> None:
         @retry_on_transient(max_attempts=2)
-        def fetch(self, table_name, pk_columns=None):  # noqa: ANN001
+        def fetch(self, table_name, pk_columns=None):
             return pk_columns
 
         assert "pk_columns" in inspect.signature(fetch).parameters
 
     def test_wrapper_keeps_the_wrapped_name(self) -> None:
         @retry_on_transient(max_attempts=2)
-        async def extract(self):  # noqa: ANN001
+        async def extract(self):
             return None
 
         assert extract.__name__ == "extract"
@@ -60,7 +60,7 @@ class TestDecoratorPreservesSignature:
     @pytest.mark.asyncio
     async def test_decorated_function_still_runs(self) -> None:
         @retry_on_transient(max_attempts=2)
-        async def extract(pk_columns=None):  # noqa: ANN001
+        async def extract(pk_columns=None):
             return pk_columns
 
         assert await extract(pk_columns=["id"]) == ["id"]
@@ -94,7 +94,8 @@ class TestBoundaryAccounting:
         # A stale skip count must never eat rows past the boundary.
         rows = [{"k": 5, "v": "a"}, {"k": 6, "v": "b"}, {"k": 7, "v": "c"}]
         assert drop_consumed(rows, self.KEY, [5], 5) == [
-            {"k": 6, "v": "b"}, {"k": 7, "v": "c"},
+            {"k": 6, "v": "b"},
+            {"k": 7, "v": "c"},
         ]
 
     def test_nothing_is_dropped_without_a_boundary(self) -> None:
@@ -153,11 +154,11 @@ class TestUniqueKeyGuard:
         assert "'k'" in message
 
     def test_a_genuinely_unique_key_passes(self) -> None:
-        assert_key_unique([{"k": 1}, {"k": 2}], ["k"], "t") is None
+        assert assert_key_unique([{"k": 1}, {"k": 2}], ["k"], "t") is None
 
     def test_a_composite_key_compares_all_columns(self) -> None:
         rows = [{"a": 1, "b": 1}, {"a": 1, "b": 2}]
-        assert_key_unique(rows, ["a", "b"], "t") is None
+        assert assert_key_unique(rows, ["a", "b"], "t") is None
         with pytest.raises(DataQualityError):
             assert_key_unique(rows + [{"a": 1, "b": 2}], ["a", "b"], "t")
 

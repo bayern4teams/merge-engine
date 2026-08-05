@@ -7,10 +7,10 @@ malformed data handling, and boundary conditions in data extraction.
 
 from __future__ import annotations
 
-import os
-import tempfile
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 
 # Helper to create a proper async context manager mock for engine.connect()
 def _make_async_context_manager(return_value=None, side_effect=None):
@@ -23,13 +23,11 @@ def _make_async_context_manager(return_value=None, side_effect=None):
     ctx.__aexit__.return_value = None
     return ctx
 
-import pytest
-import yaml
-
 
 # =============================================================================
 # Fixtures
 # =============================================================================
+
 
 @pytest.fixture
 def minimal_config_data():
@@ -65,6 +63,7 @@ def minimal_config_data():
 # =============================================================================
 # Edge Cases: Dependency Analysis
 # =============================================================================
+
 
 class TestDependencyAnalysisEdgeCases:
     """Edge cases for dependency analysis and sorting."""
@@ -138,7 +137,8 @@ class TestDependencyAnalysisEdgeCases:
         from src.orchestrator.utils.dependency_sort import find_execution_groups
 
         dep_tree = {
-            "A": [], "B": [],  # Group 0: no deps
+            "A": [],
+            "B": [],  # Group 0: no deps
             "C": ["A"],  # Group 1: depends on A
             "D": ["C", "B"],  # Group 2: depends on C and B
         }
@@ -154,6 +154,7 @@ class TestDependencyAnalysisEdgeCases:
 # Edge Cases: Schema Discovery
 # =============================================================================
 
+
 class TestSchemaDiscoveryEdgeCases:
     """Edge cases for schema discovery across connectors."""
 
@@ -164,8 +165,11 @@ class TestSchemaDiscoveryEdgeCases:
 
         config = {
             "connection": {
-                "host": "localhost", "port": 5432,
-                "user": "u", "password": "p", "database": "empty",
+                "host": "localhost",
+                "port": 5432,
+                "user": "u",
+                "password": "p",
+                "database": "empty",
             }
         }
         connector = PostgresConnector(config)
@@ -198,8 +202,11 @@ class TestSchemaDiscoveryEdgeCases:
 
         config = {
             "connection": {
-                "host": "localhost", "port": 5432,
-                "user": "u", "password": "p", "database": "test",
+                "host": "localhost",
+                "port": 5432,
+                "user": "u",
+                "password": "p",
+                "database": "test",
             }
         }
         connector = PostgresConnector(config)
@@ -211,6 +218,7 @@ class TestSchemaDiscoveryEdgeCases:
         ]
 
         call_count = [0]
+
         def execute_side_effect(*args, **kwargs):
             call_count[0] += 1
             if call_count[0] == 1:
@@ -270,6 +278,7 @@ class TestSchemaDiscoveryEdgeCases:
 # Edge Cases: Data Extraction
 # =============================================================================
 
+
 class TestDataExtractionEdgeCases:
     """Edge cases for data extraction."""
 
@@ -280,8 +289,11 @@ class TestDataExtractionEdgeCases:
 
         config = {
             "connection": {
-                "host": "localhost", "port": 5432,
-                "user": "u", "password": "p", "database": "test",
+                "host": "localhost",
+                "port": 5432,
+                "user": "u",
+                "password": "p",
+                "database": "test",
             }
         }
         connector = PostgresConnector(config)
@@ -321,8 +333,10 @@ class TestDataExtractionEdgeCases:
             def __init__(self, items):
                 self._items = items
                 self._index = 0
+
             def __aiter__(self):
                 return self
+
             async def __anext__(self):
                 if self._index >= len(self._items):
                     raise StopAsyncIteration
@@ -359,8 +373,11 @@ class TestDataExtractionEdgeCases:
 
         config = {
             "connection": {
-                "host": "localhost", "port": 5432,
-                "user": "u", "password": "p", "database": "test",
+                "host": "localhost",
+                "port": 5432,
+                "user": "u",
+                "password": "p",
+                "database": "test",
             }
         }
         connector = PostgresConnector(config)
@@ -376,6 +393,7 @@ class TestDataExtractionEdgeCases:
         ]
 
         call_count = [0]
+
         def execute_side_effect(*args, **kwargs):
             call_count[0] += 1
             if call_count[0] == 1:
@@ -412,8 +430,10 @@ class TestDataExtractionEdgeCases:
             def __init__(self, items):
                 self._items = items
                 self._index = 0
+
             def __aiter__(self):
                 return self
+
             async def __anext__(self):
                 if self._index >= len(self._items):
                     raise StopAsyncIteration
@@ -425,6 +445,12 @@ class TestDataExtractionEdgeCases:
         mock_coll.count_documents = AsyncMock(return_value=100)
         docs = [{"_id": f"doc_{i}", "name": f"name_{i}"} for i in range(5)]
         find_result = MagicMock()
+        # The real cursor chain is find(...).sort("_id", 1).limit(...) (keyset
+        # pagination needs a stable sort order) - .sort must be mocked too, or
+        # it returns a fresh, un-iterable MagicMock and .limit() never sees
+        # find_result at all (Phase 0 Sec 0.7, found while wiring
+        # tests/integration into the default gate for the first time).
+        find_result.sort = MagicMock(return_value=find_result)
         find_result.limit = MagicMock(return_value=find_result)
         find_result.__aiter__ = MagicMock(return_value=_AsyncListIterator(docs))
         mock_coll.find.return_value = find_result
@@ -447,8 +473,11 @@ class TestDataExtractionEdgeCases:
 
         config = {
             "connection": {
-                "host": "localhost", "port": 5432,
-                "user": "u", "password": "p", "database": "test",
+                "host": "localhost",
+                "port": 5432,
+                "user": "u",
+                "password": "p",
+                "database": "test",
             }
         }
         connector = PostgresConnector(config)
@@ -462,6 +491,7 @@ class TestDataExtractionEdgeCases:
         ]
 
         call_count = [0]
+
         def execute_side_effect(*args, **kwargs):
             call_count[0] += 1
             if call_count[0] == 1:
@@ -497,8 +527,10 @@ class TestDataExtractionEdgeCases:
             def __init__(self, items):
                 self._items = items
                 self._index = 0
+
             def __aiter__(self):
                 return self
+
             async def __anext__(self):
                 if self._index >= len(self._items):
                     raise StopAsyncIteration
@@ -510,6 +542,12 @@ class TestDataExtractionEdgeCases:
         mock_coll.count_documents = AsyncMock(return_value=1)
         docs = [{"_id": "mongo_id_1", "name": "Alice", "active": True}]
         find_result = MagicMock()
+        # The real cursor chain is find(...).sort("_id", 1).limit(...) (keyset
+        # pagination needs a stable sort order) - .sort must be mocked too, or
+        # it returns a fresh, un-iterable MagicMock and .limit() never sees
+        # find_result at all (Phase 0 Sec 0.7, found while wiring
+        # tests/integration into the default gate for the first time).
+        find_result.sort = MagicMock(return_value=find_result)
         find_result.limit = MagicMock(return_value=find_result)
         find_result.__aiter__ = MagicMock(return_value=_AsyncListIterator(docs))
         mock_coll.find.return_value = find_result
@@ -529,6 +567,7 @@ class TestDataExtractionEdgeCases:
 # =============================================================================
 # Edge Cases: Entity Resolution
 # =============================================================================
+
 
 class TestEntityResolutionEdgeCases:
     """Edge cases for entity resolution."""
@@ -571,6 +610,7 @@ class TestEntityResolutionEdgeCases:
 # Edge Cases: Field Mapping
 # =============================================================================
 
+
 class TestFieldMappingEdgeCases:
     """Edge cases for field mapping."""
 
@@ -608,6 +648,7 @@ class TestFieldMappingEdgeCases:
 # Edge Cases: Load Data
 # =============================================================================
 
+
 class TestDataLoadEdgeCases:
     """Edge cases for data loading."""
 
@@ -633,8 +674,11 @@ class TestDataLoadEdgeCases:
         from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
 
         config = {
-            "host": "localhost", "port": 5432,
-            "user": "u", "password": "p", "database": "d",
+            "host": "localhost",
+            "port": 5432,
+            "user": "u",
+            "password": "p",
+            "database": "d",
             "schema": "public",
         }
         connector = PostgreSQLDestinationConnector(config)
@@ -649,11 +693,15 @@ class TestDataLoadEdgeCases:
     def test_postgres_dest_add_column_exists(self):
         """PostgreSQL destination add_column should be idempotent."""
         from psycopg2 import OperationalError as Psycopg2OperationalError
+
         from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
 
         config = {
-            "host": "localhost", "port": 5432,
-            "user": "u", "password": "p", "database": "d",
+            "host": "localhost",
+            "port": 5432,
+            "user": "u",
+            "password": "p",
+            "database": "d",
             "schema": "public",
         }
         connector = PostgreSQLDestinationConnector(config)
@@ -685,6 +733,7 @@ class TestDataLoadEdgeCases:
 # =============================================================================
 # Edge Cases: State Management
 # =============================================================================
+
 
 class TestStateManagementEdgeCases:
     """Edge cases for pipeline state management."""
@@ -747,6 +796,7 @@ class TestStateManagementEdgeCases:
 # Edge Cases: Retry Logic
 # =============================================================================
 
+
 class TestRetryEdgeCases:
     """Edge cases for retry logic."""
 
@@ -768,7 +818,7 @@ class TestRetryEdgeCases:
 
     def test_error_hierarchy(self):
         """TransientError and PermanentError should inherit from RuntimeError."""
-        from src.orchestrator.utils.retry import TransientError, PermanentError
+        from src.orchestrator.utils.retry import PermanentError, TransientError
 
         assert issubclass(TransientError, RuntimeError)
         assert issubclass(PermanentError, RuntimeError)
@@ -779,6 +829,7 @@ class TestRetryEdgeCases:
 # =============================================================================
 # Edge Cases: ID Utilities
 # =============================================================================
+
 
 class TestIDUtilsEdgeCases:
     """Edge cases for ID utilities."""

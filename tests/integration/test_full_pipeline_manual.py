@@ -10,9 +10,17 @@ checkpoints, and Langfuse tracing.
 
 import json
 import logging
-import time
 import sys
 from datetime import datetime
+
+# This is a standalone manual driver (its own __main__ calls each test_*
+# function directly with a step counter), not a pytest suite - its
+# functions only happen to match pytest's test_* collection glob. __test__
+# = False (an official pytest convention) stops it being collected at all,
+# rather than erroring on a missing `current_step` fixture that was never
+# meant to exist (Phase 0 Sec 0.7, found while wiring tests/integration into
+# the default gate for the first time).
+__test__ = False
 
 logging.basicConfig(
     level=logging.INFO,
@@ -78,13 +86,15 @@ def next_step(description: str):
 
 
 def record_result(step: int, description: str, status: str, details: str = ""):
-    results.append({
-        "step": step,
-        "description": description,
-        "status": status,
-        "details": details,
-        "timestamp": datetime.now().isoformat(),
-    })
+    results.append(
+        {
+            "step": step,
+            "description": description,
+            "status": status,
+            "details": details,
+            "timestamp": datetime.now().isoformat(),
+        }
+    )
     icon = {"pass": "✅", "fail": "❌", "skip": "⏭️", "warn": "⚠️"}.get(status, "❓")
     log.info("%s STEP %d: %s - %s", icon, step, description, status.upper())
     if details:
@@ -94,11 +104,14 @@ def record_result(step: int, description: str, status: str, details: str = ""):
 def check_langfuse(current_step: int):
     """Check if Langfuse is running at http://localhost:3000."""
     import urllib.request
+
     try:
         req = urllib.request.Request("http://localhost:3000/")
         resp = urllib.request.urlopen(req, timeout=5)
         if resp.status == 200:
-            record_result(current_step, "Langfuse Dashboard", "pass", "Running at http://localhost:3000")
+            record_result(
+                current_step, "Langfuse Dashboard", "pass", "Running at http://localhost:3000"
+            )
             return True
         else:
             record_result(current_step, "Langfuse Dashboard", "fail", f"Status: {resp.status}")
@@ -111,6 +124,7 @@ def check_langfuse(current_step: int):
 def check_gradio(current_step: int):
     """Check if Gradio is running at http://localhost:7860."""
     import urllib.request
+
     try:
         req = urllib.request.Request("http://localhost:7860/")
         resp = urllib.request.urlopen(req, timeout=5)
@@ -128,11 +142,14 @@ def check_gradio(current_step: int):
 def check_langgraph_server(current_step: int):
     """Check if LangGraph server is running at http://localhost:8123."""
     import urllib.request
+
     try:
         req = urllib.request.Request("http://localhost:8123/docs")
         resp = urllib.request.urlopen(req, timeout=5)
         if resp.status == 200:
-            record_result(current_step, "LangGraph Server", "pass", "Running at http://localhost:8123")
+            record_result(
+                current_step, "LangGraph Server", "pass", "Running at http://localhost:8123"
+            )
             return True
         else:
             record_result(current_step, "LangGraph Server", "fail", f"Status: {resp.status}")
@@ -160,18 +177,18 @@ def test_clickhouse_connection(current_step: int, origin_config, label: str):
         tables = result.get("tables", [])
         schemas = result.get("schemas", [])
         record_result(
-            current_step, label, "pass",
-            f"Connected. Tables: {len(tables)}, Schemas: {len(schemas)}"
+            current_step,
+            label,
+            "pass",
+            f"Connected. Tables: {len(tables)}, Schemas: {len(schemas)}",
         )
         if tables:
-            record_result(current_step, f"{label} - Discovered tables", "pass",
-                         ", ".join(tables[:20]))
+            record_result(
+                current_step, f"{label} - Discovered tables", "pass", ", ".join(tables[:20])
+            )
         return result
     else:
-        record_result(
-            current_step, label, "fail",
-            result.get("error", "Unknown connection error")
-        )
+        record_result(current_step, label, "fail", result.get("error", "Unknown connection error"))
         return None
 
 
@@ -193,29 +210,35 @@ def test_postgresql_connection(current_step: int):
         tables = result.get("tables", [])
         schemas = result.get("schemas", [])
         record_result(
-            current_step, "Destination Connection", "pass",
-            f"Connected. Tables: {len(tables)}, Schemas: {len(schemas)}"
+            current_step,
+            "Destination Connection",
+            "pass",
+            f"Connected. Tables: {len(tables)}, Schemas: {len(schemas)}",
         )
         if tables:
-            record_result(current_step, "Destination - Discovered tables", "pass",
-                         ", ".join(tables[:20]))
+            record_result(
+                current_step, "Destination - Discovered tables", "pass", ", ".join(tables[:20])
+            )
         return result
     else:
         record_result(
-            current_step, "Destination Connection", "fail",
-            result.get("error", "Unknown connection error")
+            current_step,
+            "Destination Connection",
+            "fail",
+            result.get("error", "Unknown connection error"),
         )
         return None
 
 
 def test_mcp_tools(current_step: int):
     """Test all MCP tools directly."""
-    from src.mcp_server.tools.extract_data import extract_data
-    from src.mcp_server.tools.discover_schema import discover_schema
-    from src.mcp_server.tools.resolve_entities import resolve_entities
-    from src.mcp_server.tools.map_fields import map_fields
-    from src.mcp_server.tools.load_data import load_data
     from src.mcp_server.tools.mark_imported import mark_imported
+
+    from src.mcp_server.tools.discover_schema import discover_schema
+    from src.mcp_server.tools.extract_data import extract_data
+    from src.mcp_server.tools.load_data import load_data
+    from src.mcp_server.tools.map_fields import map_fields
+    from src.mcp_server.tools.resolve_entities import resolve_entities
 
     tools = [
         ("extract_data", extract_data),
@@ -244,9 +267,13 @@ def test_workflow_manager(current_step: int):
 
         # Test status method exists
         if hasattr(wm, "get_workflow_status"):
-            record_result(current_step, "WorkflowManager.get_workflow_status", "pass", "Method exists")
+            record_result(
+                current_step, "WorkflowManager.get_workflow_status", "pass", "Method exists"
+            )
         else:
-            record_result(current_step, "WorkflowManager.get_workflow_status", "fail", "Method missing")
+            record_result(
+                current_step, "WorkflowManager.get_workflow_status", "fail", "Method missing"
+            )
 
         # Test start method exists
         if hasattr(wm, "start_workflow"):
@@ -318,15 +345,19 @@ def test_parse_request_llm(current_step: int):
 
         if result and isinstance(result, dict):
             record_result(
-                current_step, "Parse Request (LLM)", "pass",
+                current_step,
+                "Parse Request (LLM)",
+                "pass",
                 f"Companies: {result.get('entities', [])}, "
-                f"Operations: {result.get('operations', [])}"
+                f"Operations: {result.get('operations', [])}",
             )
             return result
         else:
             record_result(
-                current_step, "Parse Request (LLM)", "fail",
-                f"Unexpected result type: {type(result)}, value: {result}"
+                current_step,
+                "Parse Request (LLM)",
+                "fail",
+                f"Unexpected result type: {type(result)}, value: {result}",
             )
             return None
     except Exception as e:
@@ -342,8 +373,12 @@ def test_discover_schemas_mcp(current_step: int):
         result = discover_schema(origin_id="origin_1")
 
         if result:
-            record_result(current_step, "Discover Schema MCP", "pass",
-                         f"Result keys: {list(result.keys()) if isinstance(result, dict) else 'non-dict'}")
+            record_result(
+                current_step,
+                "Discover Schema MCP",
+                "pass",
+                f"Result keys: {list(result.keys()) if isinstance(result, dict) else 'non-dict'}",
+            )
             return result
         else:
             record_result(current_step, "Discover Schema MCP", "fail", "Empty result")
@@ -410,9 +445,13 @@ def test_graph_structure(current_step: int):
         node_list = getattr(graph, "nodes", [])
         for node_id in expected_nodes:
             if node_id in node_list:
-                record_result(current_step, f"Graph Node: {node_id}", "pass", "Node present in graph")
+                record_result(
+                    current_step, f"Graph Node: {node_id}", "pass", "Node present in graph"
+                )
             else:
-                record_result(current_step, f"Graph Node: {node_id}", "fail", "Node missing from graph")
+                record_result(
+                    current_step, f"Graph Node: {node_id}", "fail", "Node missing from graph"
+                )
 
         return graph
     except Exception as e:
@@ -442,9 +481,13 @@ def test_connectors(current_step: int):
             record_result(current_step, "ClickHouseConnector.extract", "fail", "Method missing")
 
         if hasattr(ch, "discover_schema"):
-            record_result(current_step, "ClickHouseConnector.discover_schema", "pass", "Method exists")
+            record_result(
+                current_step, "ClickHouseConnector.discover_schema", "pass", "Method exists"
+            )
         else:
-            record_result(current_step, "ClickHouseConnector.discover_schema", "fail", "Method missing")
+            record_result(
+                current_step, "ClickHouseConnector.discover_schema", "fail", "Method missing"
+            )
     except Exception as e:
         record_result(current_step, "ClickHouseConnector Init", "fail", str(e))
 
@@ -458,17 +501,30 @@ def test_connectors(current_step: int):
             database="global_warehouse",
             schema="public",
         )
-        record_result(current_step, "PostgreSQLDestinationConnector Init", "pass", "Connector created")
+        record_result(
+            current_step, "PostgreSQLDestinationConnector Init", "pass", "Connector created"
+        )
 
         if hasattr(pg, "load"):
-            record_result(current_step, "PostgreSQLDestinationConnector.load", "pass", "Method exists")
+            record_result(
+                current_step, "PostgreSQLDestinationConnector.load", "pass", "Method exists"
+            )
         else:
-            record_result(current_step, "PostgreSQLDestinationConnector.load", "fail", "Method missing")
+            record_result(
+                current_step, "PostgreSQLDestinationConnector.load", "fail", "Method missing"
+            )
 
         if hasattr(pg, "create_table"):
-            record_result(current_step, "PostgreSQLDestinationConnector.create_table", "pass", "Method exists")
+            record_result(
+                current_step, "PostgreSQLDestinationConnector.create_table", "pass", "Method exists"
+            )
         else:
-            record_result(current_step, "PostgreSQLDestinationConnector.create_table", "fail", "Method missing")
+            record_result(
+                current_step,
+                "PostgreSQLDestinationConnector.create_table",
+                "fail",
+                "Method missing",
+            )
     except Exception as e:
         record_result(current_step, "PostgreSQLDestinationConnector Init", "fail", str(e))
 
@@ -484,32 +540,36 @@ def test_config_loading(current_step: int):
         # Check LLM config
         if hasattr(config, "llm"):
             llm = config.llm
-            record_result(current_step, "Config LLM", "pass",
-                         f"Provider: {llm.provider}, Model: {llm.model}")
+            record_result(
+                current_step, "Config LLM", "pass", f"Provider: {llm.provider}, Model: {llm.model}"
+            )
         else:
             record_result(current_step, "Config LLM", "fail", "LLM config missing")
 
         # Check retry config
         if hasattr(config, "retry"):
             retry = config.retry
-            record_result(current_step, "Config Retry", "pass",
-                         f"Max attempts: {retry.max_attempts}")
+            record_result(
+                current_step, "Config Retry", "pass", f"Max attempts: {retry.max_attempts}"
+            )
         else:
             record_result(current_step, "Config Retry", "fail", "Retry config missing")
 
         # Check extraction config
         if hasattr(config, "extraction"):
             extr = config.extraction
-            record_result(current_step, "Config Extraction", "pass",
-                         f"Batch size: {extr.default_batch_size}")
+            record_result(
+                current_step, "Config Extraction", "pass", f"Batch size: {extr.default_batch_size}"
+            )
         else:
             record_result(current_step, "Config Extraction", "fail", "Extraction config missing")
 
         # Check langfuse config
         if hasattr(config, "langfuse"):
             lf = config.langfuse
-            record_result(current_step, "Config Langfuse", "pass",
-                         f"Enabled: {lf.enabled}, Host: {lf.host}")
+            record_result(
+                current_step, "Config Langfuse", "pass", f"Enabled: {lf.enabled}, Host: {lf.host}"
+            )
         else:
             record_result(current_step, "Config Langfuse", "warn", "Langfuse config missing")
 
@@ -533,8 +593,7 @@ def test_dependency_sort(current_step: int):
         result = topological_sort(deps)
 
         if result:
-            record_result(current_step, "Dependency Sort", "pass",
-                         f"Order: {result}")
+            record_result(current_step, "Dependency Sort", "pass", f"Order: {result}")
 
             # Verify ordering
             idx1 = result.index("extract_table1")
@@ -542,11 +601,13 @@ def test_dependency_sort(current_step: int):
             idx3 = result.index("extract_table3")
 
             if idx1 < idx2 < idx3:
-                record_result(current_step, "Dependency Ordering", "pass",
-                             "Dependencies correctly ordered")
+                record_result(
+                    current_step, "Dependency Ordering", "pass", "Dependencies correctly ordered"
+                )
             else:
-                record_result(current_step, "Dependency Ordering", "fail",
-                             "Dependencies not in correct order")
+                record_result(
+                    current_step, "Dependency Ordering", "fail", "Dependencies not in correct order"
+                )
         else:
             record_result(current_step, "Dependency Sort", "fail", "Empty result")
     except Exception as e:
@@ -562,8 +623,9 @@ def test_id_utils(current_step: int):
         id2 = generate_uuid()
 
         if id1 and id2:
-            record_result(current_step, "ID Generation", "pass",
-                         f"Generated: {id1[:16]}..., {id2[:16]}...")
+            record_result(
+                current_step, "ID Generation", "pass", f"Generated: {id1[:16]}..., {id2[:16]}..."
+            )
             if validate_uuid(id1) and validate_uuid(id2):
                 record_result(current_step, "ID Validation", "pass", "UUIDs are valid hex format")
             else:
@@ -571,7 +633,12 @@ def test_id_utils(current_step: int):
             if id1 != id2:
                 record_result(current_step, "ID Uniqueness", "pass", "IDs are unique")
             else:
-                record_result(current_step, "ID Uniqueness", "warn", "IDs are identical (deterministic prefix)")
+                record_result(
+                    current_step,
+                    "ID Uniqueness",
+                    "warn",
+                    "IDs are identical (deterministic prefix)",
+                )
         else:
             record_result(current_step, "ID Generation", "fail", "Empty ID")
     except Exception as e:
@@ -659,17 +726,21 @@ def generate_report():
     # Save report to file
     report_path = "tests/integration/test_report.json"
     with open(report_path, "w") as f:
-        json.dump({
-            "timestamp": datetime.now().isoformat(),
-            "summary": {
-                "total": total,
-                "passed": passed,
-                "failed": failed,
-                "warnings": warnings,
-                "skipped": skipped,
+        json.dump(
+            {
+                "timestamp": datetime.now().isoformat(),
+                "summary": {
+                    "total": total,
+                    "passed": passed,
+                    "failed": failed,
+                    "warnings": warnings,
+                    "skipped": skipped,
+                },
+                "results": results,
             },
-            "results": results,
-        }, f, indent=2)
+            f,
+            indent=2,
+        )
 
     log.info("Report saved to: %s", report_path)
     log.info("")
@@ -806,16 +877,23 @@ def main():
         config_json = json.dumps({"origins": [ORIGIN_1, ORIGIN_2], "destination": DESTINATION})
         parsed = json.loads(config_json)
         if parsed.get("origins") and parsed.get("destination"):
-            record_result(step, "Config JSON Format", "pass",
-                         f"Origins: {len(parsed['origins'])}, Destination: {parsed['destination']['type']}")
+            record_result(
+                step,
+                "Config JSON Format",
+                "pass",
+                f"Origins: {len(parsed['origins'])}, Destination: {parsed['destination']['type']}",
+            )
         else:
-            record_result(step, "Config JSON Format", "fail", "Missing origins or destination in JSON")
+            record_result(
+                step, "Config JSON Format", "fail", "Missing origins or destination in JSON"
+            )
     except Exception as e:
         record_result(step, "Config JSON Format", "fail", str(e))
 
     step = next_step("Verify FastAPI app creation")
     try:
         from src.api.main import create_api
+
         app = create_api()
         paths = {r.path for r in app.routes if hasattr(r, "path")}
         if "/api/workflow/start" in paths and "/api/connections/test" in paths:
@@ -830,9 +908,18 @@ def main():
         from src.ui import connections
         from src.ui.components.db_discovery import test_and_discover_schemas
 
-        label = connections.conn_label(ORIGIN_1) if isinstance(ORIGIN_1, dict) and ORIGIN_1.get("connection") else "n/a"
+        label = (
+            connections.conn_label(ORIGIN_1)
+            if isinstance(ORIGIN_1, dict) and ORIGIN_1.get("connection")
+            else "n/a"
+        )
         if callable(test_and_discover_schemas) and callable(connections.add_to_recent):
-            record_result(step, "UI Support Helpers", "pass", f"discovery + connections available (label: {label})")
+            record_result(
+                step,
+                "UI Support Helpers",
+                "pass",
+                f"discovery + connections available (label: {label})",
+            )
         else:
             record_result(step, "UI Support Helpers", "fail", "Helpers not callable")
     except Exception as e:
@@ -847,12 +934,11 @@ def main():
 
     step = next_step("Simulate setup phase: add origins")
     try:
-        from src.ui.gradio_app import add_origin_to_json, submit_origins_json
+        from src.ui.gradio_app import add_origin_to_json
 
         origins_list = []
         origins_list, msg1, _, _ = add_origin_to_json(
-            origins_list, "clickhouse", "10.10.9.46", 8190,
-            "admin", "pass", "zoominfo", 1, []
+            origins_list, "clickhouse", "10.10.9.46", 8190, "admin", "pass", "zoominfo", 1, []
         )
         if origins_list:
             record_result(step, "Add Origin 1", "pass", msg1)
@@ -860,8 +946,7 @@ def main():
             record_result(step, "Add Origin 1", "fail", "Failed to add origin")
 
         origins_list, msg2, _, _ = add_origin_to_json(
-            origins_list, "clickhouse", "10.10.9.46", 8195,
-            "admin", "pass", "diffbot", 2, []
+            origins_list, "clickhouse", "10.10.9.46", 8195, "admin", "pass", "diffbot", 2, []
         )
         if origins_list and len(origins_list) == 2:
             record_result(step, "Add Origin 2", "pass", msg2)
@@ -884,13 +969,16 @@ def main():
         if state:
             record_result(step, "Pipeline Start", "pass", f"Thread/State: {state}")
         else:
-            record_result(step, "Pipeline Start", "warn", "No state returned (expected in dev mode)")
+            record_result(
+                step, "Pipeline Start", "warn", "No state returned (expected in dev mode)"
+            )
     except Exception as e:
         record_result(step, "Pipeline Start", "warn", str(e))
 
     step = next_step("Verify Langfuse traces in dashboard")
     try:
         import urllib.request
+
         req = urllib.request.Request("http://localhost:3000/api/telemetry")
         try:
             resp = urllib.request.urlopen(req, timeout=5)

@@ -1,4 +1,7 @@
-# Core dependencies
+# GENERATED FILE - do not hand-edit.
+# Source of truth is pyproject.toml; regenerate with:
+#   python scripts/generate_requirements.py
+
 langgraph>=0.2.0
 langgraph-checkpoint
 langgraph-checkpoint-sqlite
@@ -18,9 +21,6 @@ tenacity>=8.2.0
 uuid-utils>=0.8.0
 fastapi>=0.115.0
 uvicorn>=0.30.0
+langfuse>=4.0,<5
 structlog>=24.0.0
-# Observability (self-hosted Langfuse — docker/langfuse-compose.yml)
-langfuse>=3.0.0
-
-# Per-run extraction spool: rows live here instead of in graph state.
 duckdb>=1.0.0

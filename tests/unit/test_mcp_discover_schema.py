@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.mcp_server.tools.discover_schema import (
-    discover_schema_impl,
     discover_schema_handler,
+    discover_schema_impl,
 )
 
 
@@ -33,25 +33,25 @@ class TestDiscoverSchemaImpl:
         }
 
     @pytest.mark.asyncio
-    async def test_discover_schema_success(
-        self, valid_origin_config: dict[str, Any]
-    ) -> None:
+    async def test_discover_schema_success(self, valid_origin_config: dict[str, Any]) -> None:
         """Test successful schema discovery."""
         mock_connector = MagicMock()
         mock_connector.close = AsyncMock()
-        mock_connector.discover_schema = AsyncMock(return_value={
-            "tables": [
-                {
-                    "name": "users",
-                    "columns": [
-                        {"name": "id", "type": "INTEGER", "nullable": False},
-                        {"name": "name", "type": "VARCHAR", "nullable": False},
-                    ],
-                    "foreign_keys": [],
-                    "sample_row": {"id": 1, "name": "Alice"},
-                }
-            ]
-        })
+        mock_connector.discover_schema = AsyncMock(
+            return_value={
+                "tables": [
+                    {
+                        "name": "users",
+                        "columns": [
+                            {"name": "id", "type": "INTEGER", "nullable": False},
+                            {"name": "name", "type": "VARCHAR", "nullable": False},
+                        ],
+                        "foreign_keys": [],
+                        "sample_row": {"id": 1, "name": "Alice"},
+                    }
+                ]
+            }
+        )
 
         with patch(
             "src.mcp_server.tools.discover_schema.create_connector",
@@ -72,31 +72,33 @@ class TestDiscoverSchemaImpl:
         """Test discovery with multiple tables."""
         mock_connector = MagicMock()
         mock_connector.close = AsyncMock()
-        mock_connector.discover_schema = AsyncMock(return_value={
-            "tables": [
-                {
-                    "name": "users",
-                    "columns": [{"name": "id", "type": "INTEGER", "nullable": False}],
-                    "foreign_keys": [],
-                    "sample_row": {"id": 1},
-                },
-                {
-                    "name": "orders",
-                    "columns": [
-                        {"name": "id", "type": "INTEGER", "nullable": False},
-                        {"name": "user_id", "type": "INTEGER", "nullable": False},
-                    ],
-                    "foreign_keys": [
-                        {
-                            "column": "user_id",
-                            "ref_table": "users",
-                            "ref_column": "id",
-                        }
-                    ],
-                    "sample_row": {"id": 1, "user_id": 1},
-                },
-            ]
-        })
+        mock_connector.discover_schema = AsyncMock(
+            return_value={
+                "tables": [
+                    {
+                        "name": "users",
+                        "columns": [{"name": "id", "type": "INTEGER", "nullable": False}],
+                        "foreign_keys": [],
+                        "sample_row": {"id": 1},
+                    },
+                    {
+                        "name": "orders",
+                        "columns": [
+                            {"name": "id", "type": "INTEGER", "nullable": False},
+                            {"name": "user_id", "type": "INTEGER", "nullable": False},
+                        ],
+                        "foreign_keys": [
+                            {
+                                "column": "user_id",
+                                "ref_table": "users",
+                                "ref_column": "id",
+                            }
+                        ],
+                        "sample_row": {"id": 1, "user_id": 1},
+                    },
+                ]
+            }
+        )
 
         with patch(
             "src.mcp_server.tools.discover_schema.create_connector",
@@ -139,19 +141,20 @@ class TestDiscoverSchemaImpl:
             await discover_schema_impl(config)
 
     @pytest.mark.asyncio
-    async def test_discover_schema_connector_error(self, valid_origin_config: dict[str, Any]) -> None:
+    async def test_discover_schema_connector_error(
+        self, valid_origin_config: dict[str, Any]
+    ) -> None:
         """Test handling of connector discovery failure."""
         mock_connector = MagicMock()
         mock_connector.close = AsyncMock()
-        mock_connector.discover_schema = AsyncMock(
-            side_effect=Exception("Connection refused")
-        )
+        mock_connector.discover_schema = AsyncMock(side_effect=Exception("Connection refused"))
 
         with patch(
             "src.mcp_server.tools.discover_schema.create_connector",
             return_value=mock_connector,
         ):
             from src.orchestrator.utils.retry import PermanentError
+
             with pytest.raises(PermanentError, match="Schema discovery failed"):
                 await discover_schema_impl(valid_origin_config)
 
@@ -169,19 +172,21 @@ class TestDiscoverSchemaImpl:
         }
         mock_connector = MagicMock()
         mock_connector.close = AsyncMock()
-        mock_connector.discover_schema = AsyncMock(return_value={
-            "tables": [
-                {
-                    "name": "events",
-                    "columns": [
-                        {"name": "_id", "type": "ObjectId", "nullable": False},
-                        {"name": "type", "type": "STRING", "nullable": False},
-                    ],
-                    "foreign_keys": [],
-                    "sample_row": {"_id": "evt1", "type": "click"},
-                }
-            ]
-        })
+        mock_connector.discover_schema = AsyncMock(
+            return_value={
+                "tables": [
+                    {
+                        "name": "events",
+                        "columns": [
+                            {"name": "_id", "type": "ObjectId", "nullable": False},
+                            {"name": "type", "type": "STRING", "nullable": False},
+                        ],
+                        "foreign_keys": [],
+                        "sample_row": {"_id": "evt1", "type": "click"},
+                    }
+                ]
+            }
+        )
 
         with patch(
             "src.mcp_server.tools.discover_schema.create_connector",
@@ -210,19 +215,23 @@ class TestDiscoverSchemaHandler:
                 "database": "testdb",
             },
         }
-        mock_impl = AsyncMock(return_value={
-            "origin_id": "test_origin",
-            "origin_type": "postgres",
-            "tables": [],
-        })
+        mock_impl = AsyncMock(
+            return_value={
+                "origin_id": "test_origin",
+                "origin_type": "postgres",
+                "tables": [],
+            }
+        )
 
         with patch(
             "src.mcp_server.tools.discover_schema.discover_schema_impl",
             mock_impl,
         ):
-            result = await discover_schema_handler({
-                "origin_config": origin_config,
-            })
+            result = await discover_schema_handler(
+                {
+                    "origin_config": origin_config,
+                }
+            )
 
         mock_impl.assert_called_once_with(origin_config)
         assert result["origin_id"] == "test_origin"
@@ -244,29 +253,38 @@ class TestDiscoverSchemaHandler:
         mock_conn = MagicMock()
 
         mock_conn.close = AsyncMock()
-        mock_conn.discover_schema = AsyncMock(return_value={
-            "tables": [],
-            "origin_id": "test_origin",
-            "origin_type": "postgres",
-        })
-
-        with patch(
-            "src.mcp_server.server._get_config",
-            return_value=mock_config,
-        ), patch(
-            "src.mcp_server.tools.discover_schema.create_connector",
-            return_value=mock_conn,
-        ):
-            result = await discover_schema_handler({
+        mock_conn.discover_schema = AsyncMock(
+            return_value={
+                "tables": [],
                 "origin_id": "test_origin",
-            })
+                "origin_type": "postgres",
+            }
+        )
+
+        with (
+            patch(
+                "src.mcp_server.server._get_config",
+                return_value=mock_config,
+            ),
+            patch(
+                "src.mcp_server.tools.discover_schema.create_connector",
+                return_value=mock_conn,
+            ),
+        ):
+            result = await discover_schema_handler(
+                {
+                    "origin_id": "test_origin",
+                }
+            )
 
         assert result["origin_id"] == "test_origin"
 
     @pytest.mark.asyncio
     async def test_handler_missing_both_origin_config_and_origin_id(self) -> None:
         """Test handler fails when neither origin_config nor origin_id provided."""
-        with pytest.raises(ValueError, match="Either 'origin_id' or 'origin_config' must be provided"):
+        with pytest.raises(
+            ValueError, match="Either 'origin_id' or 'origin_config' must be provided"
+        ):
             await discover_schema_handler({})
 
     @pytest.mark.asyncio

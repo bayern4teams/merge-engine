@@ -12,10 +12,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # =============================================================================
 # Fixtures
 # =============================================================================
+
 
 @pytest.fixture
 def dest_config():
@@ -54,7 +54,10 @@ def mock_cursor():
 # Constructor & Lifecycle tests
 # =============================================================================
 
-@pytest.mark.skip(reason="Skipped per user request - postgresql_destination tests excluded from test suite")
+
+@pytest.mark.skip(
+    reason="Skipped per user request - postgresql_destination tests excluded from test suite"
+)
 class TestPostgreSQLDestinationInit:
     """Tests for PostgreSQLDestinationConnector initialization."""
 
@@ -92,7 +95,10 @@ class TestPostgreSQLDestinationInit:
 # _ensure_connection() tests
 # =============================================================================
 
-@pytest.mark.skip(reason="Skipped per user request - postgresql_destination tests excluded from test suite")
+
+@pytest.mark.skip(
+    reason="Skipped per user request - postgresql_destination tests excluded from test suite"
+)
 class TestEnsureConnection:
     """Tests for _ensure_connection method."""
 
@@ -149,7 +155,10 @@ class TestEnsureConnection:
 # close() tests
 # =============================================================================
 
-@pytest.mark.skip(reason="Skipped per user request - postgresql_destination tests excluded from test suite")
+
+@pytest.mark.skip(
+    reason="Skipped per user request - postgresql_destination tests excluded from test suite"
+)
 class TestClose:
     """Tests for the close() method."""
 
@@ -192,7 +201,10 @@ class TestClose:
 # Context manager tests
 # =============================================================================
 
-@pytest.mark.skip(reason="Skipped per user request - postgresql_destination tests excluded from test suite")
+
+@pytest.mark.skip(
+    reason="Skipped per user request - postgresql_destination tests excluded from test suite"
+)
 class TestContextManager:
     """Tests for __enter__ and __exit__ methods."""
 
@@ -224,11 +236,16 @@ class TestContextManager:
 # get_table_schema() tests
 # =============================================================================
 
-@pytest.mark.skip(reason="Skipped per user request - postgresql_destination tests excluded from test suite")
+
+@pytest.mark.skip(
+    reason="Skipped per user request - postgresql_destination tests excluded from test suite"
+)
 class TestGetTableSchema:
     """Tests for get_table_schema method."""
 
-    def test_returns_empty_for_nonexistent_table(self, dest_config, mock_psycopg2_connect, mock_cursor):
+    def test_returns_empty_for_nonexistent_table(
+        self, dest_config, mock_psycopg2_connect, mock_cursor
+    ):
         """get_table_schema should return empty for non-existent table."""
         mock_psycopg2, mock_conn = mock_psycopg2_connect
         mock_conn.cursor.return_value = mock_cursor
@@ -275,8 +292,8 @@ class TestGetTableSchema:
         mock_conn.cursor.return_value = mock_cursor
 
         mock_cursor.fetchone.side_effect = [
-            (True,),   # table exists
-            ("id",),   # primary key
+            (True,),  # table exists
+            ("id",),  # primary key
         ]
         mock_cursor.fetchall.return_value = [
             ("id", "integer", "NO"),
@@ -306,7 +323,10 @@ class TestGetTableSchema:
 # list_tables() tests
 # =============================================================================
 
-@pytest.mark.skip(reason="Skipped per user request - postgresql_destination tests excluded from test suite")
+
+@pytest.mark.skip(
+    reason="Skipped per user request - postgresql_destination tests excluded from test suite"
+)
 class TestListTables:
     """Tests for list_tables method."""
 
@@ -357,11 +377,16 @@ class TestListTables:
 # column_exists() tests
 # =============================================================================
 
-@pytest.mark.skip(reason="Skipped per user request - postgresql_destination tests excluded from test suite")
+
+@pytest.mark.skip(
+    reason="Skipped per user request - postgresql_destination tests excluded from test suite"
+)
 class TestColumnExists:
     """Tests for column_exists method."""
 
-    def test_returns_true_for_existing_column(self, dest_config, mock_psycopg2_connect, mock_cursor):
+    def test_returns_true_for_existing_column(
+        self, dest_config, mock_psycopg2_connect, mock_cursor
+    ):
         """column_exists should return True when column exists."""
         mock_psycopg2, mock_conn = mock_psycopg2_connect
         mock_conn.cursor.return_value = mock_cursor
@@ -374,7 +399,9 @@ class TestColumnExists:
 
         assert result is True
 
-    def test_returns_false_for_nonexistent_column(self, dest_config, mock_psycopg2_connect, mock_cursor):
+    def test_returns_false_for_nonexistent_column(
+        self, dest_config, mock_psycopg2_connect, mock_cursor
+    ):
         """column_exists should return False when column doesn't exist."""
         mock_psycopg2, mock_conn = mock_psycopg2_connect
         mock_conn.cursor.return_value = mock_cursor
@@ -404,7 +431,10 @@ class TestColumnExists:
 # load_batch() tests
 # =============================================================================
 
-@pytest.mark.skip(reason="Skipped per user request - postgresql_destination tests excluded from test suite")
+
+@pytest.mark.skip(
+    reason="Skipped per user request - postgresql_destination tests excluded from test suite"
+)
 class TestLoadBatch:
     """Tests for load_batch method."""
 
@@ -453,7 +483,7 @@ class TestLoadBatch:
         connector.load_batch("users", records, upsert_key="user_id")
 
         sql = mock_cursor.execute.call_args[0][0]
-        assert "ON CONFLICT (\"user_id\")" in sql
+        assert 'ON CONFLICT ("user_id")' in sql
 
     def test_handles_json_values(self, dest_config, mock_psycopg2_connect, mock_cursor):
         """load_batch should serialize dict/list values as JSON strings."""
@@ -473,6 +503,7 @@ class TestLoadBatch:
         call_args = mock_cursor.execute.call_args
         processed = call_args[0][1]
         import json
+
         assert processed["metadata"] == json.dumps({"key": "value"})
         assert processed["tags"] == json.dumps(["a", "b"])
 
@@ -521,7 +552,10 @@ class TestLoadBatch:
 # load_batch_bulk() tests
 # =============================================================================
 
-@pytest.mark.skip(reason="Skipped per user request - postgresql_destination tests excluded from test suite")
+
+@pytest.mark.skip(
+    reason="Skipped per user request - postgresql_destination tests excluded from test suite"
+)
 class TestLoadBatchBulk:
     """Tests for load_batch_bulk method."""
 
@@ -575,7 +609,10 @@ class TestLoadBatchBulk:
 # add_column() tests
 # =============================================================================
 
-@pytest.mark.skip(reason="Skipped per user request - postgresql_destination tests excluded from test suite")
+
+@pytest.mark.skip(
+    reason="Skipped per user request - postgresql_destination tests excluded from test suite"
+)
 class TestAddColumn:
     """Tests for add_column method."""
 
@@ -606,6 +643,7 @@ class TestAddColumn:
         mock_conn.cursor.return_value = mock_cursor
 
         from psycopg2 import OperationalError as Psycopg2OperationalError
+
         mock_cursor.execute.side_effect = Psycopg2OperationalError("column already exists")
 
         from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
@@ -622,6 +660,7 @@ class TestAddColumn:
         mock_conn.cursor.return_value = mock_cursor
 
         from psycopg2 import OperationalError as Psycopg2OperationalError
+
         mock_cursor.execute.side_effect = Psycopg2OperationalError("permission denied")
 
         from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
@@ -648,7 +687,10 @@ class TestAddColumn:
 # extend_schema_batch() tests
 # =============================================================================
 
-@pytest.mark.skip(reason="Skipped per user request - postgresql_destination tests excluded from test suite")
+
+@pytest.mark.skip(
+    reason="Skipped per user request - postgresql_destination tests excluded from test suite"
+)
 class TestExtendSchemaBatch:
     """Tests for extend_schema_batch method."""
 
@@ -679,6 +721,7 @@ class TestExtendSchemaBatch:
         mock_conn.cursor.return_value = mock_cursor
 
         from psycopg2 import OperationalError as Psycopg2OperationalError
+
         # First succeeds, second fails
         mock_cursor.execute.side_effect = [
             None,
@@ -705,6 +748,7 @@ class TestExtendSchemaBatch:
         mock_conn.cursor.return_value = mock_cursor
 
         from psycopg2 import OperationalError as Psycopg2OperationalError
+
         mock_cursor.execute.side_effect = Psycopg2OperationalError("column already exists")
 
         changes = [{"table": "users", "column": "phone", "data_type": "TEXT"}]
@@ -767,64 +811,89 @@ class TestExtendSchemaBatch:
 # _normalize_type() tests
 # =============================================================================
 
-@pytest.mark.skip(reason="Skipped per user request - postgresql_destination tests excluded from test suite")
+
+@pytest.mark.skip(
+    reason="Skipped per user request - postgresql_destination tests excluded from test suite"
+)
 class TestNormalizeType:
     """Tests for the static _normalize_type helper."""
 
     def test_normalizes_varchar(self):
         from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
+
         assert PostgreSQLDestinationConnector._normalize_type("character varying") == "VARCHAR"
 
     def test_normalizes_integer(self):
         from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
+
         assert PostgreSQLDestinationConnector._normalize_type("integer") == "INTEGER"
 
     def test_normalizes_bigint(self):
         from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
+
         assert PostgreSQLDestinationConnector._normalize_type("bigint") == "BIGINT"
 
     def test_normalizes_smallint(self):
         from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
+
         assert PostgreSQLDestinationConnector._normalize_type("smallint") == "SMALLINT"
 
     def test_normalizes_numeric(self):
         from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
+
         assert PostgreSQLDestinationConnector._normalize_type("numeric") == "NUMERIC"
 
     def test_normalizes_boolean(self):
         from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
+
         assert PostgreSQLDestinationConnector._normalize_type("boolean") == "BOOLEAN"
 
     def test_normalizes_timestamp_types(self):
         from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
-        assert PostgreSQLDestinationConnector._normalize_type("timestamp without time zone") == "TIMESTAMP"
-        assert PostgreSQLDestinationConnector._normalize_type("timestamp with time zone") == "TIMESTAMPTZ"
+
+        assert (
+            PostgreSQLDestinationConnector._normalize_type("timestamp without time zone")
+            == "TIMESTAMP"
+        )
+        assert (
+            PostgreSQLDestinationConnector._normalize_type("timestamp with time zone")
+            == "TIMESTAMPTZ"
+        )
 
     def test_normalizes_json_types(self):
         from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
+
         assert PostgreSQLDestinationConnector._normalize_type("json") == "JSON"
         assert PostgreSQLDestinationConnector._normalize_type("jsonb") == "JSONB"
 
     def test_normalizes_uuid(self):
         from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
+
         assert PostgreSQLDestinationConnector._normalize_type("uuid") == "UUID"
 
     def test_normalizes_bytea(self):
         from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
+
         assert PostgreSQLDestinationConnector._normalize_type("bytea") == "BYTEA"
 
     def test_normalizes_date(self):
         from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
+
         assert PostgreSQLDestinationConnector._normalize_type("date") == "DATE"
 
     def test_normalizes_text(self):
         from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
+
         assert PostgreSQLDestinationConnector._normalize_type("text") == "TEXT"
 
     def test_normalizes_double_precision(self):
         from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
-        assert PostgreSQLDestinationConnector._normalize_type("double precision") == "DOUBLE PRECISION"
+
+        assert (
+            PostgreSQLDestinationConnector._normalize_type("double precision") == "DOUBLE PRECISION"
+        )
 
     def test_uppercases_unknown_type(self):
         from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
+
         assert PostgreSQLDestinationConnector._normalize_type("my_custom_type") == "MY_CUSTOM_TYPE"

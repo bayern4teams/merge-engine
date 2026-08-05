@@ -59,8 +59,7 @@ def apply_cluster_decisions(
                 if decision is not None:
                     stats["kept"] += 1
                     # Reviewed and confirmed — don't re-flag it downstream.
-                    cluster = {**cluster, "required_human_review": False,
-                               "reviewed_by_human": True}
+                    cluster = {**cluster, "required_human_review": False, "reviewed_by_human": True}
                 rebuilt.append(cluster)
                 continue
 
@@ -68,7 +67,8 @@ def apply_cluster_decisions(
                 logger.warning(
                     "Unknown cluster action %r for %s — splitting, because "
                     "an unintended merge is not recoverable.",
-                    action, cluster.get("cluster_id"),
+                    action,
+                    cluster.get("cluster_id"),
                 )
                 stats["unknown"] += 1
 
@@ -90,18 +90,24 @@ def apply_cluster_decisions(
             stats["split"] += 1
             for part in partitions:
                 members = sorted(set(part))
-                rebuilt.append({
-                    "cluster_id": deterministic_uuid(entity_type, *members),
-                    "record_ids": members,
-                    "match_confidence": 1.0 if len(members) == 1
-                    else cluster.get("match_confidence", 1.0),
-                    "required_human_review": False,
-                    "reviewed_by_human": True,
-                })
+                rebuilt.append(
+                    {
+                        "cluster_id": deterministic_uuid(entity_type, *members),
+                        "record_ids": members,
+                        "match_confidence": 1.0
+                        if len(members) == 1
+                        else cluster.get("match_confidence", 1.0),
+                        "required_human_review": False,
+                        "reviewed_by_human": True,
+                    }
+                )
         updated[entity_type] = rebuilt
 
     logger.info(
         "Applied %d cluster decisions: %d kept, %d split, %d unrecognised",
-        len(by_id), stats["kept"], stats["split"], stats["unknown"],
+        len(by_id),
+        stats["kept"],
+        stats["split"],
+        stats["unknown"],
     )
     return updated, stats

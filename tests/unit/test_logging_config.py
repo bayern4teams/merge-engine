@@ -4,14 +4,10 @@ Tests for src/utils/logging_config.py - Structured logging configuration.
 
 import json
 import logging
-import sys
-from io import StringIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from src.utils.logging_config import setup_logging, _JSONFormatter
+from src.utils.logging_config import _JSONFormatter, setup_logging
 
 
 class TestSetupLogging:
@@ -89,14 +85,9 @@ class TestSetupLogging:
             mock_get_logger.return_value = mock_logger
             setup_logging(json=True)
             # Check handler was added with JSON formatter
-            handlers = [
-                call.args[0] for call in mock_logger.addHandler.call_args_list
-            ]
+            handlers = [call.args[0] for call in mock_logger.addHandler.call_args_list]
             # At least one handler should use JSONFormatter
-            json_handlers = [
-                h for h in handlers
-                if isinstance(h.formatter, _JSONFormatter)
-            ]
+            json_handlers = [h for h in handlers if isinstance(h.formatter, _JSONFormatter)]
             assert len(json_handlers) >= 1
 
 

@@ -16,7 +16,6 @@ from typing import Any
 import pytest
 
 from src.mcp_server.tools.resolve_entities import (
-    _LAST_BLOCKING_STATS,
     _MAX_COMPARISONS,
     _generate_candidate_pairs,
     _ordered,
@@ -28,8 +27,11 @@ from src.mcp_server.tools.resolve_entities import (
 
 def _rec(i: int, first: str, last: str, email: str | None = None) -> dict[str, Any]:
     rec = {
-        "_origin_id": "pg", "_origin_table": "staff", "_origin_id_row": str(i),
-        "first_name": first, "last_name": last,
+        "_origin_id": "pg",
+        "_origin_table": "staff",
+        "_origin_id_row": str(i),
+        "first_name": first,
+        "last_name": last,
     }
     if email:
         rec["email"] = email
@@ -46,8 +48,12 @@ class TestMemoisationPreservesSemantics:
     @pytest.mark.parametrize(
         "a,b",
         [
-            ("rory", "rori"), ("smith", "smyth"), ("acme corp", "acme corporation"),
-            ("", "x"), ("jon", "john"), ("abc", "xyz"),
+            ("rory", "rori"),
+            ("smith", "smyth"),
+            ("acme corp", "acme corporation"),
+            ("", "x"),
+            ("jon", "john"),
+            ("abc", "xyz"),
             ("elizabeth taylor", "taylor elizabeth"),
         ],
     )
@@ -96,13 +102,13 @@ class TestComparisonBudget:
 
     def test_a_realistic_merge_compares_every_candidate_pair(self) -> None:
         records = [
-            _rec(i, f"first{i % 40}", f"last{i % 37}", f"user{i}@example.com")
-            for i in range(600)
+            _rec(i, f"first{i % 40}", f"last{i % 37}", f"user{i}@example.com") for i in range(600)
         ]
 
-        _generate_candidate_pairs(records)
+        stats: dict[str, int] = {}
+        _generate_candidate_pairs(records, stats=stats)
 
-        assert _LAST_BLOCKING_STATS["uncompared_pairs"] == 0
+        assert stats["uncompared_pairs"] == 0
 
     def test_shortfall_is_reported_when_the_budget_does_bind(
         self, monkeypatch: pytest.MonkeyPatch
@@ -113,20 +119,18 @@ class TestComparisonBudget:
         monkeypatch.setattr(mod, "_MAX_COMPARISONS", 5)
         records = [_rec(i, "same", "name") for i in range(20)]
 
-        pairs = mod._generate_candidate_pairs(records)
+        stats: dict[str, int] = {}
+        pairs = mod._generate_candidate_pairs(records, stats=stats)
 
         assert len(pairs) == 5
-        assert mod._LAST_BLOCKING_STATS["uncompared_pairs"] > 0
+        assert stats["uncompared_pairs"] > 0
 
 
 class TestDeterminism:
     """Identical input must produce identical output, budget or no budget."""
 
     def _records(self) -> list[dict[str, Any]]:
-        return [
-            _rec(i, f"first{i % 12}", f"last{i % 9}", f"u{i}@example.com")
-            for i in range(120)
-        ]
+        return [_rec(i, f"first{i % 12}", f"last{i % 9}", f"u{i}@example.com") for i in range(120)]
 
     def test_pairs_are_identical_across_runs(self) -> None:
         first = [(a, b) for a, b, _r1, _r2 in _generate_candidate_pairs(self._records())]

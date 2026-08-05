@@ -10,10 +10,8 @@ Entity types: companies, contacts, products, orders
 """
 
 import random
-import string
 import uuid
 from datetime import datetime, timedelta
-from typing import Any
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -66,22 +64,45 @@ def random_phone(variant: str = "original") -> str:
 def random_address(number: int = None) -> dict:
     """Generate a random address with edge-case variations."""
     streets = [
-        "Main St", "Main Street", "Main St.",
-        "Oak Avenue", "Oak Ave.", "Oak Avenue.",
-        "Elm Boulevard", "Elm Blvd", "Elm Blvd.",
-        "Broadway", "Broadway", "Broadway",
-        "Park Road", "Park Rd.", "Park Road.",
+        "Main St",
+        "Main Street",
+        "Main St.",
+        "Oak Avenue",
+        "Oak Ave.",
+        "Oak Avenue.",
+        "Elm Boulevard",
+        "Elm Blvd",
+        "Elm Blvd.",
+        "Broadway",
+        "Broadway",
+        "Broadway",
+        "Park Road",
+        "Park Rd.",
+        "Park Road.",
     ]
     cities = [
-        "New York", "Los Angeles", "Chicago", "Houston", "Phoenix",
-        "Philadelphia", "San Antonio", "San Diego", "Dallas", "San Jose",
+        "New York",
+        "Los Angeles",
+        "Chicago",
+        "Houston",
+        "Phoenix",
+        "Philadelphia",
+        "San Antonio",
+        "San Diego",
+        "Dallas",
+        "San Jose",
     ]
     states = [
-        "NY", "New York",
-        "CA", "California",
-        "IL", "Illinois",
-        "TX", "Texas",
-        "AZ", "Arizona",
+        "NY",
+        "New York",
+        "CA",
+        "California",
+        "IL",
+        "Illinois",
+        "TX",
+        "Texas",
+        "AZ",
+        "Arizona",
     ]
 
     if number is None:
@@ -102,61 +123,220 @@ def random_address(number: int = None) -> dict:
 
 
 FIRST_NAMES_MALE = [
-    "James", "John", "Robert", "Michael", "William", "David", "Richard",
-    "Joseph", "Thomas", "Charles", "Christopher", "Daniel", "Matthew",
-    "Anthony", "Mark", "Donald", "Steven", "Paul", "Andrew", "Joshua",
-    "Robert", "Kenneth", "George", "Timothy", "Ronald", "Edward", "Jason",
-    "Jeffrey", "Ryan", "Jacob", "Gary", "Nicholas", "Eric", "Jonathan",
-    "Stephen", "Larry", "Justin", "Scott", "Brandon", "Benjamin",
-    "Bob", "Bobby", "Rob", "Mick", "Mike", "Dick", "Rick",
+    "James",
+    "John",
+    "Robert",
+    "Michael",
+    "William",
+    "David",
+    "Richard",
+    "Joseph",
+    "Thomas",
+    "Charles",
+    "Christopher",
+    "Daniel",
+    "Matthew",
+    "Anthony",
+    "Mark",
+    "Donald",
+    "Steven",
+    "Paul",
+    "Andrew",
+    "Joshua",
+    "Robert",
+    "Kenneth",
+    "George",
+    "Timothy",
+    "Ronald",
+    "Edward",
+    "Jason",
+    "Jeffrey",
+    "Ryan",
+    "Jacob",
+    "Gary",
+    "Nicholas",
+    "Eric",
+    "Jonathan",
+    "Stephen",
+    "Larry",
+    "Justin",
+    "Scott",
+    "Brandon",
+    "Benjamin",
+    "Bob",
+    "Bobby",
+    "Rob",
+    "Mick",
+    "Mike",
+    "Dick",
+    "Rick",
 ]
 
 FIRST_NAMES_FEMALE = [
-    "Mary", "Patricia", "Jennifer", "Linda", "Barbara", "Elizabeth",
-    "Susan", "Jessica", "Sarah", "Karen", "Nancy", "Lisa", "Betty",
-    "Margaret", "Sandra", "Ashley", "Dorothy", "Kimberly", "Emily",
-    "Donna", "Michelle", "Carol", "Amanda", "Melissa", "Deborah",
-    "Stephanie", "Rebecca", "Sharon", "Laura", "Cynthia", "Kathleen",
-    "Amy", "Angela", "Brenda", "Amy", "Anna", "Sarah", "Sally",
-    "Betsy", "Betty", "Tina", "Liz", "Lizzy", "Megan", "Meg",
+    "Mary",
+    "Patricia",
+    "Jennifer",
+    "Linda",
+    "Barbara",
+    "Elizabeth",
+    "Susan",
+    "Jessica",
+    "Sarah",
+    "Karen",
+    "Nancy",
+    "Lisa",
+    "Betty",
+    "Margaret",
+    "Sandra",
+    "Ashley",
+    "Dorothy",
+    "Kimberly",
+    "Emily",
+    "Donna",
+    "Michelle",
+    "Carol",
+    "Amanda",
+    "Melissa",
+    "Deborah",
+    "Stephanie",
+    "Rebecca",
+    "Sharon",
+    "Laura",
+    "Cynthia",
+    "Kathleen",
+    "Amy",
+    "Angela",
+    "Brenda",
+    "Amy",
+    "Anna",
+    "Sarah",
+    "Sally",
+    "Betsy",
+    "Betty",
+    "Tina",
+    "Liz",
+    "Lizzy",
+    "Megan",
+    "Meg",
 ]
 
 LAST_NAMES = [
-    "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller",
-    "Davis", "Rodriguez", "Martinez", "Hernandez", "Lopez", "Gonzalez",
-    "Wilson", "Anderson", "Thomas", "Taylor", "Moore", "Jackson", "Martin",
-    "Lee", "Perez", "Thompson", "White", "Harris", "Sanchez", "Clark",
-    "Ramirez", "Lewis", "Robinson", "Walker", "Young", "Allen", "King",
-    "Wright", "Scott", "Torres", "Nguyen", "Hill", "Flores",
-    "Von", "Van", "De", "La", "El",
+    "Smith",
+    "Johnson",
+    "Williams",
+    "Brown",
+    "Jones",
+    "Garcia",
+    "Miller",
+    "Davis",
+    "Rodriguez",
+    "Martinez",
+    "Hernandez",
+    "Lopez",
+    "Gonzalez",
+    "Wilson",
+    "Anderson",
+    "Thomas",
+    "Taylor",
+    "Moore",
+    "Jackson",
+    "Martin",
+    "Lee",
+    "Perez",
+    "Thompson",
+    "White",
+    "Harris",
+    "Sanchez",
+    "Clark",
+    "Ramirez",
+    "Lewis",
+    "Robinson",
+    "Walker",
+    "Young",
+    "Allen",
+    "King",
+    "Wright",
+    "Scott",
+    "Torres",
+    "Nguyen",
+    "Hill",
+    "Flores",
+    "Von",
+    "Van",
+    "De",
+    "La",
+    "El",
 ]
 
 COMPANY_PREFIXES = [
-    "Acme", "Global", "International", "United", "Premier",
-    "Elite", "Apex", "Summit", "Pinnacle", "Cornerstone",
-    "Blue Sky", "Sunrise", "Pacific", "Atlantic", "Metro",
+    "Acme",
+    "Global",
+    "International",
+    "United",
+    "Premier",
+    "Elite",
+    "Apex",
+    "Summit",
+    "Pinnacle",
+    "Cornerstone",
+    "Blue Sky",
+    "Sunrise",
+    "Pacific",
+    "Atlantic",
+    "Metro",
 ]
 
 COMPANY_SUFFIXES = [
-    "Corporation", "Corp.", "Corporations",
-    "LLC", "L.L.C.",
-    "Inc.", "Incorporated",
-    "Ltd.", "Limited",
-    "Group", "Holdings", "Enterprises",
-    "Solutions", "Technologies", "Systems", "Services",
+    "Corporation",
+    "Corp.",
+    "Corporations",
+    "LLC",
+    "L.L.C.",
+    "Inc.",
+    "Incorporated",
+    "Ltd.",
+    "Limited",
+    "Group",
+    "Holdings",
+    "Enterprises",
+    "Solutions",
+    "Technologies",
+    "Systems",
+    "Services",
 ]
 
 PRODUCT_CATEGORIES = [
-    "Electronics", "Software", "Hardware", "Services", "Supplies",
-    "Furniture", "Clothing", "Food & Beverage", "Automotive", "Medical",
+    "Electronics",
+    "Software",
+    "Hardware",
+    "Services",
+    "Supplies",
+    "Furniture",
+    "Clothing",
+    "Food & Beverage",
+    "Automotive",
+    "Medical",
 ]
 
 PRODUCT_NAMES = [
-    "Widget A", "Widget B", "Gadget X", "Gadget Y", "Tool Pro",
-    "Device Plus", "System Ultra", "Pack Basic", "Pack Premium",
-    "Connector Type-A", "Connector Type-B", "Adapter Dual-Port",
-    "Cable USB-C 3ft", "Cable HDMI 6ft", "Cable Ethernet 10ft",
-    "Mount Wall", "Mount Desk", "Stand Floor",
+    "Widget A",
+    "Widget B",
+    "Gadget X",
+    "Gadget Y",
+    "Tool Pro",
+    "Device Plus",
+    "System Ultra",
+    "Pack Basic",
+    "Pack Premium",
+    "Connector Type-A",
+    "Connector Type-B",
+    "Adapter Dual-Port",
+    "Cable USB-C 3ft",
+    "Cable HDMI 6ft",
+    "Cable Ethernet 10ft",
+    "Mount Wall",
+    "Mount Desk",
+    "Stand Floor",
 ]
 
 ORDER_STATUSES = ["pending", "confirmed", "shipped", "delivered", "cancelled", "returned"]
@@ -193,22 +373,26 @@ def generate_companies(count: int = 200) -> list[dict]:
     # --- Normal unique companies ---
     for i in range(count):
         name, canonical = generate_company_name("original")
-        companies.append({
-            "id": random_uuid(),
-            "name": name,
-            "legal_name": f"{name} Legal Entity",
-            "phone": random_phone("original"),
-            "email": f"info@{canonical.replace(' ', '')}.com",
-            "website": f"https://{canonical.replace(' ', '')}.com",
-            "industry": random.choice(["Technology", "Healthcare", "Finance", "Retail", "Manufacturing"]),
-            "employee_count": random.randint(10, 10000),
-            "annual_revenue": random.randint(100000, 100000000),
-            "address": random_address(),
-            "created_at": (datetime.now() - timedelta(days=random.randint(1, 730))).isoformat(),
-            "updated_at": (datetime.now() - timedelta(days=random.randint(0, 30))).isoformat(),
-            "record_status": "active",
-            "source_id": None,  # will be set per-origin
-        })
+        companies.append(
+            {
+                "id": random_uuid(),
+                "name": name,
+                "legal_name": f"{name} Legal Entity",
+                "phone": random_phone("original"),
+                "email": f"info@{canonical.replace(' ', '')}.com",
+                "website": f"https://{canonical.replace(' ', '')}.com",
+                "industry": random.choice(
+                    ["Technology", "Healthcare", "Finance", "Retail", "Manufacturing"]
+                ),
+                "employee_count": random.randint(10, 10000),
+                "annual_revenue": random.randint(100000, 100000000),
+                "address": random_address(),
+                "created_at": (datetime.now() - timedelta(days=random.randint(1, 730))).isoformat(),
+                "updated_at": (datetime.now() - timedelta(days=random.randint(0, 30))).isoformat(),
+                "record_status": "active",
+                "source_id": None,  # will be set per-origin
+            }
+        )
 
     # --- Duplicate edge cases: same canonical name, different display ---
     edge_companies = []
@@ -223,80 +407,94 @@ def generate_companies(count: int = 200) -> list[dict]:
             f"{name}",
         ]
         for j, display_name in enumerate(display_variants[:4]):
-            edge_companies.append({
-                "id": random_uuid(),
-                "name": display_name,
-                "legal_name": f"{display_name} Legal Entity",
-                "phone": random_phone(f"dashes" if j == 0 else "original"),
-                "email": f"contact{random.randint(1, 99)}@{canonical.replace(' ', '')}.com",
-                "address": random_address(),
-                "source_id": None,
-                "industry": random.choice(["Technology", "Finance"]),
-                "employee_count": random.randint(50, 5000),
-                "created_at": (datetime.now() - timedelta(days=random.randint(1, 730))).isoformat(),
-                "updated_at": (datetime.now() - timedelta(days=random.randint(0, 30))).isoformat(),
-                "record_status": "active",
-            })
+            edge_companies.append(
+                {
+                    "id": random_uuid(),
+                    "name": display_name,
+                    "legal_name": f"{display_name} Legal Entity",
+                    "phone": random_phone("dashes" if j == 0 else "original"),
+                    "email": f"contact{random.randint(1, 99)}@{canonical.replace(' ', '')}.com",
+                    "address": random_address(),
+                    "source_id": None,
+                    "industry": random.choice(["Technology", "Finance"]),
+                    "employee_count": random.randint(50, 5000),
+                    "created_at": (
+                        datetime.now() - timedelta(days=random.randint(1, 730))
+                    ).isoformat(),
+                    "updated_at": (
+                        datetime.now() - timedelta(days=random.randint(0, 30))
+                    ).isoformat(),
+                    "record_status": "active",
+                }
+            )
 
     companies.extend(edge_companies)
 
     # --- Near-duplicates: similar but different names ---
     for i in range(10):
         name, _ = generate_company_name("original")
-        companies.append({
-            "id": random_uuid(),
-            "name": f"{name} II",
-            "phone": random_phone("original"),
-            "email": f"info2@similar{random.randint(1, 999)}.com",
-            "address": random_address(),
-            "source_id": None,
-            "industry": random.choice(["Technology", "Retail"]),
-            "employee_count": random.randint(10, 1000),
-            "created_at": (datetime.now() - timedelta(days=random.randint(1, 730))).isoformat(),
-            "updated_at": (datetime.now() - timedelta(days=random.randint(0, 30))).isoformat(),
-            "record_status": "active",
-        })
-        companies.append({
-            "id": random_uuid(),
-            "name": f"{name} Inc.",
-            "phone": random_phone("original"),
-            "email": f"info3@similar{random.randint(1, 999)}.com",
-            "address": random_address(),
-            "source_id": None,
-            "industry": random.choice(["Technology", "Retail"]),
-            "employee_count": random.randint(10, 1000),
-            "created_at": (datetime.now() - timedelta(days=random.randint(1, 730))).isoformat(),
-            "updated_at": (datetime.now() - timedelta(days=random.randint(0, 30))).isoformat(),
-            "record_status": "active",
-        })
+        companies.append(
+            {
+                "id": random_uuid(),
+                "name": f"{name} II",
+                "phone": random_phone("original"),
+                "email": f"info2@similar{random.randint(1, 999)}.com",
+                "address": random_address(),
+                "source_id": None,
+                "industry": random.choice(["Technology", "Retail"]),
+                "employee_count": random.randint(10, 1000),
+                "created_at": (datetime.now() - timedelta(days=random.randint(1, 730))).isoformat(),
+                "updated_at": (datetime.now() - timedelta(days=random.randint(0, 30))).isoformat(),
+                "record_status": "active",
+            }
+        )
+        companies.append(
+            {
+                "id": random_uuid(),
+                "name": f"{name} Inc.",
+                "phone": random_phone("original"),
+                "email": f"info3@similar{random.randint(1, 999)}.com",
+                "address": random_address(),
+                "source_id": None,
+                "industry": random.choice(["Technology", "Retail"]),
+                "employee_count": random.randint(10, 1000),
+                "created_at": (datetime.now() - timedelta(days=random.randint(1, 730))).isoformat(),
+                "updated_at": (datetime.now() - timedelta(days=random.randint(0, 30))).isoformat(),
+                "record_status": "active",
+            }
+        )
 
     # --- Null/empty field edge cases ---
     for i in range(5):
-        companies.append({
-            "id": random_uuid(),
-            "name": None,
-            "phone": None,
-            "email": None,
-            "address": None,
-            "source_id": None,
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
-            "record_status": "active",
-        })
+        companies.append(
+            {
+                "id": random_uuid(),
+                "name": None,
+                "phone": None,
+                "email": None,
+                "address": None,
+                "source_id": None,
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+                "record_status": "active",
+            }
+        )
 
     # --- Empty string edge cases ---
     for i in range(5):
-        companies.append({
-            "id": random_uuid(),
-            "name": "",
-            "phone": "",
-            "email": "",
-            "address": {},
-            "source_id": None,
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
-            "record_status": "active",
-        })
+        companies.append(
+            {
+                "id": random_uuid(),
+                "name": "",
+                "phone": "",
+                "email": "",
+                "address": {},
+                "source_id": None,
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+                "record_status": "active",
+            }
+        )
 
     return companies
 
@@ -344,7 +542,6 @@ def generate_contact(first: str = None, last: str = None, variant: str = "origin
         "Stephen": ["Steve"],
         "Timothy": ["Tim"],
         "Jonathan": ["Jon"],
-        "Daniel": ["Dan"],
     }
 
     nicks = nicknames_map.get(first, [])
@@ -358,26 +555,41 @@ def generate_contact(first: str = None, last: str = None, variant: str = "origin
         "nickname": nick,
         "full_name": f"{first} {last}" if not nick else f"{nick} {last}",
         "email": email,
-        "emails": [email, random_email(first, last, "plus_addressing")] if variant == "original" else [email],
+        "emails": [email, random_email(first, last, "plus_addressing")]
+        if variant == "original"
+        else [email],
         "phone": phone,
         "phones": [phone, random_phone()] if variant == "original" else [phone],
-        "title": random.choice([
-            "Software Engineer", "Product Manager", "Sales Director",
-            "VP of Engineering", "CTO", "CEO", "Marketing Manager",
-            "HR Director", "Financial Analyst", "Operations Manager",
-        ]),
+        "title": random.choice(
+            [
+                "Software Engineer",
+                "Product Manager",
+                "Sales Director",
+                "VP of Engineering",
+                "CTO",
+                "CEO",
+                "Marketing Manager",
+                "HR Director",
+                "Financial Analyst",
+                "Operations Manager",
+            ]
+        ),
         "company_id": None,  # linked later
         "address": random_address(),
-        "linkedin": f"https://linkedin.com/in/{first.lower()}-{last.lower()}" if variant == "original" else None,
+        "linkedin": f"https://linkedin.com/in/{first.lower()}-{last.lower()}"
+        if variant == "original"
+        else None,
         "date_of_birth": None,  # some will have
         "gender": random.choice(["M", "F", None, None]),
-        "notes": random.choice([
-            None,
-            "",
-            f"Preferred contact method: email",
-            f"Met at conference 2024",
-            f"Referral from {random.choice(LAST_NAMES)}",
-        ]),
+        "notes": random.choice(
+            [
+                None,
+                "",
+                "Preferred contact method: email",
+                "Met at conference 2024",
+                f"Referral from {random.choice(LAST_NAMES)}",
+            ]
+        ),
         "source_id": None,
         "created_at": (datetime.now() - timedelta(days=random.randint(1, 730))).isoformat(),
         "updated_at": (datetime.now() - timedelta(days=random.randint(0, 30))).isoformat(),
@@ -399,8 +611,16 @@ def generate_contacts(count: int = 500) -> list[dict]:
     base_last = "Smith"
     for i, variant in enumerate(["original", "dots_removed", "plus_addressing", "no_dot"]):
         c = generate_contact(base_first, base_last, variant=variant)
-        c["first_name"] = base_first if variant == "original" else (base_first.upper() if i == 1 else base_first.lower())
-        c["last_name"] = base_last if variant == "original" else (base_last.upper() if i == 1 else base_last.lower())
+        c["first_name"] = (
+            base_first
+            if variant == "original"
+            else (base_first.upper() if i == 1 else base_first.lower())
+        )
+        c["last_name"] = (
+            base_last
+            if variant == "original"
+            else (base_last.upper() if i == 1 else base_last.lower())
+        )
         contacts.append(c)
 
     # --- Same name, different emails (one person, multiple emails) ---
@@ -490,29 +710,31 @@ def generate_products(count: int = 300) -> list[dict]:
         name = random.choice(PRODUCT_NAMES)
         sku_base = f"SKU-{category[:3].upper()}-{random.randint(1000, 9999)}"
 
-        products.append({
-            "id": random_uuid(),
-            "name": name,
-            "description": f"High-quality {name.lower()} in {category.lower()} category",
-            "sku": sku_base,
-            "category": category,
-            "price": round(random.uniform(9.99, 999.99), 2),
-            "cost": round(random.uniform(5.00, 500.00), 2),
-            "weight": round(random.uniform(0.1, 50.0), 2),
-            "units": random.choice(["pcs", "kg", "lbs", "m", "ft"]),
-            "stock_quantity": random.randint(0, 10000),
-            "reorder_level": random.randint(10, 100),
-            "supplier": random.choice(COMPANY_PREFIXES) + " Supplies",
-            "created_at": (datetime.now() - timedelta(days=random.randint(1, 730))).isoformat(),
-            "updated_at": (datetime.now() - timedelta(days=random.randint(0, 30))).isoformat(),
-            "record_status": random.choice(["active", "active", "discontinued", "draft"]),
-            "source_id": None,
-            "specifications": {
-                "color": random.choice(["Red", "Blue", "Green", "Black", "White", None]),
-                "size": random.choice(["Small", "Medium", "Large", "XL", None]),
-                "material": random.choice(["Plastic", "Metal", "Wood", "Fabric", None]),
-            },
-        })
+        products.append(
+            {
+                "id": random_uuid(),
+                "name": name,
+                "description": f"High-quality {name.lower()} in {category.lower()} category",
+                "sku": sku_base,
+                "category": category,
+                "price": round(random.uniform(9.99, 999.99), 2),
+                "cost": round(random.uniform(5.00, 500.00), 2),
+                "weight": round(random.uniform(0.1, 50.0), 2),
+                "units": random.choice(["pcs", "kg", "lbs", "m", "ft"]),
+                "stock_quantity": random.randint(0, 10000),
+                "reorder_level": random.randint(10, 100),
+                "supplier": random.choice(COMPANY_PREFIXES) + " Supplies",
+                "created_at": (datetime.now() - timedelta(days=random.randint(1, 730))).isoformat(),
+                "updated_at": (datetime.now() - timedelta(days=random.randint(0, 30))).isoformat(),
+                "record_status": random.choice(["active", "active", "discontinued", "draft"]),
+                "source_id": None,
+                "specifications": {
+                    "color": random.choice(["Red", "Blue", "Green", "Black", "White", None]),
+                    "size": random.choice(["Small", "Medium", "Large", "XL", None]),
+                    "material": random.choice(["Plastic", "Metal", "Wood", "Fabric", None]),
+                },
+            }
+        )
 
     # --- SKU variations (same product, different SKU representation) ---
     for _ in range(15):
@@ -526,59 +748,67 @@ def generate_products(count: int = 300) -> list[dict]:
             f"  {base_sku}  ",  # leading/trailing spaces
         ]
         for sku in variations[:4]:
-            products.append({
-                "id": random_uuid(),
-                "name": name,
-                "description": f"{name} description",
-                "sku": sku,
-                "category": "Hardware",
-                "price": round(random.uniform(9.99, 999.99), 2),
-                "cost": round(random.uniform(5.0, 500.0), 2),
-                "stock_quantity": random.randint(0, 10000),
-                "source_id": None,
-                "created_at": datetime.now().isoformat(),
-                "updated_at": datetime.now().isoformat(),
-                "record_status": "active",
-            })
+            products.append(
+                {
+                    "id": random_uuid(),
+                    "name": name,
+                    "description": f"{name} description",
+                    "sku": sku,
+                    "category": "Hardware",
+                    "price": round(random.uniform(9.99, 999.99), 2),
+                    "cost": round(random.uniform(5.0, 500.0), 2),
+                    "stock_quantity": random.randint(0, 10000),
+                    "source_id": None,
+                    "created_at": datetime.now().isoformat(),
+                    "updated_at": datetime.now().isoformat(),
+                    "record_status": "active",
+                }
+            )
 
     # --- Similar names (differ by one word) ---
     for _ in range(10):
         base = random.choice(PRODUCT_NAMES)
-        products.append({
-            "id": random_uuid(),
-            "name": base,
-            "sku": f"SKU-NEAR-{random.randint(1000, 9999)}",
-            "category": random.choice(PRODUCT_CATEGORIES),
-            "price": round(random.uniform(9.99, 999.99), 2),
-            "source_id": None,
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
-            "record_status": "active",
-        })
-        products.append({
-            "id": random_uuid(),
-            "name": f"{base} Plus",
-            "sku": f"SKU-NEAR-{random.randint(1000, 9999)}",
-            "category": random.choice(PRODUCT_CATEGORIES),
-            "price": round(random.uniform(9.99, 999.99), 2),
-            "source_id": None,
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
-            "record_status": "active",
-        })
+        products.append(
+            {
+                "id": random_uuid(),
+                "name": base,
+                "sku": f"SKU-NEAR-{random.randint(1000, 9999)}",
+                "category": random.choice(PRODUCT_CATEGORIES),
+                "price": round(random.uniform(9.99, 999.99), 2),
+                "source_id": None,
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+                "record_status": "active",
+            }
+        )
+        products.append(
+            {
+                "id": random_uuid(),
+                "name": f"{base} Plus",
+                "sku": f"SKU-NEAR-{random.randint(1000, 9999)}",
+                "category": random.choice(PRODUCT_CATEGORIES),
+                "price": round(random.uniform(9.99, 999.99), 2),
+                "source_id": None,
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+                "record_status": "active",
+            }
+        )
 
     # --- Null/empty ---
     for _ in range(5):
-        products.append({
-            "id": random_uuid(),
-            "name": None,
-            "sku": None,
-            "price": None,
-            "source_id": None,
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
-            "record_status": "draft",
-        })
+        products.append(
+            {
+                "id": random_uuid(),
+                "name": None,
+                "sku": None,
+                "price": None,
+                "source_id": None,
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+                "record_status": "draft",
+            }
+        )
 
     return products
 
@@ -608,40 +838,44 @@ def generate_orders(
         for _ in range(num_items):
             product = random.choice(active_products) if active_products else None
             if product:
-                items.append({
-                    "product_id": product["id"],
-                    "product_name": product["name"],
-                    "sku": product["sku"],
-                    "quantity": random.randint(1, 100),
-                    "unit_price": product.get("price", random.uniform(9.99, 999.99)),
-                    "total": round(random.uniform(10, 10000), 2),
-                })
+                items.append(
+                    {
+                        "product_id": product["id"],
+                        "product_name": product["name"],
+                        "sku": product["sku"],
+                        "quantity": random.randint(1, 100),
+                        "unit_price": product.get("price", random.uniform(9.99, 999.99)),
+                        "total": round(random.uniform(10, 10000), 2),
+                    }
+                )
 
         total = sum(item["total"] for item in items)
 
-        orders.append({
-            "id": random_uuid(),
-            "order_number": f"ORD-{random.randint(100000, 999999)}",
-            "contact_id": contact["id"] if contact else None,
-            "company_id": company["id"] if company else None,
-            "items": items,
-            "subtotal": round(total, 2),
-            "tax": round(total * 0.08, 2),
-            "shipping": round(random.uniform(5, 50), 2),
-            "total": round(total * 1.08 + random.uniform(5, 50), 2),
-            "currency": "USD",
-            "status": random.choice(ORDER_STATUSES),
-            "shipping_address": random_address(),
-            "billing_address": random_address(),
-            "notes": random.choice([None, "", "Rush delivery", "Gift wrap"]),
-            "placed_at": (datetime.now() - timedelta(days=random.randint(1, 365))).isoformat(),
-            "shipped_at": None,
-            "delivered_at": None,
-            "source_id": None,
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
-            "record_status": "active",
-        })
+        orders.append(
+            {
+                "id": random_uuid(),
+                "order_number": f"ORD-{random.randint(100000, 999999)}",
+                "contact_id": contact["id"] if contact else None,
+                "company_id": company["id"] if company else None,
+                "items": items,
+                "subtotal": round(total, 2),
+                "tax": round(total * 0.08, 2),
+                "shipping": round(random.uniform(5, 50), 2),
+                "total": round(total * 1.08 + random.uniform(5, 50), 2),
+                "currency": "USD",
+                "status": random.choice(ORDER_STATUSES),
+                "shipping_address": random_address(),
+                "billing_address": random_address(),
+                "notes": random.choice([None, "", "Rush delivery", "Gift wrap"]),
+                "placed_at": (datetime.now() - timedelta(days=random.randint(1, 365))).isoformat(),
+                "shipped_at": None,
+                "delivered_at": None,
+                "source_id": None,
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+                "record_status": "active",
+            }
+        )
 
     return orders
 
@@ -683,7 +917,10 @@ def generate_mongodb_contacts(contacts: list[dict]) -> list[dict]:
                 "status": c.get("record_status"),
                 "source": "mongodb_origin",
             },
-            "tags": random.sample(["vip", "lead", "customer", "partner", "influencer", "prospect"], k=random.randint(0, 3)),
+            "tags": random.sample(
+                ["vip", "lead", "customer", "partner", "influencer", "prospect"],
+                k=random.randint(0, 3),
+            ),
         }
         docs.append(doc)
     return docs
@@ -715,8 +952,12 @@ def generate_mongodb_companies(companies: list[dict]) -> list[dict]:
                 "source": "mongodb_origin",
             },
             "socialProfiles": {
-                "linkedin": f"https://linkedin.com/company/{c.get('name', 'unknown').lower().replace(' ', '-')}" if c.get("name") else None,
-                "twitter": f"https://twitter.com/{c.get('name', 'unknown').lower().replace(' ', '')}" if c.get("name") else None,
+                "linkedin": f"https://linkedin.com/company/{c.get('name', 'unknown').lower().replace(' ', '-')}"
+                if c.get("name")
+                else None,
+                "twitter": f"https://twitter.com/{c.get('name', 'unknown').lower().replace(' ', '')}"
+                if c.get("name")
+                else None,
             },
         }
         docs.append(doc)
@@ -781,11 +1022,12 @@ def assign_source_ids(
     - ~20% are unique to origin 1
     - ~20% are unique to origin 2 (MongoDB)
     """
+
     def split_records(records: list[dict]) -> tuple[list, list, list]:
         n = len(records)
-        both = records[:int(n * 0.6)]
-        origin1_only = records[int(n * 0.6):int(n * 0.8)]
-        origin2_only = records[int(n * 0.8):]
+        both = records[: int(n * 0.6)]
+        origin1_only = records[int(n * 0.6) : int(n * 0.8)]
+        origin2_only = records[int(n * 0.8) :]
         return both, origin1_only, origin2_only
 
     companies_both, comp1_only, comp2_only = split_records(companies)
@@ -1191,11 +1433,19 @@ def generate_all(counts: dict = None) -> dict:
     orders = generate_orders(contacts, companies, products, n_orders)
 
     # Split across origins
-    (pg1_companies, mongo_companies,
-     pg1_contacts, mongo_contacts,
-     pg1_products, mongo_products,
-     mongo_orders) = assign_source_ids(
-        companies, contacts, products, orders,
+    (
+        pg1_companies,
+        mongo_companies,
+        pg1_contacts,
+        mongo_contacts,
+        pg1_products,
+        mongo_products,
+        mongo_orders,
+    ) = assign_source_ids(
+        companies,
+        contacts,
+        products,
+        orders,
     )
 
     # MongoDB documents (nested format)
@@ -1253,7 +1503,6 @@ def generate_all(counts: dict = None) -> dict:
 if __name__ == "__main__":
     import json
     import os
-    from datetime import date
 
     data = generate_all()
     output_dir = os.path.join(os.path.dirname(__file__), "generated")

@@ -3,10 +3,11 @@ Tests for src/orchestrator/utils/dependency_sort.py - Topological sort for entit
 """
 
 import pytest
+
 from src.orchestrator.utils.dependency_sort import (
+    find_execution_groups,
     topological_sort,
     validate_extraction_order,
-    find_execution_groups,
 )
 
 

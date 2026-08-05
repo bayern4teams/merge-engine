@@ -7,15 +7,15 @@ for each entity type in dependency order.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
-from pathlib import Path
-
-from src.mcp_server.tools.load_data import load_data_impl, _get_destination_connector
+from src.mcp_server.tools.load_data import _get_destination_connector, load_data_impl
 from src.orchestrator.spool import (
     clusters_for,
     collection_count,
@@ -29,7 +29,6 @@ from src.orchestrator.utils.entity_aliases import resolve_dest_table
 logger = logging.getLogger("merge-engine.orchestrator.load_data")
 
 _RUN_REPORTS_DIR = Path("logs") / "run_reports"
-
 
 
 # Pre-load guardrail (Phase 6.2) threshold: a scoped merge whose subject
@@ -151,7 +150,8 @@ def build_reconciliation_report(
         # mapping-review gate.
         mapping_for_entity = field_mappings.get(entity, {}) or {}
         dropped_fields = [
-            u.get("field") for u in (unmapped_fields.get(entity) or [])
+            u.get("field")
+            for u in (unmapped_fields.get(entity) or [])
             if isinstance(u, dict) and u.get("field") not in mapping_for_entity
         ]
 
@@ -180,9 +180,7 @@ def build_reconciliation_report(
             "fields_dropped_from_mapping": dropped_fields,
         }
         if entity == subject_entity and extracted_total:
-            entity_report["subject_unification_ratio"] = round(
-                len(unified) / extracted_total, 4
-            )
+            entity_report["subject_unification_ratio"] = round(len(unified) / extracted_total, 4)
         entities[entity] = entity_report
 
         if rows_inserted + rows_updated > 0:
@@ -199,7 +197,8 @@ def build_reconciliation_report(
             )
         ratio = entity_report.get("subject_unification_ratio")
         if (
-            ratio is not None and ratio >= 0.95
+            ratio is not None
+            and ratio >= 0.95
             and len(clusters) >= _SCOPED_MERGE_GUARDRAIL_MIN_CLUSTERS
             and auto_merged == 0
         ):
@@ -230,7 +229,7 @@ def build_reconciliation_report(
 
     return {
         "run_id": state.get("run_id", ""),
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "entities": entities,
         "new_columns": [
             {"table": c.get("table"), "column": c.get("column"), "data_type": c.get("data_type")}
@@ -242,10 +241,13 @@ def build_reconciliation_report(
         "families_requested": families_requested,
         "families_loaded": families_loaded,
         "completeness_pct": (
-            round(100 * families_loaded / families_requested, 1)
-            if families_requested else 0.0
+            round(100 * families_loaded / families_requested, 1) if families_requested else 0.0
         ),
         "data_quality": {"grade": grade, "red_flags": red_flags},
+        # Per-node wall-clock seconds, merged in by the _timed() wrapper in
+        # graph.py's _build_builder() (Phase 0 Sec 0.6). Compared against
+        # docs/verification/BUDGETS.yaml by drive_app.py --assert-budgets.
+        "timings": dict(state.get("timings") or {}),
     }
 
 
@@ -255,9 +257,7 @@ def _write_run_report(report: dict[str, Any]) -> str | None:
     try:
         _RUN_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
         path = _RUN_REPORTS_DIR / f"{run_id}.json"
-        path.write_text(
-            json.dumps(report, indent=2, default=str), encoding="utf-8"
-        )
+        path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
         logger.info("Reconciliation report written to %s", path)
         return str(path)
     except Exception as exc:
@@ -289,8 +289,7 @@ async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
     if state.get("load_approval") is not True:
         reason = ((state.get("human_feedback") or {}).get("reason") or "").strip()
         logger.warning(
-            "Load NOT approved (load_approval=%r) — writing nothing to the "
-            "destination.%s",
+            "Load NOT approved (load_approval=%r) — writing nothing to the destination.%s",
             state.get("load_approval"),
             f" Reason: {reason}" if reason else "",
         )
@@ -299,8 +298,11 @@ async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
         report["load_rejected_reason"] = reason
         _write_run_report(report)
         logger.debug("EXIT load_data_node (rejected)")
+        # No new error here - a rejected load isn't a failure, it's an
+        # explicit human decision. The old `errors: state.get("errors", [])`
+        # re-appended the entire error history through operator.add's
+        # reducer on every rejection (Phase 0 Sec 0.8).
         return {
-            "errors": state.get("errors", []),
             "reconciliation_report": report,
             "failure": {},
         }
@@ -321,8 +323,10 @@ async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
         report["guardrail_fired"] = True
         _write_run_report(report)
         logger.debug("EXIT load_data_node (guardrail)")
+        # The guardrail's own detail already lands in `failure` and the
+        # report - no separate new error to add here (see the rejected-load
+        # branch above for why the old passthrough was a bug).
         return {
-            "errors": state.get("errors", []),
             "reconciliation_report": report,
             "failure": guardrail_failure,
         }
@@ -331,13 +335,20 @@ async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
     field_mappings: dict[str, dict] = state.get("field_mappings", {})
     destination = state.get("destination")
     extraction_order = state.get("extraction_order", [])
-    errors: list[str] = list(state.get("errors", []))
+    # Only THIS call's own errors - seeding with state's existing history
+    # used to mean the returned "errors" list already contained the old
+    # history, which operator.add's reducer then appended a SECOND time on
+    # top of the existing state, duplicating it every single call (Phase 0
+    # Sec 0.8). `errors[-3:]` below only ever needs errors raised during
+    # this call's own per-entity load attempts.
+    errors: list[str] = []
 
     logger.debug("extraction_order: %s", extraction_order)
     logger.debug("unified_entities keys: %s", list(unified_entities.keys()))
     for ue in unified_entities:
-        logger.debug("  Entity '%s': %d unified records",
-                     ue, collection_count(unified_entities, ue))
+        logger.debug(
+            "  Entity '%s': %d unified records", ue, collection_count(unified_entities, ue)
+        )
 
     # Schema changes are applied INSIDE the load transaction below (Fix #4,
     # Phase 4.5) — not here. Applying them on their own connector, ahead of
@@ -385,7 +396,8 @@ async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         logger.warning(
             "Could not open a shared destination connector (%s); falling "
-            "back to per-entity connections, which are not atomic.", exc,
+            "back to per-entity connections, which are not atomic.",
+            exc,
         )
         load_connector = None
         atomic = _null_transaction
@@ -401,23 +413,12 @@ async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
     try:
         with atomic(dry_run=dry_run) if dry_run else atomic():
             if pending_schema_changes:
-                logger.info(
-                    "Applying %d pending schema change(s) inside the load "
-                    "transaction...", len(pending_schema_changes),
-                )
-                logger.debug(
-                    "Schema changes: %s",
-                    json.dumps(pending_schema_changes, default=str)[:500],
-                )
                 await _apply_schema_changes(
-                    destination, pending_schema_changes, errors,
+                    destination,
+                    pending_schema_changes,
+                    errors,
                     connector=load_connector,
                 )
-                if load_connector is not None:
-                    # A schema change may have created a brand-new table
-                    # (ensure_table) that the earlier connectivity-probe
-                    # list_tables() call could not have seen yet.
-                    available_dest_tables = load_connector.list_tables()
 
             await _load_all_entities(
                 entity_order=entity_order,
@@ -437,9 +438,7 @@ async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
             # back with it, or the next run reuses ids for rows that were
             # never written and silently duplicates them.
             if not failed_entities:
-                _persist_entity_map(
-                    state, destination, set(load_results), connector=load_connector
-                )
+                _persist_entity_map(state, destination, set(load_results), connector=load_connector)
             else:
                 # Raising is what triggers the rollback: everything written
                 # in this transaction, including earlier entities, is undone.
@@ -449,9 +448,7 @@ async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
                 )
     except _LoadAborted as exc:
         rolled_back = True
-        logger.error(
-            "Load rolled back — the destination is unchanged. %s", exc
-        )
+        logger.error("Load rolled back — the destination is unchanged. %s", exc)
     except Exception as exc:
         rolled_back = True
         msg = f"Load transaction failed and was rolled back: {exc}"
@@ -461,10 +458,8 @@ async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
             failed_entities = list(entity_order)
     finally:
         if load_connector is not None:
-            try:
+            with contextlib.suppress(Exception):
                 load_connector.close()
-            except Exception:
-                pass
 
     if rolled_back:
         # Nothing landed, so no entity may claim inserted/updated counts.
@@ -479,7 +474,11 @@ async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
         ] or list(dict.fromkeys(failed_entities))
 
     report = build_reconciliation_report(
-        state, load_results, errors, failed_entities, rolled_back=rolled_back,
+        state,
+        load_results,
+        errors,
+        failed_entities,
+        rolled_back=rolled_back,
     )
     report["load_rolled_back"] = rolled_back
     if dry_run:
@@ -575,8 +574,16 @@ async def _load_all_entities(
     # entity's table regardless of where the loop currently is.
     entity_type_by_dest_table: dict[str, str] = {}
     for entity_type in entity_order:
-        dest_tables = getattr(destination, 'tables', {}) if hasattr(destination, 'tables') else (destination.get('tables', {}) if isinstance(destination, dict) else {})
-        candidate_table = dest_tables.get(entity_type, entity_type) if isinstance(dest_tables, dict) else entity_type
+        dest_tables = (
+            getattr(destination, "tables", {})
+            if hasattr(destination, "tables")
+            else (destination.get("tables", {}) if isinstance(destination, dict) else {})
+        )
+        candidate_table = (
+            dest_tables.get(entity_type, entity_type)
+            if isinstance(dest_tables, dict)
+            else entity_type
+        )
         if available_dest_tables:
             resolved = resolve_dest_table(entity_type, available_dest_tables)
             if resolved:
@@ -592,8 +599,16 @@ async def _load_all_entities(
 
         mapping = field_mappings.get(entity_type, {})
         logger.debug("Field mapping for '%s': %d mappings", entity_type, len(mapping))
-        dest_tables = getattr(destination, 'tables', {}) if hasattr(destination, 'tables') else (destination.get('tables', {}) if isinstance(destination, dict) else {})
-        dest_table = dest_tables.get(entity_type, entity_type) if isinstance(dest_tables, dict) else entity_type
+        dest_tables = (
+            getattr(destination, "tables", {})
+            if hasattr(destination, "tables")
+            else (destination.get("tables", {}) if isinstance(destination, dict) else {})
+        )
+        dest_table = (
+            dest_tables.get(entity_type, entity_type)
+            if isinstance(dest_tables, dict)
+            else entity_type
+        )
         if available_dest_tables:
             resolved = resolve_dest_table(entity_type, available_dest_tables)
             if resolved:
@@ -711,7 +726,8 @@ def _persist_entity_map(
             # not persist is not a load worth keeping.
             logger.error(
                 "Could not persist the entity map (%s) — rolling the load "
-                "back, because without it a re-run would duplicate rows.", exc,
+                "back, because without it a re-run would duplicate rows.",
+                exc,
             )
             raise
         # No transaction to roll back: the rows are already committed.
@@ -720,7 +736,8 @@ def _persist_entity_map(
         logger.error(
             "Could not persist the entity map (%s). The load is already "
             "committed, so it stands — but a re-run may insert duplicate "
-            "rows instead of updating.", exc,
+            "rows instead of updating.",
+            exc,
         )
 
 
@@ -730,63 +747,26 @@ async def _apply_schema_changes(
     errors: list[str],
     connector: Any = None,
 ) -> None:
-    """Apply pending ALTER TABLE ADD COLUMN statements to the destination.
+    """Refuse pending schema changes — the destination schema is a contract.
 
-    Fix #4 (Phase 4.5, merge-engine-remediation-1-to-6): when ``connector``
-    is given, it is the SAME connector the caller is about to load through —
-    reusing it, rather than opening a second connection, is what lets these
-    ALTERs join the caller's `atomic()` transaction and roll back with the
-    data if the load fails afterward. PostgreSQL DDL is transactional, and
-    the connector's `_commit` is already a no-op while an enclosing `atomic()`
-    block owns the transaction, so no connector changes were needed — only
-    calling it with the load's own connector instead of a fresh one.
-
-    Without a connector (the shared-connector-unavailable fallback), a fresh
-    one is opened here and closed after use; those ALTERs commit immediately
-    and will NOT roll back if the load fails later — logged explicitly so
-    that gap is visible rather than assumed away.
+    This is the last of four layers keeping the destination immutable. The
+    mapper no longer proposes new columns and the mappings gate no longer
+    accepts them, so reaching here at all means a stale checkpoint or a
+    regression upstream. Either way it is recorded as an error and surfaced
+    at the final gate rather than executed: a run that mutated the schema
+    used to leave the ALTERs committed even when every row rolled back,
+    which is how ``company`` grew from 14 columns to 43.
     """
-    dest_type = destination.type if hasattr(destination, "type") else (destination.get("type", "postgresql") if isinstance(destination, dict) else "postgresql")
-    logger.debug("Applying schema changes to destination type '%s'", dest_type)
-    logger.debug("Schema changes count: %d", len(changes))
-
-    owns_connector = connector is None
-    try:
-        if owns_connector:
-            dest_config = destination.model_dump() if hasattr(destination, "model_dump") else (destination.connection.model_dump() if hasattr(destination, "connection") else destination)
-            logger.debug("Creating a standalone destination connector for schema extension")
-            from src.mcp_server.tools.load_data import _get_destination_connector
-            connector = _get_destination_connector(
-                dest_config if isinstance(dest_config, dict) else None
-            )
-            logger.warning(
-                "Schema changes are being applied on a standalone connector, "
-                "outside the load transaction — they will NOT roll back if "
-                "the load fails afterward."
-            )
-        if hasattr(connector, "ensure_table"):
-            for table in {c["table"] for c in changes}:
-                connector.ensure_table(table)
-        logger.debug("Calling connector.extend_schema_batch with %d changes", len(changes))
-        result = connector.extend_schema_batch(changes)
-        logger.debug("extend_schema_batch result: %s", json.dumps(result, default=str))
-        logger.info(
-            "Schema extension: %d added, %d failed",
-            result.get("added", 0),
-            result.get("failed", 0),
-        )
-        for err in range(result.get("failed", 0)):
-            errors.append("Schema change failed")
-    except Exception as exc:
-        msg = f"Schema extension failed: {exc}"
-        logger.error(msg, exc_info=True)
-        errors.append(msg)
-    finally:
-        if owns_connector and connector is not None:
-            try:
-                connector.close()
-            except Exception:
-                pass
+    summary = ", ".join(f"{c.get('table')}.{c.get('column')}" for c in changes[:10])
+    if len(changes) > 10:
+        summary += f", … (+{len(changes) - 10} more)"
+    msg = (
+        f"Refused {len(changes)} destination schema change(s) — the destination "
+        f"schema is a fixed contract and no column may be added: {summary}. "
+        f"Map these fields onto existing columns or leave them unmapped."
+    )
+    logger.error(msg)
+    errors.append(msg)
 
 
 async def update_extraction_state_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -812,7 +792,10 @@ async def update_extraction_state_node(state: dict[str, Any]) -> dict[str, Any]:
     extraction_watermarks: dict[str, Any] = state.get("extraction_watermarks", {})
     destination = state.get("destination", {})
     run_id = state.get("run_id", "")
-    errors: list[str] = list(state.get("errors", []))
+    # Only THIS call's own errors - see load_data_node's identical fix
+    # above for why seeding with the existing history double-counted it
+    # through operator.add's reducer (Phase 0 Sec 0.8).
+    errors: list[str] = []
 
     logger.debug("Tables with observed watermarks: %d", len(extraction_watermarks))
 
@@ -832,7 +815,9 @@ async def update_extraction_state_node(state: dict[str, Any]) -> dict[str, Any]:
         return {"errors": errors}
 
     try:
-        connector = _get_destination_connector(destination if isinstance(destination, dict) else None)
+        connector = _get_destination_connector(
+            destination if isinstance(destination, dict) else None
+        )
     except Exception as exc:
         msg = f"Could not create destination connector for extraction-state update: {exc}"
         logger.error(msg, exc_info=True)
@@ -853,7 +838,9 @@ async def update_extraction_state_node(state: dict[str, Any]) -> dict[str, Any]:
             )
             logger.info(
                 "Updated extraction state for '%s': watermark %s=%s (%d rows)",
-                tracking_key, entry.get("watermark_column"), entry.get("last_value"),
+                tracking_key,
+                entry.get("watermark_column"),
+                entry.get("last_value"),
                 entry.get("rows_extracted", 0),
             )
         except Exception as exc:

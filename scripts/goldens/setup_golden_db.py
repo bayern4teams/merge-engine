@@ -1,6 +1,6 @@
 """
 Create the golden-baseline database used to verify remediations 1-6 against the
-hand-merged references (see docs: BOEING/AIRBUS/LOCKHEED_APP_VS_MANUAL_DIAGNOSIS.md,
+hand-merged references (see docs/diagnostics/: BOEING/AIRBUS/LOCKHEED_APP_VS_MANUAL_DIAGNOSIS.md,
 and the plan at merge-engine-remediation-1-to-6 in project memory).
 
 This provisions ONE new PostgreSQL database, `global_warehouse_golden`, with THREE
@@ -14,6 +14,7 @@ Usage:
                                [--password pass] [--admin-db postgres]
                                [--golden-db global_warehouse_golden]
 """
+
 import argparse
 import pathlib
 import sys
@@ -21,7 +22,12 @@ import sys
 import psycopg2
 
 SCHEMAS = ("boeing", "airbus", "lockheed")
-DDL_DIR = pathlib.Path(__file__).resolve().parent.parent.parent / "sample_databases" / "destination" / "sql"
+DDL_DIR = (
+    pathlib.Path(__file__).resolve().parent.parent.parent
+    / "sample_databases"
+    / "destination"
+    / "sql"
+)
 DDL_FILES = sorted(DDL_DIR.glob("*.sql"))  # 01_company.sql ... 07_technographic.sql
 
 
@@ -46,8 +52,11 @@ def main() -> int:
 
     # 1. Create the golden database if it doesn't exist yet.
     admin_conn = psycopg2.connect(
-        host=args.host, port=args.port, user=args.user,
-        password=args.password, dbname=args.admin_db,
+        host=args.host,
+        port=args.port,
+        user=args.user,
+        password=args.password,
+        dbname=args.admin_db,
     )
     admin_conn.autocommit = True
     with admin_conn.cursor() as cur:
@@ -62,8 +71,11 @@ def main() -> int:
 
     # 2. Build each schema from the same DDL used for global_warehouse's `public`.
     conn = psycopg2.connect(
-        host=args.host, port=args.port, user=args.user,
-        password=args.password, dbname=args.golden_db,
+        host=args.host,
+        port=args.port,
+        user=args.user,
+        password=args.password,
+        dbname=args.golden_db,
     )
     conn.autocommit = True
     with conn.cursor() as cur:
@@ -74,7 +86,9 @@ def main() -> int:
             for ddl_file in DDL_FILES:
                 sql = ddl_file.read_text(encoding="utf-8")
                 cur.execute(sql)
-            cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_schema = %s", (schema,))
+            cur.execute(
+                "SELECT count(*) FROM information_schema.tables WHERE table_schema = %s", (schema,)
+            )
             n_tables = cur.fetchone()[0]
             log(f"  schema '{schema}': {n_tables} tables created")
             if n_tables != 25:

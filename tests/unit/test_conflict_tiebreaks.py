@@ -187,10 +187,13 @@ class TestReconciliationReport:
             },
             "unified_entities": {
                 "company": [
-                    {"name": "Acme", "_conflicts": [
-                        {"field": "city", "winning_rule": "priority"},
-                        {"field": "city", "winning_rule": "completeness"},
-                    ]},
+                    {
+                        "name": "Acme",
+                        "_conflicts": [
+                            {"field": "city", "winning_rule": "priority"},
+                            {"field": "city", "winning_rule": "completeness"},
+                        ],
+                    },
                     {"name": "Globex"},
                 ],
             },
@@ -201,7 +204,9 @@ class TestReconciliationReport:
 
     def test_report_numbers(self):
         report = build_reconciliation_report(
-            self._state(), {"company": {"inserted": 2, "updated": 1}}, ["oops"],
+            self._state(),
+            {"company": {"inserted": 2, "updated": 1}},
+            ["oops"],
         )
         ent = report["entities"]["company"]
         assert ent["extracted_per_origin"] == {"pg": 2, "ch": 1}
@@ -230,7 +235,9 @@ class TestReconciliationReport:
         state = self._state()
         state["target_entities"] = ["company"]
         report = build_reconciliation_report(
-            state, {"company": {"inserted": 2, "updated": 0}}, [],
+            state,
+            {"company": {"inserted": 2, "updated": 0}},
+            [],
         )
         assert report["data_quality"] == {"grade": "A", "red_flags": []}
         assert report["families_requested"] == 1
@@ -239,14 +246,19 @@ class TestReconciliationReport:
 
     def test_rows_dropped_reflects_unified_minus_landed(self):
         report = build_reconciliation_report(
-            self._state(), {"company": {"inserted": 1, "updated": 0}}, [],
+            self._state(),
+            {"company": {"inserted": 1, "updated": 0}},
+            [],
         )
         # 2 unified records, only 1 landed.
         assert report["entities"]["company"]["rows_dropped"] == 1
 
     def test_a_rolled_back_load_grades_f_and_flags_first(self):
         report = build_reconciliation_report(
-            self._state(), {}, ["boom"], rolled_back=True,
+            self._state(),
+            {},
+            ["boom"],
+            rolled_back=True,
         )
         assert report["data_quality"]["grade"] == "F"
         assert "rolled back" in report["data_quality"]["red_flags"][0]
@@ -269,7 +281,11 @@ class TestReconciliationReport:
         state["unmapped_fields"] = {
             "company": [
                 {"field": "notes", "suggested_column": None, "reason": "LLM proposed skipping"},
-                {"field": "phone_raw", "suggested_column": "phone_raw", "reason": "incompatible type"},
+                {
+                    "field": "phone_raw",
+                    "suggested_column": "phone_raw",
+                    "reason": "incompatible type",
+                },
             ],
         }
         # "phone_raw" already has a field_mappings entry (Phase 4.2's
@@ -279,7 +295,9 @@ class TestReconciliationReport:
             "company": {"phone_raw": {"dest_column": "phone_raw", "requires_schema_change": True}},
         }
         report = build_reconciliation_report(
-            state, {"company": {"inserted": 2, "updated": 0}}, [],
+            state,
+            {"company": {"inserted": 2, "updated": 0}},
+            [],
         )
         assert report["entities"]["company"]["fields_dropped_from_mapping"] == ["notes"]
         assert report["data_quality"]["grade"] == "C"
@@ -288,7 +306,9 @@ class TestReconciliationReport:
         state = self._state()
         state["dropped_inferred_entities"] = ["product"]
         report = build_reconciliation_report(
-            state, {"company": {"inserted": 2, "updated": 0}}, [],
+            state,
+            {"company": {"inserted": 2, "updated": 0}},
+            [],
         )
         assert report["dropped_inferred_entities"] == ["product"]
         assert report["data_quality"]["grade"] == "B"
@@ -297,14 +317,18 @@ class TestReconciliationReport:
         state = self._state()
         state["merge_scope"] = {"active": True, "subject": "Acme", "scope_type": "company"}
         report = build_reconciliation_report(
-            state, {"company": {"inserted": 2, "updated": 0}}, [],
+            state,
+            {"company": {"inserted": 2, "updated": 0}},
+            [],
         )
         # 2 unified / 3 extracted
         assert report["entities"]["company"]["subject_unification_ratio"] == round(2 / 3, 4)
 
     def test_unscoped_run_has_no_subject_unification_ratio(self):
         report = build_reconciliation_report(
-            self._state(), {"company": {"inserted": 2, "updated": 0}}, [],
+            self._state(),
+            {"company": {"inserted": 2, "updated": 0}},
+            [],
         )
         assert "subject_unification_ratio" not in report["entities"]["company"]
 
@@ -312,7 +336,9 @@ class TestReconciliationReport:
         state = self._state()
         state["target_entities"] = ["company", "person", "finance"]
         report = build_reconciliation_report(
-            state, {"company": {"inserted": 2, "updated": 0}}, [],
+            state,
+            {"company": {"inserted": 2, "updated": 0}},
+            [],
         )
         assert report["families_requested"] == 3
         assert report["families_loaded"] == 1
@@ -320,6 +346,7 @@ class TestReconciliationReport:
 
     def test_write_run_report(self, tmp_path, monkeypatch):
         import src.orchestrator.nodes.load_data as mod
+
         monkeypatch.setattr(mod, "_RUN_REPORTS_DIR", tmp_path)
         report = {"run_id": "r-1", "entities": {}}
         path = _write_run_report(report)
@@ -335,15 +362,21 @@ class TestScopedMergeGuardrail:
     def _clusters(self, n: int, merged: int = 0) -> list[dict]:
         clusters = []
         for i in range(merged):
-            clusters.append({
-                "cluster_id": f"m{i}", "record_ids": ["a", "b"],
-                "required_human_review": False,
-            })
+            clusters.append(
+                {
+                    "cluster_id": f"m{i}",
+                    "record_ids": ["a", "b"],
+                    "required_human_review": False,
+                }
+            )
         for i in range(n - merged):
-            clusters.append({
-                "cluster_id": f"s{i}", "record_ids": ["a"],
-                "required_human_review": False,
-            })
+            clusters.append(
+                {
+                    "cluster_id": f"s{i}",
+                    "record_ids": ["a"],
+                    "required_human_review": False,
+                }
+            )
         return clusters
 
     def test_fires_when_the_subject_entity_never_auto_merges(self):

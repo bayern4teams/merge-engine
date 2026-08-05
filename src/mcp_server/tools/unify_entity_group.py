@@ -13,15 +13,17 @@ import fnmatch
 import logging
 from typing import Any
 
-from src.utils.id_utils import generate_uuid
-from src.mcp_server.tools.value_coercion import parse_magnitude
-from src.orchestrator.utils.retry import TransientError, PermanentError
+from src.utils.value_coercion import parse_magnitude
 
 logger = logging.getLogger("merge-engine.tools.unify_entity_group")
 
 _RECENCY_FIELDS = (
-    "updated_at", "modified_at", "last_modified", "updated_on",
-    "last_updated", "modified_on",
+    "updated_at",
+    "modified_at",
+    "last_modified",
+    "updated_on",
+    "last_updated",
+    "modified_on",
 )
 
 
@@ -51,8 +53,14 @@ def _recency_key(rec: dict[str, Any]) -> str:
 DEFAULT_POLICY = ("priority", "completeness", "recency")
 
 _KNOWN_RULES = {
-    "priority", "completeness", "recency", "shortest", "first_seen",
-    "numeric_max", "numeric_min", "non_null",
+    "priority",
+    "completeness",
+    "recency",
+    "shortest",
+    "first_seen",
+    "numeric_max",
+    "numeric_min",
+    "non_null",
 }
 
 # Smart built-in defaults by field-name pattern (fnmatch glob syntax),
@@ -93,9 +101,7 @@ def _default_policy_for_field(field: str) -> tuple[str, ...]:
     return DEFAULT_POLICY
 
 
-def resolve_policy(
-    field: str, conflict_policy: dict[str, Any] | None
-) -> tuple[str, ...]:
+def resolve_policy(field: str, conflict_policy: dict[str, Any] | None) -> tuple[str, ...]:
     """The rule chain to apply to one field.
 
     A policy maps a field name to an ordered list of rules, with ``_default``
@@ -117,7 +123,9 @@ def resolve_policy(
     if unknown:
         logger.warning(
             "Ignoring unknown conflict rule(s) %s for field '%s'; using %s",
-            unknown, field, list(usable) or list(fallback),
+            unknown,
+            field,
+            list(usable) or list(fallback),
         )
     return usable or fallback
 
@@ -147,35 +155,23 @@ def _apply_rule(
     """Narrow the candidates by one rule. Never returns an empty list."""
     if rule == "priority":
         best = max(origin_priorities.get(o, 0) for _, o in candidates)
-        return [
-            (r, o) for r, o in candidates
-            if origin_priorities.get(o, 0) == best
-        ]
+        return [(r, o) for r, o in candidates if origin_priorities.get(o, 0) == best]
     if rule == "completeness":
         best = max(_completeness(r.get(field)) for r, _ in candidates)
-        return [
-            (r, o) for r, o in candidates
-            if _completeness(r.get(field)) == best
-        ]
+        return [(r, o) for r, o in candidates if _completeness(r.get(field)) == best]
     if rule == "shortest":
         # For fields where the terse value is the canonical one — a bare
         # phone number over the same number wrapped in formatting.
         best = min(
-            _completeness(r.get(field)) for r, _ in candidates
-            if _completeness(r.get(field))
+            _completeness(r.get(field)) for r, _ in candidates if _completeness(r.get(field))
         )
-        return [
-            (r, o) for r, o in candidates
-            if _completeness(r.get(field)) == best
-        ]
+        return [(r, o) for r, o in candidates if _completeness(r.get(field)) == best]
     if rule == "recency":
         stamps = [_recency_key(r) for r, _ in candidates]
         best_stamp = max(stamps)
         if not best_stamp:
             return candidates
-        return [
-            (r, o) for (r, o), s in zip(candidates, stamps) if s == best_stamp
-        ]
+        return [(r, o) for (r, o), s in zip(candidates, stamps, strict=True) if s == best_stamp]
     if rule in ("numeric_max", "numeric_min"):
         scored = [(r, o, _numeric_value(r.get(field))) for r, o in candidates]
         numeric = [(r, o, v) for r, o, v in scored if v is not None]
@@ -184,7 +180,11 @@ def _apply_rule(
             # nothing to discriminate on, so let the next rule in the chain
             # decide instead of arbitrarily picking one.
             return candidates
-        target = max(v for _, _, v in numeric) if rule == "numeric_max" else min(v for _, _, v in numeric)
+        target = (
+            max(v for _, _, v in numeric)
+            if rule == "numeric_max"
+            else min(v for _, _, v in numeric)
+        )
         return [(r, o) for r, o, v in numeric if v == target]
     if rule == "non_null":
         # A no-op by construction: _resolve_conflict is only ever called on
@@ -253,8 +253,9 @@ async def unify_entity_group_impl(
             "source_count": int,
         }
     """
-    logger.debug("ENTER unify_entity_group_impl: cluster_id=%s, records_count=%d",
-                  cluster_id, len(records))
+    logger.debug(
+        "ENTER unify_entity_group_impl: cluster_id=%s, records_count=%d", cluster_id, len(records)
+    )
 
     if not records:
         logger.debug("No records to unify, raising ValueError")
@@ -270,18 +271,20 @@ async def unify_entity_group_impl(
     for rec in records:
         origin = rec.get("_origin_id", rec.get("origin_id", "unknown"))
         sources.add(origin)
-        for key, value in rec.items():
+        for key in rec:
             if key.startswith("_"):
                 continue
             all_fields.setdefault(key, []).append((rec, origin))
 
-    logger.debug("Collected %d fields from %d records across %d sources",
-                  len(all_fields), len(records), len(sources))
+    logger.debug(
+        "Collected %d fields from %d records across %d sources",
+        len(all_fields),
+        len(records),
+        len(sources),
+    )
 
     # Priority order: higher priority origins preferred for conflicts
-    origin_priorities: dict[str, int] = {
-        o.get("id"): o.get("priority", 0) for o in (origins or [])
-    }
+    origin_priorities: dict[str, int] = {o.get("id"): o.get("priority", 0) for o in (origins or [])}
     logger.debug("Origin priorities: %s", origin_priorities)
 
     fields_processed = 0
@@ -311,7 +314,9 @@ async def unify_entity_group_impl(
             # Check if all values agree
             if all(v == values[0] for v in values):
                 unified[field] = values[0]
-                logger.debug("Field '%s': all %d values agree on '%s'", field, len(values), values[0])
+                logger.debug(
+                    "Field '%s': all %d values agree on '%s'", field, len(values), values[0]
+                )
             else:
                 # Conflict! priority → completeness → recency tiebreaks
                 fields_with_conflicts += 1
@@ -320,18 +325,25 @@ async def unify_entity_group_impl(
                 )
                 unified[field] = best[0][field]
 
-                conflicts.append({
-                    "field": field,
-                    "values": [
-                        {"origin": orig, "value": rec[field]}
-                        for rec, orig in non_null_values
-                    ],
-                    "selected_origin": best[1],
-                    "selected_value": best[0][field],
-                    "winning_rule": rule,
-                })
-                logger.debug("Field '%s': CONFLICT! %d values, selected %s from %s (rule=%s)",
-                              field, len(values), best[0][field], best[1], rule)
+                conflicts.append(
+                    {
+                        "field": field,
+                        "values": [
+                            {"origin": orig, "value": rec[field]} for rec, orig in non_null_values
+                        ],
+                        "selected_origin": best[1],
+                        "selected_value": best[0][field],
+                        "winning_rule": rule,
+                    }
+                )
+                logger.debug(
+                    "Field '%s': CONFLICT! %d values, selected %s from %s (rule=%s)",
+                    field,
+                    len(values),
+                    best[0][field],
+                    best[1],
+                    rule,
+                )
 
     # Preserve cluster-level metadata
     unified["_cluster_id"] = cluster_id
@@ -339,7 +351,11 @@ async def unify_entity_group_impl(
 
     logger.debug(
         "EXIT unify_entity_group_impl: cluster_id=%s, unified_fields=%d, conflicts=%d, null_filled=%d, sources=%d",
-        cluster_id, len(unified), len(conflicts), len(null_filled), len(sources),
+        cluster_id,
+        len(unified),
+        len(conflicts),
+        len(null_filled),
+        len(sources),
     )
     return {
         "cluster_id": cluster_id,

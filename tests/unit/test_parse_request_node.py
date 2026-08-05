@@ -35,8 +35,10 @@ class TestParseRequest:
         return client
 
     @staticmethod
-    def _prompts(system: str = "Extract entity types. Return only JSON.",
-                 human: str = "Extract entities: {user_request}") -> dict[str, dict[str, str]]:
+    def _prompts(
+        system: str = "Extract entity types. Return only JSON.",
+        human: str = "Extract entities: {user_request}",
+    ) -> dict[str, dict[str, str]]:
         return {"request_parsing": {"system": system, "human": human}}
 
     @pytest.mark.asyncio
@@ -44,12 +46,15 @@ class TestParseRequest:
         self, base_state: dict[str, Any], mock_llm_client: MagicMock
     ) -> None:
         """Test parse_request with the entity_types contract."""
-        with patch(
-            "src.orchestrator.nodes.parse_request.LLMClient",
-            return_value=mock_llm_client,
-        ), patch(
-            "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
-            self._prompts(),
+        with (
+            patch(
+                "src.orchestrator.nodes.parse_request.LLMClient",
+                return_value=mock_llm_client,
+            ),
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                self._prompts(),
+            ),
         ):
             result = await parse_request(base_state)
 
@@ -64,12 +69,15 @@ class TestParseRequest:
         """Test parse_request with empty dict response falls back to empty list."""
         mock_llm_client.call_json = AsyncMock(return_value={})
 
-        with patch(
-            "src.orchestrator.nodes.parse_request.LLMClient",
-            return_value=mock_llm_client,
-        ), patch(
-            "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
-            self._prompts(),
+        with (
+            patch(
+                "src.orchestrator.nodes.parse_request.LLMClient",
+                return_value=mock_llm_client,
+            ),
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                self._prompts(),
+            ),
         ):
             result = await parse_request(base_state)
 
@@ -82,12 +90,15 @@ class TestParseRequest:
         """Test parse_request falls back to default prompt when template missing."""
         mock_llm_client.call_json = AsyncMock(return_value={"entity_types": ["person"]})
 
-        with patch(
-            "src.orchestrator.nodes.parse_request.LLMClient",
-            return_value=mock_llm_client,
-        ), patch(
-            "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
-            {},  # Empty - no request_parsing template
+        with (
+            patch(
+                "src.orchestrator.nodes.parse_request.LLMClient",
+                return_value=mock_llm_client,
+            ),
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                {},  # Empty - no request_parsing template
+            ),
         ):
             result = await parse_request(base_state)
 
@@ -99,16 +110,17 @@ class TestParseRequest:
         self, base_state: dict[str, Any], mock_llm_client: MagicMock
     ) -> None:
         """Test parse_request handles LLM failure gracefully."""
-        mock_llm_client.call_json = AsyncMock(
-            side_effect=Exception("LLM service unavailable")
-        )
+        mock_llm_client.call_json = AsyncMock(side_effect=Exception("LLM service unavailable"))
 
-        with patch(
-            "src.orchestrator.nodes.parse_request.LLMClient",
-            return_value=mock_llm_client,
-        ), patch(
-            "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
-            self._prompts(),
+        with (
+            patch(
+                "src.orchestrator.nodes.parse_request.LLMClient",
+                return_value=mock_llm_client,
+            ),
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                self._prompts(),
+            ),
         ):
             result = await parse_request(base_state)
 
@@ -123,12 +135,15 @@ class TestParseRequest:
         """Test parse_request handles unexpected LLM result type (not a dict)."""
         mock_llm_client.call_json = AsyncMock(return_value="string_not_a_dict")
 
-        with patch(
-            "src.orchestrator.nodes.parse_request.LLMClient",
-            return_value=mock_llm_client,
-        ), patch(
-            "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
-            self._prompts(),
+        with (
+            patch(
+                "src.orchestrator.nodes.parse_request.LLMClient",
+                return_value=mock_llm_client,
+            ),
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                self._prompts(),
+            ),
         ):
             result = await parse_request(base_state)
 
@@ -141,12 +156,15 @@ class TestParseRequest:
         """Test that the human prompt is correctly formatted with user_request."""
         mock_llm_client.call_json = AsyncMock(return_value={"entity_types": ["person"]})
 
-        with patch(
-            "src.orchestrator.nodes.parse_request.LLMClient",
-            return_value=mock_llm_client,
-        ), patch(
-            "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
-            self._prompts(human="Parse this: {user_request}"),
+        with (
+            patch(
+                "src.orchestrator.nodes.parse_request.LLMClient",
+                return_value=mock_llm_client,
+            ),
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                self._prompts(human="Parse this: {user_request}"),
+            ),
         ):
             await parse_request(base_state)
 
@@ -160,42 +178,51 @@ class TestParseRequest:
         """Test that the system prompt is correctly passed to LLM."""
         mock_llm_client.call_json = AsyncMock(return_value={"entity_types": ["person"]})
 
-        with patch(
-            "src.orchestrator.nodes.parse_request.LLMClient",
-            return_value=mock_llm_client,
-        ), patch(
-            "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
-            self._prompts(system="You extract entity types from user requests. Return only JSON."),
+        with (
+            patch(
+                "src.orchestrator.nodes.parse_request.LLMClient",
+                return_value=mock_llm_client,
+            ),
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                self._prompts(
+                    system="You extract entity types from user requests. Return only JSON."
+                ),
+            ),
         ):
             await parse_request(base_state)
 
         call_args = mock_llm_client.call_json.call_args
-        assert (
-            "You extract entity types from user requests"
-            in call_args[1]["system_prompt"]
-        )
+        assert "You extract entity types from user requests" in call_args[1]["system_prompt"]
 
     @pytest.mark.asyncio
     async def test_company_scope_is_captured(
         self, base_state: dict[str, Any], mock_llm_client: MagicMock
     ) -> None:
         """A request about one named company yields an active merge_scope."""
-        mock_llm_client.call_json = AsyncMock(return_value={
-            "entity_types": ["company", "person", "product"],
-            "subject": "Nova",
-            "scope_type": "company",
-        })
-        with patch(
-            "src.orchestrator.nodes.parse_request.LLMClient",
-            return_value=mock_llm_client,
-        ), patch(
-            "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
-            self._prompts(),
+        mock_llm_client.call_json = AsyncMock(
+            return_value={
+                "entity_types": ["company", "person", "product"],
+                "subject": "Nova",
+                "scope_type": "company",
+            }
+        )
+        with (
+            patch(
+                "src.orchestrator.nodes.parse_request.LLMClient",
+                return_value=mock_llm_client,
+            ),
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                self._prompts(),
+            ),
         ):
             result = await parse_request(base_state)
 
         assert result["merge_scope"] == {
-            "active": True, "subject": "Nova", "scope_type": "company",
+            "active": True,
+            "subject": "Nova",
+            "scope_type": "company",
         }
 
     @pytest.mark.asyncio
@@ -203,17 +230,22 @@ class TestParseRequest:
         self, base_state: dict[str, Any], mock_llm_client: MagicMock
     ) -> None:
         """A general request (no subject) leaves the scope inactive."""
-        mock_llm_client.call_json = AsyncMock(return_value={
-            "entity_types": ["company", "person"],
-            "subject": "",
-            "scope_type": "none",
-        })
-        with patch(
-            "src.orchestrator.nodes.parse_request.LLMClient",
-            return_value=mock_llm_client,
-        ), patch(
-            "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
-            self._prompts(),
+        mock_llm_client.call_json = AsyncMock(
+            return_value={
+                "entity_types": ["company", "person"],
+                "subject": "",
+                "scope_type": "none",
+            }
+        )
+        with (
+            patch(
+                "src.orchestrator.nodes.parse_request.LLMClient",
+                return_value=mock_llm_client,
+            ),
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                self._prompts(),
+            ),
         ):
             result = await parse_request(base_state)
 
@@ -229,17 +261,22 @@ class TestParseRequest:
         Guards against a half-answer from the model quietly filtering a merge
         the user meant to be whole.
         """
-        mock_llm_client.call_json = AsyncMock(return_value={
-            "entity_types": ["company"],
-            "subject": "CRM",
-            "scope_type": "none",
-        })
-        with patch(
-            "src.orchestrator.nodes.parse_request.LLMClient",
-            return_value=mock_llm_client,
-        ), patch(
-            "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
-            self._prompts(),
+        mock_llm_client.call_json = AsyncMock(
+            return_value={
+                "entity_types": ["company"],
+                "subject": "CRM",
+                "scope_type": "none",
+            }
+        )
+        with (
+            patch(
+                "src.orchestrator.nodes.parse_request.LLMClient",
+                return_value=mock_llm_client,
+            ),
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                self._prompts(),
+            ),
         ):
             result = await parse_request(base_state)
 
@@ -251,17 +288,22 @@ class TestParseRequest:
     ) -> None:
         """The error path must still return a well-formed inactive scope."""
         mock_llm_client.call_json = AsyncMock(side_effect=Exception("boom"))
-        with patch(
-            "src.orchestrator.nodes.parse_request.LLMClient",
-            return_value=mock_llm_client,
-        ), patch(
-            "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
-            self._prompts(),
+        with (
+            patch(
+                "src.orchestrator.nodes.parse_request.LLMClient",
+                return_value=mock_llm_client,
+            ),
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                self._prompts(),
+            ),
         ):
             result = await parse_request(base_state)
 
         assert result["merge_scope"] == {
-            "active": False, "subject": "", "scope_type": "none",
+            "active": False,
+            "subject": "",
+            "scope_type": "none",
         }
 
     # -- explicit vs. inferred entity types (remediation #1, 2026-07-30) --
@@ -273,18 +315,23 @@ class TestParseRequest:
         """A Company-Wildcard response names some types but only explicitly
         asks for a subset; both lists must be returned, and explicit is the
         proper subset the prompt contract requires."""
-        mock_llm_client.call_json = AsyncMock(return_value={
-            "entity_types": ["company", "person", "finance", "technology"],
-            "explicit_entity_types": ["finance", "technology"],
-            "subject": "Boeing",
-            "scope_type": "company",
-        })
-        with patch(
-            "src.orchestrator.nodes.parse_request.LLMClient",
-            return_value=mock_llm_client,
-        ), patch(
-            "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
-            self._prompts(),
+        mock_llm_client.call_json = AsyncMock(
+            return_value={
+                "entity_types": ["company", "person", "finance", "technology"],
+                "explicit_entity_types": ["finance", "technology"],
+                "subject": "Boeing",
+                "scope_type": "company",
+            }
+        )
+        with (
+            patch(
+                "src.orchestrator.nodes.parse_request.LLMClient",
+                return_value=mock_llm_client,
+            ),
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                self._prompts(),
+            ),
         ):
             result = await parse_request(base_state)
 
@@ -298,15 +345,16 @@ class TestParseRequest:
         """A model/profile that doesn't emit explicit_entity_types at all must
         default to treating everything as explicit -- the strictest, safest
         fallback (never silently widen what's allowed to fail quietly)."""
-        mock_llm_client.call_json = AsyncMock(
-            return_value={"entity_types": ["person", "company"]}
-        )
-        with patch(
-            "src.orchestrator.nodes.parse_request.LLMClient",
-            return_value=mock_llm_client,
-        ), patch(
-            "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
-            self._prompts(),
+        mock_llm_client.call_json = AsyncMock(return_value={"entity_types": ["person", "company"]})
+        with (
+            patch(
+                "src.orchestrator.nodes.parse_request.LLMClient",
+                return_value=mock_llm_client,
+            ),
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                self._prompts(),
+            ),
         ):
             result = await parse_request(base_state)
 
@@ -318,16 +366,21 @@ class TestParseRequest:
     ) -> None:
         """If the model violates its own output contract and lists an explicit
         type not present in entity_types, drop it rather than trust it."""
-        mock_llm_client.call_json = AsyncMock(return_value={
-            "entity_types": ["company"],
-            "explicit_entity_types": ["company", "person"],  # "person" not in entity_types
-        })
-        with patch(
-            "src.orchestrator.nodes.parse_request.LLMClient",
-            return_value=mock_llm_client,
-        ), patch(
-            "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
-            self._prompts(),
+        mock_llm_client.call_json = AsyncMock(
+            return_value={
+                "entity_types": ["company"],
+                "explicit_entity_types": ["company", "person"],  # "person" not in entity_types
+            }
+        )
+        with (
+            patch(
+                "src.orchestrator.nodes.parse_request.LLMClient",
+                return_value=mock_llm_client,
+            ),
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                self._prompts(),
+            ),
         ):
             result = await parse_request(base_state)
 
@@ -338,12 +391,15 @@ class TestParseRequest:
         self, base_state: dict[str, Any], mock_llm_client: MagicMock
     ) -> None:
         mock_llm_client.call_json = AsyncMock(side_effect=Exception("boom"))
-        with patch(
-            "src.orchestrator.nodes.parse_request.LLMClient",
-            return_value=mock_llm_client,
-        ), patch(
-            "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
-            self._prompts(),
+        with (
+            patch(
+                "src.orchestrator.nodes.parse_request.LLMClient",
+                return_value=mock_llm_client,
+            ),
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                self._prompts(),
+            ),
         ):
             result = await parse_request(base_state)
 

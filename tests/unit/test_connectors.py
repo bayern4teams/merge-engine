@@ -32,11 +32,14 @@ class TestCreateConnector:
     def test_create_databricks_connector(self) -> None:
         """Should create a DatabricksConnector for databricks type."""
         with patch("src.mcp_server.connectors._CONNECTOR_REGISTRY", {"databricks": MagicMock()}):
-            connector = create_connector("databricks", {
-                "host": "test.databricks.com",
-                "http_path": "/sql/1.0/warehouses/abc",
-                "token": "test",
-            })
+            connector = create_connector(
+                "databricks",
+                {
+                    "host": "test.databricks.com",
+                    "http_path": "/sql/1.0/warehouses/abc",
+                    "token": "test",
+                },
+            )
             assert connector is not None
 
     def test_invalid_type_raises(self) -> None:
@@ -66,6 +69,7 @@ class TestBaseConnector:
 
     def test_abstract_methods_not_implemented(self) -> None:
         """Subclass without abstract methods should raise TypeError."""
+
         class IncompleteConnector(BaseConnector):
             pass
 
@@ -75,7 +79,9 @@ class TestBaseConnector:
     def test_all_abstract_methods_defined(self) -> None:
         """BaseConnector should define expected abstract methods."""
         abstract_methods = [
-            "discover_schema", "extract", "close",
+            "discover_schema",
+            "extract",
+            "close",
         ]
         for method in abstract_methods:
             assert hasattr(BaseConnector, method)
@@ -83,6 +89,7 @@ class TestBaseConnector:
     def test_connector_has_config_attribute(self) -> None:
         """Connector should accept and store config via base class."""
         from src.mcp_server.connectors.postgres import PostgresConnector
+
         config = {"host": "localhost", "database": "test"}
         conn = PostgresConnector(config)
         assert hasattr(conn, "config")
@@ -95,6 +102,7 @@ class TestConnectorConnectionConfig:
     def test_postgres_receives_config(self) -> None:
         """Postgres connector should receive connection dict."""
         from src.mcp_server.connectors.postgres import PostgresConnector
+
         config = {
             "host": "db.example.com",
             "port": 5432,
@@ -108,6 +116,7 @@ class TestConnectorConnectionConfig:
     def test_mongodb_receives_config(self) -> None:
         """MongoDB connector should receive connection dict."""
         from src.mcp_server.connectors.mongodb import MongoDBConnector
+
         config = {"uri": "mongodb://user:pass@host/db"}
         conn = MongoDBConnector(config)
         assert conn.config == config
@@ -133,11 +142,13 @@ class TestConnectorModuleExports:
     def test_create_connector_exported(self) -> None:
         """create_connector should be available from package."""
         from src.mcp_server.connectors import create_connector as cc
+
         assert callable(cc)
 
     def test_base_connector_exported(self) -> None:
         """BaseConnector should be available from package."""
         from src.mcp_server.connectors import BaseConnector as BC
+
         assert BC is not None
 
     def test_all_connectors_exported(self) -> None:
@@ -145,10 +156,11 @@ class TestConnectorModuleExports:
         from src.mcp_server.connectors import (
             BaseConnector,
             ClickHouseConnector,
-            PostgresConnector,
-            MongoDBConnector,
             DatabricksConnector,
+            MongoDBConnector,
+            PostgresConnector,
         )
+
         assert BaseConnector is not None
         assert ClickHouseConnector is not None
         assert PostgresConnector is not None
@@ -158,6 +170,7 @@ class TestConnectorModuleExports:
     def test_connector_registry_has_all_types(self) -> None:
         """Connector registry should have all expected types."""
         from src.mcp_server.connectors import _CONNECTOR_REGISTRY
+
         assert "postgres" in _CONNECTOR_REGISTRY
         assert "mongodb" in _CONNECTOR_REGISTRY
         assert "databricks" in _CONNECTOR_REGISTRY
@@ -166,6 +179,7 @@ class TestConnectorModuleExports:
     def test_connector_registry_no_duplicates(self) -> None:
         """Connector registry should have no duplicate entries."""
         from src.mcp_server.connectors import _CONNECTOR_REGISTRY
+
         # 4 connector types plus the "postgresql" alias for "postgres"
         assert len(_CONNECTOR_REGISTRY) == 5
         assert "clickhouse" in _CONNECTOR_REGISTRY

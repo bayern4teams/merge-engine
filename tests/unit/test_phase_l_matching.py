@@ -32,11 +32,15 @@ from src.mcp_server.tools.resolve_entities import (
 )
 
 
-def _person(row: str, first: str, last: str, email: str | None = None,
-            origin: str = "pg") -> dict[str, Any]:
+def _person(
+    row: str, first: str, last: str, email: str | None = None, origin: str = "pg"
+) -> dict[str, Any]:
     rec: dict[str, Any] = {
-        "_origin_id": origin, "_origin_table": "staff", "_origin_id_row": row,
-        "first_name": first, "last_name": last,
+        "_origin_id": origin,
+        "_origin_table": "staff",
+        "_origin_id_row": row,
+        "first_name": first,
+        "last_name": last,
     }
     if email is not None:
         rec["email"] = email
@@ -48,10 +52,13 @@ def _person(row: str, first: str, last: str, email: str | None = None,
 
 def test_rare_value_outweighs_common_one() -> None:
     """The core idea: agreeing on a rare value is stronger evidence."""
-    model = FieldModel(name="last_name", term_frequency={
-        "smith": 0.20,     # 1 in 5 records
-        "zaentz": 0.001,   # 1 in 1000
-    })
+    model = FieldModel(
+        name="last_name",
+        term_frequency={
+            "smith": 0.20,  # 1 in 5 records
+            "zaentz": 0.001,  # 1 in 1000
+        },
+    )
     common = model.weight(LEVEL_EXACT, "smith")
     rare = model.weight(LEVEL_EXACT, "zaentz")
     assert rare > common, "a rare surname must carry more weight than a common one"
@@ -102,10 +109,18 @@ def test_blocking_still_pairs_across_differently_named_fields() -> None:
     pair, which is the whole reason multi-origin merges exist.
     """
     records = [
-        {"_origin_id": "pg", "_origin_table": "companies",
-         "_origin_id_row": "1", "company_name": "Titan Labs"},
-        {"_origin_id": "ch", "_origin_table": "organizations",
-         "_origin_id_row": "2", "org_title": "Titan Labs"},
+        {
+            "_origin_id": "pg",
+            "_origin_table": "companies",
+            "_origin_id_row": "1",
+            "company_name": "Titan Labs",
+        },
+        {
+            "_origin_id": "ch",
+            "_origin_table": "organizations",
+            "_origin_id_row": "2",
+            "org_title": "Titan Labs",
+        },
     ]
     assert len(_generate_candidate_pairs(records)) == 1
 
@@ -119,22 +134,28 @@ def test_blocking_pairs_on_a_typo_via_phonetic_key() -> None:
     assert len(_generate_candidate_pairs(records)) == 1
 
 
-def test_oversized_approximate_blocks_are_purged() -> None:
-    """A phonetic code shared by dozens of records is not evidence."""
-    records = [
-        _person(str(i), f"n{i}xx", "yy", f"user{i}@x.com") for i in range(40)
-    ]
-    # All share a phonetic code and a surname, but nothing that identifies
-    # any particular pair — so no pair should be proposed on that basis.
-    pairs = _generate_candidate_pairs(records)
-    assert len(pairs) == 0
+def test_oversized_approximate_blocks_are_admitted_but_dont_merge() -> None:
+    """BUG C / C1: a non-discriminative block is admitted, not annihilated.
+
+    A phonetic code shared by dozens of records is weak evidence, but the
+    block must still be proposed for scoring (budget-limited, honestly
+    counted) rather than silently dropped — that silent drop is exactly how
+    a real scoped merge went from hundreds of candidate pairs to zero.
+    Scoring, not blocking, is what keeps this from producing a false merge
+    (see test_no_unique_id_and_a_constant_field_does_not_merge).
+    """
+    records = [_person(str(i), f"n{i}xx", "yy", f"user{i}@x.com") for i in range(40)]
+    stats: dict[str, int] = {}
+    pairs = _generate_candidate_pairs(records, stats=stats)
+    assert len(pairs) > 0
+    assert stats["blocks_purged"] >= 1
+    assert stats["uncompared_pairs"] == 0
 
 
 def test_exact_full_value_blocks_are_never_purged() -> None:
     """An exact match on the complete value is evidence at any block size."""
     records = [
-        {"_origin_id": "a", "_origin_table": "t", "_origin_id_row": str(i),
-         "name": "Acme Corp"}
+        {"_origin_id": "a", "_origin_table": "t", "_origin_id_row": str(i), "name": "Acme Corp"}
         for i in range(30)
     ]
     assert len(_generate_candidate_pairs(records)) > 0
@@ -202,13 +223,23 @@ async def test_no_unique_id_and_a_constant_field_does_not_merge() -> None:
     different actors were merged this way.
     """
     records = [
-        {"_origin_id": "pg", "_origin_table": "actor", "_origin_id_row": str(i),
-         "first_name": first, "last_name": last,
-         "last_update": "2022-02-15 09:34:33+00"}
+        {
+            "_origin_id": "pg",
+            "_origin_table": "actor",
+            "_origin_id_row": str(i),
+            "first_name": first,
+            "last_name": last,
+            "last_update": "2022-02-15 09:34:33+00",
+        }
         for i, (first, last) in enumerate(
-            [("ANGELA", "HUDSON"), ("ANGELA", "WITHERSPOON"),
-             ("GRETA", "KEITEL"), ("GRETA", "MALDEN"),
-             ("SUSAN", "DAVIS"), ("JENNIFER", "DAVIS")]
+            [
+                ("ANGELA", "HUDSON"),
+                ("ANGELA", "WITHERSPOON"),
+                ("GRETA", "KEITEL"),
+                ("GRETA", "MALDEN"),
+                ("SUSAN", "DAVIS"),
+                ("JENNIFER", "DAVIS"),
+            ]
             + [(f"NAME{i}", f"SUR{i}") for i in range(40)]
         )
     ]
@@ -224,13 +255,28 @@ async def test_full_name_agreement_still_merges_without_an_id() -> None:
     complete name match is different evidence from a partial one.
     """
     records = [
-        {"_origin_id": "pg", "_origin_table": "a", "_origin_id_row": "1",
-         "first_name": "Marina", "last_name": "Kowalczyk"},
-        {"_origin_id": "crm", "_origin_table": "b", "_origin_id_row": "2",
-         "first_name": "Marina", "last_name": "Kowalczyk"},
+        {
+            "_origin_id": "pg",
+            "_origin_table": "a",
+            "_origin_id_row": "1",
+            "first_name": "Marina",
+            "last_name": "Kowalczyk",
+        },
+        {
+            "_origin_id": "crm",
+            "_origin_table": "b",
+            "_origin_id_row": "2",
+            "first_name": "Marina",
+            "last_name": "Kowalczyk",
+        },
     ] + [
-        {"_origin_id": "pg", "_origin_table": "a", "_origin_id_row": str(i + 10),
-         "first_name": f"Other{i}", "last_name": f"Person{i}"}
+        {
+            "_origin_id": "pg",
+            "_origin_table": "a",
+            "_origin_id_row": str(i + 10),
+            "first_name": f"Other{i}",
+            "last_name": f"Person{i}",
+        }
         for i in range(40)
     ]
     result = await resolve_entities_impl("person", records)
@@ -248,10 +294,10 @@ def test_uncertain_pairs_are_surfaced_not_dropped() -> None:
     from src.mcp_server.tools.resolve_entities import _pending_merge_candidates
 
     scored = [
-        ("a", "b", 0.99),   # confident match — merged, not pending
-        ("c", "d", 0.85),   # uncertain
-        ("e", "f", 0.92),   # uncertain, stronger
-        ("g", "h", 0.10),   # confident non-match
+        ("a", "b", 0.99),  # confident match — merged, not pending
+        ("c", "d", 0.85),  # uncertain
+        ("e", "f", 0.92),  # uncertain, stronger
+        ("g", "h", 0.10),  # confident non-match
     ]
     pending = _pending_merge_candidates(scored)
     assert [p["record_ids"] for p in pending] == [["e", "f"], ["c", "d"]]
@@ -261,7 +307,8 @@ def test_uncertain_pairs_are_surfaced_not_dropped() -> None:
 def test_pending_candidates_are_capped() -> None:
     """The payload and the reviewer both have limits."""
     from src.mcp_server.tools.resolve_entities import (
-        _MAX_PENDING_CANDIDATES, _pending_merge_candidates,
+        _MAX_PENDING_CANDIDATES,
+        _pending_merge_candidates,
     )
 
     scored = [(f"a{i}", f"b{i}", 0.8) for i in range(_MAX_PENDING_CANDIDATES + 25)]
@@ -273,14 +320,18 @@ def test_matches_gate_fires_for_unmerged_uncertain_pairs() -> None:
     from src.orchestrator.nodes.resolve_entities import has_low_confidence_clusters
 
     state = {
-        "entity_clusters": {"person": [
-            {"cluster_id": "c1", "record_ids": ["r1"], "required_human_review": False},
-        ]},
-        "resolution_stats": {"person": {
-            "pending_merge_candidates": [
-                {"record_ids": ["r1", "r2"], "confidence": 0.88},
-            ],
-        }},
+        "entity_clusters": {
+            "person": [
+                {"cluster_id": "c1", "record_ids": ["r1"], "required_human_review": False},
+            ]
+        },
+        "resolution_stats": {
+            "person": {
+                "pending_merge_candidates": [
+                    {"record_ids": ["r1", "r2"], "confidence": 0.88},
+                ],
+            }
+        },
     }
     assert has_low_confidence_clusters(state) is True
 
@@ -289,9 +340,11 @@ def test_matches_gate_still_skips_when_nothing_is_uncertain() -> None:
     from src.orchestrator.nodes.resolve_entities import has_low_confidence_clusters
 
     state = {
-        "entity_clusters": {"person": [
-            {"cluster_id": "c1", "record_ids": ["r1"], "required_human_review": False},
-        ]},
+        "entity_clusters": {
+            "person": [
+                {"cluster_id": "c1", "record_ids": ["r1"], "required_human_review": False},
+            ]
+        },
         "resolution_stats": {"person": {"pending_merge_candidates": []}},
     }
     assert has_low_confidence_clusters(state) is False
@@ -304,6 +357,77 @@ async def test_blocking_shortfall_is_reported_not_hidden() -> None:
     result = await resolve_entities_impl("person", records)
     assert "uncompared_pairs" in result
     assert result["uncompared_pairs"] == 0
+
+
+# ── D.1 / D.2 / D.3 Clustering profile instrumentation ───────────────
+
+
+@pytest.mark.asyncio
+async def test_clustering_stats_are_reported() -> None:
+    """BUG D.1: every run must report a clustering cost profile, not just a
+    log line, so a real run's component-size distribution is measurable
+    without re-reading logs."""
+    records = [_person(str(i), "Sam", "Jones", f"sam{i}@x.com") for i in range(5)]
+    result = await resolve_entities_impl("person", records)
+    assert "clustering_seconds" in result
+    assert result["clustering_seconds"] >= 0.0
+    assert "largest_component_size" in result
+    assert "large_components" in result
+    # 5 distinct people, no shared field beyond first/last name pattern —
+    # they should not all fuse into one component.
+    assert result["largest_component_size"] <= 5
+
+
+@pytest.mark.asyncio
+async def test_large_component_is_logged_not_silently_slow(caplog) -> None:
+    """BUG D.1: a component over the visibility threshold must be logged,
+    not just silently take longer — the whole point of the instrumentation
+    is that a pathologically dense component is discoverable without a
+    profiler attached."""
+    import logging
+
+    from src.mcp_server.tools import resolve_entities as re_mod
+
+    original_threshold = re_mod._LARGE_COMPONENT_THRESHOLD
+    re_mod._LARGE_COMPONENT_THRESHOLD = 2
+    try:
+        # Everyone shares the same name + email -> genuine duplicates,
+        # auto-merged into one component of 4, above the lowered threshold
+        # of 2 (mirrors test_genuine_duplicates_still_merge's shape).
+        records = [
+            _person(str(i), "Sam", "Jones", "sam.jones@x.com", origin=f"o{i}") for i in range(4)
+        ]
+        with caplog.at_level(logging.INFO, logger="merge-engine.tools.resolve_entities"):
+            result = await resolve_entities_impl("person", records)
+        assert result["largest_component_size"] >= 3
+        assert result["large_components"] >= 1
+        assert any(
+            "exceeds the" in r.message and "visibility threshold" in r.message
+            for r in caplog.records
+        )
+    finally:
+        re_mod._LARGE_COMPONENT_THRESHOLD = original_threshold
+
+
+def test_partition_component_hoist_matches_unhoisted_semantics() -> None:
+    """BUG D.2: hoisting the fields_a/fields_b dict comprehensions out of
+    the inner conflict-check loop must not change which components get
+    split — same conflicting-identity outcome, just computed once per
+    member instead of once per pair."""
+    from src.mcp_server.tools.resolve_entities import _partition_component
+
+    records_by_id = {
+        "a": {"email": "x@x.com", "first_name": "A"},
+        "b": {"email": "y@x.com", "first_name": "B"},
+        "c": {"first_name": "C"},
+    }
+    edge_weight = {("a", "b"): 0.9, ("a", "c"): 0.9, ("b", "c"): 0.9}
+    parts, repaired, cut = _partition_component(["a", "b", "c"], edge_weight, records_by_id)
+    # Conflicting emails (a vs b) must split every member out, same as
+    # before the hoist.
+    assert repaired == 1
+    assert cut == 0
+    assert sorted(parts) == [["a"], ["b"], ["c"]]
 
 
 # ── L.4 / K.4 Stable ids under incremental extraction ────────────────

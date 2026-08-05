@@ -14,6 +14,7 @@ from src.orchestrator.spool import RunSpool, entity_rows, make_handle
 @pytest.fixture(autouse=True)
 def _spool_isolation(tmp_path, monkeypatch):
     import src.orchestrator.spool as spool_mod
+
     monkeypatch.setattr(spool_mod, "SPOOL_DIR", tmp_path / "spool")
     yield
 
@@ -29,7 +30,9 @@ def _state(active: bool = True) -> dict[str, Any]:
     return {
         "run_id": "dd_test",
         "merge_scope": {
-            "active": active, "subject": "Nova", "scope_type": "company",
+            "active": active,
+            "subject": "Nova",
+            "scope_type": "company",
         },
         "destination": {"type": "postgresql", "host": "h", "database": "d"},
         "target_entities": ["company"],
@@ -39,17 +42,27 @@ def _state(active: bool = True) -> dict[str, Any]:
 def test_matching_destination_row_is_injected_with_its_id() -> None:
     spool = RunSpool("dd_test")
     spool.reset_entity("company")
-    spool.append("company", [
-        {"_origin_id": "crm", "_origin_table": "companies",
-         "_origin_id_row": "7", "id": 7, "name": "Nova"},
-    ])
+    spool.append(
+        "company",
+        [
+            {
+                "_origin_id": "crm",
+                "_origin_table": "companies",
+                "_origin_id_row": "7",
+                "id": 7,
+                "name": "Nova",
+            },
+        ],
+    )
     entity_map: dict[str, dict[str, str]] = {}
     extracted = {"company": make_handle("dd_test", "company", 1)}
 
-    conn = _fake_connector([
-        {"id": "dest-nova-1", "name": "Nova Inc"},   # matches "Nova"
-        {"id": "dest-other", "name": "Globex"},        # does not
-    ])
+    conn = _fake_connector(
+        [
+            {"id": "dest-nova-1", "name": "Nova Inc"},  # matches "Nova"
+            {"id": "dest-other", "name": "Globex"},  # does not
+        ]
+    )
     with patch(
         "src.mcp_server.tools.load_data._get_destination_connector",
         return_value=conn,
@@ -103,15 +116,28 @@ async def test_cluster_adopts_the_destination_id() -> None:
     from src.mcp_server.tools.resolve_entities import resolve_entities_impl
 
     records = [
-        {"_origin_id": "crm", "_origin_table": "companies", "_origin_id_row": "7",
-         "name": "Nova Inc", "email": "info@nova.com", "tax_id": "NV-100"},
-        {"_origin_id": "__destination__", "_origin_table": "companies",
-         "_origin_id_row": "dest-1",
-         "name": "Nova Inc", "email": "info@nova.com", "tax_id": "NV-100"},
+        {
+            "_origin_id": "crm",
+            "_origin_table": "companies",
+            "_origin_id_row": "7",
+            "name": "Nova Inc",
+            "email": "info@nova.com",
+            "tax_id": "NV-100",
+        },
+        {
+            "_origin_id": "__destination__",
+            "_origin_table": "companies",
+            "_origin_id_row": "dest-1",
+            "name": "Nova Inc",
+            "email": "info@nova.com",
+            "tax_id": "NV-100",
+        },
     ]
     known = {"__destination__:companies:dest-1": "dest-1"}
     result = await resolve_entities_impl(
-        entity_type="company", records=records, known_cluster_ids=known,
+        entity_type="company",
+        records=records,
+        known_cluster_ids=known,
     )
     multi = [c for c in result["clusters"] if len(c.get("record_ids", [])) == 2]
     assert multi, "the incoming and destination Nova rows should have clustered"

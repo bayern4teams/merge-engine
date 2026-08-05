@@ -52,9 +52,7 @@ async def plan_scope(state: dict[str, Any]) -> dict[str, Any]:
     # can show "did you mean Nova Labs or Novatech?". Best-effort — a probe
     # failure leaves candidates empty but never stops the run.
     origins = state.get("origins", []) or []
-    scope_plan["candidates"] = await probe_subject_candidates(
-        subject, scope_plan, origins
-    )
+    scope_plan["candidates"] = await probe_subject_candidates(subject, scope_plan, origins)
 
     return {
         "scope_plan": scope_plan,

@@ -2,8 +2,10 @@ import { useEffect, useState } from "react";
 import { OriginConfig, DestinationConfig } from "./api";
 import SetupScreen from "./components/SetupScreen";
 import PipelineScreen from "./components/PipelineScreen";
+import SettingsScreen from "./components/SettingsScreen";
+import InvestigateScreen from "./components/InvestigateScreen";
 
-type Tab = "setup" | "pipeline";
+type Tab = "setup" | "pipeline" | "settings" | "investigate";
 type Theme = "light" | "dark";
 
 export default function App() {
@@ -56,18 +58,31 @@ export default function App() {
           Pipeline
           {ready && <span className="tab-badge">✓</span>}
         </button>
+        <button
+          className={`tab ${tab === "settings" ? "active" : ""}`}
+          onClick={() => setTab("settings")}
+        >
+          Settings
+        </button>
+        <button
+          className={`tab ${tab === "investigate" ? "active" : ""}`}
+          onClick={() => setTab("investigate")}
+        >
+          Investigate
+        </button>
       </div>
 
-      {tab === "setup" ? (
+      {tab === "setup" && (
         <SetupScreen
           origins={origins}
           destination={destination}
           onOriginsChange={setOrigins}
           onDestinationChange={setDestination}
         />
-      ) : (
-        <PipelineScreen origins={origins} destination={destination} />
       )}
+      {tab === "pipeline" && <PipelineScreen origins={origins} destination={destination} />}
+      {tab === "settings" && <SettingsScreen />}
+      {tab === "investigate" && <InvestigateScreen />}
     </div>
   );
 }

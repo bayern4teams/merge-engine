@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 ORIGIN_CONFIGS = [
     {
@@ -57,7 +56,7 @@ class TestWorkflowManagerIntegration:
 
         mock_graph = self._build_mock_graph()
 
-        with patch("src.orchestrator.workflow_manager.load_config", return_value=mock_config):
+        with patch("src.utils.config_loader.load_config", return_value=mock_config):
             with patch("src.orchestrator.workflow_manager.build_graph", return_value=mock_graph):
                 manager = WorkflowManager()
                 thread_id = manager.start_workflow(
@@ -81,7 +80,7 @@ class TestWorkflowManagerIntegration:
 
         mock_graph = self._build_mock_graph()
 
-        with patch("src.orchestrator.workflow_manager.load_config", return_value=mock_config):
+        with patch("src.utils.config_loader.load_config", return_value=mock_config):
             with patch("src.orchestrator.workflow_manager.build_graph", return_value=mock_graph):
                 manager = WorkflowManager()
                 status = manager.get_workflow_status("nonexistent_thread")
@@ -104,7 +103,7 @@ class TestWorkflowManagerIntegration:
         mock_graph.get_state.return_value = None
         mock_graph.update_state = MagicMock()
 
-        with patch("src.orchestrator.workflow_manager.load_config", return_value=mock_config):
+        with patch("src.utils.config_loader.load_config", return_value=mock_config):
             with patch("src.orchestrator.workflow_manager.build_graph", return_value=mock_graph):
                 manager = WorkflowManager()
                 thread_id = manager.start_workflow(
@@ -116,6 +115,7 @@ class TestWorkflowManagerIntegration:
 
                 # Wait briefly for the background thread
                 import time
+
                 time.sleep(0.2)
 
                 status = manager.get_workflow_status(thread_id)
@@ -132,7 +132,7 @@ class TestWorkflowManagerIntegration:
 
         mock_graph = self._build_mock_graph()
 
-        with patch("src.orchestrator.workflow_manager.load_config", return_value=mock_config):
+        with patch("src.utils.config_loader.load_config", return_value=mock_config):
             with patch("src.orchestrator.workflow_manager.build_graph", return_value=mock_graph):
                 manager = WorkflowManager()
                 thread_id = manager.start_workflow(
@@ -143,6 +143,7 @@ class TestWorkflowManagerIntegration:
                 )
 
                 import time
+
                 time.sleep(0.1)
 
                 manager.abort_workflow(thread_id)
@@ -161,7 +162,7 @@ class TestWorkflowManagerIntegration:
         mock_graph = self._build_mock_graph()
         mock_graph.stream = MagicMock(side_effect=StopIteration)
 
-        with patch("src.orchestrator.workflow_manager.load_config", return_value=mock_config):
+        with patch("src.utils.config_loader.load_config", return_value=mock_config):
             with patch("src.orchestrator.workflow_manager.build_graph", return_value=mock_graph):
                 manager = WorkflowManager()
                 thread_id = manager.start_workflow(
@@ -173,6 +174,7 @@ class TestWorkflowManagerIntegration:
 
                 # Give the thread time to start
                 import time
+
                 time.sleep(0.1)
 
                 active = manager.list_active_workflows()
@@ -190,7 +192,7 @@ class TestWorkflowManagerIntegration:
 
         mock_graph = self._build_mock_graph()
 
-        with patch("src.orchestrator.workflow_manager.load_config", return_value=mock_config):
+        with patch("src.utils.config_loader.load_config", return_value=mock_config):
             with patch("src.orchestrator.workflow_manager.build_graph", return_value=mock_graph):
                 manager = WorkflowManager()
                 # Should not raise, just log
@@ -207,17 +209,31 @@ class TestWorkflowManagerIntegration:
 
         mock_graph = MagicMock()
 
-        # Simulate workflow that gets interrupted, then resumes successfully
-        interrupt_event = {"parse_request": {
-            "interrupt_data": {"question": "Approve field mappings?", "type": "field_mapping"}
-        }}
+        # Simulate workflow that gets interrupted, then resumes successfully.
+        # The real code drives this via graph.astream (async), called once
+        # from start_workflow with the initial state and once from
+        # resume_workflow with None (Phase 0 Sec 0.7, found while wiring
+        # tests/integration into the default gate for the first time - this
+        # test predates the sync .stream -> async .astream migration and its
+        # mock never actually got iterated).
+        interrupt_event = {
+            "parse_request": {
+                "interrupt_data": {"question": "Approve field mappings?", "type": "field_mapping"}
+            }
+        }
         resume_event = {"load_data": {}}
-        mock_graph.stream = MagicMock(return_value=iter([interrupt_event, resume_event]))
+
+        async def _fake_astream(state, config=None, **kwargs):
+            events = [resume_event] if state is None else [interrupt_event]
+            for event in events:
+                yield event
+
+        mock_graph.astream = _fake_astream
         mock_graph.update_state = MagicMock()
         mock_graph.get_state = MagicMock()
         mock_graph.get_state.return_value = None
 
-        with patch("src.orchestrator.workflow_manager.load_config", return_value=mock_config):
+        with patch("src.utils.config_loader.load_config", return_value=mock_config):
             with patch("src.orchestrator.workflow_manager.build_graph", return_value=mock_graph):
                 manager = WorkflowManager()
                 thread_id = manager.start_workflow(
@@ -228,6 +244,7 @@ class TestWorkflowManagerIntegration:
                 )
 
                 import time
+
                 time.sleep(0.3)
 
                 manager.resume_workflow(
@@ -248,12 +265,20 @@ class TestWorkflowManagerIntegration:
         from src.orchestrator.workflow_manager import WorkflowManager
 
         mock_graph = self._build_mock_graph()
-        origins = [{
-            "id": "test_crm",
-            "type": "postgres",
-            "connection": {"host": "localhost", "port": 5432, "user": "test", "password": "test", "database": "test_db"},
-            "priority": 1,
-        }]
+        origins = [
+            {
+                "id": "test_crm",
+                "type": "postgres",
+                "connection": {
+                    "host": "localhost",
+                    "port": 5432,
+                    "user": "test",
+                    "password": "test",
+                    "database": "test_db",
+                },
+                "priority": 1,
+            }
+        ]
         destination = {
             "type": "postgresql",
             "host": "localhost",
@@ -264,7 +289,7 @@ class TestWorkflowManagerIntegration:
             "schema": "public",
         }
 
-        with patch("src.orchestrator.workflow_manager.load_config", return_value=mock_config):
+        with patch("src.utils.config_loader.load_config", return_value=mock_config):
             with patch("src.orchestrator.workflow_manager.build_graph", return_value=mock_graph):
                 manager = WorkflowManager()
                 thread_id = manager.start_workflow(
@@ -288,7 +313,7 @@ class TestWorkflowManagerIntegration:
         mock_graph = self._build_mock_graph()
         mock_graph.stream = MagicMock(return_value=iter([]))
 
-        with patch("src.orchestrator.workflow_manager.load_config", return_value=mock_config):
+        with patch("src.utils.config_loader.load_config", return_value=mock_config):
             with patch("src.orchestrator.workflow_manager.build_graph", return_value=mock_graph):
                 manager = WorkflowManager()
 
@@ -304,6 +329,7 @@ class TestWorkflowManagerIntegration:
                     threads.append(tid)
 
                 import time
+
                 time.sleep(0.3)
 
                 # After completion, cleanup should remove them
@@ -316,15 +342,25 @@ class TestWorkflowManagerIntegration:
         mock_config: Any,
         test_config_path: Any,
     ) -> None:
-        """Test workflow when graph.stream raises an exception."""
+        """Test workflow when graph.astream raises an exception."""
         from src.orchestrator.workflow_manager import WorkflowManager
 
         mock_graph = MagicMock()
-        mock_graph.stream = MagicMock(side_effect=ValueError("Simulated failure"))
+
+        # The real code drives this via graph.astream (async) - a plain sync
+        # MagicMock side_effect never actually got exercised (Phase 0 Sec
+        # 0.7, found while wiring tests/integration into the default gate for
+        # the first time - this test predates the sync .stream -> async
+        # .astream migration).
+        async def _raising_astream(*args, **kwargs):
+            raise ValueError("Simulated failure")
+            yield {}  # pragma: no cover - makes this an async generator function
+
+        mock_graph.astream = _raising_astream
         mock_graph.get_state = MagicMock()
         mock_graph.get_state.return_value = None
 
-        with patch("src.orchestrator.workflow_manager.load_config", return_value=mock_config):
+        with patch("src.utils.config_loader.load_config", return_value=mock_config):
             with patch("src.orchestrator.workflow_manager.build_graph", return_value=mock_graph):
                 manager = WorkflowManager()
                 thread_id = manager.start_workflow(
@@ -335,6 +371,7 @@ class TestWorkflowManagerIntegration:
                 )
 
                 import time
+
                 time.sleep(0.3)
 
                 status = manager.get_workflow_status(thread_id)

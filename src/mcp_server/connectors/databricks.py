@@ -6,7 +6,6 @@ Uses the official Databricks SQL connector for Python.
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
@@ -14,7 +13,7 @@ from databricks.sql import connect as dbsql_connect
 from databricks.sql.exc import Error as DatabricksError
 
 from src.mcp_server.connectors.base import BaseConnector
-from src.orchestrator.utils.retry import TransientError, retry_on_transient
+from src.orchestrator.utils.retry import retry_on_transient
 
 logger = logging.getLogger("merge-engine.connectors.databricks")
 
@@ -43,7 +42,10 @@ class DatabricksConnector(BaseConnector):
 
         logger.debug(
             "Creating Databricks connection: host=%s, http_path=%s, catalog=%s, schema=%s",
-            host, http_path, self._catalog, self._schema,
+            host,
+            http_path,
+            self._catalog,
+            self._schema,
         )
         self._connection = dbsql_connect(
             server_hostname=host,
@@ -90,11 +92,13 @@ class DatabricksConnector(BaseConnector):
                 # DESCRIBE TABLE returns: col_name, data_type, comment (row format)
                 name = row[0] if isinstance(row, (list, tuple)) else row.get("col_name")
                 dtype = row[1] if len(row) > 1 else row.get("data_type")
-                columns.append({
-                    "name": str(name),
-                    "type": str(dtype),
-                    "nullable": True,
-                })
+                columns.append(
+                    {
+                        "name": str(name),
+                        "type": str(dtype),
+                        "nullable": True,
+                    }
+                )
             logger.debug("Table %s has %d columns", table_name, len(columns))
 
             result = {"columns": columns, "primary_key": "id"}
@@ -131,8 +135,12 @@ class DatabricksConnector(BaseConnector):
         dict
             {"inserted": int, "updated": int}
         """
-        logger.debug("ENTER load_batch: table=%s, records_count=%d, upsert_key=%s",
-                      table_name, len(records), upsert_key)
+        logger.debug(
+            "ENTER load_batch: table=%s, records_count=%d, upsert_key=%s",
+            table_name,
+            len(records),
+            upsert_key,
+        )
         conn = await self._ensure_connection()
         qualified = f"{self._catalog}.{self._schema}.{table_name}"
         logger.debug("Qualified table name: %s", qualified)
@@ -155,7 +163,7 @@ class DatabricksConnector(BaseConnector):
                 FROM __records__
             ) AS source
             ON target.{upsert_key} = source.{upsert_key}
-            WHEN MATCHED THEN UPDATE SET {', '.join(f'target."{c}" = source."{c}"' for c in target_columns if c != upsert_key)}
+            WHEN MATCHED THEN UPDATE SET {", ".join(f'target."{c}" = source."{c}"' for c in target_columns if c != upsert_key)}
             WHEN NOT MATCHED THEN INSERT ({col_list}) VALUES ({placeholder_list})
         """
         logger.debug("MERGE SQL built for table %s", table_name)
@@ -164,8 +172,9 @@ class DatabricksConnector(BaseConnector):
         batch_size = 500
         total_batches = (len(records) + batch_size - 1) // batch_size
         total_inserted = 0
-        total_updated = 0
-        logger.debug("Processing %d records in %d batches of %d", len(records), total_batches, batch_size)
+        logger.debug(
+            "Processing %d records in %d batches of %d", len(records), total_batches, batch_size
+        )
 
         cursor = conn.cursor()
         try:
@@ -174,7 +183,9 @@ class DatabricksConnector(BaseConnector):
                 batch_params = [dict(r) for r in batch]
                 logger.debug(
                     "Executing MERGE batch %d/%d: %d records",
-                    batch_idx // batch_size + 1, total_batches, len(batch),
+                    batch_idx // batch_size + 1,
+                    total_batches,
+                    len(batch),
                 )
 
                 # Use execute_batch if available, else individual executes
@@ -184,14 +195,18 @@ class DatabricksConnector(BaseConnector):
                 total_inserted += cursor.rowcount
                 logger.debug(
                     "Batch %d/%d completed: rowcount=%d",
-                    batch_idx // batch_size + 1, total_batches, cursor.rowcount,
+                    batch_idx // batch_size + 1,
+                    total_batches,
+                    cursor.rowcount,
                 )
         finally:
             cursor.close()
 
         logger.debug(
             "EXIT load_batch: table=%s, total_inserted=%d, total_batches=%d",
-            table_name, total_inserted, total_batches,
+            table_name,
+            total_inserted,
+            total_batches,
         )
         return {"inserted": total_inserted, "updated": 0}  # rowcount behavior varies
 
@@ -220,8 +235,9 @@ class DatabricksConnector(BaseConnector):
         bool
             True on success.
         """
-        logger.debug("ENTER add_column: table=%s, column=%s, type=%s",
-                      table_name, column_name, data_type)
+        logger.debug(
+            "ENTER add_column: table=%s, column=%s, type=%s", table_name, column_name, data_type
+        )
         conn = await self._ensure_connection()
         qualified = f"{self._catalog}.{self._schema}.{table_name}"
 
@@ -273,7 +289,11 @@ class DatabricksConnector(BaseConnector):
                 qualified = f"{self._catalog}.{self._schema}.{table}"
                 logger.debug(
                     "Processing schema change %d/%d: ALTER TABLE %s ADD COLUMN %s (%s)",
-                    idx + 1, len(changes), qualified, col, dtype,
+                    idx + 1,
+                    len(changes),
+                    qualified,
+                    col,
+                    dtype,
                 )
 
                 try:
@@ -282,15 +302,15 @@ class DatabricksConnector(BaseConnector):
                     added += 1
                     logger.debug("Successfully added column %s.%s", table, col)
                 except DatabricksError as exc:
-                    logger.warning(
-                        "Failed to add column %s.%s: %s", table, col, exc
-                    )
+                    logger.warning("Failed to add column %s.%s: %s", table, col, exc)
                     failed += 1
         finally:
             cursor.close()
 
         logger.debug(
             "EXIT extend_schema_batch: added=%d, failed=%d, total=%d",
-            added, failed, len(changes),
+            added,
+            failed,
+            len(changes),
         )
         return {"added": added, "failed": failed}

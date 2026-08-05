@@ -18,7 +18,7 @@ from pymongo.server_api import ServerApi
 from src.mcp_server.connectors.base import BaseConnector
 from src.mcp_server.connectors.filters import normalize_filter
 from src.mcp_server.connectors.keyset import decode_cursor, encode_cursor
-from src.orchestrator.utils.retry import TransientError, retry_on_transient
+from src.orchestrator.utils.retry import retry_on_transient
 
 logger = logging.getLogger("merge-engine.connectors.mongodb")
 
@@ -71,7 +71,8 @@ class MongoDBConnector(BaseConnector):
         logger.debug(
             "Creating MongoDB async client: uri=%s:%s, db=%s",
             uri[:50] + "..." if len(uri) > 50 else uri,
-            "...", self._db_name,
+            "...",
+            self._db_name,
         )
         self._client = AsyncMongoClient(
             uri,
@@ -101,7 +102,9 @@ class MongoDBConnector(BaseConnector):
         try:
             db = client[self._db_name]
             collection_names = await db.list_collection_names()
-            logger.debug("Found %d collections in database %s", len(collection_names), self._db_name)
+            logger.debug(
+                "Found %d collections in database %s", len(collection_names), self._db_name
+            )
         except Exception as exc:
             logger.warning("Failed to list MongoDB collections: %s", exc)
             logger.debug("EXIT discover_schema - returning empty tables")
@@ -122,12 +125,14 @@ class MongoDBConnector(BaseConnector):
                 logger.debug("Fetched %d sample documents from %s", len(samples), coll_name)
 
                 if not samples:
-                    tables.append({
-                        "name": coll_name,
-                        "columns": [],
-                        "foreign_keys": [],
-                        "sample_row": {},
-                    })
+                    tables.append(
+                        {
+                            "name": coll_name,
+                            "columns": [],
+                            "foreign_keys": [],
+                            "sample_row": {},
+                        }
+                    )
                     logger.debug("Collection %s is empty, skipping schema inference", coll_name)
                     continue
 
@@ -160,12 +165,14 @@ class MongoDBConnector(BaseConnector):
                 # Sample row (first document, flattened)
                 sample_row = self._flatten_doc(samples[0])
 
-                tables.append({
-                    "name": coll_name,
-                    "columns": columns,
-                    "foreign_keys": [],  # MongoDB doesn't have native FKs
-                    "sample_row": sample_row,
-                })
+                tables.append(
+                    {
+                        "name": coll_name,
+                        "columns": columns,
+                        "foreign_keys": [],  # MongoDB doesn't have native FKs
+                        "sample_row": sample_row,
+                    }
+                )
             except Exception as exc:
                 logger.warning("Failed to discover schema for collection %s: %s", coll_name, exc)
                 logger.debug("Continuing to next collection after error")
@@ -195,8 +202,13 @@ class MongoDBConnector(BaseConnector):
         for MongoDB; the parameter is accepted for interface compatibility
         but ignored (full re-scan every run).
         """
-        logger.debug("ENTER extract: collection=%s, columns=%s, batch_size=%d, cursor=%s",
-                      table_name, columns, batch_size, cursor)
+        logger.debug(
+            "ENTER extract: collection=%s, columns=%s, batch_size=%d, cursor=%s",
+            table_name,
+            columns,
+            batch_size,
+            cursor,
+        )
         client = await self._ensure_client()
         db = client[self._db_name]
         collection = db[table_name]
@@ -257,11 +269,7 @@ class MongoDBConnector(BaseConnector):
         # One extra document is fetched purely to learn whether another page
         # exists; it is never returned.
         logger.debug("Fetching with limit=%d", batch_size + 1)
-        cursor_obj = (
-            collection.find(query_filter, projection)
-            .sort("_id", 1)
-            .limit(batch_size + 1)
-        )
+        cursor_obj = collection.find(query_filter, projection).sort("_id", 1).limit(batch_size + 1)
         fetched: list[dict[str, Any]] = []
         async for doc in cursor_obj:
             fetched.append(doc)
@@ -279,7 +287,8 @@ class MongoDBConnector(BaseConnector):
 
         next_cursor = (
             encode_cursor(keyset_values=[last_id], total_count=total_count)
-            if has_more and last_id else None
+            if has_more and last_id
+            else None
         )
         origin_ids = [str(i) for i in range(len(rows))]
 
@@ -341,7 +350,8 @@ class MongoDBConnector(BaseConnector):
         )
         logger.debug(
             "mark_imported completed: matched=%d, modified=%d",
-            result.matched_count, result.modified_count,
+            result.matched_count,
+            result.modified_count,
         )
         return result.modified_count >= 0 or result.matched_count >= 0
 

@@ -9,7 +9,7 @@ finish at all; these make it slow even when it does finish correctly.
 
 Timings below are all from real Boeing runs against ClickHouse origins with
 ~2.9M and ~1.27M `Company` rows respectively (see
-`docs/BOEING_APP_VS_MANUAL_DIAGNOSIS.md` for the dataset).
+`docs/diagnostics/BOEING_APP_VS_MANUAL_DIAGNOSIS.md` for the dataset).
 
 ## 1. Entity-cluster partitioning is the dominant cost, not scoring — O(n²), unguarded, single-threaded
 
@@ -139,5 +139,5 @@ The first real completed Boeing run (this session) landed at 12.0% overall
 row parity against the hand-merge golden. That's a **data-quality** gap
 (uniform survivorship, entity-breadth caps, matcher precision), already
 tracked in `merge-engine-app-vs-manual-gap.md` and
-`docs/BOEING_APP_VS_MANUAL_DIAGNOSIS.md` — not something on this list, and
+`docs/diagnostics/BOEING_APP_VS_MANUAL_DIAGNOSIS.md` — not something on this list, and
 not something tonight's fixes touched or were meant to touch.

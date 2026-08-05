@@ -10,18 +10,17 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from tenacity import (
-    RetryCallState,
+    after_log,
+    before_log,
     retry_if_exception_type,
     stop_after_attempt,
     wait_chain,
-    wait_combine,
     wait_exponential,
     wait_fixed,
-    before_log,
-    after_log,
 )
 
 logger = logging.getLogger("merge-engine.retry")
@@ -122,21 +121,44 @@ class UserInputError(MergeEngineError):
 # driver the same network blip can surface as almost anything — so the
 # message is the most portable signal available.
 _TRANSIENT_MARKERS = (
-    "timeout", "timed out", "connection reset", "connection refused",
-    "connection closed", "broken pipe", "temporarily unavailable",
-    "too many connections", "server closed the connection",
-    "rate limit", "429", "503", "504", "deadlock detected",
-    "could not connect", "network is unreachable", "eof detected",
-    "ssl connection has been closed", "operation now in progress",
+    "timeout",
+    "timed out",
+    "connection reset",
+    "connection refused",
+    "connection closed",
+    "broken pipe",
+    "temporarily unavailable",
+    "too many connections",
+    "server closed the connection",
+    "rate limit",
+    "429",
+    "503",
+    "504",
+    "deadlock detected",
+    "could not connect",
+    "network is unreachable",
+    "eof detected",
+    "ssl connection has been closed",
+    "operation now in progress",
 )
 
 # Substrings that identify a failure retrying will never fix.
 _PERMANENT_MARKERS = (
-    "authentication failed", "password authentication",
-    "permission denied", "access denied", "not authorized",
-    "does not exist", "no such table", "unknown database",
-    "syntax error", "invalid input syntax", "undefined column",
-    "duplicate key", "violates", "role ", "must be owner",
+    "authentication failed",
+    "password authentication",
+    "permission denied",
+    "access denied",
+    "not authorized",
+    "does not exist",
+    "no such table",
+    "unknown database",
+    "syntax error",
+    "invalid input syntax",
+    "undefined column",
+    "duplicate key",
+    "violates",
+    "role ",
+    "must be owner",
 )
 
 
@@ -171,10 +193,9 @@ def classify_exception(exc: BaseException) -> MergeEngineError:
 def _build_wait_strategy(backoff: str, min_backoff: float, max_backoff: float):
     """Build a tenacity wait strategy from configuration."""
     if backoff == "exponential":
-        return wait_chain(*[
-            wait_exponential(multiplier=1, min=min_backoff, max=max_backoff)
-            for _ in range(3)
-        ])
+        return wait_chain(
+            *[wait_exponential(multiplier=1, min=min_backoff, max=max_backoff) for _ in range(3)]
+        )
     elif backoff == "linear":
         return wait_fixed(min_backoff)
     else:

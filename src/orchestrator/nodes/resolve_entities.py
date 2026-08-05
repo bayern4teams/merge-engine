@@ -7,24 +7,52 @@ clusters of matching records.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
+from concurrent.futures import ProcessPoolExecutor
 from typing import Any
 
-from src.mcp_server.tools.resolve_entities import resolve_entities_impl
-from src.orchestrator.utils.entity_aliases import concept_matches
+from src.mcp_server.tools.resolve_entities import (
+    _PROCESS_POOL_MIN_RECORDS,
+    resolve_entities_impl,
+)
 from src.orchestrator.spool import (
     RunSpool,
-    clusters_for,
     entity_row_count,
     entity_rows,
     is_handle,
     make_handle,
     store_clusters,
 )
-from src.orchestrator.utils.retry import TransientError
+from src.orchestrator.utils.entity_aliases import concept_matches
 from src.orchestrator.utils.retry_hints import with_retry_hint
 
 logger = logging.getLogger("merge-engine.orchestrator.resolve_entities")
+
+# Bounded rather than os.cpu_count(): each worker holds a full copy of one
+# entity's records (pickled across the process boundary), and ClickHouse/
+# Postgres connections plus the API server itself are already competing for
+# this machine's cores during a run. 4 is the same conservative default
+# Part 1.5 B.2's design discussion used for a comparable fan-out.
+_MAX_POOL_WORKERS = 4
+
+
+def _matching_rules_for(
+    matching_rules: dict[str, Any] | None, entity_type: str
+) -> dict[str, Any] | None:
+    """Per-entity rules, falling back to a ``_default`` entry (Part 1.6.A).
+
+    ``matching_rules`` is keyed per entity type
+    (``{entity: {blocking_keys, unique_id_fields, strictness, ...}}``, O.2).
+    A run-by-run override set in the UI's Advanced panel is submitted before
+    ``target_entities`` is even known (parse_request hasn't run yet), so it
+    can only be written under a synthetic ``_default`` key — the same
+    convention ``conflict_policy`` already uses (see ``WorkflowStart``'s
+    docstring). An explicit per-entity entry still wins over ``_default``.
+    """
+    rules = matching_rules or {}
+    return rules.get(entity_type) or rules.get("_default")
 
 
 async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
@@ -44,7 +72,10 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
     logger.debug("State keys: %s", list(state.keys()))
     extracted_data: dict[str, list[dict]] = state.get("extracted_data", {})
     target_entities: list[str] = state.get("target_entities", [])
-    errors: list[str] = list(state.get("errors", []))
+    # Only THIS call's own errors (Phase 0 Sec 0.8) - see load_data_node's
+    # identical fix for why seeding with the existing history double-counted
+    # it through operator.add's reducer.
+    errors: list[str] = []
     entity_clusters: dict[str, list[dict]] = dict(state.get("entity_clusters", {}))
     resolution_stats: dict[str, dict] = dict(state.get("resolution_stats", {}))
 
@@ -70,6 +101,13 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
     # pollute clustering with unrelated rows.
     _inject_subject_destination_rows(state, spool, entity_map, extracted_data)
 
+    # ── Phase 1: sequential prep (Part 1.5 B.3, same shape as B.1's
+    # map_fields split) ──────────────────────────────────────────────
+    # Record pooling writes to this run's spool (reset_entity/append) --
+    # not safe to run concurrently with other entities' spool writes, so
+    # every entity's records are resolved here, strictly in order, before
+    # any resolve_entities_impl call is dispatched.
+    prepared: list[tuple[str, list[dict[str, Any]]]] = []
     for entity_type in target_entities:
         records = entity_rows(state, entity_type)
         if not records:
@@ -81,7 +119,9 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
             for key in list(extracted_data):
                 if key != entity_type and concept_matches(entity_type, key):
                     rows = entity_rows(state, key)
-                    logger.debug("Pooling %d rows from '%s' into concept '%s'", len(rows), key, entity_type)
+                    logger.debug(
+                        "Pooling %d rows from '%s' into concept '%s'", len(rows), key, entity_type
+                    )
                     pooled.extend(rows)
             if pooled:
                 records = pooled
@@ -90,130 +130,177 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
                 # rows travelling through checkpointed state.
                 spool.reset_entity(entity_type)
                 spool.append(entity_type, pooled)
-                extracted_data[entity_type] = make_handle(
-                    run_id, entity_type, len(pooled)
-                )
+                extracted_data[entity_type] = make_handle(run_id, entity_type, len(pooled))
         logger.debug("Processing entity '%s': %d records", entity_type, len(records))
         if not records:
             logger.info("No records to resolve for entity '%s', skipping.", entity_type)
             entity_clusters[entity_type] = []
             continue
+        prepared.append((entity_type, records))
 
-        logger.info("Resolving entities for '%s': %d records", entity_type, len(records))
-
+    # ── Phase 2: concurrent dispatch ────────────────────────────────────
+    # Part 1.5 B.3: resolve_entities_impl's CPU-bound core (blocking, model
+    # fit, scoring) is pure-Python and GIL-bound -- asyncio.gather alone
+    # would not parallelise it (unlike B.1's map_fields, which is I/O-bound
+    # LLM round-trips). A process pool gives real parallelism across
+    # entities instead.
+    #
+    # Requires at least TWO qualifying entities, not one: measured live
+    # (docs/verification/PROCESS_POOL_PROFILE.md), dispatching a single
+    # 1,503-record entity alone to the pool was slightly SLOWER than inline
+    # (23.67s vs 22.52s) -- pickling/IPC overhead with nothing to overlap it
+    # against. Two same-sized entities dispatched concurrently measured
+    # 1.53x faster than sequential, correctness verified byte-identical.
+    # One qualifying entity therefore runs inline exactly as before; the
+    # pool only stands up when there is real work to parallelise.
+    #
+    # Any pool-creation failure degrades to running every entity inline
+    # (process_pool=None) -- this must never be what breaks a merge run.
+    process_pool: ProcessPoolExecutor | None = None
+    qualifying = sum(1 for _et, records in prepared if len(records) >= _PROCESS_POOL_MIN_RECORDS)
+    if qualifying >= 2:
         try:
-            logger.debug("Calling resolve_entities_impl for entity '%s'", entity_type)
-            result = await resolve_entities_impl(
-                entity_type=entity_type,
-                records=records,
-                llm_config=with_retry_hint(
-                    state.get("llm_config") or None, state, "resolve_entities"
-                ),
-                known_cluster_ids=entity_map.get(entity_type),
-                matching_rules=(state.get("matching_rules") or {}).get(
-                    entity_type
-                ),
-                subject=(state.get("merge_scope") or {}).get("subject") or None,
+            process_pool = ProcessPoolExecutor(
+                max_workers=min(_MAX_POOL_WORKERS, os.cpu_count() or 1)
             )
-            logger.debug("resolve_entities_impl result keys: %s", list(result.keys()))
-
-            clusters = result.get("clusters", [])
-
-            # Stats
-            total_records = result.get("total_records", 0)
-            auto_matched = result.get("auto_matched", 0)
-            auto_excluded = result.get("auto_excluded", 0)
-            llm_scored = result.get("llm_scored", 0)
-            multi_record_clusters = [c for c in clusters if len(c.get("record_ids", [])) > 1]
-            low_conf_clusters = [c for c in clusters if c.get("required_human_review", False)]
-
-            # Clusters go to the spool; state keeps a handle carrying the
-            # summary the routers and gates need, so neither has to read
-            # every cluster back just to decide what to do.
-            entity_clusters[entity_type] = store_clusters(
-                run_id, entity_type, clusters,
-                needs_review=len(low_conf_clusters),
-                multi_record=len(multi_record_clusters),
-            )
-
-            uncompared = result.get("uncompared_pairs", 0)
-            resolution_stats[entity_type] = {
-                "total_records": total_records,
-                "auto_matched": auto_matched,
-                "auto_excluded": auto_excluded,
-                "llm_scored": llm_scored,
-                "clusters_formed": len(clusters),
-                "low_confidence": len(low_conf_clusters),
-                # Pairs the comparison budget could not reach. A reviewer
-                # approving this run needs to see that some records were
-                # never compared, rather than have it sit in a log file.
-                "uncompared_pairs": uncompared,
-                "candidate_pairs": result.get("candidate_pairs", 0),
-                # Uncertain pairs left unmerged. They form no multi-record
-                # cluster, so without this the matches gate would auto-skip
-                # and the human would never learn they existed.
-                "pending_merge_candidates": result.get(
-                    "pending_merge_candidates", []
-                ),
-            }
-            if uncompared:
-                logger.warning(
-                    "Entity '%s': %d candidate pair(s) exceeded the comparison "
-                    "budget and were NOT compared. Duplicates among them will "
-                    "not have been detected.",
-                    entity_type, uncompared,
-                )
-
-            logger.debug(
-                "Resolution stats - total=%d, auto=%d, llm=%d, multi=%d, low_conf=%d",
-                total_records, auto_matched, llm_scored, len(multi_record_clusters), len(low_conf_clusters),
-            )
-            for lc in low_conf_clusters:
-                logger.debug(
-                    "Low-confidence cluster: id=%s, records=%s, score=%.2f",
-                    lc.get("cluster_id"), lc.get("record_ids"), lc.get("confidence", 0),
-                )
-
-            logger.info(
-                "Entity resolution for '%s': %d records → %d clusters "
-                "(auto=%d, llm_scored=%d, multi=%d)",
-                entity_type,
-                total_records,
-                len(clusters),
-                auto_matched,
-                llm_scored,
-                len(multi_record_clusters),
-            )
-
         except Exception as exc:
-            msg = f"Entity resolution failed for '{entity_type}': {exc}"
-            logger.error(msg, exc_info=True)
+            logger.warning(
+                "Could not create resolve_entities process pool (%s); "
+                "every entity will run inline instead.",
+                exc,
+            )
+            process_pool = None
+
+    try:
+        logger.debug("Dispatching %d entity resolution(s) concurrently", len(prepared))
+        results = await asyncio.gather(
+            *(
+                resolve_entities_impl(
+                    entity_type=entity_type,
+                    records=records,
+                    llm_config=with_retry_hint(
+                        state.get("llm_config") or None, state, "resolve_entities"
+                    ),
+                    known_cluster_ids=entity_map.get(entity_type),
+                    matching_rules=_matching_rules_for(state.get("matching_rules"), entity_type),
+                    subject=(state.get("merge_scope") or {}).get("subject") or None,
+                    process_pool=process_pool,
+                )
+                for entity_type, records in prepared
+            ),
+            return_exceptions=True,
+        )
+    finally:
+        if process_pool is not None:
+            process_pool.shutdown(wait=True)
+
+    # ── Phase 3: sequential merge, in target_entities order ─────────────
+    # asyncio.gather preserves input order, so results lines up 1:1 with
+    # prepared. Merging here keeps entity_clusters/resolution_stats/errors
+    # ordering deterministic across runs, exactly as when this loop ran
+    # strictly sequentially (same pattern as B.1's map_fields_node.py).
+    for (entity_type, _records), outcome in zip(prepared, results, strict=True):
+        if isinstance(outcome, Exception):
+            msg = f"Entity resolution failed for '{entity_type}': {outcome}"
+            logger.error(msg, exc_info=outcome)
             errors.append(msg)
             entity_clusters[entity_type] = []
+            continue
+        if isinstance(outcome, BaseException):
+            raise outcome
+
+        result = outcome
+        logger.debug("resolve_entities_impl result keys: %s", list(result.keys()))
+
+        clusters = result.get("clusters", [])
+
+        # Stats
+        total_records = result.get("total_records", 0)
+        auto_matched = result.get("auto_matched", 0)
+        auto_excluded = result.get("auto_excluded", 0)
+        llm_scored = result.get("llm_scored", 0)
+        multi_record_clusters = [c for c in clusters if len(c.get("record_ids", [])) > 1]
+        low_conf_clusters = [c for c in clusters if c.get("required_human_review", False)]
+
+        # Clusters go to the spool; state keeps a handle carrying the
+        # summary the routers and gates need, so neither has to read
+        # every cluster back just to decide what to do.
+        entity_clusters[entity_type] = store_clusters(
+            run_id,
+            entity_type,
+            clusters,
+            needs_review=len(low_conf_clusters),
+            multi_record=len(multi_record_clusters),
+        )
+
+        uncompared = result.get("uncompared_pairs", 0)
+        resolution_stats[entity_type] = {
+            "total_records": total_records,
+            "auto_matched": auto_matched,
+            "auto_excluded": auto_excluded,
+            "llm_scored": llm_scored,
+            "clusters_formed": len(clusters),
+            "low_confidence": len(low_conf_clusters),
+            # Pairs the comparison budget could not reach. A reviewer
+            # approving this run needs to see that some records were
+            # never compared, rather than have it sit in a log file.
+            "uncompared_pairs": uncompared,
+            "candidate_pairs": result.get("candidate_pairs", 0),
+            # Uncertain pairs left unmerged. They form no multi-record
+            # cluster, so without this the matches gate would auto-skip
+            # and the human would never learn they existed.
+            "pending_merge_candidates": result.get("pending_merge_candidates", []),
+        }
+        if uncompared:
+            logger.warning(
+                "Entity '%s': %d candidate pair(s) exceeded the comparison "
+                "budget and were NOT compared. Duplicates among them will "
+                "not have been detected.",
+                entity_type,
+                uncompared,
+            )
+
+        logger.debug(
+            "Resolution stats - total=%d, auto=%d, llm=%d, multi=%d, low_conf=%d",
+            total_records,
+            auto_matched,
+            llm_scored,
+            len(multi_record_clusters),
+            len(low_conf_clusters),
+        )
+        for lc in low_conf_clusters:
+            logger.debug(
+                "Low-confidence cluster: id=%s, records=%s, score=%.2f",
+                lc.get("cluster_id"),
+                lc.get("record_ids"),
+                lc.get("confidence", 0),
+            )
+
+        logger.info(
+            "Entity resolution for '%s': %d records → %d clusters "
+            "(auto=%d, llm_scored=%d, multi=%d)",
+            entity_type,
+            total_records,
+            len(clusters),
+            auto_matched,
+            llm_scored,
+            len(multi_record_clusters),
+        )
 
     logger.debug("Total entity types in entity_clusters: %d", len(entity_clusters))
     logger.debug("Total errors: %d", len(errors))
     logger.debug("EXIT resolve_entities")
 
+    # Only the keys this node actually computes (Phase 0 Sec 0.8) - a key it
+    # omits is left untouched by LangGraph's per-key TypedDict state update,
+    # not cleared. extracted_data is kept explicit since
+    # _inject_subject_destination_rows above may have added subject rows to
+    # it for a scoped merge.
     return {
         "entity_clusters": entity_clusters,
         "resolution_stats": resolution_stats,
         "errors": errors,
-        "origins": state.get("origins", []),
-        "destination": state.get("destination", {}),
-        "llm_config": state.get("llm_config", {}),
-        "extraction_config": state.get("extraction_config", {}),
-        "target_entities": target_entities,
-        "schemas": state.get("schemas", {}),
-        "dependency_tree": state.get("dependency_tree", {}),
-        "extraction_order": state.get("extraction_order", []),
         "extracted_data": extracted_data,
-        "unified_entities": state.get("unified_entities", {}),
-        "field_mappings": state.get("field_mappings", {}),
-        "pending_schema_changes": state.get("pending_schema_changes", []),
-        "human_feedback": state.get("human_feedback"),
-        "load_approval": state.get("load_approval"),
-        "retry_counts": state.get("retry_counts", {}),
         "interrupt_data": None,
     }
 
@@ -270,16 +357,14 @@ def _inject_subject_destination_rows(
         # no assumption is made about which column holds the name.
         needle = subject.lower()
         matched = [
-            r for r in rows
-            if any(
-                isinstance(v, str) and needle in v.lower()
-                for v in r.values()
-            )
+            r for r in rows if any(isinstance(v, str) and needle in v.lower() for v in r.values())
         ]
         if not matched:
             logger.info(
                 "Destination dedup: no existing %r rows in %s matched %r.",
-                subject_entity, dest_table, subject,
+                subject_entity,
+                dest_table,
+                subject,
             )
             return
 
@@ -311,12 +396,15 @@ def _inject_subject_destination_rows(
         logger.info(
             "Destination dedup: injected %d existing %r row(s) from %s so a "
             "re-merge updates them instead of duplicating.",
-            len(prepared), subject_entity, dest_table,
+            len(prepared),
+            subject_entity,
+            dest_table,
         )
     except Exception as exc:
         logger.warning(
             "Destination dedup skipped (%s); incoming subject rows may be "
-            "inserted as new instead of updating existing ones.", exc,
+            "inserted as new instead of updating existing ones.",
+            exc,
         )
 
 
@@ -352,7 +440,8 @@ def _load_entity_map(state: dict[str, Any]) -> dict[str, dict[str, str]]:
         logger.warning(
             "Could not read the entity map (%s); cluster ids will be derived "
             "from membership alone, which can duplicate rows on an "
-            "incremental re-run.", exc,
+            "incremental re-run.",
+            exc,
         )
         return {}
 
@@ -370,8 +459,9 @@ def has_low_confidence_clusters(state: dict[str, Any]) -> bool:
         pending = stats.get("pending_merge_candidates") or []
         if pending:
             logger.info(
-                "Entity '%s': %d uncertain pair(s) were left unmerged and "
-                "need a human decision.", entity_type, len(pending),
+                "Entity '%s': %d uncertain pair(s) were left unmerged and need a human decision.",
+                entity_type,
+                len(pending),
             )
             return True
 
@@ -385,7 +475,8 @@ def has_low_confidence_clusters(state: dict[str, Any]) -> bool:
             if int(value.get("needs_review", 0)) > 0:
                 logger.info(
                     "Entity '%s': %s cluster(s) need review.",
-                    entity_type, value.get("needs_review"),
+                    entity_type,
+                    value.get("needs_review"),
                 )
                 return True
             continue

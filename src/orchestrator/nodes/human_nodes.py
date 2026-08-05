@@ -56,9 +56,13 @@ async def human_review_deps(state: dict[str, Any]) -> dict[str, Any]:
     if human_feedback and "dependency_tree" in human_feedback:
         logger.info("Human approved/modified dependency tree")
         logger.debug("Feedback keys: %s", list(human_feedback.keys()))
+        # No new errors from this gate - previously returned
+        # state.get("errors", []) here, which operator.add's reducer then
+        # re-appended onto the existing list on every single resume,
+        # duplicating the whole error history each time (Phase 0 Sec 0.8;
+        # same fix applied to every HITL gate in this file).
         return {
             "dependency_tree": human_feedback["dependency_tree"],
-            "errors": state.get("errors", []),
         }
 
     # Interrupt the graph
@@ -86,7 +90,6 @@ async def human_review_scope(state: dict[str, Any]) -> dict[str, Any]:
         logger.info("Human confirmed/edited the merge scope")
         return {
             "scope_plan": human_feedback["scope_plan"],
-            "errors": state.get("errors", []),
         }
 
     logger.debug("Interrupting at human_review_scope checkpoint")
@@ -101,14 +104,16 @@ def _build_scope_interrupt(scope_plan: dict[str, Any]) -> dict[str, Any]:
     plan_rows: list[dict[str, Any]] = []
     for entity, entries in entities.items():
         for e in entries:
-            plan_rows.append({
-                "entity_type": entity,
-                "origin_id": e.get("origin_id"),
-                "table": e.get("table"),
-                "mode": e.get("mode"),
-                "columns": e.get("columns", []),
-                "reason": e.get("reason", ""),
-            })
+            plan_rows.append(
+                {
+                    "entity_type": entity,
+                    "origin_id": e.get("origin_id"),
+                    "table": e.get("table"),
+                    "mode": e.get("mode"),
+                    "columns": e.get("columns", []),
+                    "reason": e.get("reason", ""),
+                }
+            )
     return {
         "node": "human_review_scope",
         "title": "Confirm merge scope",
@@ -136,12 +141,14 @@ async def human_review_matches(state: dict[str, Any]) -> dict[str, Any]:
         clusters = clusters_for(state, entity_type)
         for cluster in clusters:
             if cluster.get("required_human_review", False):
-                low_conf_clusters.append({
-                    "entity_type": entity_type,
-                    "cluster_id": cluster.get("cluster_id", ""),
-                    "record_ids": cluster.get("record_ids", []),
-                    "confidence": cluster.get("match_confidence", 0),
-                })
+                low_conf_clusters.append(
+                    {
+                        "entity_type": entity_type,
+                        "cluster_id": cluster.get("cluster_id", ""),
+                        "record_ids": cluster.get("record_ids", []),
+                        "confidence": cluster.get("match_confidence", 0),
+                    }
+                )
 
     logger.debug("Found %d low-confidence clusters", len(low_conf_clusters))
 
@@ -161,28 +168,21 @@ async def human_review_matches(state: dict[str, Any]) -> dict[str, Any]:
         # Clusters live in the spool, so materialise them, apply the
         # user's splits, and write the result back as a handle.
         run_id = str(state.get("run_id") or "unknown")
-        materialised = {
-            e: clusters_for(state, e) for e in entity_clusters
-        }
-        rebuilt, stats = apply_cluster_decisions(
-            materialised, human_feedback["cluster_decisions"]
-        )
+        materialised = {e: clusters_for(state, e) for e in entity_clusters}
+        rebuilt, stats = apply_cluster_decisions(materialised, human_feedback["cluster_decisions"])
         rebuilt = {
             e: store_clusters(
-                run_id, e, cs,
-                needs_review=sum(
-                    1 for c in cs if c.get("required_human_review")
-                ),
-                multi_record=sum(
-                    1 for c in cs if len(c.get("record_ids", [])) > 1
-                ),
+                run_id,
+                e,
+                cs,
+                needs_review=sum(1 for c in cs if c.get("required_human_review")),
+                multi_record=sum(1 for c in cs if len(c.get("record_ids", [])) > 1),
             )
             for e, cs in rebuilt.items()
         }
         logger.info("Cluster decisions applied: %s", stats)
         return {
             "entity_clusters": rebuilt,
-            "errors": state.get("errors", []),
         }
 
     logger.debug("Interrupting at human_review_matches checkpoint")
@@ -209,13 +209,15 @@ async def human_review_mappings(state: dict[str, Any]) -> dict[str, Any]:
     unmapped: list[dict[str, Any]] = []
     for entity_type, fields in unmapped_fields_by_entity.items():
         for field_info in fields:
-            unmapped.append({
-                "entity_type": entity_type,
-                "source_field": field_info.get("field"),
-                "confidence": field_info.get("confidence"),
-                "suggested_column": field_info.get("suggested_column"),
-                "reason": field_info.get("reason"),
-            })
+            unmapped.append(
+                {
+                    "entity_type": entity_type,
+                    "source_field": field_info.get("field"),
+                    "confidence": field_info.get("confidence"),
+                    "suggested_column": field_info.get("suggested_column"),
+                    "reason": field_info.get("reason"),
+                }
+            )
 
     logger.debug("Unmapped fields: %d", len(unmapped))
 
@@ -234,7 +236,6 @@ async def human_review_mappings(state: dict[str, Any]) -> dict[str, Any]:
         logger.debug("Feedback keys: %s", list(human_feedback.keys()))
         return {
             "pending_schema_changes": human_feedback.get("schema_changes", pending_schema_changes),
-            "errors": state.get("errors", []),
         }
 
     logger.debug("Interrupting at human_review_mappings checkpoint")
@@ -251,7 +252,6 @@ async def human_final_approval(state: dict[str, Any]) -> dict[str, Any]:
     logger.debug("ENTER human_final_approval")
     logger.debug("State keys: %s", list(state.keys()))
     unified_entities = state.get("unified_entities", {})
-    field_mappings = state.get("field_mappings", {})
     pending_schema_changes = state.get("pending_schema_changes", [])
     errors = state.get("errors", [])
 
@@ -296,10 +296,7 @@ async def human_final_approval(state: dict[str, Any]) -> dict[str, Any]:
     ):
         logger.info("Human approved final load")
         logger.debug("EXIT human_final_approval (approved)")
-        return {
-            "load_approval": True,
-            "errors": errors,
-        }
+        return {"load_approval": True}
 
     logger.debug("Interrupting at human_final_approval checkpoint")
     logger.debug("EXIT human_final_approval (interrupt)")
@@ -343,7 +340,9 @@ def build_error_interrupt(state: dict[str, Any]) -> dict[str, Any]:
                     "detail": (
                         f"Continue at '{successor}' without this step's "
                         "output. The merge will be knowingly incomplete."
-                    ) if successor else "Continue without this step's output.",
+                    )
+                    if successor
+                    else "Continue without this step's output.",
                 },
                 {
                     "decision": "abort",
@@ -382,7 +381,9 @@ async def handle_error(state: dict[str, Any]) -> dict[str, Any]:
 
     logger.warning(
         "Error gate: user chose '%s' for failure in '%s' (%s)",
-        decision, failed_node, str(failure.get("error", ""))[:200],
+        decision,
+        failed_node,
+        str(failure.get("error", ""))[:200],
     )
     logger.debug("EXIT handle_error (decision=%s)", decision)
 

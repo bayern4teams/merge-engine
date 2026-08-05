@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC
 from typing import Any
 
-from src.mcp_server.connectors import create_connector
-from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
 from src.mcp_server.connectors.clickhouse_destination import ClickHouseDestinationConnector
-from src.orchestrator.utils.retry import TransientError, PermanentError
+from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
+from src.orchestrator.utils.retry import PermanentError
 from src.utils.id_utils import generate_uuid
 
 logger = logging.getLogger("merge-engine.tools.load_data")
@@ -111,8 +111,9 @@ async def load_data_impl(
             "failed": int,
         }
     """
-    logger.debug("ENTER load_data_impl: entity_type=%s, records_count=%d",
-                  entity_type, len(records))
+    logger.debug(
+        "ENTER load_data_impl: entity_type=%s, records_count=%d", entity_type, len(records)
+    )
     if not records:
         logger.debug("No records to load, returning early")
         return {
@@ -128,9 +129,7 @@ async def load_data_impl(
         try:
             connector = _get_destination_connector(destination_config)
         except Exception as exc:
-            raise PermanentError(
-                f"Failed to create destination connector: {exc}"
-            ) from exc
+            raise PermanentError(f"Failed to create destination connector: {exc}") from exc
 
     # Get the destination table name — use entity_type as default (dynamic)
     dest_table = table_name or entity_type
@@ -148,7 +147,9 @@ async def load_data_impl(
         if translated:
             logger.info(
                 "Entity '%s': resolved %d foreign-key value(s) to their "
-                "referenced rows' destination ids.", entity_type, translated,
+                "referenced rows' destination ids.",
+                entity_type,
+                translated,
             )
 
     # Build provenance tracking
@@ -159,7 +160,11 @@ async def load_data_impl(
     try:
         if hasattr(connector, "ensure_table"):
             connector.ensure_table(dest_table)
-        logger.debug("Calling connector.load_batch: table=%s, records=%d", dest_table, len(transformed_records))
+        logger.debug(
+            "Calling connector.load_batch: table=%s, records=%d",
+            dest_table,
+            len(transformed_records),
+        )
         result = connector.load_batch(
             table_name=dest_table,
             records=transformed_records,
@@ -210,6 +215,7 @@ def _get_destination_connector(
         }
     else:
         from src.mcp_server.server import _get_config
+
         config = _get_config()
         dest = config.destination
         dest_type = getattr(dest, "type", "postgresql") if dest else "postgresql"
@@ -288,9 +294,7 @@ def _transform_records(
         # person_id -> id leaves id None for records whose origin doesn't
         # have that source field (NOT NULL PK violation on insert).
         if t_rec.get("id") is None:
-            t_rec["id"] = (
-                rec.get("_cluster_id") or rec.get("id") or generate_uuid()
-            )
+            t_rec["id"] = rec.get("_cluster_id") or rec.get("id") or generate_uuid()
 
         # Add provenance metadata
         source_ids = []
@@ -311,8 +315,9 @@ def _transform_records(
 
 def _get_timestamp() -> str:
     """Get current UTC timestamp as ISO string."""
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat()
+    from datetime import datetime
+
+    return datetime.now(UTC).isoformat()
 
 
 async def load_data_handler(arguments: dict[str, Any]) -> dict[str, Any]:

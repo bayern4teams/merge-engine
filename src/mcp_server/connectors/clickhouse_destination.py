@@ -11,12 +11,12 @@ from __future__ import annotations
 import json
 import logging
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import clickhouse_connect
 
-from src.orchestrator.utils.retry import TransientError, retry_on_transient
+from src.orchestrator.utils.retry import retry_on_transient
 
 logger = logging.getLogger("merge-engine.connectors.clickhouse_destination")
 
@@ -145,11 +145,13 @@ class ClickHouseDestinationConnector:
                 col_name, col_type, is_pk, is_nullable = row
                 nullable = is_nullable or "Nullable" in str(col_type)
                 base_type = str(col_type).replace("Nullable(", "").replace(")", "")
-                columns.append({
-                    "name": col_name,
-                    "type": base_type,
-                    "nullable": nullable,
-                })
+                columns.append(
+                    {
+                        "name": col_name,
+                        "type": base_type,
+                        "nullable": nullable,
+                    }
+                )
                 if is_pk:
                     primary_keys.append(col_name)
 
@@ -204,16 +206,13 @@ class ClickHouseDestinationConnector:
                     params[f"s{i}"] = f"%{subject}%"
                 where = " WHERE " + " OR ".join(clauses)
             result = client.query(
-                f"SELECT * FROM `{self._database}`.`{table_name}`{where} "
-                f"LIMIT {int(limit)}",
+                f"SELECT * FROM `{self._database}`.`{table_name}`{where} LIMIT {int(limit)}",
                 params,
             )
             names = result.column_names
-            return [dict(zip(names, row)) for row in result.result_rows]
+            return [dict(zip(names, row, strict=True)) for row in result.result_rows]
         except Exception as exc:
-            logger.warning(
-                "Could not read destination rows from %s: %s", table_name, exc
-            )
+            logger.warning("Could not read destination rows from %s: %s", table_name, exc)
             return []
 
     def table_exists(self, table_name: str) -> bool:
@@ -330,13 +329,27 @@ class ClickHouseDestinationConnector:
         client = self._ensure_client()
         client.insert(
             "merge_engine_extraction_state",
-            [[
-                origin_id, table_name, watermark_column, watermark_kind,
-                last_value, run_id, datetime.now(timezone.utc), rows_extracted,
-            ]],
+            [
+                [
+                    origin_id,
+                    table_name,
+                    watermark_column,
+                    watermark_kind,
+                    last_value,
+                    run_id,
+                    datetime.now(UTC),
+                    rows_extracted,
+                ]
+            ],
             column_names=[
-                "origin_id", "table_name", "watermark_column", "watermark_kind",
-                "last_value", "last_run_id", "last_extracted_at", "rows_extracted_last_run",
+                "origin_id",
+                "table_name",
+                "watermark_column",
+                "watermark_kind",
+                "last_value",
+                "last_run_id",
+                "last_extracted_at",
+                "rows_extracted_last_run",
             ],
             database=self._database,
         )
@@ -362,13 +375,13 @@ class ClickHouseDestinationConnector:
             params["table_name"] = table_name
         where = " AND ".join(clauses) if clauses else "1=1"
         client.command(
-            f"ALTER TABLE `{self._database}`.`merge_engine_extraction_state` "
-            f"DELETE WHERE {where}",
+            f"ALTER TABLE `{self._database}`.`merge_engine_extraction_state` DELETE WHERE {where}",
             parameters=params,
         )
         logger.info(
             "Cleared extraction-state for a full re-merge (origin=%s, table=%s)",
-            origin_id, table_name,
+            origin_id,
+            table_name,
         )
         return -1
 
@@ -625,9 +638,7 @@ class ClickHouseDestinationConnector:
                 if "already exists" in error_str or "noNewColumn" in error_str:
                     added += 1
                 else:
-                    logger.warning(
-                        "Failed to add column %s.%s: %s", table, col, exc
-                    )
+                    logger.warning("Failed to add column %s.%s: %s", table, col, exc)
                     failed += 1
 
         return {"added": added, "failed": failed}

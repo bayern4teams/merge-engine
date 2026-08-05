@@ -12,10 +12,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # =============================================================================
 # Fixtures
 # =============================================================================
+
 
 @pytest.fixture
 def mongodb_config():
@@ -40,6 +40,7 @@ def mongodb_config_with_db():
 # =============================================================================
 # Constructor & Lifecycle tests
 # =============================================================================
+
 
 class TestMongoDBConnectorInit:
     """Tests for MongoDBConnector initialization."""
@@ -70,6 +71,7 @@ class TestMongoDBConnectorInit:
 # =============================================================================
 # _ensure_client tests
 # =============================================================================
+
 
 class TestEnsureClient:
     """Tests for _ensure_client lifecycle method."""
@@ -173,6 +175,7 @@ class TestEnsureClient:
 # close() tests
 # =============================================================================
 
+
 class TestClose:
     """Tests for the close() method."""
 
@@ -203,15 +206,17 @@ class TestClose:
 # discover_schema() tests
 # =============================================================================
 
+
 class _AsyncListIterator:
     """An async iterator that yields items from a list."""
+
     def __init__(self, items):
         self._items = items
         self._index = 0
-    
+
     def __aiter__(self):
         return self
-    
+
     async def __anext__(self):
         if self._index >= len(self._items):
             raise StopAsyncIteration
@@ -287,15 +292,24 @@ class TestDiscoverSchema:
     @pytest.mark.asyncio
     async def test_discovers_collections(self, mongodb_config):
         """discover_schema should return schema info for each collection."""
-        connector, _, _, _ = _make_mock_mongodb_connector(mongodb_config, [
-            ("users", [
-                {"_id": "1", "name": "Alice", "email": "alice@example.com", "age": 30},
-                {"_id": "2", "name": "Bob", "email": "bob@example.com", "age": 25},
-            ]),
-            ("orders", [
-                {"_id": "1", "user_id": "1", "total": 99.99},
-            ]),
-        ])
+        connector, _, _, _ = _make_mock_mongodb_connector(
+            mongodb_config,
+            [
+                (
+                    "users",
+                    [
+                        {"_id": "1", "name": "Alice", "email": "alice@example.com", "age": 30},
+                        {"_id": "2", "name": "Bob", "email": "bob@example.com", "age": 25},
+                    ],
+                ),
+                (
+                    "orders",
+                    [
+                        {"_id": "1", "user_id": "1", "total": 99.99},
+                    ],
+                ),
+            ],
+        )
 
         schema = await connector.discover_schema()
 
@@ -308,9 +322,12 @@ class TestDiscoverSchema:
     @pytest.mark.asyncio
     async def test_discovers_empty_collection(self, mongodb_config):
         """discover_schema should handle empty collections."""
-        connector, _, _, _ = _make_mock_mongodb_connector(mongodb_config, [
-            ("empty_coll", []),
-        ])
+        connector, _, _, _ = _make_mock_mongodb_connector(
+            mongodb_config,
+            [
+                ("empty_coll", []),
+            ],
+        )
 
         schema = await connector.discover_schema()
 
@@ -322,12 +339,30 @@ class TestDiscoverSchema:
     @pytest.mark.asyncio
     async def test_infers_column_types(self, mongodb_config):
         """discover_schema should infer column types from sample documents."""
-        connector, _, _, _ = _make_mock_mongodb_connector(mongodb_config, [
-            ("products", [
-                {"_id": "1", "name": "Widget", "price": 9.99, "active": True, "tags": ["a", "b"]},
-                {"_id": "2", "name": "Gadget", "price": 19.99, "active": False, "count": 10},
-            ]),
-        ])
+        connector, _, _, _ = _make_mock_mongodb_connector(
+            mongodb_config,
+            [
+                (
+                    "products",
+                    [
+                        {
+                            "_id": "1",
+                            "name": "Widget",
+                            "price": 9.99,
+                            "active": True,
+                            "tags": ["a", "b"],
+                        },
+                        {
+                            "_id": "2",
+                            "name": "Gadget",
+                            "price": 19.99,
+                            "active": False,
+                            "count": 10,
+                        },
+                    ],
+                ),
+            ],
+        )
 
         schema = await connector.discover_schema()
 
@@ -340,11 +375,17 @@ class TestDiscoverSchema:
     @pytest.mark.asyncio
     async def test_flattens_nested_docs(self, mongodb_config):
         """discover_schema should flatten nested documents with dot notation."""
-        connector, _, _, _ = _make_mock_mongodb_connector(mongodb_config, [
-            ("events", [
-                {"_id": "1", "user": {"name": "Alice", "age": 30}, "action": "login"},
-            ]),
-        ])
+        connector, _, _, _ = _make_mock_mongodb_connector(
+            mongodb_config,
+            [
+                (
+                    "events",
+                    [
+                        {"_id": "1", "user": {"name": "Alice", "age": 30}, "action": "login"},
+                    ],
+                ),
+            ],
+        )
 
         schema = await connector.discover_schema()
 
@@ -377,6 +418,7 @@ class TestDiscoverSchema:
 # =============================================================================
 # extract() tests
 # =============================================================================
+
 
 class TestExtract:
     """Tests for extract method."""
@@ -433,7 +475,8 @@ class TestExtract:
         connector._client = mock_client
 
         result = await connector.extract(
-            "users", ["id", "name"],
+            "users",
+            ["id", "name"],
             filter={"_imported": False},
         )
 
@@ -460,7 +503,8 @@ class TestExtract:
         connector._client = mock_client
 
         result = await connector.extract(
-            "users", ["id", "active"],
+            "users",
+            ["id", "active"],
             filter={"active": True},
         )
 
@@ -479,10 +523,10 @@ class TestExtract:
         mock_client.__getitem__ = MagicMock(return_value=mock_db)
 
         docs = [{"_id": "1", "name": "Alice"}]
-        
+
         # Track find() calls and capture projection from positional args
         captured_projection = [None]
-        
+
         def track_find(*args, **kwargs):
             if len(args) >= 2:
                 captured_projection[0] = args[1]
@@ -491,7 +535,7 @@ class TestExtract:
             find_result.limit = MagicMock(return_value=find_result)
             find_result.__aiter__ = MagicMock(return_value=async_iter_obj)
             return find_result
-        
+
         coll = AsyncMock()
         coll.find = MagicMock(side_effect=track_find)
         coll.count_documents = AsyncMock(return_value=1)
@@ -559,6 +603,7 @@ class TestExtract:
 # mark_imported() tests
 # =============================================================================
 
+
 class TestMarkImported:
     """Tests for mark_imported method."""
 
@@ -577,7 +622,7 @@ class TestMarkImported:
         # Mock _ensure_client to skip the actual network call
         connector._ensure_client = AsyncMock(return_value=AsyncMock())
         # Patch mark_imported to bypass the ObjectIdInvalidId source bug
-        with patch.object(connector, 'mark_imported', new_callable=AsyncMock, return_value=True):
+        with patch.object(connector, "mark_imported", new_callable=AsyncMock, return_value=True):
             result = await connector.mark_imported("users", ["id_1", "id_2"])
             assert result is True
 
@@ -593,7 +638,7 @@ class TestMarkImported:
         connector._db_name = "testdb"
 
         connector._ensure_client = AsyncMock(return_value=AsyncMock())
-        with patch.object(connector, 'mark_imported', new_callable=AsyncMock, return_value=True):
+        with patch.object(connector, "mark_imported", new_callable=AsyncMock, return_value=True):
             result = await connector.mark_imported("users", [])
             assert result is True
 
@@ -602,40 +647,49 @@ class TestMarkImported:
 # _infer_type() tests
 # =============================================================================
 
+
 class TestInferType:
     """Tests for the static _infer_type helper."""
 
     def test_infer_string(self):
         from src.mcp_server.connectors.mongodb import MongoDBConnector
+
         assert MongoDBConnector._infer_type("hello") == "STRING"
 
     def test_infer_bool(self):
         from src.mcp_server.connectors.mongodb import MongoDBConnector
+
         assert MongoDBConnector._infer_type(True) == "BOOLEAN"
         assert MongoDBConnector._infer_type(False) == "BOOLEAN"
 
     def test_infer_int(self):
         from src.mcp_server.connectors.mongodb import MongoDBConnector
+
         assert MongoDBConnector._infer_type(42) == "INTEGER"
 
     def test_infer_float(self):
         from src.mcp_server.connectors.mongodb import MongoDBConnector
+
         assert MongoDBConnector._infer_type(3.14) == "DOUBLE"
 
     def test_infer_dict(self):
         from src.mcp_server.connectors.mongodb import MongoDBConnector
+
         assert MongoDBConnector._infer_type({"key": "val"}) == "OBJECT"
 
     def test_infer_list(self):
         from src.mcp_server.connectors.mongodb import MongoDBConnector
+
         assert MongoDBConnector._infer_type([1, 2, 3]) == "ARRAY"
 
     def test_infer_none(self):
         from src.mcp_server.connectors.mongodb import MongoDBConnector
+
         assert MongoDBConnector._infer_type(None) == "NULL"
 
     def test_infer_unknown(self):
         from src.mcp_server.connectors.mongodb import MongoDBConnector
+
         assert MongoDBConnector._infer_type(object()) == "UNKNOWN"
 
 
@@ -643,11 +697,13 @@ class TestInferType:
 # _flatten_doc() tests
 # =============================================================================
 
+
 class TestFlattenDoc:
     """Tests for the static _flatten_doc helper."""
 
     def test_flattens_nested_dict(self):
         from src.mcp_server.connectors.mongodb import MongoDBConnector
+
         doc = {"name": "Alice", "address": {"city": "NYC", "zip": "10001"}}
         result = MongoDBConnector._flatten_doc(doc)
         assert result == {
@@ -658,6 +714,7 @@ class TestFlattenDoc:
 
     def test_leaves_flat_doc_unchanged(self):
         from src.mcp_server.connectors.mongodb import MongoDBConnector
+
         doc = {"name": "Alice", "age": 30}
         result = MongoDBConnector._flatten_doc(doc)
         assert result == doc
@@ -670,6 +727,7 @@ class TestFlattenDoc:
         This test verifies the actual source behavior.
         """
         from src.mcp_server.connectors.mongodb import MongoDBConnector
+
         doc = {"a": {"b": {"c": "deep"}}}
         result = MongoDBConnector._flatten_doc(doc)
         # Source flattens one level: a.b -> {"c": "deep"}
@@ -677,6 +735,7 @@ class TestFlattenDoc:
 
     def test_mixed_nested_and_flat(self):
         from src.mcp_server.connectors.mongodb import MongoDBConnector
+
         doc = {"name": "Alice", "meta": {"source": "api"}}
         result = MongoDBConnector._flatten_doc(doc)
         assert result["name"] == "Alice"

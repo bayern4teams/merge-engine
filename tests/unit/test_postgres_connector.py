@@ -11,12 +11,11 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy import text
-
 
 # =============================================================================
 # Helper: Async context manager mock factory
 # =============================================================================
+
 
 def make_async_cm(mock_obj):
     """Return a MagicMock configured as an async context manager wrapping mock_obj.
@@ -69,6 +68,7 @@ def make_single_result(fetchall_rows, scalar_val=None, fetchone_val=None):
 # Fixtures
 # =============================================================================
 
+
 @pytest.fixture
 def postgres_config():
     """Basic PostgreSQL connection config dict."""
@@ -120,6 +120,7 @@ def mock_cursor():
 # Constructor & Lifecycle tests
 # =============================================================================
 
+
 class TestPostgresConnectorInit:
     """Tests for PostgresConnector initialization."""
 
@@ -143,6 +144,7 @@ class TestPostgresConnectorInit:
 # _ensure_engine tests
 # =============================================================================
 
+
 class TestEnsureEngine:
     """Tests for _ensure_engine lifecycle method."""
 
@@ -153,9 +155,7 @@ class TestEnsureEngine:
 
         connector = PostgresConnector(postgres_config)
 
-        with patch(
-            "src.mcp_server.connectors.postgres.create_async_engine"
-        ) as mock_create:
+        with patch("src.mcp_server.connectors.postgres.create_async_engine") as mock_create:
             mock_engine = AsyncMock()
             mock_create.return_value = mock_engine
 
@@ -177,9 +177,7 @@ class TestEnsureEngine:
         existing_engine = AsyncMock()
         connector._engine = existing_engine
 
-        with patch(
-            "src.mcp_server.connectors.postgres.create_async_engine"
-        ) as mock_create:
+        with patch("src.mcp_server.connectors.postgres.create_async_engine") as mock_create:
             engine = await connector._ensure_engine()
 
             assert engine is existing_engine
@@ -190,12 +188,12 @@ class TestEnsureEngine:
         """_ensure_engine should default port to 5432 when not specified."""
         from src.mcp_server.connectors.postgres import PostgresConnector
 
-        config = {"connection": {"host": "db.example.com", "user": "u", "password": "p", "database": "d"}}
+        config = {
+            "connection": {"host": "db.example.com", "user": "u", "password": "p", "database": "d"}
+        }
         connector = PostgresConnector(config)
 
-        with patch(
-            "src.mcp_server.connectors.postgres.create_async_engine"
-        ) as mock_create:
+        with patch("src.mcp_server.connectors.postgres.create_async_engine") as mock_create:
             mock_create.return_value = AsyncMock()
             await connector._ensure_engine()
 
@@ -209,9 +207,7 @@ class TestEnsureEngine:
 
         connector = PostgresConnector(postgres_config)
 
-        with patch(
-            "src.mcp_server.connectors.postgres.create_async_engine"
-        ) as mock_create:
+        with patch("src.mcp_server.connectors.postgres.create_async_engine") as mock_create:
             mock_create.return_value = AsyncMock()
             await connector._ensure_engine()
 
@@ -224,6 +220,7 @@ class TestEnsureEngine:
 # =============================================================================
 # close() tests
 # =============================================================================
+
 
 class TestClose:
     """Tests for the close() method."""
@@ -254,6 +251,7 @@ class TestClose:
 # =============================================================================
 # discover_schema() tests
 # =============================================================================
+
 
 class TestDiscoverSchema:
     """Tests for discover_schema method."""
@@ -302,11 +300,28 @@ class TestDiscoverSchema:
         from src.mcp_server.connectors.postgres import PostgresConnector
 
         table_result = make_single_result([{"table_schema": "public", "table_name": "users"}])
-        col_result = make_single_result([
-            {"column_name": "id", "data_type": "integer", "is_nullable": "NO", "character_maximum_length": None},
-            {"column_name": "email", "data_type": "character varying", "is_nullable": "NO", "character_maximum_length": 255},
-            {"column_name": "bio", "data_type": "text", "is_nullable": "YES", "character_maximum_length": None},
-        ])
+        col_result = make_single_result(
+            [
+                {
+                    "column_name": "id",
+                    "data_type": "integer",
+                    "is_nullable": "NO",
+                    "character_maximum_length": None,
+                },
+                {
+                    "column_name": "email",
+                    "data_type": "character varying",
+                    "is_nullable": "NO",
+                    "character_maximum_length": 255,
+                },
+                {
+                    "column_name": "bio",
+                    "data_type": "text",
+                    "is_nullable": "YES",
+                    "character_maximum_length": None,
+                },
+            ]
+        )
         fk_result = make_single_result([])
         pk_result = make_single_result([])
         sample_result = make_single_result([], fetchone_val=None)
@@ -342,14 +357,16 @@ class TestDiscoverSchema:
 
         table_result = make_single_result([{"table_schema": "public", "table_name": "orders"}])
         col_result = make_single_result([])
-        fk_result = make_single_result([
-            {
-                "column_name": "user_id",
-                "constraint_name": "fk_orders_user",
-                "ref_table": "users",
-                "ref_column": "id",
-            }
-        ])
+        fk_result = make_single_result(
+            [
+                {
+                    "column_name": "user_id",
+                    "constraint_name": "fk_orders_user",
+                    "ref_table": "users",
+                    "ref_column": "id",
+                }
+            ]
+        )
         pk_result = make_single_result([])
         sample_result = make_single_result([], fetchone_val=None)
 
@@ -381,9 +398,9 @@ class TestDiscoverSchema:
         col_result = make_single_result([])
         fk_result = make_single_result([])
         pk_result = make_single_result([])
-        sample_result = make_single_result([], fetchone_val={
-            "id": 1, "name": "Alice", "email": "alice@example.com"
-        })
+        sample_result = make_single_result(
+            [], fetchone_val={"id": 1, "name": "Alice", "email": "alice@example.com"}
+        )
 
         all_results = [table_result, col_result, fk_result, pk_result, sample_result]
 
@@ -411,7 +428,12 @@ class TestDiscoverSchema:
         table_result = make_single_result([{"table_schema": "public", "table_name": "bad_table"}])
 
         # 1 tables query + 3 more for columns/fk/sample (all raise)
-        all_results = [table_result, Exception("permission denied"), Exception("permission denied"), Exception("permission denied")]
+        all_results = [
+            table_result,
+            Exception("permission denied"),
+            Exception("permission denied"),
+            Exception("permission denied"),
+        ]
 
         async_conn = AsyncMock()
         async_conn.execute = AsyncMock(side_effect=all_results)
@@ -431,12 +453,21 @@ class TestDiscoverSchema:
         """discover_schema should exclude pg_catalog and information_schema."""
         from src.mcp_server.connectors.postgres import PostgresConnector
 
-        table_result = make_single_result([
-            {"table_schema": "public", "table_name": "products"},
-        ])
-        col_result = make_single_result([
-            {"column_name": "id", "data_type": "integer", "is_nullable": "NO", "character_maximum_length": None},
-        ])
+        table_result = make_single_result(
+            [
+                {"table_schema": "public", "table_name": "products"},
+            ]
+        )
+        col_result = make_single_result(
+            [
+                {
+                    "column_name": "id",
+                    "data_type": "integer",
+                    "is_nullable": "NO",
+                    "character_maximum_length": None,
+                },
+            ]
+        )
         fk_result = make_single_result([])
         pk_result = make_single_result([])
         sample_result = make_single_result([], fetchone_val=None)
@@ -462,6 +493,7 @@ class TestDiscoverSchema:
 # extract() tests
 # =============================================================================
 
+
 class TestExtract:
     """Tests for extract method."""
 
@@ -471,10 +503,12 @@ class TestExtract:
         from src.mcp_server.connectors.postgres import PostgresConnector
 
         count_result = make_query_result([], total=150)
-        data_result = make_query_result([
-            {"id": 1, "name": "Alice"},
-            {"id": 2, "name": "Bob"},
-        ])
+        data_result = make_query_result(
+            [
+                {"id": 1, "name": "Alice"},
+                {"id": 2, "name": "Bob"},
+            ]
+        )
 
         async_conn = AsyncMock()
         async_conn.execute = AsyncMock(side_effect=[count_result, data_result])
@@ -483,7 +517,9 @@ class TestExtract:
         engine = MagicMock()
         # extract() opens two separate connections: one for the count query,
         # one for the data query.
-        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn), make_async_cm(async_conn)])
+        engine.connect = MagicMock(
+            side_effect=[make_async_cm(async_conn), make_async_cm(async_conn)]
+        )
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
 
@@ -508,12 +544,15 @@ class TestExtract:
         async_conn.commit = AsyncMock()
 
         engine = MagicMock()
-        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn), make_async_cm(async_conn)])
+        engine.connect = MagicMock(
+            side_effect=[make_async_cm(async_conn), make_async_cm(async_conn)]
+        )
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
 
         result = await connector.extract(
-            "users", ["id", "name"],
+            "users",
+            ["id", "name"],
             filter={"_imported": False},
         )
 
@@ -532,12 +571,15 @@ class TestExtract:
         async_conn.commit = AsyncMock()
 
         engine = MagicMock()
-        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn), make_async_cm(async_conn)])
+        engine.connect = MagicMock(
+            side_effect=[make_async_cm(async_conn), make_async_cm(async_conn)]
+        )
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
 
         result = await connector.extract(
-            "users", ["id", "name"],
+            "users",
+            ["id", "name"],
             filter={"active": True},
         )
 
@@ -549,22 +591,27 @@ class TestExtract:
         from src.mcp_server.connectors.postgres import PostgresConnector
 
         count_result = make_query_result([], total=100)
-        data_result = make_query_result([
-            {"id": 101, "name": "Charlie"},
-            {"id": 102, "name": "Diana"},
-        ])
+        data_result = make_query_result(
+            [
+                {"id": 101, "name": "Charlie"},
+                {"id": 102, "name": "Diana"},
+            ]
+        )
 
         async_conn = AsyncMock()
         async_conn.execute = AsyncMock(side_effect=[count_result, data_result])
         async_conn.commit = AsyncMock()
 
         engine = MagicMock()
-        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn), make_async_cm(async_conn)])
+        engine.connect = MagicMock(
+            side_effect=[make_async_cm(async_conn), make_async_cm(async_conn)]
+        )
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
 
         result = await connector.extract(
-            "users", ["id", "name"],
+            "users",
+            ["id", "name"],
             cursor="100",
             batch_size=50,
         )
@@ -585,12 +632,15 @@ class TestExtract:
         async_conn.commit = AsyncMock()
 
         engine = MagicMock()
-        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn), make_async_cm(async_conn)])
+        engine.connect = MagicMock(
+            side_effect=[make_async_cm(async_conn), make_async_cm(async_conn)]
+        )
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
 
         result = await connector.extract(
-            "users", ["id", "name"],
+            "users",
+            ["id", "name"],
             batch_size=1000,
         )
 
@@ -610,7 +660,9 @@ class TestExtract:
         async_conn.commit = AsyncMock()
 
         engine = MagicMock()
-        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn), make_async_cm(async_conn)])
+        engine.connect = MagicMock(
+            side_effect=[make_async_cm(async_conn), make_async_cm(async_conn)]
+        )
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
 
@@ -634,7 +686,9 @@ class TestExtract:
         async_conn.commit = AsyncMock()
 
         engine = MagicMock()
-        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn), make_async_cm(async_conn)])
+        engine.connect = MagicMock(
+            side_effect=[make_async_cm(async_conn), make_async_cm(async_conn)]
+        )
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
 
@@ -657,7 +711,9 @@ class TestExtract:
         async_conn.commit = AsyncMock()
 
         engine = MagicMock()
-        engine.connect = MagicMock(side_effect=[make_async_cm(async_conn), make_async_cm(async_conn)])
+        engine.connect = MagicMock(
+            side_effect=[make_async_cm(async_conn), make_async_cm(async_conn)]
+        )
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
 
@@ -677,74 +733,88 @@ class TestExtract:
 # _map_sql_type() tests
 # =============================================================================
 
+
 class TestMapSqlType:
     """Tests for the static _map_sql_type helper."""
 
     def test_maps_varchar(self):
         """_map_sql_type should map 'character varying' to VARCHAR."""
         from src.mcp_server.connectors.postgres import PostgresConnector
+
         assert PostgresConnector._map_sql_type("character varying") == "VARCHAR"
 
     def test_maps_varchar_with_length(self):
         """_map_sql_type should include length for VARCHAR."""
         from src.mcp_server.connectors.postgres import PostgresConnector
+
         assert PostgresConnector._map_sql_type("character varying", 255) == "VARCHAR(255)"
 
     def test_maps_text(self):
         """_map_sql_type should map 'text' to TEXT."""
         from src.mcp_server.connectors.postgres import PostgresConnector
+
         assert PostgresConnector._map_sql_type("text") == "TEXT"
 
     def test_maps_integer(self):
         """_map_sql_type should map 'integer' to INTEGER."""
         from src.mcp_server.connectors.postgres import PostgresConnector
+
         assert PostgresConnector._map_sql_type("integer") == "INTEGER"
 
     def test_maps_bigint(self):
         """_map_sql_type should map 'bigint' to BIGINT."""
         from src.mcp_server.connectors.postgres import PostgresConnector
+
         assert PostgresConnector._map_sql_type("bigint") == "BIGINT"
 
     def test_maps_numeric(self):
         """_map_sql_type should map 'numeric' to DECIMAL."""
         from src.mcp_server.connectors.postgres import PostgresConnector
+
         assert PostgresConnector._map_sql_type("numeric") == "DECIMAL"
 
     def test_maps_boolean(self):
         """_map_sql_type should map 'boolean' to BOOLEAN."""
         from src.mcp_server.connectors.postgres import PostgresConnector
+
         assert PostgresConnector._map_sql_type("boolean") == "BOOLEAN"
 
     def test_maps_timestamp_types(self):
         """_map_sql_type should handle timestamp variants."""
         from src.mcp_server.connectors.postgres import PostgresConnector
+
         assert PostgresConnector._map_sql_type("timestamp without time zone") == "TIMESTAMP"
         assert PostgresConnector._map_sql_type("timestamp with time zone") == "TIMESTAMPTZ"
 
     def test_maps_date(self):
         """_map_sql_type should map 'date' to DATE."""
         from src.mcp_server.connectors.postgres import PostgresConnector
+
         assert PostgresConnector._map_sql_type("date") == "DATE"
 
     def test_maps_json_types(self):
         """_map_sql_type should handle JSON/JSONB types."""
         from src.mcp_server.connectors.postgres import PostgresConnector
+
         assert PostgresConnector._map_sql_type("json") == "JSON"
         assert PostgresConnector._map_sql_type("jsonb") == "JSONB"
 
     def test_maps_uuid(self):
         """_map_sql_type should map 'uuid' to UUID."""
         from src.mcp_server.connectors.postgres import PostgresConnector
+
         assert PostgresConnector._map_sql_type("uuid") == "UUID"
 
     def test_maps_unknown_to_upper(self):
         """_map_sql_type should uppercase unknown types."""
         from src.mcp_server.connectors.postgres import PostgresConnector
+
         assert PostgresConnector._map_sql_type("my_custom_type") == "MY_CUSTOM_TYPE"
 
     def test_maps_char(self):
         """_map_sql_type should handle character type."""
         from src.mcp_server.connectors.postgres import PostgresConnector
+
         assert PostgresConnector._map_sql_type("character") == "CHAR"
         # Source maps 'character' with char_max to VARCHAR(length) same as 'character varying'
         assert PostgresConnector._map_sql_type("character", 10) == "VARCHAR(10)"

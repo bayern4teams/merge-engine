@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.mcp_server.tools.extract_data import (
-    extract_data_impl,
     extract_data_handler,
+    extract_data_impl,
 )
 
 
@@ -33,21 +33,21 @@ class TestExtractDataImpl:
         }
 
     @pytest.mark.asyncio
-    async def test_extract_data_success(
-        self, valid_origin_config: dict[str, Any]
-    ) -> None:
+    async def test_extract_data_success(self, valid_origin_config: dict[str, Any]) -> None:
         """Test successful data extraction."""
         mock_connector = MagicMock()
         mock_connector.close = AsyncMock()
-        mock_connector.extract = AsyncMock(return_value={
-            "rows": [
-                {"id": 1, "name": "Alice", "email": "alice@example.com"},
-                {"id": 2, "name": "Bob", "email": "bob@example.com"},
-            ],
-            "column_names": ["id", "name", "email"],
-            "total_count": 2,
-            "next_cursor": None,
-        })
+        mock_connector.extract = AsyncMock(
+            return_value={
+                "rows": [
+                    {"id": 1, "name": "Alice", "email": "alice@example.com"},
+                    {"id": 2, "name": "Bob", "email": "bob@example.com"},
+                ],
+                "column_names": ["id", "name", "email"],
+                "total_count": 2,
+                "next_cursor": None,
+            }
+        )
 
         with patch(
             "src.mcp_server.tools.extract_data.create_connector",
@@ -67,18 +67,18 @@ class TestExtractDataImpl:
         assert result["total_count"] == 2
 
     @pytest.mark.asyncio
-    async def test_extract_data_with_cursor(
-        self, valid_origin_config: dict[str, Any]
-    ) -> None:
+    async def test_extract_data_with_cursor(self, valid_origin_config: dict[str, Any]) -> None:
         """Test extraction with pagination cursor."""
         mock_connector = MagicMock()
         mock_connector.close = AsyncMock()
-        mock_connector.extract = AsyncMock(return_value={
-            "rows": [{"id": 3, "name": "Charlie"}],
-            "column_names": ["id", "name"],
-            "total_count": 10,
-            "next_cursor": "cursor_abc123",
-        })
+        mock_connector.extract = AsyncMock(
+            return_value={
+                "rows": [{"id": 3, "name": "Charlie"}],
+                "column_names": ["id", "name"],
+                "total_count": 10,
+                "next_cursor": "cursor_abc123",
+            }
+        )
 
         with patch(
             "src.mcp_server.tools.extract_data.create_connector",
@@ -103,18 +103,18 @@ class TestExtractDataImpl:
         assert result["next_cursor"] == "cursor_abc123"
 
     @pytest.mark.asyncio
-    async def test_extract_data_with_filter(
-        self, valid_origin_config: dict[str, Any]
-    ) -> None:
+    async def test_extract_data_with_filter(self, valid_origin_config: dict[str, Any]) -> None:
         """Test extraction with filter conditions."""
         mock_connector = MagicMock()
         mock_connector.close = AsyncMock()
-        mock_connector.extract = AsyncMock(return_value={
-            "rows": [{"id": 1, "name": "Alice"}],
-            "column_names": ["id", "name"],
-            "total_count": 1,
-            "next_cursor": None,
-        })
+        mock_connector.extract = AsyncMock(
+            return_value={
+                "rows": [{"id": 1, "name": "Alice"}],
+                "column_names": ["id", "name"],
+                "total_count": 1,
+                "next_cursor": None,
+            }
+        )
 
         with patch(
             "src.mcp_server.tools.extract_data.create_connector",
@@ -179,21 +179,18 @@ class TestExtractDataImpl:
             )
 
     @pytest.mark.asyncio
-    async def test_extract_data_connector_error(
-        self, valid_origin_config: dict[str, Any]
-    ) -> None:
+    async def test_extract_data_connector_error(self, valid_origin_config: dict[str, Any]) -> None:
         """Test handling of connector extraction failure."""
         mock_connector = MagicMock()
         mock_connector.close = AsyncMock()
-        mock_connector.extract = AsyncMock(
-            side_effect=Exception("Table not found")
-        )
+        mock_connector.extract = AsyncMock(side_effect=Exception("Table not found"))
 
         with patch(
             "src.mcp_server.tools.extract_data.create_connector",
             return_value=mock_connector,
         ):
             from src.orchestrator.utils.retry import PermanentError
+
             with pytest.raises(PermanentError, match="Extraction failed"):
                 await extract_data_impl(
                     origin_config=valid_origin_config,
@@ -202,18 +199,18 @@ class TestExtractDataImpl:
                 )
 
     @pytest.mark.asyncio
-    async def test_extract_data_empty_rows(
-        self, valid_origin_config: dict[str, Any]
-    ) -> None:
+    async def test_extract_data_empty_rows(self, valid_origin_config: dict[str, Any]) -> None:
         """Test extraction with empty result set."""
         mock_connector = MagicMock()
         mock_connector.close = AsyncMock()
-        mock_connector.extract = AsyncMock(return_value={
-            "rows": [],
-            "column_names": ["id", "name"],
-            "total_count": 0,
-            "next_cursor": None,
-        })
+        mock_connector.extract = AsyncMock(
+            return_value={
+                "rows": [],
+                "column_names": ["id", "name"],
+                "total_count": 0,
+                "next_cursor": None,
+            }
+        )
 
         with patch(
             "src.mcp_server.tools.extract_data.create_connector",
@@ -245,24 +242,28 @@ class TestExtractDataHandler:
                 "database": "testdb",
             },
         }
-        mock_impl = AsyncMock(return_value={
-            "rows": [],
-            "column_names": ["id"],
-            "total_count": 0,
-            "next_cursor": None,
-            "origin_id": "test_origin",
-            "table_name": "users",
-        })
+        mock_impl = AsyncMock(
+            return_value={
+                "rows": [],
+                "column_names": ["id"],
+                "total_count": 0,
+                "next_cursor": None,
+                "origin_id": "test_origin",
+                "table_name": "users",
+            }
+        )
 
         with patch(
             "src.mcp_server.tools.extract_data.extract_data_impl",
             mock_impl,
         ):
-            result = await extract_data_handler({
-                "origin_config": origin_config,
-                "table_name": "users",
-                "columns": ["id"],
-            })
+            result = await extract_data_handler(
+                {
+                    "origin_config": origin_config,
+                    "table_name": "users",
+                    "columns": ["id"],
+                }
+            )
 
         mock_impl.assert_called_once()
         assert result["origin_id"] == "test_origin"
@@ -287,36 +288,47 @@ class TestExtractDataHandler:
         mock_conn = MagicMock()
 
         mock_conn.close = AsyncMock()
-        mock_conn.extract = AsyncMock(return_value={
-            "rows": [],
-            "column_names": ["id"],
-            "total_count": 0,
-            "next_cursor": None,
-        })
+        mock_conn.extract = AsyncMock(
+            return_value={
+                "rows": [],
+                "column_names": ["id"],
+                "total_count": 0,
+                "next_cursor": None,
+            }
+        )
 
-        with patch(
-            "src.mcp_server.server._get_config",
-            return_value=mock_config,
-        ), patch(
-            "src.mcp_server.tools.extract_data.create_connector",
-            return_value=mock_conn,
+        with (
+            patch(
+                "src.mcp_server.server._get_config",
+                return_value=mock_config,
+            ),
+            patch(
+                "src.mcp_server.tools.extract_data.create_connector",
+                return_value=mock_conn,
+            ),
         ):
-            result = await extract_data_handler({
-                "origin_id": "test_origin",
-                "table_name": "users",
-                "columns": ["id"],
-            })
+            result = await extract_data_handler(
+                {
+                    "origin_id": "test_origin",
+                    "table_name": "users",
+                    "columns": ["id"],
+                }
+            )
 
         assert result["origin_id"] == "test_origin"
 
     @pytest.mark.asyncio
     async def test_handler_missing_both_origin_config_and_origin_id(self) -> None:
         """Test handler fails when neither origin_config nor origin_id provided."""
-        with pytest.raises(ValueError, match="Either 'origin_id' or 'origin_config' must be provided"):
-            await extract_data_handler({
-                "table_name": "users",
-                "columns": ["id"],
-            })
+        with pytest.raises(
+            ValueError, match="Either 'origin_id' or 'origin_config' must be provided"
+        ):
+            await extract_data_handler(
+                {
+                    "table_name": "users",
+                    "columns": ["id"],
+                }
+            )
 
     @pytest.mark.asyncio
     async def test_handler_origin_id_not_found(
@@ -333,8 +345,10 @@ class TestExtractDataHandler:
             return_value=mock_config,
         ):
             with pytest.raises(ValueError, match="Unknown origin 'test_origin'"):
-                await extract_data_handler({
-                    "origin_id": "test_origin",
-                    "table_name": "users",
-                    "columns": ["id"],
-                })
+                await extract_data_handler(
+                    {
+                        "origin_id": "test_origin",
+                        "table_name": "users",
+                        "columns": ["id"],
+                    }
+                )

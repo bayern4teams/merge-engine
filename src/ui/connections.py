@@ -10,13 +10,10 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
 
 # Overridable so the test suite can redirect history writes to a temp file
 # instead of clobbering the user's real saved connections.
-CONFIG_PATH = os.environ.get(
-    "MERGE_ENGINE_HISTORY_PATH", "config/recent_connections.json"
-)
+CONFIG_PATH = os.environ.get("MERGE_ENGINE_HISTORY_PATH", "config/recent_connections.json")
 
 _CONN_TYPE_ICONS = {
     "postgres": "🐘",
@@ -31,7 +28,7 @@ def load_persistent_history() -> dict[str, list]:
     if not os.path.exists(CONFIG_PATH):
         return {"recent_origins": [], "recent_destinations": []}
     try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return {"recent_origins": [], "recent_destinations": []}
@@ -47,9 +44,7 @@ def save_persistent_history(history: dict[str, list]) -> None:
         pass
 
 
-def add_to_recent(
-    new_item: dict, max_size: int = 5, kind: str = "origin"
-) -> list[dict]:
+def add_to_recent(new_item: dict, max_size: int = 5, kind: str = "origin") -> list[dict]:
     """Append an item to the recent list for `kind`, de-duplicating on
     (host, database, type), and persist. Returns the trimmed list."""
     history = load_persistent_history()

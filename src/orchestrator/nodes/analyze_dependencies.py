@@ -11,7 +11,7 @@ import json
 import logging
 from typing import Any
 
-from src.llm import LLMClient, PROMPT_TEMPLATES
+from src.llm import PROMPT_TEMPLATES, LLMClient
 from src.mcp_server.tools.select_entity_tables import select_entity_tables_impl
 from src.orchestrator.utils.dependency_sort import topological_sort
 from src.orchestrator.utils.retry_hints import apply_retry_hint
@@ -37,7 +37,11 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
     target_entities = state.get("target_entities", [])
     schemas = state.get("schemas", {})
     llm_config: dict[str, Any] = state["llm_config"]
-    errors: list[str] = list(state.get("errors", []))
+    # Only THIS call's own errors (Phase 0 Sec 0.8) - seeding with the
+    # existing history meant the returned list already contained it, and
+    # operator.add's reducer then appended that same history a second time
+    # onto state, duplicating it on every single call.
+    errors: list[str] = []
 
     logger.debug("target_entities: %s", target_entities)
     logger.debug("schemas keys: %s", list(schemas.keys()))
@@ -52,7 +56,7 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
         return {
             "dependency_tree": {},
             "extraction_order": [],
-            "errors": errors + [msg],
+            "errors": [*errors, msg],
         }
 
     # Decide WHICH tables hold each entity before reasoning about their order.
@@ -71,8 +75,7 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
     if reuse_pinned:
         entity_tables = pinned
         table_selection_notes = (
-            f"Reused from saved profile "
-            f"{state.get('profile_name') or '(unnamed)'}."
+            f"Reused from saved profile {state.get('profile_name') or '(unnamed)'}."
         )
         logger.info(
             "Reusing pinned table selection for %s",
@@ -91,17 +94,14 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
             for entity, tables in entity_tables.items():
                 logger.info(
                     "Entity '%s' -> %d source table(s): %s",
-                    entity, len(tables),
-                    ", ".join(
-                        f"{t['origin_id']}:{t['table']}" for t in tables
-                    ) or "none",
+                    entity,
+                    len(tables),
+                    ", ".join(f"{t['origin_id']}:{t['table']}" for t in tables) or "none",
                 )
         except Exception as exc:
             # Never fail the run over table selection — extraction falls back
             # to the alias heuristic when entity_tables is empty.
-            logger.warning(
-                "Entity table selection failed: %s", exc, exc_info=True
-            )
+            logger.warning("Entity table selection failed: %s", exc, exc_info=True)
 
     # Build schema summary for LLM prompt
     schema_summary = _build_schema_summary(schemas, target_entities)
@@ -123,9 +123,9 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
 
     # The prompt contains literal JSON examples with curly braces,
     # so str.format() would raise KeyError — substitute placeholders directly.
-    user_prompt = human_template.replace(
-        "{target_entities}", json.dumps(target_entities)
-    ).replace("{schema_info}", schema_summary)
+    user_prompt = human_template.replace("{target_entities}", json.dumps(target_entities)).replace(
+        "{schema_info}", schema_summary
+    )
     # If a reviewer rejected the previous dependency tree, their reason is
     # appended here so this rerun answers the objection.
     user_prompt = apply_retry_hint(user_prompt, state, "analyze_dependencies")
@@ -141,7 +141,6 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
 
         # Parse response
         dependency_tree = result.get("dependency_tree", {})
-        notes = result.get("notes", "")
         logger.debug("Parsed dependency_tree: %s", dependency_tree)
 
         # Compute extraction order via topological sort
@@ -154,27 +153,17 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
             extraction_order,
         )
 
+        # Only the keys this node actually computes - a key it omits is left
+        # untouched by LangGraph's per-key TypedDict state update, not
+        # cleared (Phase 0 Sec 0.8; the passthrough here predated that being
+        # verified and cited a StateGraph(dict) overwrite semantics this
+        # graph hasn't used for a long time).
         return {
             "dependency_tree": dependency_tree,
             "dependency_analysis_warning": "",
             "extraction_order": extraction_order,
             "entity_tables": entity_tables,
             "table_selection_notes": table_selection_notes,
-            "errors": errors,
-            "origins": state.get("origins", []),
-            "destination": state.get("destination", {}),
-            "llm_config": state.get("llm_config", {}),
-            "extraction_config": state.get("extraction_config", {}),
-            "target_entities": target_entities,
-            "schemas": schemas,
-            "unified_entities": state.get("unified_entities", {}),
-            "extracted_data": state.get("extracted_data", {}),
-            "entity_clusters": state.get("entity_clusters", {}),
-            "field_mappings": state.get("field_mappings", {}),
-            "pending_schema_changes": state.get("pending_schema_changes", []),
-            "human_feedback": state.get("human_feedback"),
-            "load_approval": state.get("load_approval"),
-            "retry_counts": state.get("retry_counts", {}),
             "interrupt_data": None,
         }
 
@@ -194,20 +183,6 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
             "entity_tables": entity_tables,
             "table_selection_notes": table_selection_notes,
             "errors": errors,
-            "origins": state.get("origins", []),
-            "destination": state.get("destination", {}),
-            "llm_config": state.get("llm_config", {}),
-            "extraction_config": state.get("extraction_config", {}),
-            "target_entities": target_entities,
-            "schemas": schemas,
-            "unified_entities": state.get("unified_entities", {}),
-            "extracted_data": state.get("extracted_data", {}),
-            "entity_clusters": state.get("entity_clusters", {}),
-            "field_mappings": state.get("field_mappings", {}),
-            "pending_schema_changes": state.get("pending_schema_changes", []),
-            "human_feedback": state.get("human_feedback"),
-            "load_approval": state.get("load_approval"),
-            "retry_counts": state.get("retry_counts", {}),
             "interrupt_data": None,
         }
     finally:
@@ -240,9 +215,7 @@ def _build_schema_summary(schemas: dict[str, Any], target_entities: list[str]) -
             # Sample row (first 2 fields)
             sample = table.get("sample_row", {})
             if sample:
-                sample_str = ", ".join(
-                    f"{k}={v!r}" for k, v in list(sample.items())[:3]
-                )
+                sample_str = ", ".join(f"{k}={v!r}" for k, v in list(sample.items())[:3])
                 lines.append(f"    Sample: {{{sample_str}}}")
 
     return "\n".join(lines)

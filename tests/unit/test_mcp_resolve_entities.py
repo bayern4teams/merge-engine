@@ -8,10 +8,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.mcp_server.tools.resolve_entities import (
-    resolve_entities_impl,
     _compute_heuristic_confidence,
-    _record_id,
     _generate_candidate_pairs,
+    _record_id,
+    resolve_entities_impl,
 )
 
 
@@ -70,7 +70,9 @@ class TestResolveEntitiesImpl:
         assert result["llm_scored"] == 0
 
     @pytest.mark.asyncio
-    async def test_resolve_entities_multiple_records(self, sample_records: list[dict[str, Any]]) -> None:
+    async def test_resolve_entities_multiple_records(
+        self, sample_records: list[dict[str, Any]]
+    ) -> None:
         """Test resolving with multiple records."""
         result = await resolve_entities_impl("person", sample_records)
 
@@ -96,8 +98,11 @@ class TestResolveEntitiesImpl:
         other threads sharing the GIL) a chance to run during a long pass."""
         records = [
             {
-                "_origin_id": "o1", "_origin_table": "t", "_origin_id_row": str(i),
-                "name": "Alice Smith", "email": f"alice{i}@example.com",
+                "_origin_id": "o1",
+                "_origin_table": "t",
+                "_origin_id_row": str(i),
+                "name": "Alice Smith",
+                "email": f"alice{i}@example.com",
             }
             for i in range(50)  # same-name block -> C(50,2) = 1225 pairs
         ]
@@ -115,8 +120,11 @@ class TestResolveEntitiesImpl:
         """No pointless overhead below the yield threshold."""
         records = [
             {
-                "_origin_id": "o1", "_origin_table": "t", "_origin_id_row": str(i),
-                "name": "Bob Jones", "email": f"bob{i}@example.com",
+                "_origin_id": "o1",
+                "_origin_table": "t",
+                "_origin_id_row": str(i),
+                "name": "Bob Jones",
+                "email": f"bob{i}@example.com",
             }
             for i in range(5)  # C(5,2) = 10 pairs, well under the threshold
         ]
@@ -282,10 +290,20 @@ class TestGenerateCandidatePairs:
     def test_explicit_blocking_keys_used(self) -> None:
         """Explicit blocking_keys override the auto-detected name field."""
         records = [
-            {"_origin_id": "a", "_origin_table": "t", "_origin_id_row": "1",
-             "name": "Alice Smith", "city": "Berlin"},
-            {"_origin_id": "b", "_origin_table": "t", "_origin_id_row": "2",
-             "name": "Bob Jones", "city": "Berlin"},
+            {
+                "_origin_id": "a",
+                "_origin_table": "t",
+                "_origin_id_row": "1",
+                "name": "Alice Smith",
+                "city": "Berlin",
+            },
+            {
+                "_origin_id": "b",
+                "_origin_table": "t",
+                "_origin_id_row": "2",
+                "name": "Bob Jones",
+                "city": "Berlin",
+            },
         ]
         pairs = _generate_candidate_pairs(records, blocking_keys=["city"])
         assert len(pairs) == 1
@@ -293,9 +311,9 @@ class TestGenerateCandidatePairs:
     def test_max_comparisons_enforced(self) -> None:
         """Pairs are truncated at _MAX_COMPARISONS."""
         from src.mcp_server.tools import resolve_entities as mod
+
         records = [
-            {"_origin_id": "a", "_origin_table": "t", "_origin_id_row": str(i),
-             "name": "Acme Corp"}
+            {"_origin_id": "a", "_origin_table": "t", "_origin_id_row": str(i), "name": "Acme Corp"}
             for i in range(30)
         ]
         with patch.object(mod, "_MAX_COMPARISONS", 5):
@@ -315,26 +333,35 @@ class TestGenerateCandidatePairs:
         # A small block (3 records, unique name) that alone meets a budget
         # of 3, sorted first because it is smaller...
         small_block = [
-            {"_origin_id": "a", "_origin_table": "t", "_origin_id_row": f"s{i}",
-             "name": "Small Block Co"}
+            {
+                "_origin_id": "a",
+                "_origin_table": "t",
+                "_origin_id_row": f"s{i}",
+                "name": "Small Block Co",
+            }
             for i in range(3)
         ]
         # ...and a much larger block (1000 records, one shared exact name)
         # that must never be expanded once the budget above is already met.
         large_block = [
-            {"_origin_id": "a", "_origin_table": "t", "_origin_id_row": f"l{i}",
-             "name": "Big Block Corp"}
+            {
+                "_origin_id": "a",
+                "_origin_table": "t",
+                "_origin_id_row": f"l{i}",
+                "name": "Big Block Corp",
+            }
             for i in range(1000)
         ]
         records = small_block + large_block
 
+        stats: dict[str, int] = {}
         with patch.object(mod, "_MAX_COMPARISONS", 3):
-            pairs = _generate_candidate_pairs(records)
+            pairs = _generate_candidate_pairs(records, stats=stats)
 
         assert len(pairs) == 3
         # The large block (1000 choose 2 = 499500 pairs) was only counted,
         # not built — reported as (at least) that much uncompared evidence.
-        assert mod._LAST_BLOCKING_STATS["uncompared_pairs"] >= 1000 * 999 // 2
+        assert stats["uncompared_pairs"] >= 1000 * 999 // 2
 
     def test_skips_self_comparisons(self) -> None:
         """Test that identical record IDs are skipped."""
@@ -348,10 +375,18 @@ class TestGenerateCandidatePairs:
     def test_cross_origin_name_fields_block_together(self) -> None:
         """Records with differently-named name fields still share a block."""
         records = [
-            {"_origin_id": "pg", "_origin_table": "companies", "_origin_id_row": "1",
-             "company_name": "Titan Labs"},
-            {"_origin_id": "ch", "_origin_table": "organizations", "_origin_id_row": "2",
-             "org_title": "Titan Labs"},
+            {
+                "_origin_id": "pg",
+                "_origin_table": "companies",
+                "_origin_id_row": "1",
+                "company_name": "Titan Labs",
+            },
+            {
+                "_origin_id": "ch",
+                "_origin_table": "organizations",
+                "_origin_id_row": "2",
+                "org_title": "Titan Labs",
+            },
         ]
         pairs = _generate_candidate_pairs(records)
         assert len(pairs) == 1
@@ -359,39 +394,73 @@ class TestGenerateCandidatePairs:
     def test_ref_field_blocking_pass(self) -> None:
         """Names differ but a shared ref-like field token pairs them anyway."""
         records = [
-            {"_origin_id": "pg", "_origin_table": "companies", "_origin_id_row": "1",
-             "company_name": "Alpha Systems", "match_test_ref": "BQXJ-102"},
-            {"_origin_id": "ch", "_origin_table": "organizations", "_origin_id_row": "2",
-             "org_title": "Zeta Holdings", "match_test_ref": "BQXJ-1029"},
+            {
+                "_origin_id": "pg",
+                "_origin_table": "companies",
+                "_origin_id_row": "1",
+                "company_name": "Alpha Systems",
+                "match_test_ref": "BQXJ-102",
+            },
+            {
+                "_origin_id": "ch",
+                "_origin_table": "organizations",
+                "_origin_id_row": "2",
+                "org_title": "Zeta Holdings",
+                "match_test_ref": "BQXJ-1029",
+            },
         ]
         pairs = _generate_candidate_pairs(records)
         assert len(pairs) == 1
 
-    def test_oversized_ref_blocks_skipped(self) -> None:
-        """A ref token shared by too many records is non-discriminative."""
-        from src.mcp_server.tools import resolve_entities as mod
+    def test_oversized_ref_blocks_are_admitted_not_dropped(self) -> None:
+        """BUG C / C1: a purge must degrade, never annihilate.
+
+        A ref token shared by too many records is non-discriminative, but
+        the old behaviour of dropping the whole block silently zeroed out
+        candidate generation for real scoped-merge corpora (every record
+        shares the subject token). It must still be admitted and left to
+        the size-sorted comparison budget — scoring, not blocking, decides
+        whether any of these pairs actually match.
+        """
         records = [
-            {"_origin_id": "a", "_origin_table": "t", "_origin_id_row": str(i),
-             "name": f"Unique Name {i}", "ref_code": "SHARED-1"}
+            {
+                "_origin_id": "a",
+                "_origin_table": "t",
+                "_origin_id_row": str(i),
+                "name": f"Unique Name {i}",
+                "ref_code": "SHARED-1",
+            }
             for i in range(30)
         ]
-        # All 30 share ref token "shared" (> _MAX_REF_BLOCK) and no name
-        # tokens overlap ("unique" is shared... use distinct first tokens).
         for i, rec in enumerate(records):
             rec["name"] = f"n{i}xx yy"
-        pairs = _generate_candidate_pairs(records)
-        assert len(pairs) == 0
+        stats: dict[str, int] = {}
+        pairs = _generate_candidate_pairs(records, stats=stats)
+        assert len(pairs) > 0
+        assert stats["blocks_purged"] >= 1
+        assert stats["uncompared_pairs"] == 0
 
     def test_no_duplicate_pairs_across_passes(self) -> None:
         """A pair matched by both passes is only generated once."""
         records = [
-            {"_origin_id": "a", "_origin_table": "t", "_origin_id_row": "1",
-             "name": "Acme Corp", "ref_code": "AC-1"},
-            {"_origin_id": "b", "_origin_table": "t", "_origin_id_row": "2",
-             "name": "Acme Inc", "ref_code": "AC-2"},
+            {
+                "_origin_id": "a",
+                "_origin_table": "t",
+                "_origin_id_row": "1",
+                "name": "Acme Corp",
+                "ref_code": "AC-1",
+            },
+            {
+                "_origin_id": "b",
+                "_origin_table": "t",
+                "_origin_id_row": "2",
+                "name": "Acme Inc",
+                "ref_code": "AC-2",
+            },
         ]
         pairs = _generate_candidate_pairs(records)
         assert len(pairs) == 1
+
 
 class TestJudgePairsChunking:
     """Tests for the chunked, bounded-concurrency LLM judgment path."""
@@ -401,8 +470,7 @@ class TestJudgePairsChunking:
         from src.mcp_server.tools import resolve_entities as mod
 
         borderline = [
-            (f"a:t:{i}", f"b:t:{i}",
-             {"name": f"X {i}"}, {"name": f"X {i}b"}, 0.8)
+            (f"a:t:{i}", f"b:t:{i}", {"name": f"X {i}"}, {"name": f"X {i}b"}, 0.8)
             for i in range(10)
         ]
 
@@ -411,18 +479,23 @@ class TestJudgePairsChunking:
         async def fake_call_json(system_prompt: str, user_prompt: str):
             n_pairs = user_prompt.count("Pair ")
             calls.append(n_pairs)
-            return {"judgments": [
-                {"pair_id": n, "match": True, "confidence": 0.99}
-                for n in range(1, n_pairs + 1)
-            ]}
+            return {
+                "judgments": [
+                    {"pair_id": n, "match": True, "confidence": 0.99} for n in range(1, n_pairs + 1)
+                ]
+            }
 
         fake_client = MagicMock()
         fake_client.call_json = AsyncMock(side_effect=fake_call_json)
 
-        with patch.object(mod, "_LLM_CHUNK_SIZE", 4), \
-             patch("src.llm.LLMClient", return_value=fake_client):
+        with (
+            patch.object(mod, "_LLM_CHUNK_SIZE", 4),
+            patch("src.llm.LLMClient", return_value=fake_client),
+        ):
             results = await mod._judge_pairs_with_llm(
-                "company", borderline, {"provider": "openai"},
+                "company",
+                borderline,
+                {"provider": "openai"},
             )
 
         assert len(calls) == 3  # 4 + 4 + 2
@@ -434,8 +507,7 @@ class TestJudgePairsChunking:
         from src.mcp_server.tools import resolve_entities as mod
 
         borderline = [
-            (f"a:t:{i}", f"b:t:{i}",
-             {"name": f"X {i}"}, {"name": f"X {i}b"}, 0.75)
+            (f"a:t:{i}", f"b:t:{i}", {"name": f"X {i}"}, {"name": f"X {i}b"}, 0.75)
             for i in range(4)
         ]
 
@@ -446,18 +518,23 @@ class TestJudgePairsChunking:
             if call_count["n"] == 1:
                 raise RuntimeError("LLM down")
             n_pairs = user_prompt.count("Pair ")
-            return {"judgments": [
-                {"pair_id": n, "match": False, "confidence": 0.9}
-                for n in range(1, n_pairs + 1)
-            ]}
+            return {
+                "judgments": [
+                    {"pair_id": n, "match": False, "confidence": 0.9} for n in range(1, n_pairs + 1)
+                ]
+            }
 
         fake_client = MagicMock()
         fake_client.call_json = AsyncMock(side_effect=flaky_call_json)
 
-        with patch.object(mod, "_LLM_CHUNK_SIZE", 2), \
-             patch("src.llm.LLMClient", return_value=fake_client):
+        with (
+            patch.object(mod, "_LLM_CHUNK_SIZE", 2),
+            patch("src.llm.LLMClient", return_value=fake_client),
+        ):
             results = await mod._judge_pairs_with_llm(
-                "company", borderline, {"provider": "openai"},
+                "company",
+                borderline,
+                {"provider": "openai"},
             )
 
         assert len(results) == 4

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.mcp_server.tools.value_coercion import (
+from src.utils.value_coercion import (
     coerce_value,
     is_compatible,
     normalize_date_like,
@@ -58,9 +58,7 @@ class TestCoerceValue:
         assert value == 10000
 
     def test_hex_id_into_bigint_is_genuinely_incompatible(self) -> None:
-        value, ok, reason = coerce_value(
-            "ba34c3bb1541495295e82f2db9ebe703", "bigint"
-        )
+        value, ok, reason = coerce_value("ba34c3bb1541495295e82f2db9ebe703", "bigint")
         assert ok is False
         assert reason
 
@@ -130,9 +128,7 @@ class TestCoerceValue:
         # A "timestamp with time zone" column must not go through the
         # date-only normalizer — created_at values like this already load
         # fine and must pass through untouched.
-        value, ok, _reason = coerce_value(
-            "2026-06-15T04:59:04", "timestamp with time zone"
-        )
+        value, ok, _reason = coerce_value("2026-06-15T04:59:04", "timestamp with time zone")
         assert ok is True
         assert value == "2026-06-15T04:59:04"
 
@@ -161,9 +157,7 @@ class TestIsCompatible:
         assert ok is True
 
     def test_one_incompatible_sample_fails_the_check(self) -> None:
-        ok, reason = is_compatible(
-            ["ba34c3bb1541495295e82f2db9ebe703"], "bigint"
-        )
+        ok, reason = is_compatible(["ba34c3bb1541495295e82f2db9ebe703"], "bigint")
         assert ok is False
         assert "bigint" in reason
 

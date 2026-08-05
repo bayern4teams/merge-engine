@@ -41,7 +41,12 @@ class TestLLMClientInit:
 
     def test_azure_provider(self):
         """Azure provider should be accepted when explicitly specified."""
-        config = {"provider": "azure", "model": "gpt-4", "api_key": "test", "base_url": "https://openai.azure.com/"}
+        config = {
+            "provider": "azure",
+            "model": "gpt-4",
+            "api_key": "test",
+            "base_url": "https://openai.azure.com/",
+        }
         client = LLMClient(config)
         assert client.provider == "azure"
 
@@ -164,9 +169,13 @@ class TestLLMClientModelFallback:
         assert client.model_chain == ["solo"]
 
     def test_advance_model_updates_name_and_resets_cached_model(self):
-        client = LLMClient({
-            "model": "primary", "fallback_models": ["second"], "api_key": "test",
-        })
+        client = LLMClient(
+            {
+                "model": "primary",
+                "fallback_models": ["second"],
+                "api_key": "test",
+            }
+        )
         client._model = object()  # pretend a model was already built
         assert client._advance_model() is True
         assert client.model_name == "second"
@@ -180,7 +189,9 @@ class TestLLMClientModelFallback:
     @pytest.mark.asyncio
     async def test_quota_error_falls_back_to_next_model_and_succeeds(self):
         config = {
-            "model": "primary", "fallback_models": ["second"], "api_key": "test",
+            "model": "primary",
+            "fallback_models": ["second"],
+            "api_key": "test",
             "cache_enabled": False,
         }
         client = LLMClient(config)
@@ -192,9 +203,7 @@ class TestLLMClientModelFallback:
         working_model = AsyncMock()
         working_model.ainvoke = AsyncMock(return_value=MagicMock(content="ok"))
 
-        with patch.object(
-            client, "_get_model", side_effect=[failing_model, working_model]
-        ):
+        with patch.object(client, "_get_model", side_effect=[failing_model, working_model]):
             result = await client.call(system_prompt="s", user_prompt="u")
 
         assert result == "ok"
@@ -206,7 +215,9 @@ class TestLLMClientModelFallback:
         # every model in the chain — burning through it would just delay
         # the real failure, not fix anything.
         config = {
-            "model": "primary", "fallback_models": ["second"], "api_key": "test",
+            "model": "primary",
+            "fallback_models": ["second"],
+            "api_key": "test",
             "cache_enabled": False,
         }
         client = LLMClient(config)
@@ -293,6 +304,79 @@ class TestLLMClientCallJson:
                 )
 
 
+class TestLLMClientCallJsonCaching:
+    """Phase 0 Sec 0.8: a malformed response must never be cached. The old
+    call() unconditionally wrote SEMANTIC_CACHE.put() before call_json ever
+    attempted to parse the content, so a later identical call would replay
+    the same unparseable response forever instead of ever retrying the real
+    LLM. These exercise the real call() -> SEMANTIC_CACHE path (only
+    _get_model/ainvoke are mocked), unlike the tests above which patch
+    call() itself and so never touch the cache at all.
+    """
+
+    @pytest.mark.asyncio
+    async def test_malformed_response_is_not_cached(self):
+        from src.llm.cost import SEMANTIC_CACHE
+
+        config = {"model": "gpt-4", "api_key": "test"}
+        client = LLMClient(config)
+
+        with patch.object(client, "_get_model") as mock_get_model:
+            mock_model = AsyncMock()
+            mock_model.ainvoke = AsyncMock(return_value=MagicMock(content="not json"))
+            mock_get_model.return_value = mock_model
+
+            SEMANTIC_CACHE.clear()
+            with pytest.raises(json.JSONDecodeError):
+                await client.call_json(
+                    system_prompt="Return JSON.",
+                    user_prompt="a request that always fails to parse",
+                )
+            assert SEMANTIC_CACHE.size == 0
+
+    @pytest.mark.asyncio
+    async def test_valid_response_is_still_cached(self):
+        from src.llm.cost import SEMANTIC_CACHE
+
+        config = {"model": "gpt-4", "api_key": "test"}
+        client = LLMClient(config)
+
+        with patch.object(client, "_get_model") as mock_get_model:
+            mock_model = AsyncMock()
+            mock_model.ainvoke = AsyncMock(return_value=MagicMock(content='{"ok": true}'))
+            mock_get_model.return_value = mock_model
+
+            SEMANTIC_CACHE.clear()
+            result = await client.call_json(
+                system_prompt="Return JSON.",
+                user_prompt="a request that always parses fine",
+            )
+            assert result == {"ok": True}
+            assert SEMANTIC_CACHE.size == 1
+
+    @pytest.mark.asyncio
+    async def test_plain_call_without_validate_before_cache_still_caches_anything(self):
+        """The direct call() path (no validate_before_cache) is unaffected -
+        a plain-text caller has nothing to "successfully parse"."""
+        from src.llm.cost import SEMANTIC_CACHE
+
+        config = {"model": "gpt-4", "api_key": "test"}
+        client = LLMClient(config)
+
+        with patch.object(client, "_get_model") as mock_get_model:
+            mock_model = AsyncMock()
+            mock_model.ainvoke = AsyncMock(return_value=MagicMock(content="plain text, not json"))
+            mock_get_model.return_value = mock_model
+
+            SEMANTIC_CACHE.clear()
+            result = await client.call(
+                system_prompt="Be plain.",
+                user_prompt="a request whose response is never JSON",
+            )
+            assert result == "plain text, not json"
+            assert SEMANTIC_CACHE.size == 1
+
+
 class TestLLMClientCallBatch:
     """Tests for call_batch() method."""
 
@@ -328,6 +412,7 @@ class TestCreateLLMClient:
     def test_factory_creates_client(self):
         """Factory should create and return LLMClient."""
         from src.llm.client import create_llm_client
+
         config = {"provider": "openai", "model": "gpt-4", "api_key": "test"}
         client = create_llm_client(config)
         assert isinstance(client, LLMClient)
@@ -335,6 +420,7 @@ class TestCreateLLMClient:
     def test_factory_with_different_providers(self):
         """Factory should work with different providers."""
         from src.llm.client import create_llm_client
+
         for provider in ["openai", "azure", "anthropic"]:
             config = {
                 "provider": provider,

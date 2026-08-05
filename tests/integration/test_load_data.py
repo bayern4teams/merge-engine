@@ -39,6 +39,9 @@ class TestLoadDataNodeIntegration:
             },
         }
         dependency_state["extraction_order"] = ["company", "person"]
+        # Without this the node short-circuits at the not-approved guard and
+        # never reaches the connector at all.
+        dependency_state["load_approval"] = True
         dependency_state["destination"] = {
             "type": "postgresql",
             "host": "localhost",
@@ -50,12 +53,10 @@ class TestLoadDataNodeIntegration:
         }
 
         mock_databricks = MagicMock()
-        mock_databricks.load_batch = AsyncMock(
-            return_value={"inserted": 2, "updated": 0}
-        )
+        mock_databricks.load_batch = AsyncMock(return_value={"inserted": 2, "updated": 0})
         mock_databricks.close = AsyncMock()
 
-        with patch("src.orchestrator.nodes.load_data.create_connector") as mock_create:
+        with patch("src.mcp_server.tools.load_data._get_destination_connector") as mock_create:
             mock_create.return_value = mock_databricks
             result = await load_data_node(dependency_state)
 
@@ -73,6 +74,7 @@ class TestLoadDataNodeIntegration:
         dependency_state["unified_entities"] = {}
         dependency_state["field_mappings"] = {}
         dependency_state["extraction_order"] = ["company"]
+        dependency_state["load_approval"] = True
         dependency_state["destination"] = {
             "type": "postgresql",
             "host": "localhost",
@@ -84,12 +86,10 @@ class TestLoadDataNodeIntegration:
         }
 
         mock_databricks = MagicMock()
-        mock_databricks.load_batch = AsyncMock(
-            return_value={"inserted": 0, "updated": 0}
-        )
+        mock_databricks.load_batch = AsyncMock(return_value={"inserted": 0, "updated": 0})
         mock_databricks.close = AsyncMock()
 
-        with patch("src.orchestrator.nodes.load_data.create_connector") as mock_create:
+        with patch("src.mcp_server.tools.load_data._get_destination_connector") as mock_create:
             mock_create.return_value = mock_databricks
             result = await load_data_node(dependency_state)
 
@@ -111,6 +111,12 @@ class TestLoadDataNodeIntegration:
             "company": {"name": {"dest_column": "name", "confidence": 0.98}},
         }
         dependency_state["extraction_order"] = ["company"]
+        # Without explicit approval the node refuses to write at all (by
+        # design - the human_final_approval gate must run first), so it
+        # never reaches the connector call this test means to exercise
+        # (Phase 0 Sec 0.7, found while wiring tests/integration into the
+        # default gate for the first time).
+        dependency_state["load_approval"] = True
         dependency_state["destination"] = {
             "type": "postgresql",
             "host": "localhost",
@@ -122,11 +128,9 @@ class TestLoadDataNodeIntegration:
         }
 
         mock_pg = MagicMock()
-        mock_pg.load_batch = AsyncMock(
-            side_effect=ConnectionError("PostgreSQL unreachable")
-        )
+        mock_pg.load_batch = AsyncMock(side_effect=ConnectionError("PostgreSQL unreachable"))
 
-        with patch("src.orchestrator.nodes.load_data.create_connector") as mock_create:
+        with patch("src.mcp_server.tools.load_data._get_destination_connector") as mock_create:
             mock_create.return_value = mock_pg
             result = await load_data_node(dependency_state)
 
@@ -166,7 +170,9 @@ class TestLoadDataToolIntegration:
         mock_connector = MagicMock()
         mock_connector.load_batch.return_value = {"inserted": 2, "updated": 0}
 
-        with patch("src.mcp_server.tools.load_data._get_destination_connector", return_value=mock_connector):
+        with patch(
+            "src.mcp_server.tools.load_data._get_destination_connector", return_value=mock_connector
+        ):
             result = await load_data_impl(
                 entity_type="company",
                 records=records,
@@ -219,7 +225,9 @@ class TestLoadDataToolIntegration:
         mock_connector = MagicMock()
         mock_connector.load_batch.return_value = {"inserted": 1, "updated": 0}
 
-        with patch("src.mcp_server.tools.load_data._get_destination_connector", return_value=mock_connector):
+        with patch(
+            "src.mcp_server.tools.load_data._get_destination_connector", return_value=mock_connector
+        ):
             result = await load_data_impl(
                 entity_type="company",
                 records=records,

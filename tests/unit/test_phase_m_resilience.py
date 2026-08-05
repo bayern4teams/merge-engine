@@ -106,7 +106,9 @@ class TestFallibleRouting:
         route = _fallible_router("extract_data", "resolve_entities")
         state = {
             "failure": {
-                "node": "extract_data", "error": "boom", "disposition": "escalate",
+                "node": "extract_data",
+                "error": "boom",
+                "disposition": "escalate",
             }
         }
 
@@ -172,13 +174,9 @@ class TestFallibleRouting:
         assert '"disposition": "fail"' in source
 
     def test_review_decision_still_applies_when_healthy(self) -> None:
-        with patch(
-            "src.orchestrator.graph.has_low_confidence_clusters", return_value=True
-        ):
+        with patch("src.orchestrator.graph.has_low_confidence_clusters", return_value=True):
             assert _resolve_entities_router({"failure": {}}) == "review"
-        with patch(
-            "src.orchestrator.graph.has_low_confidence_clusters", return_value=False
-        ):
+        with patch("src.orchestrator.graph.has_low_confidence_clusters", return_value=False):
             assert _resolve_entities_router({"failure": {}}) == "continue"
 
 
@@ -242,12 +240,23 @@ class TestPreflight:
                 {
                     "id": "pg1",
                     "type": "postgres",
-                    "connection": {"host": "h", "port": 5432, "user": "u",
-                                   "password": "p", "database": "d"},
+                    "connection": {
+                        "host": "h",
+                        "port": 5432,
+                        "user": "u",
+                        "password": "p",
+                        "database": "d",
+                    },
                 }
             ],
-            "destination": {"type": "postgres", "host": "h", "port": 5432,
-                            "user": "u", "password": "p", "database": "d"},
+            "destination": {
+                "type": "postgres",
+                "host": "h",
+                "port": 5432,
+                "user": "u",
+                "password": "p",
+                "database": "d",
+            },
             "llm_config": {"provider": "openai", "model": "m"},
         }
 
@@ -255,9 +264,11 @@ class TestPreflight:
     async def test_all_clear_records_no_failure(self, state: dict[str, Any]) -> None:
         from src.orchestrator.nodes import preflight as pf
 
-        with patch.object(pf, "_probe_reachable"), \
-                patch.object(pf, "_probe_writable"), \
-                patch.object(pf, "_probe_llm"):
+        with (
+            patch.object(pf, "_probe_reachable"),
+            patch.object(pf, "_probe_writable"),
+            patch.object(pf, "_probe_llm"),
+        ):
             result = await pf.preflight(state)
 
         assert result["failure"] == {}
@@ -265,17 +276,17 @@ class TestPreflight:
         assert result["preflight_report"]["passed"] >= 6
 
     @pytest.mark.asyncio
-    async def test_unreachable_origin_stops_the_run(
-        self, state: dict[str, Any]
-    ) -> None:
+    async def test_unreachable_origin_stops_the_run(self, state: dict[str, Any]) -> None:
         from src.orchestrator.nodes import preflight as pf
 
         def unreachable(db_type: str, cfg: dict[str, Any]) -> None:
             raise Exception("could not connect to server")
 
-        with patch.object(pf, "_probe_reachable", side_effect=unreachable), \
-                patch.object(pf, "_probe_writable"), \
-                patch.object(pf, "_probe_llm"):
+        with (
+            patch.object(pf, "_probe_reachable", side_effect=unreachable),
+            patch.object(pf, "_probe_writable"),
+            patch.object(pf, "_probe_llm"),
+        ):
             result = await pf.preflight(state)
 
         assert result["failure"]["node"] == "preflight"
@@ -292,9 +303,11 @@ class TestPreflight:
         def denied(db_type: str, cfg: dict[str, Any]) -> None:
             raise Exception("permission denied for schema public")
 
-        with patch.object(pf, "_probe_reachable"), \
-                patch.object(pf, "_probe_writable", side_effect=denied), \
-                patch.object(pf, "_probe_llm"):
+        with (
+            patch.object(pf, "_probe_reachable"),
+            patch.object(pf, "_probe_writable", side_effect=denied),
+            patch.object(pf, "_probe_llm"),
+        ):
             result = await pf.preflight(state)
 
         assert result["failure"]
@@ -302,18 +315,18 @@ class TestPreflight:
         assert checks["destination writable"]["ok"] is False
 
     @pytest.mark.asyncio
-    async def test_dead_llm_is_caught_before_extraction(
-        self, state: dict[str, Any]
-    ) -> None:
+    async def test_dead_llm_is_caught_before_extraction(self, state: dict[str, Any]) -> None:
         """An exhausted quota used to surface as an empty, "successful" run."""
         from src.orchestrator.nodes import preflight as pf
 
         async def forbidden(cfg: dict[str, Any]) -> None:
             raise Exception("403 quota exceeded")
 
-        with patch.object(pf, "_probe_reachable"), \
-                patch.object(pf, "_probe_writable"), \
-                patch.object(pf, "_probe_llm", side_effect=forbidden):
+        with (
+            patch.object(pf, "_probe_reachable"),
+            patch.object(pf, "_probe_writable"),
+            patch.object(pf, "_probe_llm", side_effect=forbidden),
+        ):
             result = await pf.preflight(state)
 
         checks = {c["name"]: c for c in result["preflight_report"]["checks"]}
@@ -325,30 +338,39 @@ class TestPreflight:
         from src.orchestrator.nodes import preflight as pf
 
         state["user_request"] = "   "
-        with patch.object(pf, "_probe_reachable"), \
-                patch.object(pf, "_probe_writable"), \
-                patch.object(pf, "_probe_llm"):
+        with (
+            patch.object(pf, "_probe_reachable"),
+            patch.object(pf, "_probe_writable"),
+            patch.object(pf, "_probe_llm"),
+        ):
             result = await pf.preflight(state)
 
         checks = {c["name"]: c for c in result["preflight_report"]["checks"]}
         assert checks["merge request"]["ok"] is False
 
     @pytest.mark.asyncio
-    async def test_every_origin_is_probed_even_after_one_fails(
-        self, state: dict[str, Any]
-    ) -> None:
+    async def test_every_origin_is_probed_even_after_one_fails(self, state: dict[str, Any]) -> None:
         """One run should reveal every broken connection, not just the first."""
         from src.orchestrator.nodes import preflight as pf
 
-        state["origins"].append({
-            "id": "pg2", "type": "postgres",
-            "connection": {"host": "h2", "port": 5432, "user": "u",
-                           "password": "p", "database": "d"},
-        })
-        with patch.object(pf, "_probe_reachable",
-                          side_effect=Exception("could not connect")), \
-                patch.object(pf, "_probe_writable"), \
-                patch.object(pf, "_probe_llm"):
+        state["origins"].append(
+            {
+                "id": "pg2",
+                "type": "postgres",
+                "connection": {
+                    "host": "h2",
+                    "port": 5432,
+                    "user": "u",
+                    "password": "p",
+                    "database": "d",
+                },
+            }
+        )
+        with (
+            patch.object(pf, "_probe_reachable", side_effect=Exception("could not connect")),
+            patch.object(pf, "_probe_writable"),
+            patch.object(pf, "_probe_llm"),
+        ):
             result = await pf.preflight(state)
 
         names = [c["name"] for c in result["preflight_report"]["checks"]]
@@ -365,8 +387,14 @@ class TestAtomicLoad:
         )
 
         connector = PostgreSQLDestinationConnector(
-            {"host": "h", "port": 5432, "user": "u", "password": "p",
-             "database": "d", "schema": "public"}
+            {
+                "host": "h",
+                "port": 5432,
+                "user": "u",
+                "password": "p",
+                "database": "d",
+                "schema": "public",
+            }
         )
         connector._connection = MagicMock(closed=0)
         return connector
@@ -389,7 +417,7 @@ class TestAtomicLoad:
 
         with pytest.raises(ValueError):
             with connector.atomic():
-                connector._commit(conn)   # "person" loaded
+                connector._commit(conn)  # "person" loaded
                 raise ValueError("company failed")
 
         assert conn.commit.call_count == 0
@@ -480,10 +508,11 @@ class TestAtomicLoad:
                 raise RuntimeError("disk full")
             return {"total_records": 1, "inserted": 1, "updated": 0}
 
-        with patch.object(node_mod, "_get_destination_connector",
-                          return_value=connector), \
-                patch.object(node_mod, "load_data_impl", side_effect=load_one), \
-                patch.object(node_mod, "_write_run_report", return_value=None):
+        with (
+            patch.object(node_mod, "_get_destination_connector", return_value=connector),
+            patch.object(node_mod, "load_data_impl", side_effect=load_one),
+            patch.object(node_mod, "_write_run_report", return_value=None),
+        ):
             result = await node_mod.load_data_node(state)
 
         report = result["reconciliation_report"]
@@ -497,18 +526,18 @@ class TestAtomicLoad:
             assert per_entity.get("loaded", 0) == 0
 
     @pytest.mark.asyncio
-    async def test_schema_change_rolls_back_with_the_data_on_the_shared_connector(
+    async def test_schema_change_is_refused_at_the_real_connector_level(
         self,
     ) -> None:
-        """Fix #4 (Phase 4.5) at the real-connector level.
+        """Phase 0 Bug A, at the real-connector level.
 
-        Before this fix, _apply_schema_changes opened its own standalone
+        Before Bug A's fix, _apply_schema_changes opened its own standalone
         connector and its ALTER TABLE committed immediately — outside the
         load's transaction — so a failed run left the destination schema
-        permanently polluted even though every row rolled back. Now the
-        schema change is applied through the SAME connector the data load
-        uses, so extend_schema_batch's writes ride the one real connection
-        and roll back with everything else when a later entity fails.
+        permanently polluted even though every row rolled back (company grew
+        from 14 columns to 43 this way). Now the destination schema is a
+        fixed contract: extend_schema_batch is never called at all, pending
+        or not, and the refusal is recorded as an error.
         """
         from src.orchestrator.nodes import load_data as node_mod
 
@@ -540,23 +569,23 @@ class TestAtomicLoad:
                 raise RuntimeError("disk full")
             return {"total_records": 1, "inserted": 1, "updated": 0}
 
-        with patch.object(node_mod, "_get_destination_connector",
-                           return_value=connector), \
-                patch.object(node_mod, "load_data_impl", side_effect=load_one), \
-                patch.object(node_mod, "_write_run_report", return_value=None), \
-                patch.object(connector, "extend_schema_batch",
-                             wraps=connector.extend_schema_batch) as schema_spy:
+        with (
+            patch.object(node_mod, "_get_destination_connector", return_value=connector),
+            patch.object(node_mod, "load_data_impl", side_effect=load_one),
+            patch.object(node_mod, "_write_run_report", return_value=None),
+            patch.object(
+                connector, "extend_schema_batch", wraps=connector.extend_schema_batch
+            ) as schema_spy,
+        ):
             result = await node_mod.load_data_node(state)
 
-        # The ALTER went through the load's own connector, not a second one —
-        # _get_destination_connector was never asked for a standalone
-        # connector inside _apply_schema_changes.
-        schema_spy.assert_called_once()
+        # No ALTER is ever issued — the pending change is refused outright.
+        schema_spy.assert_not_called()
+        assert any("fixed contract" in e for e in result["errors"])
         report = result["reconciliation_report"]
         assert report["load_rolled_back"] is True
-        # The real connection never committed — the ALTER's writes rolled
-        # back on the same connection as the failed data load, not on one
-        # of their own that had already gone through.
+        # The real connection never committed — the failed company load
+        # rolled back on the shared connection.
         assert conn.commit.call_count == 0
         assert conn.rollback.call_count == 1
         # Fix #6: the rolled-back load must escalate, not flow on silently.

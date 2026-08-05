@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.mcp_server.tools.unify_entity_group import (
-    unify_entity_group_impl,
     unify_entity_group_handler,
+    unify_entity_group_impl,
 )
 
 
@@ -160,25 +160,29 @@ class TestUnifyEntityGroupHandler:
     @pytest.mark.asyncio
     async def test_handler_calls_impl(self) -> None:
         """Test handler delegates to impl."""
-        mock_impl = AsyncMock(return_value={
-            "cluster_id": "c1",
-            "unified_record": {"name": "Alice", "_cluster_id": "c1", "_source_count": 2},
-            "conflicts": [],
-            "null_filled_fields": ["email"],
-            "source_count": 2,
-        })
+        mock_impl = AsyncMock(
+            return_value={
+                "cluster_id": "c1",
+                "unified_record": {"name": "Alice", "_cluster_id": "c1", "_source_count": 2},
+                "conflicts": [],
+                "null_filled_fields": ["email"],
+                "source_count": 2,
+            }
+        )
 
         with patch(
             "src.mcp_server.tools.unify_entity_group.unify_entity_group_impl",
             mock_impl,
         ):
-            result = await unify_entity_group_handler({
-                "cluster_id": "c1",
-                "records": [
-                    {"_origin_id": "a", "name": "Alice"},
-                    {"_origin_id": "b", "name": "Alice"},
-                ],
-            })
+            result = await unify_entity_group_handler(
+                {
+                    "cluster_id": "c1",
+                    "records": [
+                        {"_origin_id": "a", "name": "Alice"},
+                        {"_origin_id": "b", "name": "Alice"},
+                    ],
+                }
+            )
 
         mock_impl.assert_called_once()
         assert result["cluster_id"] == "c1"

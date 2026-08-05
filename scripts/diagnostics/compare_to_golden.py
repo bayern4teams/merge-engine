@@ -17,6 +17,7 @@ Usage:
     python compare_to_golden.py airbus     #   against global_warehouse_golden.airbus
     python compare_to_golden.py lockheed
 """
+
 import argparse
 import json
 import pathlib
@@ -27,9 +28,17 @@ import psycopg2
 import psycopg2.extras
 
 TABLES = [
-    "industry", "location", "company", "company_relation", "person",
-    "experience", "finance", "technologic_category", "technologic",
-    "contact_phone", "contact_email",
+    "industry",
+    "location",
+    "company",
+    "company_relation",
+    "person",
+    "experience",
+    "finance",
+    "technologic_category",
+    "technologic",
+    "contact_phone",
+    "contact_email",
 ]
 
 GOLDEN_COMPANY_NAME = {"boeing": "Boeing", "airbus": "Airbus", "lockheed": "Lockheed Martin"}
@@ -59,11 +68,17 @@ class SideData:
             for r in self.rows["person"]
         }
         self.location_key_by_id = {
-            r["id"]: (norm(r.get("city_name")), norm(r.get("country_name")), norm(r.get("address_line1")))
+            r["id"]: (
+                norm(r.get("city_name")),
+                norm(r.get("country_name")),
+                norm(r.get("address_line1")),
+            )
             for r in self.rows["location"]
         }
         self.industry_name_by_id = {r["id"]: norm(r.get("name")) for r in self.rows["industry"]}
-        self.tech_cat_name_by_id = {r["id"]: norm(r.get("name")) for r in self.rows["technologic_category"]}
+        self.tech_cat_name_by_id = {
+            r["id"]: norm(r.get("name")) for r in self.rows["technologic_category"]
+        }
 
     def company_name(self, cid):
         return self.company_name_by_id.get(cid, f"<missing:{cid}>")
@@ -83,19 +98,51 @@ def natural_key(table, row, side: SideData):
     if table == "technologic_category":
         return ("name", norm(row.get("name")))
     if table == "location":
-        return ("loc", norm(row.get("city_name")), norm(row.get("country_name")), norm(row.get("address_line1")))
+        return (
+            "loc",
+            norm(row.get("city_name")),
+            norm(row.get("country_name")),
+            norm(row.get("address_line1")),
+        )
     if table == "finance":
-        return ("fin", side.company_name(row.get("company_id")), str(row.get("period_start")), str(row.get("period_end")))
+        return (
+            "fin",
+            side.company_name(row.get("company_id")),
+            str(row.get("period_start")),
+            str(row.get("period_end")),
+        )
     if table == "technologic":
         return ("tech", side.company_name(row.get("vendor_company_id")), norm(row.get("name")))
     if table == "experience":
-        return ("exp", side.person_key(row.get("person_id")), side.company_name(row.get("company_id")), norm(row.get("job_title")))
+        return (
+            "exp",
+            side.person_key(row.get("person_id")),
+            side.company_name(row.get("company_id")),
+            norm(row.get("job_title")),
+        )
     if table == "contact_email":
-        return ("email", side.company_name(row.get("company_id")) if row.get("company_id") else side.person_key(row.get("person_id")), norm(row.get("email")))
+        return (
+            "email",
+            side.company_name(row.get("company_id"))
+            if row.get("company_id")
+            else side.person_key(row.get("person_id")),
+            norm(row.get("email")),
+        )
     if table == "contact_phone":
-        return ("phone", side.company_name(row.get("company_id")) if row.get("company_id") else side.person_key(row.get("person_id")), norm(row.get("phone")))
+        return (
+            "phone",
+            side.company_name(row.get("company_id"))
+            if row.get("company_id")
+            else side.person_key(row.get("person_id")),
+            norm(row.get("phone")),
+        )
     if table == "company_relation":
-        return ("rel", side.company_name(row.get("company_a_id")), side.company_name(row.get("company_b_id")), norm(row.get("relation_type")))
+        return (
+            "rel",
+            side.company_name(row.get("company_a_id")),
+            side.company_name(row.get("company_b_id")),
+            norm(row.get("relation_type")),
+        )
     return ("raw", json.dumps(row, default=str, sort_keys=True))
 
 
@@ -106,7 +153,9 @@ def compare_table(table, golden: SideData, app: SideData):
     missing = set(g_keys) - set(a_keys)
     extra = set(a_keys) - set(g_keys)
     golden_n, app_n = len(golden.rows[table]), len(app.rows[table])
-    parity_pct = round(100.0 * len(matched) / golden_n, 1) if golden_n else (100.0 if app_n == 0 else 0.0)
+    parity_pct = (
+        round(100.0 * len(matched) / golden_n, 1) if golden_n else (100.0 if app_n == 0 else 0.0)
+    )
     return {
         "table": table,
         "golden_rows": golden_n,
@@ -122,7 +171,16 @@ def compare_table(table, golden: SideData, app: SideData):
 
 def golden_record_diff(subject, golden: SideData, app: SideData):
     name = GOLDEN_COMPANY_NAME[subject]
-    fields = ["name", "website", "founded_date", "status", "revenue", "employee_count", "revenue_currency", "legal_name"]
+    fields = [
+        "name",
+        "website",
+        "founded_date",
+        "status",
+        "revenue",
+        "employee_count",
+        "revenue_currency",
+        "legal_name",
+    ]
 
     def find(side):
         for r in side.rows["company"]:
@@ -152,10 +210,16 @@ def main():
     ap.add_argument("--golden-db", default="global_warehouse_golden")
     args = ap.parse_args()
 
-    golden_conn = psycopg2.connect(host=args.host, port=args.port, user=args.user,
-                                    password=args.password, dbname=args.golden_db)
-    app_conn = psycopg2.connect(host=args.host, port=args.port, user=args.user,
-                                 password=args.password, dbname=args.app_db)
+    golden_conn = psycopg2.connect(
+        host=args.host,
+        port=args.port,
+        user=args.user,
+        password=args.password,
+        dbname=args.golden_db,
+    )
+    app_conn = psycopg2.connect(
+        host=args.host, port=args.port, user=args.user, password=args.password, dbname=args.app_db
+    )
 
     golden = SideData(golden_conn, args.subject)
     app = SideData(app_conn, args.app_schema)
@@ -194,7 +258,11 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{args.subject}_diff.json"
     out_path.write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
-    print(f"\nWritten to {out_path}")
+    # stderr, not stdout: drive_app.py's --assert-budgets runs this script as a
+    # subprocess and does json.loads(proc.stdout), expecting nothing but the
+    # JSON dump above. A trailing stdout line here is exactly an "Extra data"
+    # JSON parse failure for that caller.
+    print(f"\nWritten to {out_path}", file=sys.stderr)
 
     golden_conn.close()
     app_conn.close()

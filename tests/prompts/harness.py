@@ -50,7 +50,12 @@ _REQUIRED_PLACEHOLDERS = {
     "entity_table_selection": ["{target_entities}", "{table_catalog}"],
     "scope_planning": ["{subject}", "{subject_entity}", "{target_entities}", "{table_catalog}"],
     "entity_resolution": ["{entity_type}", "{pair_count}", "{pairs_block}"],
-    "field_mapping": ["{entity_type}", "{dest_table}", "{destination_schema}", "{source_fields_block}"],
+    "field_mapping": [
+        "{entity_type}",
+        "{dest_table}",
+        "{destination_schema}",
+        "{source_fields_block}",
+    ],
 }
 
 
@@ -110,22 +115,21 @@ def _build_prompt(stage: str, case: dict[str, Any]) -> tuple[str, str]:
 
     if stage == "dependency_analysis":
         return system, (
-            human
-            .replace("{target_entities}", json.dumps(inp["target_entities"]))
-            .replace("{schema_info}", inp["schema_info"])
+            human.replace("{target_entities}", json.dumps(inp["target_entities"])).replace(
+                "{schema_info}", inp["schema_info"]
+            )
         )
 
     if stage == "entity_table_selection":
         return system, (
-            human
-            .replace("{target_entities}", json.dumps(inp["target_entities"]))
-            .replace("{table_catalog}", inp["table_catalog"])
+            human.replace("{target_entities}", json.dumps(inp["target_entities"])).replace(
+                "{table_catalog}", inp["table_catalog"]
+            )
         )
 
     if stage == "scope_planning":
         return system, (
-            human
-            .replace("{subject}", inp["subject"])
+            human.replace("{subject}", inp["subject"])
             .replace("{subject_entity}", inp["subject_entity"])
             .replace("{target_entities}", json.dumps(inp["target_entities"]))
             .replace("{table_catalog}", inp["table_catalog"])
@@ -133,31 +137,38 @@ def _build_prompt(stage: str, case: dict[str, Any]) -> tuple[str, str]:
 
     if stage == "entity_resolution":
         from src.mcp_server.tools.resolve_entities import _format_pairs_block
+
         borderline = [
-            (f"a{i}", f"b{i}", pair["a"], pair["b"], 0.8)
-            for i, pair in enumerate(inp["pairs"], 1)
+            (f"a{i}", f"b{i}", pair["a"], pair["b"], 0.8) for i, pair in enumerate(inp["pairs"], 1)
         ]
         return system, (
-            human
-            .replace("{entity_type}", inp["entity_type"])
+            human.replace("{entity_type}", inp["entity_type"])
             .replace("{pair_count}", str(len(borderline)))
             .replace("{pairs_block}", _format_pairs_block(borderline))
         )
 
     if stage == "field_mapping":
-        from src.mcp_server.tools.map_fields import _format_source_fields_block
+        from src.mcp_server.tools.map_fields import (
+            _RESERVED_DEST_COLUMNS,
+            _format_source_fields_block,
+        )
+
         fields = [f["name"] for f in inp["fields"]]
         unified_schema = {
             f["name"]: {"type": f["type"], "sample_values": f.get("sample_values", [])}
             for f in inp["fields"]
         }
+        # Imported, not re-listed: map_fields_impl withholds these
+        # loader-managed columns from the model, and a harness that offered
+        # them would score a prompt production never sends. It did — the
+        # model dutifully mapped an origin surrogate key onto `_source_ids`.
         dest_cols_str = "\n".join(
             f"- {c['name']} ({c.get('type', 'unknown')})"
             for c in inp["destination_schema"]
+            if c["name"] not in _RESERVED_DEST_COLUMNS
         )
         return system, (
-            human
-            .replace("{entity_type}", inp["entity_type"])
+            human.replace("{entity_type}", inp["entity_type"])
             .replace("{dest_table}", inp["dest_table"])
             .replace("{destination_schema}", dest_cols_str)
             .replace("{source_fields_block}", _format_source_fields_block(fields, unified_schema))
@@ -190,11 +201,13 @@ def _score(stage: str, case: dict[str, Any], result: Any) -> tuple[bool, str]:
     if stage == "dependency_analysis":
         tree = result.get("dependency_tree", {}) or {}
         missing = [
-            f"{dep}->{pre}" for dep, pre in expected.get("expected_edges", [])
+            f"{dep}->{pre}"
+            for dep, pre in expected.get("expected_edges", [])
             if pre not in (tree.get(dep) or [])
         ]
         wrong = [
-            f"{dep}->{pre}" for dep, pre in expected.get("expected_absent", [])
+            f"{dep}->{pre}"
+            for dep, pre in expected.get("expected_absent", [])
             if pre in (tree.get(dep) or [])
         ]
         ok = not missing and not wrong
@@ -246,16 +259,15 @@ def _score(stage: str, case: dict[str, Any], result: Any) -> tuple[bool, str]:
                     for g in got
                 )
                 if not found:
-                    missing.append(f"{entity}:{want_entry['origin_id']}.{want_entry['table']}[{want_entry['mode']}]")
+                    missing.append(
+                        f"{entity}:{want_entry['origin_id']}.{want_entry['table']}[{want_entry['mode']}]"
+                    )
         ok = not missing
         return ok, f"missing={missing}" if not ok else "all scope entries correct"
 
     if stage == "entity_resolution":
         judgments = result.get("judgments", []) or []
-        by_id = {
-            j.get("pair_id"): bool(j.get("match"))
-            for j in judgments if isinstance(j, dict)
-        }
+        by_id = {j.get("pair_id"): bool(j.get("match")) for j in judgments if isinstance(j, dict)}
         want = expected["matches"]
         got = [by_id.get(i) for i in range(1, len(want) + 1)]
         return got == want, f"got={got} want={want}"
@@ -274,9 +286,7 @@ def _score(stage: str, case: dict[str, Any], result: Any) -> tuple[bool, str]:
                 details.append(f"{field}: action={dec.get('action')} want={exp['action']}")
             elif exp["action"] == "map" and dec.get("dest_column") != exp["dest_column"]:
                 ok = False
-                details.append(
-                    f"{field}: dest={dec.get('dest_column')} want={exp['dest_column']}"
-                )
+                details.append(f"{field}: dest={dec.get('dest_column')} want={exp['dest_column']}")
         return ok, "; ".join(details) if details else "all fields correct"
 
     raise ValueError(f"unknown stage: {stage}")
@@ -316,7 +326,8 @@ async def run_live(stages: list[str]) -> int:
             start = time.perf_counter()
             try:
                 result = await client.call_json(
-                    system_prompt=system, user_prompt=human,
+                    system_prompt=system,
+                    user_prompt=human,
                 )
             except json.JSONDecodeError:
                 malformed += 1
@@ -348,6 +359,7 @@ async def run_live(stages: list[str]) -> int:
     # Short-lived script: flush buffered spans so Langfuse receives them.
     try:
         from src.llm.tracing import flush
+
         flush()
     except Exception:
         pass
@@ -362,7 +374,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stage", choices=_STAGES, help="run a single stage")
     parser.add_argument(
-        "--live", action="store_true",
+        "--live",
+        action="store_true",
         help="call the real model and print a scorecard",
     )
     args = parser.parse_args()

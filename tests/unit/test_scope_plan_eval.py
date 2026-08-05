@@ -30,13 +30,10 @@ def _key(entry: dict) -> tuple:
 
 @pytest.mark.parametrize("case", _CASES, ids=[c["name"] for c in _CASES])
 def test_scope_plan_matches_golden(case: dict) -> None:
-    plan = _heuristic_plan(
-        case["subject_entity"], case["target_entities"], case["schema"]
-    )
+    plan = _heuristic_plan(case["subject_entity"], case["target_entities"], case["schema"])
     for entity, expected_entries in case["expected"].items():
         got = {_key(e) for e in plan.get(entity, [])}
         want = {_key(e) for e in expected_entries}
         assert got == want, (
-            f"[{case['name']}] entity '{entity}': "
-            f"expected {sorted(want)}, got {sorted(got)}"
+            f"[{case['name']}] entity '{entity}': expected {sorted(want)}, got {sorted(got)}"
         )

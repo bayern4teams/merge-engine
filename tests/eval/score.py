@@ -13,8 +13,9 @@ are not errors, they are the system correctly saying "I'm not sure".
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from tests.eval.golden import Pair, build_golden_pairs
 
@@ -24,12 +25,12 @@ class Report:
     """Outcome counts for one scoring configuration."""
 
     name: str
-    true_positive: int = 0      # same entity, auto-merged — correct
-    false_positive: int = 0     # DIFFERENT entities auto-merged — data destroyed
-    true_negative: int = 0      # different entities, not merged — correct
-    false_negative: int = 0     # same entity, auto-excluded — a missed match
-    review_same: int = 0        # same entity, sent to review — acceptable
-    review_diff: int = 0        # different entities, sent to review — acceptable
+    true_positive: int = 0  # same entity, auto-merged — correct
+    false_positive: int = 0  # DIFFERENT entities auto-merged — data destroyed
+    true_negative: int = 0  # different entities, not merged — correct
+    false_negative: int = 0  # same entity, auto-excluded — a missed match
+    review_same: int = 0  # same entity, sent to review — acceptable
+    review_diff: int = 0  # different entities, sent to review — acceptable
     worst_false_positives: list[str] = field(default_factory=list)
 
     @property
@@ -40,7 +41,7 @@ class Report:
     @property
     def recall(self) -> float:
         """Of all genuine matches, how many were auto-merged."""
-        total_same = (self.true_positive + self.false_negative + self.review_same)
+        total_same = self.true_positive + self.false_negative + self.review_same
         return self.true_positive / total_same if total_same else 0.0
 
     @property
@@ -50,8 +51,14 @@ class Report:
 
     @property
     def review_rate(self) -> float:
-        total = (self.true_positive + self.false_positive + self.true_negative
-                 + self.false_negative + self.review_same + self.review_diff)
+        total = (
+            self.true_positive
+            + self.false_positive
+            + self.true_negative
+            + self.false_negative
+            + self.review_same
+            + self.review_diff
+        )
         return (self.review_same + self.review_diff) / total if total else 0.0
 
     def render(self) -> str:
@@ -67,8 +74,7 @@ class Report:
             f"<-- each one destroys a record",
             f"  correct rejections       TN = {self.true_negative}",
             f"  missed matches           FN = {self.false_negative}",
-            f"  routed to review         {self.review_same} same / "
-            f"{self.review_diff} different",
+            f"  routed to review         {self.review_same} same / {self.review_diff} different",
         ]
         if self.worst_false_positives:
             lines.append("")
@@ -99,8 +105,7 @@ def evaluate(
         elif merged and not is_same:
             report.false_positive += 1
             report.worst_false_positives.append(
-                f"{_describe(rec_a)} + {_describe(rec_b)} "
-                f"(conf {confidence:.3f}) - {why}"
+                f"{_describe(rec_a)} + {_describe(rec_b)} (conf {confidence:.3f}) - {why}"
             )
         elif excluded and is_same:
             report.false_negative += 1
@@ -115,9 +120,7 @@ def evaluate(
 
 
 def _describe(rec: dict[str, Any]) -> str:
-    name = " ".join(
-        str(rec.get(k) or "") for k in ("first_name", "last_name")
-    ).strip()
+    name = " ".join(str(rec.get(k) or "") for k in ("first_name", "last_name")).strip()
     return f"{name} <{rec.get('email') or 'no email'}>"
 
 
@@ -149,9 +152,14 @@ class ClusterReport:
         return max(0, self.expected_clusters - self.clusters)
 
     def render(self) -> str:
-        verdict = "OK" if self.correct else (
-            f"OVER-MERGED by {self.over_merged}" if self.clusters < self.expected_clusters
-            else f"UNDER-MERGED by {self.clusters - self.expected_clusters}"
+        verdict = (
+            "OK"
+            if self.correct
+            else (
+                f"OVER-MERGED by {self.over_merged}"
+                if self.clusters < self.expected_clusters
+                else f"UNDER-MERGED by {self.clusters - self.expected_clusters}"
+            )
         )
         lines = [
             f"== {self.name} " + "=" * max(0, 56 - len(self.name)),
@@ -163,8 +171,11 @@ class ClusterReport:
         ]
         if self.examples:
             lines.append("")
-            label = ("  examples of multi-record clusters:" if self.correct
-                     else "  examples of WRONGLY merged clusters:")
+            label = (
+                "  examples of multi-record clusters:"
+                if self.correct
+                else "  examples of WRONGLY merged clusters:"
+            )
             lines.append(label)
             for e in self.examples[:5]:
                 lines.append(f"    - {e}")
@@ -181,10 +192,7 @@ def evaluate_clustering(
 
     result = asyncio.run(resolve_entities_impl("person", records, llm_config=None))
     clusters = result["clusters"]
-    by_id = {
-        f"{r['_origin_id']}:{r['_origin_table']}:{r['_origin_id_row']}": r
-        for r in records
-    }
+    by_id = {f"{r['_origin_id']}:{r['_origin_table']}:{r['_origin_id_row']}": r for r in records}
 
     report = ClusterReport(
         name=name,
@@ -200,13 +208,8 @@ def evaluate_clustering(
     if multi:
         report.largest_cluster = len(multi[0]["record_ids"])
     for cluster in multi[:5]:
-        names = [
-            _describe(by_id[rid]) for rid in cluster["record_ids"][:4]
-            if rid in by_id
-        ]
-        report.examples.append(
-            f"{len(cluster['record_ids'])} records merged: " + " | ".join(names)
-        )
+        names = [_describe(by_id[rid]) for rid in cluster["record_ids"][:4] if rid in by_id]
+        report.examples.append(f"{len(cluster['record_ids'])} records merged: " + " | ".join(names))
     return report
 
 
@@ -216,11 +219,12 @@ def main() -> int:
 
     pairs = build_golden_pairs()
     same = sum(1 for _, _, s, _ in pairs if s)
-    print(f"\nGolden set: {len(pairs)} labelled pairs "
-          f"({same} same entity, {len(pairs) - same} different)\n")
+    print(
+        f"\nGolden set: {len(pairs)} labelled pairs "
+        f"({same} same entity, {len(pairs) - same} different)\n"
+    )
 
-    print(evaluate(_compute_heuristic_confidence, pairs,
-                   name="pairwise: heuristic only").render())
+    print(evaluate(_compute_heuristic_confidence, pairs, name="pairwise: heuristic only").render())
     print()
 
     # The probabilistic model needs to see the whole record set (for term
@@ -230,19 +234,30 @@ def main() -> int:
 
     records = [r for pair in pairs for r in (pair[0], pair[1])]
     candidates = [("a", "b", a, b) for a, b, _s, _w in pairs]
-    model = _fit_match_model(records, candidates)
-    print(evaluate(lambda a, b: _score_pair(a, b, model), pairs,
-                   name="pairwise: Fellegi-Sunter + term frequency").render())
+    # _fit_match_model now returns (model, vectors) — Part 1.5 A.2 reuses
+    # the vectors it builds internally in the pipeline's own scoring loop;
+    # this harness only needs the model.
+    model, _vectors = _fit_match_model(records, candidates)
+    print(
+        evaluate(
+            lambda a, b: _score_pair(a, b, model),
+            pairs,
+            name="pairwise: Fellegi-Sunter + term frequency",
+        ).render()
+    )
     print()
 
     # Every Pagila staff row is a distinct person (1500 rows, 1500 distinct
     # emails), so correct clustering leaves all of them intact.
     staff = load_staff()[:400]
     records = [_record(row) for row in staff]
-    print(evaluate_clustering(
-        records, expected_clusters=len(records),
-        name="clustering, 400 distinct real people (must stay 400)",
-    ).render())
+    print(
+        evaluate_clustering(
+            records,
+            expected_clusters=len(records),
+            name="clustering, 400 distinct real people (must stay 400)",
+        ).render()
+    )
     print()
 
     # The opposite failure: refusing to merge anything is also broken. Each
@@ -253,10 +268,13 @@ def main() -> int:
         variant = _record(row, origin="crm", suffix="b")
         variant["first_name"] = variant["first_name"].upper()
         dupes.append(variant)
-    print(evaluate_clustering(
-        dupes, expected_clusters=100,
-        name="clustering, 100 people duplicated across 2 systems (must be 100)",
-    ).render())
+    print(
+        evaluate_clustering(
+            dupes,
+            expected_clusters=100,
+            name="clustering, 100 people duplicated across 2 systems (must be 100)",
+        ).render()
+    )
     print()
 
     print(measure_blocking_recall(dupes))
@@ -268,17 +286,23 @@ def main() -> int:
     # which merged 25 pairs of different actors in a live run.
     thin = []
     for i, row in enumerate(staff[:300]):
-        thin.append({
-            "_origin_id": "pg", "_origin_table": "actor",
-            "_origin_id_row": str(i),
-            "first_name": row["first_name"],
-            "last_name": row["last_name"],
-            "last_update": "2022-02-15 09:34:33+00",   # same for every row
-        })
-    print(evaluate_clustering(
-        thin, expected_clusters=len(thin),
-        name="clustering, 300 people with NO unique id (must stay 300)",
-    ).render())
+        thin.append(
+            {
+                "_origin_id": "pg",
+                "_origin_table": "actor",
+                "_origin_id_row": str(i),
+                "first_name": row["first_name"],
+                "last_name": row["last_name"],
+                "last_update": "2022-02-15 09:34:33+00",  # same for every row
+            }
+        )
+    print(
+        evaluate_clustering(
+            thin,
+            expected_clusters=len(thin),
+            name="clustering, 300 people with NO unique id (must stay 300)",
+        ).render()
+    )
     print()
     return 0
 
@@ -292,7 +316,8 @@ def measure_blocking_recall(records: list[dict[str, Any]]) -> str:
     since that is what blocking must not miss.
     """
     from src.mcp_server.tools.resolve_entities import (
-        _generate_candidate_pairs, _record_id,
+        _generate_candidate_pairs,
+        _record_id,
     )
 
     truth: set[tuple[str, str]] = set()
@@ -304,27 +329,28 @@ def measure_blocking_recall(records: list[dict[str, Any]]) -> str:
         by_source.setdefault(base, []).append(_record_id(rec))
     for ids in by_source.values():
         for i, a in enumerate(ids):
-            for b in ids[i + 1:]:
+            for b in ids[i + 1 :]:
                 truth.add((a, b) if a < b else (b, a))
 
     generated = {
-        (i1, i2) if i1 < i2 else (i2, i1)
-        for i1, i2, _r1, _r2 in _generate_candidate_pairs(records)
+        (i1, i2) if i1 < i2 else (i2, i1) for i1, i2, _r1, _r2 in _generate_candidate_pairs(records)
     }
     found = len(truth & generated)
     total_possible = len(records) * (len(records) - 1) // 2
     recall = found / len(truth) if truth else 0.0
 
-    return "\n".join([
-        "== blocking recall " + "=" * 39,
-        f"  true pairs that exist        : {len(truth)}",
-        f"  true pairs blocking surfaced : {found}",
-        f"  blocking recall              : {recall:.4f}"
-        f"   {'[OK]' if recall == 1.0 else '[MISSES TRUE PAIRS]'}",
-        f"  candidate pairs generated    : {len(generated)} "
-        f"of {total_possible} possible "
-        f"({len(generated) / total_possible:.1%} of all-pairs)",
-    ])
+    return "\n".join(
+        [
+            "== blocking recall " + "=" * 39,
+            f"  true pairs that exist        : {len(truth)}",
+            f"  true pairs blocking surfaced : {found}",
+            f"  blocking recall              : {recall:.4f}"
+            f"   {'[OK]' if recall == 1.0 else '[MISSES TRUE PAIRS]'}",
+            f"  candidate pairs generated    : {len(generated)} "
+            f"of {total_possible} possible "
+            f"({len(generated) / total_possible:.1%} of all-pairs)",
+        ]
+    )
 
 
 if __name__ == "__main__":

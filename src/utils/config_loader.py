@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field, field_validator
 # config_loader independently correct).
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except ImportError:
     pass
@@ -118,11 +119,7 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     """Recursively merge *override* into *base*; override values win."""
     result = base.copy()
     for key, val in override.items():
-        if (
-            key in result
-            and isinstance(result[key], dict)
-            and isinstance(val, dict)
-        ):
+        if key in result and isinstance(result[key], dict) and isinstance(val, dict):
             result[key] = _deep_merge(result[key], val)
         else:
             result[key] = val
@@ -160,11 +157,71 @@ def _resolve_env_vars(obj: Any) -> Any:
 
 _DEFAULT_CONFIG_PATH = str(Path("config/config.yaml"))
 
+# Part 1.6.A: platform-by-platform overrides live in a gitignored overlay next
+# to config.yaml, deep-merged over the committed base. config.yaml stays the
+# committed default; a machine's ports/host/base_url/tracing settings go here so
+# moving the project to another platform is an edit to one gitignored file, not
+# a diff against a tracked one. Written by the Settings page (PUT /api/config/
+# platform), never containing secrets (those stay in .env / ${ENV_VAR}).
+PLATFORM_OVERRIDES_PATH = Path("config") / "platform_overrides.yaml"
+
+_SECRET_CONFIG_KEYS = ("password", "passwd", "secret", "api_key", "token")
+
+
+def load_platform_overrides() -> dict[str, Any]:
+    """Return the platform overlay dict, or {} if none exists."""
+    if not PLATFORM_OVERRIDES_PATH.exists():
+        return {}
+    with open(PLATFORM_OVERRIDES_PATH, encoding="utf-8") as fh:
+        return yaml.safe_load(fh) or {}
+
+
+def save_platform_overrides(overrides: dict[str, Any]) -> None:
+    """Persist the platform overlay. Secrets are refused, never written."""
+    stripped = _strip_config_secrets(overrides)
+    PLATFORM_OVERRIDES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(PLATFORM_OVERRIDES_PATH, "w", encoding="utf-8") as fh:
+        yaml.safe_dump(stripped, fh, default_flow_style=False, sort_keys=False)
+
+
+def _strip_config_secrets(value: Any) -> Any:
+    """Recursively blank secret-ish values so a config dict is safe to return."""
+    if isinstance(value, dict):
+        return {
+            k: ("" if k.lower() in _SECRET_CONFIG_KEYS and v else _strip_config_secrets(v))
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_strip_config_secrets(v) for v in value]
+    return value
+
+
+def load_raw_config_dict(
+    config_path: str | None = None, resolve_env: bool = True
+) -> dict[str, Any]:
+    """The merged (base + platform overlay) config as a plain dict.
+
+    Unlike :func:`load_config` this does not validate into the Pydantic model —
+    it is what the Settings API introspects and returns (secrets stripped by the
+    caller). ``resolve_env=False`` keeps ``${VAR}`` placeholders visible so the
+    UI can show which values come from the environment.
+    """
+    config_path = config_path or _DEFAULT_CONFIG_PATH
+    with open(config_path, encoding="utf-8") as fh:
+        base = yaml.safe_load(fh) or {}
+    merged = _deep_merge(base, load_platform_overrides())
+    return _resolve_env_vars(merged) if resolve_env else merged
+
 
 def load_config(
     config_path: str | None = None,
 ) -> Config:
     """Load, resolve, and validate the application configuration.
+
+    The committed ``config.yaml`` is the base; a gitignored
+    ``config/platform_overrides.yaml`` (if present) is deep-merged over it so a
+    per-machine setting never requires editing the tracked file. ``${ENV_VAR}``
+    placeholders are then resolved.
 
     Parameters
     ----------
@@ -185,9 +242,10 @@ def load_config(
     """
     config_path = config_path or _DEFAULT_CONFIG_PATH
 
-    # Load base config
-    with open(config_path, "r", encoding="utf-8") as fh:
-        config_data = yaml.safe_load(fh)
+    # Load base config, then deep-merge the gitignored platform overlay over it.
+    with open(config_path, encoding="utf-8") as fh:
+        config_data = yaml.safe_load(fh) or {}
+    config_data = _deep_merge(config_data, load_platform_overrides())
 
     # Resolve environment variables
     config_data = _resolve_env_vars(config_data)

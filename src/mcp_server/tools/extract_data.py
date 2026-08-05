@@ -17,7 +17,6 @@ from src.mcp_server.connectors import create_connector
 from src.orchestrator.utils.retry import (
     MergeEngineError,
     PermanentError,
-    TransientError,
 )
 
 logger = logging.getLogger("merge-engine.tools.extract_data")
@@ -76,8 +75,15 @@ async def extract_data_impl(
             "origin_ids": [...],
         }
     """
-    logger.debug("ENTER extract_data_impl: origin_id=%s, table=%s, columns=%s, batch_size=%d, cursor=%s, watermark=%s",
-                  origin_config.get("id"), table_name, columns, batch_size, cursor, watermark)
+    logger.debug(
+        "ENTER extract_data_impl: origin_id=%s, table=%s, columns=%s, batch_size=%d, cursor=%s, watermark=%s",
+        origin_config.get("id"),
+        table_name,
+        columns,
+        batch_size,
+        cursor,
+        watermark,
+    )
     origin_id = origin_config.get("id", "unknown")
     origin_type = origin_config.get("type", "postgres")
     connection = origin_config.get("connection", {})
@@ -96,8 +102,12 @@ async def extract_data_impl(
     connector = None
     try:
         connector = create_connector(origin_type, connection)
-        logger.debug("Calling connector.extract: table=%s, columns=%s, batch_size=%d",
-                      table_name, columns, batch_size)
+        logger.debug(
+            "Calling connector.extract: table=%s, columns=%s, batch_size=%d",
+            table_name,
+            columns,
+            batch_size,
+        )
         extract_kwargs: dict[str, Any] = {
             "table_name": table_name,
             "columns": columns,
@@ -113,8 +123,11 @@ async def extract_data_impl(
         result = await connector.extract(**extract_kwargs)
         result["origin_id"] = origin_id
         result["table_name"] = table_name
-        logger.debug("extract_data_impl completed: rows=%d, total_count=%d",
-                      len(result.get("rows", [])), result.get("total_count", 0))
+        logger.debug(
+            "extract_data_impl completed: rows=%d, total_count=%d",
+            len(result.get("rows", [])),
+            result.get("total_count", 0),
+        )
         return result
     except MergeEngineError:
         # Already classified — re-wrapping would flatten its disposition, and
@@ -123,9 +136,7 @@ async def extract_data_impl(
         logger.error("Extraction failed for %s.%s", origin_id, table_name)
         raise
     except Exception as exc:
-        logger.error(
-            "Extraction failed for %s.%s: %s", origin_id, table_name, exc
-        )
+        logger.error("Extraction failed for %s.%s: %s", origin_id, table_name, exc)
         raise PermanentError(
             f"Extraction failed for origin '{origin_id}', table '{table_name}': {exc}"
         ) from exc
@@ -163,6 +174,7 @@ async def extract_data_handler(arguments: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Either 'origin_id' or 'origin_config' must be provided")
 
     from src.mcp_server.server import _get_config
+
     config = _get_config()
     origin_cfg = None
     for o in config.origins:
@@ -174,9 +186,12 @@ async def extract_data_handler(arguments: dict[str, Any]) -> dict[str, Any]:
         available = [o.id for o in config.origins]
         raise ValueError(f"Unknown origin '{origin_id}'. Available: {available}")
 
-    return await extract_data_impl({
-        "id": origin_cfg.id,
-        "type": origin_cfg.type,
-        "connection": origin_cfg.connection.model_dump(),
-        "priority": origin_cfg.priority,
-    }, **{k: v for k, v in arguments.items() if k != "origin_id"})
+    return await extract_data_impl(
+        {
+            "id": origin_cfg.id,
+            "type": origin_cfg.type,
+            "connection": origin_cfg.connection.model_dump(),
+            "priority": origin_cfg.priority,
+        },
+        **{k: v for k, v in arguments.items() if k != "origin_id"},
+    )

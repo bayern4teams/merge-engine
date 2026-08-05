@@ -3,7 +3,7 @@ Database setup script for merge-engine integration testing.
 
 Creates and populates:
 - 2 PostgreSQL origin databases
-- 1 MongoDB origin database  
+- 1 MongoDB origin database
 - 1 PostgreSQL destination database
 
 Usage:
@@ -37,10 +37,8 @@ import asyncio
 import json
 import os
 import random
-import sys
 import uuid
 from datetime import datetime
-from typing import Any
 
 import asyncpg
 from pymongo import MongoClient
@@ -107,8 +105,30 @@ def _address() -> dict:
     }
 
 
-FIRST_NAMES = ["James", "John", "Robert", "Michael", "William", "David", "Jennifer", "Lisa", "Elizabeth", "Sarah"]
-LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez"]
+FIRST_NAMES = [
+    "James",
+    "John",
+    "Robert",
+    "Michael",
+    "William",
+    "David",
+    "Jennifer",
+    "Lisa",
+    "Elizabeth",
+    "Sarah",
+]
+LAST_NAMES = [
+    "Smith",
+    "Johnson",
+    "Williams",
+    "Brown",
+    "Jones",
+    "Garcia",
+    "Miller",
+    "Davis",
+    "Rodriguez",
+    "Martinez",
+]
 COMPANY_NAMES = ["Acme Corp", "Global Inc", "United LLC", "Premier Solutions", "Apex Technologies"]
 PRODUCT_NAMES = ["Widget A", "Gadget X", "Tool Pro", "Device Plus", "System Ultra"]
 
@@ -117,26 +137,28 @@ def _gen_companies(n: int) -> list[dict]:
     rows = []
     for _ in range(n):
         name = random.choice(COMPANY_NAMES)
-        rows.append({
-            "id": _uid(),
-            "name": f"{name} {random.randint(100, 999)}",
-            "legal_name": f"{name} Legal Entity",
-            "phone": f"+1-{random.randint(200,999)}-{random.randint(200,999)}-{random.randint(1000,9999)}",
-            "email": f"info@{name.lower().replace(' ', '')}{random.randint(1,99)}.com",
-            "website": f"https://{name.lower().replace(' ', '')}{random.randint(1,99)}.com",
-            "industry": random.choice(["Technology", "Healthcare", "Finance"]),
-            "employee_count": random.randint(10, 5000),
-            "annual_revenue": round(random.uniform(100000, 100000000), 2),
-            "street": _address()["street"],
-            "city": _address()["city"],
-            "state": _address()["state"],
-            "zip_code": _address()["zip"],
-            "country": "US",
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
-            "record_status": "active",
-            "source_id": random.choice(["origin_postgres_1", "origin_mongodb_1"]),
-        })
+        rows.append(
+            {
+                "id": _uid(),
+                "name": f"{name} {random.randint(100, 999)}",
+                "legal_name": f"{name} Legal Entity",
+                "phone": f"+1-{random.randint(200, 999)}-{random.randint(200, 999)}-{random.randint(1000, 9999)}",
+                "email": f"info@{name.lower().replace(' ', '')}{random.randint(1, 99)}.com",
+                "website": f"https://{name.lower().replace(' ', '')}{random.randint(1, 99)}.com",
+                "industry": random.choice(["Technology", "Healthcare", "Finance"]),
+                "employee_count": random.randint(10, 5000),
+                "annual_revenue": round(random.uniform(100000, 100000000), 2),
+                "street": _address()["street"],
+                "city": _address()["city"],
+                "state": _address()["state"],
+                "zip_code": _address()["zip"],
+                "country": "US",
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+                "record_status": "active",
+                "source_id": random.choice(["origin_postgres_1", "origin_mongodb_1"]),
+            }
+        )
     return rows
 
 
@@ -145,31 +167,33 @@ def _gen_contacts(n: int) -> list[dict]:
     for _ in range(n):
         first = random.choice(FIRST_NAMES)
         last = random.choice(LAST_NAMES)
-        rows.append({
-            "id": _uid(),
-            "first_name": first,
-            "last_name": last,
-            "middle_name": random.choice(["A", None, None]),
-            "nickname": random.choice(["Bob", "Rob", "Jim", "Mike", None, None]),
-            "full_name": f"{first} {last}",
-            "email": f"{first.lower()}.{last.lower()}{random.randint(1,999)}@gmail.com",
-            "phone": f"+1-{random.randint(200,999)}-{random.randint(200,999)}-{random.randint(1000,9999)}",
-            "title": random.choice(["Engineer", "Manager", "Director", "VP", "CTO"]),
-            "company_id": _uid(),
-            "street": _address()["street"],
-            "city": _address()["city"],
-            "state": _address()["state"],
-            "zip_code": _address()["zip"],
-            "country": "US",
-            "linkedin": f"https://linkedin.com/in/{first.lower()}-{last.lower()}",
-            "date_of_birth": None,
-            "gender": random.choice(["M", "F", None]),
-            "notes": random.choice([None, "", "VIP customer"]),
-            "source_id": random.choice(["origin_postgres_1", "origin_mongodb_1"]),
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
-            "record_status": "active",
-        })
+        rows.append(
+            {
+                "id": _uid(),
+                "first_name": first,
+                "last_name": last,
+                "middle_name": random.choice(["A", None, None]),
+                "nickname": random.choice(["Bob", "Rob", "Jim", "Mike", None, None]),
+                "full_name": f"{first} {last}",
+                "email": f"{first.lower()}.{last.lower()}{random.randint(1, 999)}@gmail.com",
+                "phone": f"+1-{random.randint(200, 999)}-{random.randint(200, 999)}-{random.randint(1000, 9999)}",
+                "title": random.choice(["Engineer", "Manager", "Director", "VP", "CTO"]),
+                "company_id": _uid(),
+                "street": _address()["street"],
+                "city": _address()["city"],
+                "state": _address()["state"],
+                "zip_code": _address()["zip"],
+                "country": "US",
+                "linkedin": f"https://linkedin.com/in/{first.lower()}-{last.lower()}",
+                "date_of_birth": None,
+                "gender": random.choice(["M", "F", None]),
+                "notes": random.choice([None, "", "VIP customer"]),
+                "source_id": random.choice(["origin_postgres_1", "origin_mongodb_1"]),
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+                "record_status": "active",
+            }
+        )
     return rows
 
 
@@ -177,28 +201,32 @@ def _gen_products(n: int) -> list[dict]:
     rows = []
     for _ in range(n):
         name = random.choice(PRODUCT_NAMES)
-        rows.append({
-            "id": _uid(),
-            "name": f"{name} {random.randint(1, 99)}",
-            "description": f"High-quality {name.lower()} product",
-            "sku": f"SKU-{random.choice('ABCDE')}-{random.randint(1000, 9999)}",
-            "category": random.choice(["Electronics", "Hardware", "Software"]),
-            "price": round(random.uniform(9.99, 999.99), 2),
-            "cost": round(random.uniform(5.0, 500.0), 2),
-            "weight": round(random.uniform(0.1, 50.0), 2),
-            "units": random.choice(["pcs", "kg", "lbs"]),
-            "stock_quantity": random.randint(0, 10000),
-            "reorder_level": random.randint(10, 100),
-            "supplier": random.choice(COMPANY_NAMES),
-            "specifications": json.dumps({
-                "color": random.choice(["Red", "Blue", "Black"]),
-                "size": random.choice(["S", "M", "L", "XL"]),
-            }),
-            "source_id": random.choice(["origin_postgres_1", "origin_mongodb_1"]),
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
-            "record_status": "active",
-        })
+        rows.append(
+            {
+                "id": _uid(),
+                "name": f"{name} {random.randint(1, 99)}",
+                "description": f"High-quality {name.lower()} product",
+                "sku": f"SKU-{random.choice('ABCDE')}-{random.randint(1000, 9999)}",
+                "category": random.choice(["Electronics", "Hardware", "Software"]),
+                "price": round(random.uniform(9.99, 999.99), 2),
+                "cost": round(random.uniform(5.0, 500.0), 2),
+                "weight": round(random.uniform(0.1, 50.0), 2),
+                "units": random.choice(["pcs", "kg", "lbs"]),
+                "stock_quantity": random.randint(0, 10000),
+                "reorder_level": random.randint(10, 100),
+                "supplier": random.choice(COMPANY_NAMES),
+                "specifications": json.dumps(
+                    {
+                        "color": random.choice(["Red", "Blue", "Black"]),
+                        "size": random.choice(["S", "M", "L", "XL"]),
+                    }
+                ),
+                "source_id": random.choice(["origin_postgres_1", "origin_mongodb_1"]),
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+                "record_status": "active",
+            }
+        )
     return rows
 
 
@@ -208,50 +236,57 @@ def _gen_orders(n: int) -> list[dict]:
         num_items = random.randint(1, 3)
         items = []
         for _ in range(num_items):
-            items.append({
-                "product_id": _uid(),
-                "product_name": random.choice(PRODUCT_NAMES),
-                "sku": f"SKU-{random.choice('ABCDE')}-{random.randint(1000, 9999)}",
-                "quantity": random.randint(1, 10),
-                "unit_price": round(random.uniform(10, 500), 2),
-                "total": round(random.uniform(10, 5000), 2),
-            })
+            items.append(
+                {
+                    "product_id": _uid(),
+                    "product_name": random.choice(PRODUCT_NAMES),
+                    "sku": f"SKU-{random.choice('ABCDE')}-{random.randint(1000, 9999)}",
+                    "quantity": random.randint(1, 10),
+                    "unit_price": round(random.uniform(10, 500), 2),
+                    "total": round(random.uniform(10, 5000), 2),
+                }
+            )
         total = sum(i["total"] for i in items)
-        rows.append({
-            "id": _uid(),
-            "order_number": f"ORD-{random.randint(100000, 999999)}",
-            "contact_id": _uid(),
-            "company_id": _uid(),
-            "items": json.dumps(items),
-            "subtotal": round(total, 2),
-            "tax": round(total * 0.08, 2),
-            "shipping": round(random.uniform(5, 50), 2),
-            "total": round(total * 1.08 + random.uniform(5, 50), 2),
-            "currency": "USD",
-            "status": random.choice(["pending", "confirmed", "shipped", "delivered", "cancelled"]),
-            "shipping_street": _address()["street"],
-            "shipping_city": _address()["city"],
-            "shipping_state": _address()["state"],
-            "shipping_zip": _address()["zip"],
-            "billing_street": _address()["street"],
-            "billing_city": _address()["city"],
-            "billing_state": _address()["state"],
-            "billing_zip": _address()["zip"],
-            "notes": random.choice([None, "", "Rush delivery"]),
-            "placed_at": datetime.now().isoformat(),
-            "shipped_at": None,
-            "delivered_at": None,
-            "source_id": random.choice(["origin_postgres_1", "origin_mongodb_1"]),
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
-            "record_status": "active",
-        })
+        rows.append(
+            {
+                "id": _uid(),
+                "order_number": f"ORD-{random.randint(100000, 999999)}",
+                "contact_id": _uid(),
+                "company_id": _uid(),
+                "items": json.dumps(items),
+                "subtotal": round(total, 2),
+                "tax": round(total * 0.08, 2),
+                "shipping": round(random.uniform(5, 50), 2),
+                "total": round(total * 1.08 + random.uniform(5, 50), 2),
+                "currency": "USD",
+                "status": random.choice(
+                    ["pending", "confirmed", "shipped", "delivered", "cancelled"]
+                ),
+                "shipping_street": _address()["street"],
+                "shipping_city": _address()["city"],
+                "shipping_state": _address()["state"],
+                "shipping_zip": _address()["zip"],
+                "billing_street": _address()["street"],
+                "billing_city": _address()["city"],
+                "billing_state": _address()["state"],
+                "billing_zip": _address()["zip"],
+                "notes": random.choice([None, "", "Rush delivery"]),
+                "placed_at": datetime.now().isoformat(),
+                "shipped_at": None,
+                "delivered_at": None,
+                "source_id": random.choice(["origin_postgres_1", "origin_mongodb_1"]),
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+                "record_status": "active",
+            }
+        )
     return rows
 
 
 # ---------------------------------------------------------------------------
 # PostgreSQL helpers
 # ---------------------------------------------------------------------------
+
 
 async def _ensure_user_exists(pool: asyncpg.Pool) -> None:
     """Create the test user if it doesn't exist."""
@@ -394,12 +429,23 @@ async def _insert_companies(conn: asyncpg.Connection, companies: list[dict]) -> 
         addr = c.get("address", {})
         await conn.execute(
             stmt,
-            c["id"], c["name"], c.get("legal_name"), c.get("phone"), c.get("email"),
-            c.get("website"), c.get("industry"), c.get("employee_count"),
+            c["id"],
+            c["name"],
+            c.get("legal_name"),
+            c.get("phone"),
+            c.get("email"),
+            c.get("website"),
+            c.get("industry"),
+            c.get("employee_count"),
             c.get("annual_revenue"),
-            addr.get("street", ""), addr.get("city", ""), addr.get("state", ""),
-            addr.get("zip", ""), addr.get("country", "US"),
-            c.get("created_at"), c.get("updated_at"), c.get("record_status"),
+            addr.get("street", ""),
+            addr.get("city", ""),
+            addr.get("state", ""),
+            addr.get("zip", ""),
+            addr.get("country", "US"),
+            c.get("created_at"),
+            c.get("updated_at"),
+            c.get("record_status"),
             c.get("source_id"),
         )
 
@@ -417,13 +463,28 @@ async def _insert_contacts(conn: asyncpg.Connection, contacts: list[dict]) -> No
         addr = c.get("address", {})
         await conn.execute(
             stmt,
-            c["id"], c.get("first_name"), c.get("last_name"), c.get("middle_name"),
-            c.get("nickname"), c.get("full_name"), c.get("email"), c.get("phone"),
-            c.get("title"), c.get("company_id"),
-            addr.get("street", ""), addr.get("city", ""), addr.get("state", ""),
-            addr.get("zip", ""), addr.get("country", "US"),
-            c.get("linkedin"), c.get("date_of_birth"), c.get("gender"), c.get("notes"),
-            c.get("source_id"), c.get("created_at"), c.get("updated_at"),
+            c["id"],
+            c.get("first_name"),
+            c.get("last_name"),
+            c.get("middle_name"),
+            c.get("nickname"),
+            c.get("full_name"),
+            c.get("email"),
+            c.get("phone"),
+            c.get("title"),
+            c.get("company_id"),
+            addr.get("street", ""),
+            addr.get("city", ""),
+            addr.get("state", ""),
+            addr.get("zip", ""),
+            addr.get("country", "US"),
+            c.get("linkedin"),
+            c.get("date_of_birth"),
+            c.get("gender"),
+            c.get("notes"),
+            c.get("source_id"),
+            c.get("created_at"),
+            c.get("updated_at"),
             c.get("record_status"),
         )
 
@@ -441,11 +502,23 @@ async def _insert_products(conn: asyncpg.Connection, products: list[dict]) -> No
             spec = json.dumps(spec)
         await conn.execute(
             stmt,
-            p["id"], p.get("name"), p.get("description"), p.get("sku"),
-            p.get("category"), p.get("price"), p.get("cost"), p.get("weight"),
-            p.get("units"), p.get("stock_quantity"), p.get("reorder_level"),
-            p.get("supplier"), spec, p.get("source_id"),
-            p.get("created_at"), p.get("updated_at"), p.get("record_status"),
+            p["id"],
+            p.get("name"),
+            p.get("description"),
+            p.get("sku"),
+            p.get("category"),
+            p.get("price"),
+            p.get("cost"),
+            p.get("weight"),
+            p.get("units"),
+            p.get("stock_quantity"),
+            p.get("reorder_level"),
+            p.get("supplier"),
+            spec,
+            p.get("source_id"),
+            p.get("created_at"),
+            p.get("updated_at"),
+            p.get("record_status"),
         )
 
 
@@ -469,9 +542,17 @@ async def _insert_orders(conn: asyncpg.Connection, orders: list[dict]) -> None:
         ba = o.get("billing_address", {})
         await conn.execute(
             stmt,
-            o["id"], o.get("order_number"), o.get("contact_id"), o.get("company_id"),
-            items, o.get("subtotal"), o.get("tax"), o.get("shipping"), o.get("total"),
-            o.get("currency"), o.get("status"),
+            o["id"],
+            o.get("order_number"),
+            o.get("contact_id"),
+            o.get("company_id"),
+            items,
+            o.get("subtotal"),
+            o.get("tax"),
+            o.get("shipping"),
+            o.get("total"),
+            o.get("currency"),
+            o.get("status"),
             sa.get("street", "") if isinstance(sa, dict) else "",
             sa.get("city", "") if isinstance(sa, dict) else "",
             sa.get("state", "") if isinstance(sa, dict) else "",
@@ -480,14 +561,20 @@ async def _insert_orders(conn: asyncpg.Connection, orders: list[dict]) -> None:
             ba.get("city", "") if isinstance(ba, dict) else "",
             ba.get("state", "") if isinstance(ba, dict) else "",
             ba.get("zip", "") if isinstance(ba, dict) else "",
-            o.get("notes"), o.get("placed_at"), o.get("shipped_at"), o.get("delivered_at"),
-            o.get("source_id"), o.get("created_at"), o.get("updated_at"),
+            o.get("notes"),
+            o.get("placed_at"),
+            o.get("shipped_at"),
+            o.get("delivered_at"),
+            o.get("source_id"),
+            o.get("created_at"),
+            o.get("updated_at"),
             o.get("record_status"),
         )
 
 
-async def _populate_database(config: dict, companies: list, contacts: list,
-                              products: list, orders: list, drop: bool = False) -> None:
+async def _populate_database(
+    config: dict, companies: list, contacts: list, products: list, orders: list, drop: bool = False
+) -> None:
     """Connect to a PostgreSQL database, create schema, and insert data."""
     conn = await asyncpg.connect(
         host=config["host"],
@@ -513,8 +600,10 @@ async def _populate_database(config: dict, companies: list, contacts: list,
 
         await conn.execute("COMMIT")
         print(f"  Populated {config['host']}:{config['port']}/{config['database']}")
-        print(f"    companies={len(companies)}, contacts={len(contacts)}, "
-              f"products={len(products)}, orders={len(orders)}")
+        print(
+            f"    companies={len(companies)}, contacts={len(contacts)}, "
+            f"products={len(products)}, orders={len(orders)}"
+        )
     finally:
         await conn.close()
 
@@ -524,8 +613,9 @@ async def _populate_database(config: dict, companies: list, contacts: list,
 # ---------------------------------------------------------------------------
 
 
-def _populate_mongodb(config: dict, companies: list, contacts: list,
-                       products: list, drop: bool = False) -> None:
+def _populate_mongodb(
+    config: dict, companies: list, contacts: list, products: list, drop: bool = False
+) -> None:
     """Connect to MongoDB, create collections, and insert data."""
     client = MongoClient(
         f"mongodb://{config['host']}:{config['port']}",
@@ -665,7 +755,9 @@ async def _setup_destination(config: dict, drop: bool = False) -> None:
             await _drop_tables(conn)
         await _create_schema(conn, "destination")
         await conn.execute("COMMIT")
-        print(f"  Destination schema created at {config['host']}:{config['port']}/{config['database']}")
+        print(
+            f"  Destination schema created at {config['host']}:{config['port']}/{config['database']}"
+        )
     finally:
         await conn.close()
 
@@ -673,6 +765,7 @@ async def _setup_destination(config: dict, drop: bool = False) -> None:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 async def main(drop: bool = False) -> None:
     """Set up all test databases."""
@@ -702,7 +795,9 @@ async def main(drop: bool = False) -> None:
 
     # Populate PostgreSQL origin 1
     print("1. PostgreSQL Origin 1...")
-    await _populate_database(cfg["pg_origin_1"], pg1_companies, pg1_contacts, pg1_products, orders[:25], drop)
+    await _populate_database(
+        cfg["pg_origin_1"], pg1_companies, pg1_contacts, pg1_products, orders[:25], drop
+    )
 
     # Populate PostgreSQL origin 2 (second set)
     print("2. PostgreSQL Origin 2...")
@@ -730,6 +825,7 @@ async def main(drop: bool = False) -> None:
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(description="Setup merge-engine test databases")
     parser.add_argument("--drop", action="store_true", help="Drop existing tables first")
     args = parser.parse_args()

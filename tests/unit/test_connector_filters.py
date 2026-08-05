@@ -50,3 +50,14 @@ def test_unknown_op_falls_back_to_eq() -> None:
 def test_scalar_in_value_is_wrapped() -> None:
     out = normalize_filter({"company_id": {"op": "in", "value": 7}})
     assert out == [{"column": "company_id", "op": "in", "value": [7]}]
+
+
+def test_in_scratch_passes_through_table_name() -> None:
+    # Part 1.5 D.6: the value is a scratch-table name (a string), not a
+    # value list — must not go through "in"'s list/empty-list handling.
+    out = normalize_filter(
+        {"company_id": {"op": "in_scratch", "value": "merge_engine_scratch_abc"}}
+    )
+    assert out == [
+        {"column": "company_id", "op": "in_scratch", "value": "merge_engine_scratch_abc"}
+    ]

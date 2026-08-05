@@ -13,8 +13,14 @@ from __future__ import annotations
 from typing import Any
 
 _TIMESTAMP_NAME_HINTS = (
-    "updated_at", "modified_at", "updated_on", "modified_on",
-    "last_modified", "last_updated", "update_time", "modify_time",
+    "updated_at",
+    "modified_at",
+    "updated_on",
+    "modified_on",
+    "last_modified",
+    "last_updated",
+    "update_time",
+    "modify_time",
 )
 _TIMESTAMP_TYPE_HINTS = ("timestamp", "datetime", "date")
 _NUMERIC_TYPE_HINTS = ("int", "serial", "bigint", "smallint", "integer")

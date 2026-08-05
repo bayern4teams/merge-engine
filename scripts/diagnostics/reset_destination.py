@@ -10,6 +10,7 @@ Usage:
     python reset_destination.py                                   # global_warehouse.public
     python reset_destination.py --db global_warehouse_golden --schema boeing
 """
+
 import argparse
 
 import psycopg2
@@ -23,14 +24,17 @@ ap.add_argument("--db", default="global_warehouse")
 ap.add_argument("--schema", default="public")
 args = ap.parse_args()
 
-conn = psycopg2.connect(host=args.host, port=args.port, user=args.user,
-                         password=args.password, dbname=args.db)
+conn = psycopg2.connect(
+    host=args.host, port=args.port, user=args.user, password=args.password, dbname=args.db
+)
 conn.autocommit = True
 cur = conn.cursor()
-cur.execute('SET search_path TO %s', (args.schema,))
+cur.execute("SET search_path TO %s", (args.schema,))
 
 # All base tables in this schema
-cur.execute("SELECT tablename FROM pg_tables WHERE schemaname = %s ORDER BY tablename", (args.schema,))
+cur.execute(
+    "SELECT tablename FROM pg_tables WHERE schemaname = %s ORDER BY tablename", (args.schema,)
+)
 tables = [r[0] for r in cur.fetchall()]
 print(f"Found {len(tables)} tables in schema '{args.schema}': {tables}")
 

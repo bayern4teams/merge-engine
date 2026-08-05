@@ -31,10 +31,16 @@ _TRUTHY = {"1", "t", "true", "y", "yes", "on"}
 _FALSY = {"0", "f", "false", "n", "no", "off"}
 
 _MAGNITUDE_UNITS = {
-    "k": 1e3, "thousand": 1e3,
-    "m": 1e6, "mm": 1e6, "million": 1e6,
-    "b": 1e9, "bn": 1e9, "billion": 1e9,
-    "t": 1e12, "trillion": 1e12,
+    "k": 1e3,
+    "thousand": 1e3,
+    "m": 1e6,
+    "mm": 1e6,
+    "million": 1e6,
+    "b": 1e9,
+    "bn": 1e9,
+    "billion": 1e9,
+    "t": 1e12,
+    "trillion": 1e12,
 }
 
 # Leading qualifiers that describe an approximation rather than the number
@@ -179,9 +185,7 @@ def coerce_value(value: Any, target_sql_type: str) -> tuple[Any, bool, str]:
     return value, True, ""
 
 
-def is_compatible(
-    sample_values: list[Any], target_sql_type: str
-) -> tuple[bool, str]:
+def is_compatible(sample_values: list[Any], target_sql_type: str) -> tuple[bool, str]:
     """Would mapping onto a column of ``target_sql_type`` survive these samples?
 
     Used at mapping time, before a field is bound to an existing destination

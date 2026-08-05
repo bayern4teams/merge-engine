@@ -14,6 +14,7 @@ import {
 import Stepper from "./Stepper";
 import Gate from "./Gates";
 import EventLog, { LogLine } from "./EventLog";
+import AdvancedPanel, { ADVANCED_DEFAULT, AdvancedState, buildRunOverrides } from "./AdvancedPanel";
 
 interface Props {
   origins: OriginConfig[];
@@ -48,6 +49,7 @@ export default function PipelineScreen({ origins, destination }: Props) {
   const [profile, setProfile] = useState("");
   const [saveAs, setSaveAs] = useState("");
   const [fullRemerge, setFullRemerge] = useState(false);
+  const [advanced, setAdvanced] = useState<AdvancedState>(ADVANCED_DEFAULT);
   const [presetCompany, setPresetCompany] = useState("");
   const [threadId, setThreadId] = useState<string | null>(null);
   const [status, setStatus] = useState<WorkflowStatus | null>(null);
@@ -139,6 +141,7 @@ export default function PipelineScreen({ origins, destination }: Props) {
     lastStatusKey.current = "";
     lastGateKey.current = "";
     try {
+      const overrides = buildRunOverrides(advanced);
       const { thread_id } = await startWorkflow({
         request,
         origins,
@@ -146,6 +149,7 @@ export default function PipelineScreen({ origins, destination }: Props) {
         profile_name: profile || undefined,
         save_as_profile: saveAs.trim() || undefined,
         full_remerge: fullRemerge || undefined,
+        ...overrides,
       });
       if (profile) {
         addLog("info", `Replaying saved profile "${profile}".`);
@@ -155,6 +159,13 @@ export default function PipelineScreen({ origins, destination }: Props) {
       }
       if (saveAs.trim()) {
         addLog("info", `This run's decisions will be saved as "${saveAs.trim()}".`);
+      }
+      if (overrides.run_config?.auto_approve_gates?.length) {
+        addLog(
+          "warn",
+          `Auto-approving: ${overrides.run_config.auto_approve_gates.join(", ")} — ` +
+            "these gates will not pause for review.",
+        );
       }
       addLog("info", `Workflow ${thread_id} started with ${origins.length} origin(s).`);
       setThreadId(thread_id);
@@ -314,6 +325,9 @@ export default function PipelineScreen({ origins, destination }: Props) {
             merged back (an incremental run would find nothing new and load 0).
           </span>
         </label>
+
+        <AdvancedPanel value={advanced} onChange={setAdvanced} disabled={running} />
+
         <div className="btn-row" style={{ marginTop: 14 }}>
           <button className="btn btn-primary" onClick={onStart} disabled={!canStart || running || busy}>
             ▶ Start merge

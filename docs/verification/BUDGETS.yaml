@@ -1,0 +1,46 @@
+# Machine-checkable completion budgets (Phase 0 Sec 0.6).
+#
+# These are CEILINGS, not targets. `scripts/diagnostics/drive_app.py
+# --assert-budgets` compares a real run's `logs/run_reports/<run_id>.json`
+# (specifically its `timings` key, written by graph.py's `_timed()` wrapper)
+# against the numbers below and exits non-zero on a breach. Passing far
+# under a ceiling is success, not a sign the budget is wrong.
+#
+# Update this file only after a deliberate, recorded re-baseline
+# (docs/verification/BASELINE_V1.md) — never silently loosen a number just
+# because a run happened to be slow.
+
+# Per-entity-type ceiling for the whole resolve_entities node (blocking +
+# scoring + clustering combined), in seconds. Seeded from the v1 numbers in
+# docs/diagnostics/PERFORMANCE_BOTTLENECKS.md (person ~10-25 min, experience
+# ~20-30 min, technology ~9-11 min despite only 1,503 records — a
+# pathological-component case, not a per-record cost).
+#
+# NOTE: docs/verification/CLUSTERING_PROFILE.md (BUG D.1, measured after the
+# C0-C2 matching-precision fixes landed) found clustering itself now costs
+# 0.28s of a 211s resolve_entities call on a comparable person-sized corpus —
+# the dominant cost moved from clustering to blocking+scoring. The ceilings
+# below still hold as the whole-node budget; they should only be tightened
+# after a real end-to-end run is remeasured and BASELINE_V1.md is updated,
+# not lowered speculatively.
+resolve_entities_seconds_max:
+  person: 1500
+  experience: 1800
+  technology: 660
+  company: 1500
+  _default: 1800
+
+# p95 latency for a single LLM call through LLMClient, milliseconds. Generous
+# on purpose — the fallback chain (config.yaml's llm.fallback_models) means a
+# slow/failing primary model degrades to a further model rather than hanging,
+# and that walk itself takes real wall time.
+llm_stage_latency_ms_p95: 12000
+
+# The v1 Boeing baseline (2a48845, first honest end-to-end completion).
+# Branches must not regress below this; re-baseline in BASELINE_V1.md once
+# the §0.0 correctness fixes are verified against a real Boeing run.
+parity_pct_min: 12.0
+
+# Wall-clock ceiling for one full Boeing run through drive_app.py, start to
+# finish across all four HITL gates auto-approved.
+full_run_minutes_max: 90

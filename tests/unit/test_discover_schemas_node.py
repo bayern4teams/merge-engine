@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -35,20 +35,22 @@ class TestDiscoverSchemas:
     @pytest.fixture
     def mock_discover_schema(self) -> AsyncMock:
         """Mock discover_schema_impl."""
-        mock = AsyncMock(return_value={
-            "tables": [
-                {
-                    "name": "customers",
-                    "full_name": "public.customers",
-                    "columns": [
-                        {"name": "id", "type": "INTEGER"},
-                        {"name": "name", "type": "VARCHAR"},
-                    ],
-                    "foreign_keys": [],
-                    "sample_row": {"id": 1, "name": "Test"},
-                }
-            ]
-        })
+        mock = AsyncMock(
+            return_value={
+                "tables": [
+                    {
+                        "name": "customers",
+                        "full_name": "public.customers",
+                        "columns": [
+                            {"name": "id", "type": "INTEGER"},
+                            {"name": "name", "type": "VARCHAR"},
+                        ],
+                        "foreign_keys": [],
+                        "sample_row": {"id": 1, "name": "Test"},
+                    }
+                ]
+            }
+        )
         return mock
 
     @pytest.mark.asyncio
@@ -87,9 +89,7 @@ class TestDiscoverSchemas:
         assert mock_discover_schema.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_discover_schemas_empty_origins(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_discover_schemas_empty_origins(self, base_state: dict[str, Any]) -> None:
         """Test discover_schemas with no origins returns empty schemas."""
         base_state["origins"] = []
 
@@ -99,10 +99,9 @@ class TestDiscoverSchemas:
         assert result["errors"] == []
 
     @pytest.mark.asyncio
-    async def test_discover_schemas_partial_failure(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_discover_schemas_partial_failure(self, base_state: dict[str, Any]) -> None:
         """Test discover_schemas handles partial failure (one origin fails)."""
+
         async def side_effect_fn(origin: dict[str, Any]) -> dict[str, Any]:
             if origin.get("id") == "postgres_main":
                 return {
@@ -125,9 +124,7 @@ class TestDiscoverSchemas:
         assert "failed" in result["errors"][0].lower()
 
     @pytest.mark.asyncio
-    async def test_discover_schemas_all_fail(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_discover_schemas_all_fail(self, base_state: dict[str, Any]) -> None:
         """Test discover_schemas when all origins fail."""
         error_msg = "All connections failed"
 
@@ -149,7 +146,11 @@ class TestDiscoverSchemas:
     async def test_discover_schemas_preserves_existing_errors(
         self, base_state: dict[str, Any], mock_discover_schema: AsyncMock
     ) -> None:
-        """Test discover_schemas preserves existing errors from state."""
+        """Existing errors survive a call to this node via MergeState's real
+        operator.add reducer, not because the node re-returns the old
+        history itself (Phase 0 Sec 0.8 - see analyze_dependencies' test of
+        the same name for why the previous version of this test asserted
+        the actual bug)."""
         base_state["errors"] = ["pre-existing error 1", "pre-existing error 2"]
 
         with patch(
@@ -158,9 +159,11 @@ class TestDiscoverSchemas:
         ):
             result = await discover_schemas(base_state)
 
-        assert len(result["errors"]) == 2
-        assert "pre-existing error 1" in result["errors"]
-        assert "pre-existing error 2" in result["errors"]
+        assert "pre-existing error 1" not in result.get("errors", [])
+        assert "pre-existing error 2" not in result.get("errors", [])
+        combined = base_state["errors"] + result.get("errors", [])
+        assert "pre-existing error 1" in combined
+        assert "pre-existing error 2" in combined
 
     @pytest.mark.asyncio
     async def test_discover_schemas_schema_table_count_logged(
@@ -181,6 +184,7 @@ class TestDiscoverSchemas:
         self, base_state: dict[str, Any], mock_discover_schema: AsyncMock
     ) -> None:
         """Test discover_schemas handles origins with id as attribute (object)."""
+
         class OriginObj:
             id = "postgres_main"
             type = "postgres"
@@ -212,17 +216,17 @@ class TestDiscoverSchemas:
         assert "unknown" in result["schemas"]
 
     @pytest.mark.asyncio
-    async def test_discover_schemas_multiple_tables(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_discover_schemas_multiple_tables(self, base_state: dict[str, Any]) -> None:
         """Test discover_schemas with multiple tables in schema."""
-        mock_multi = AsyncMock(return_value={
-            "tables": [
-                {"name": "customers", "columns": [], "foreign_keys": [], "sample_row": {}},
-                {"name": "orders", "columns": [], "foreign_keys": [], "sample_row": {}},
-                {"name": "products", "columns": [], "foreign_keys": [], "sample_row": {}},
-            ]
-        })
+        mock_multi = AsyncMock(
+            return_value={
+                "tables": [
+                    {"name": "customers", "columns": [], "foreign_keys": [], "sample_row": {}},
+                    {"name": "orders", "columns": [], "foreign_keys": [], "sample_row": {}},
+                    {"name": "products", "columns": [], "foreign_keys": [], "sample_row": {}},
+                ]
+            }
+        )
 
         with patch(
             "src.orchestrator.nodes.discover_schemas.discover_schema_impl",

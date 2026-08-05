@@ -7,6 +7,7 @@ log aggregation systems (e.g., Datadog, Splunk, CloudWatch).
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import sys
 from pathlib import Path
@@ -47,7 +48,9 @@ def setup_logging(
         ],
         wrapper_class=structlog.make_filtering_bound_logger(log_level),
         context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory() if not json else structlog.stdlib.LoggerFactory(),
+        logger_factory=structlog.PrintLoggerFactory()
+        if not json
+        else structlog.stdlib.LoggerFactory(),
         cache_logger_on_first_use=False,
     )
 
@@ -83,12 +86,10 @@ def setup_logging(
     # information. Reconfiguring the stream to UTF-8 with replacement keeps
     # every record readable on any console.
     stream = sys.stdout
-    try:
+    # Not a reconfigurable text stream (pytest capture, a pipe); the handler
+    # still works, it just keeps the platform default.
+    with contextlib.suppress(AttributeError, ValueError):
         stream.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, ValueError):
-        # Not a reconfigurable text stream (pytest capture, a pipe); the
-        # handler still works, it just keeps the platform default.
-        pass
     console_handler = logging.StreamHandler(stream)
     console_handler.setFormatter(console_fmt)
     console_handler.setLevel(log_level)

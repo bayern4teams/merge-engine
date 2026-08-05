@@ -10,7 +10,9 @@ MongoDB's `sample_mflix`.
 For a step-by-step setup (Docker, databases, running your first merge), see
 **[User_Guide.md](User_Guide.md)**. For a full technical walkthrough of every
 module and the reasoning behind each design choice, see
-**[TECHNICAL_README.md](TECHNICAL_README.md)**.
+**[docs/architecture/overview.md](docs/architecture/overview.md)** (start of
+the split `TECHNICAL_README.md`, indexed at
+**[docs/INDEX.md](docs/INDEX.md)**).
 
 ## What it does
 
@@ -98,6 +100,40 @@ live against real databases — see the phase-by-phase evidence in
   exactly the 10 Nova rows, zero non-Nova pollution. Also fixes a watermark bug
   where deleting rows from the destination and re-running extracted nothing.
 
+- **Harness foundation (Phase 0, on `main`):** a manual inspection of a live
+  destination found the matcher was comparing **zero** candidate pairs at
+  real corpus size while reporting zero uncompared, and the loader had grown
+  the `company` table from 14 columns to 43 by inventing new columns for
+  unmappable source fields. Both fixed at the architecture level — field
+  mapping is `map`/`skip` only (no `new_column`, enforced in code, not just
+  the prompt), and blocking/scoring compare a canonical cross-origin
+  projection instead of raw intersected field names. Also: one verification
+  command (`python scripts/check.py all`), an architecture linter, a
+  mypy/arch-lint ratchet, and `CLAUDE.md`/`docs/INDEX.md` as the
+  repository's own map. See [TODO.md](TODO.md)'s "Phase 0" section and
+  [docs/verification/BASELINE_V1.md](docs/verification/BASELINE_V1.md).
+- **Speed + observability (Part 1.5, on `main`):** a full Boeing run went
+  from 50.7 minutes to **23.4 minutes** — `resolve_entities` 2.44x faster
+  (scoring-path waste removal + true multiprocessing for its CPU-bound
+  core), `map_fields` 5.8x faster (parallel LLM calls across entity types),
+  plus a mid-run resolve cache keyed by content hash. Langfuse tracing was
+  rebuilt so one merge run is one trace with every node and LLM call nested
+  correctly (was fragmented into disconnected spans) — automatically
+  verified by `scripts/diagnostics/verify_langfuse_trace.py` against the
+  real Langfuse API. See [TODO.md](TODO.md)'s "Part 1.5" section.
+- **Configurability, investigation UI, portability (Part 1.6, on `main`):**
+  run-by-run overrides (model, matching strictness, per-gate auto-approve)
+  and platform defaults are now editable in the UI instead of requiring a
+  config-file edit and restart. Four new read-only investigation tools — a
+  match/cluster inspector, a run timeline with token cost, a bounded schema/
+  data sampler, and an in-app diff against the hand-merge golden. The
+  project now runs on any machine, not just this one: `python
+  scripts/bootstrap.py` sets up a plain venv (no conda anywhere in it) from
+  a fresh clone, and `docker build .` produces a working image — both
+  proven live, including a real bug the Docker boot test caught (the app
+  bound only to `127.0.0.1`, which a container's port-forwarding can't
+  reach). See [TODO.md](TODO.md)'s "Part 1.6" section.
+
 Read [TODO.md](TODO.md) for the evidence behind every one of those claims —
 it is the append-only working log this project was built from, phase by
 phase, with real numbers rather than descriptions.
@@ -105,11 +141,15 @@ phase, with real numbers rather than descriptions.
 ## Quick start
 
 ```bash
-python -m venv .venv && .venv\Scripts\activate
-pip install -e .
-copy .env.example .env      # fill in LLM_API_KEY
-python -m src.main --mode both --port 7860
+python scripts/bootstrap.py    # creates .venv, installs deps, builds the frontend, copies .env.example
+# fill in LLM_API_KEY in the new .env, then:
+.venv\Scripts\python -m src.main --mode gradio --port 7860
 ```
+
+(`--mode gradio` is the legacy flag name — it serves FastAPI + the React
+SPA. `--mode both` does not work; see `CLAUDE.md`.) Or build the Docker
+image instead of a venv: `docker build -t merge-engine . && docker run -p
+7860:7860 -e LLM_API_KEY=sk-... merge-engine`.
 
 Then open `http://localhost:7860`. Full setup, including standing up your
 own origin/destination databases in Docker, is in
@@ -157,7 +197,14 @@ docker compose -f docker/langfuse-compose.yml --env-file docker/langfuse.env up 
 ```
 
 Then set `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_HOST` in
-`.env` (the stack auto-creates these on first boot).
+`.env` (the stack auto-creates these on first boot). Every HITL resume lands
+in the same trace (one merge run = one trace, not one per gate), and
+`resolve_entities`'s internal blocking/model-fit/scoring/clustering phases
+show up as their own child spans. Verify a run's trace automatically with:
+
+```bash
+python -m scripts.diagnostics.verify_langfuse_trace <thread_id>
+```
 
 ## Testing
 
@@ -165,9 +212,11 @@ Then set `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_HOST` in
 pytest
 ```
 
-908 tests passing as of the last full run (0 failed, 83 skipped — the skips
-are tests that require a live database container). Run
-`tests/eval/` separately for matcher precision/recall against labelled data.
+1,325 tests passing as of the last full run (0 failed, 83 skipped — the
+skips are tests that require a live database container). Run `tests/eval/`
+separately for matcher precision/recall against labelled data, or
+`python scripts/check.py all` for the full gate (lint, types, arch/doc
+lint, tests, frontend build, matcher eval) in one command.
 
 ## Known, documented limitations
 

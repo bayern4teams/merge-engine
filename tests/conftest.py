@@ -16,13 +16,30 @@ import yaml
 # CONFIG_PATH reads this env var. Without it, tests that exercise the recent-
 # connections history overwrite the user's real
 # config/recent_connections.json with fixture data.
+#
+# Keyed by PYTEST_XDIST_WORKER (Phase 0 Sec 0.7): under `pytest -n auto`,
+# pytest-xdist runs one process per worker ("gw0", "gw1", ...), and every
+# worker importing this module at the same fixed path would collide on the
+# same file. Serial runs (no xdist) have no such env var and all share
+# "main", which is exactly today's single-file behaviour.
+_xdist_worker = os.environ.get("PYTEST_XDIST_WORKER", "main")
 os.environ.setdefault(
     "MERGE_ENGINE_HISTORY_PATH",
-    os.path.join(tempfile.gettempdir(), "merge_engine_test_history.json"),
+    os.path.join(tempfile.gettempdir(), f"merge_engine_test_history_{_xdist_worker}.json"),
 )
 
-from src.utils.config_loader import load_config, Config
-from src.orchestrator.workflow_manager import WorkflowManager
+# Part 1.5 D.7: resolve_entities' cross-run matching cache lives at a fixed
+# path (logs/spool/_resolve_cache.duckdb), not a per-test fixture. Without
+# this, two tests using the same synthetic record set would silently share a
+# cache hit across test boundaries — real-world-correct (a hit is always
+# byte-identical to a fresh compute, by construction), but it breaks test
+# isolation and would mask a bug in the CACHE ITSELF behind "still passed".
+os.environ.setdefault("MERGE_ENGINE_DISABLE_RESOLVE_CACHE", "1")
+
+from src.utils.config_loader import (  # noqa: E402 - must follow the env var above
+    Config,
+    load_config,
+)
 
 
 @pytest.fixture(scope="session")
@@ -277,9 +294,7 @@ def temp_config_file() -> str:
         },
     }
 
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".yaml", delete=False
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
         yaml.dump(config_data, f)
         return f.name
 
@@ -291,3 +306,16 @@ def clean_env(monkeypatch: Any) -> None:
     for key in list(os.environ.keys()):
         if key.startswith("DB_") or key.startswith("DATABRICKS_") or key.startswith("OPENAI_"):
             monkeypatch.delenv(key, raising=False)
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Auto-apply the `unit`/`integration` markers by directory (Phase 0 Sec
+    0.7), so no individual test file needs a decorator just to be
+    selectable by `-m unit` / `-m integration` — the directory a test lives
+    in already IS that classification."""
+    for item in items:
+        path = str(item.path)
+        if f"{os.sep}tests{os.sep}unit{os.sep}" in path:
+            item.add_marker(pytest.mark.unit)
+        elif f"{os.sep}tests{os.sep}integration{os.sep}" in path:
+            item.add_marker(pytest.mark.integration)

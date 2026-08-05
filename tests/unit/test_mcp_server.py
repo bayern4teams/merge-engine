@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -22,10 +21,10 @@ class TestInitializeServer:
 
     def test_get_config_raises_when_not_initialized(self) -> None:
         """Test _get_config raises RuntimeError when not initialized."""
-        from src.mcp_server.server import _get_config
-
         # Reset the global config
         import src.mcp_server.server as server_mod
+        from src.mcp_server.server import _get_config
+
         original = server_mod._config
         try:
             server_mod._config = None
@@ -144,26 +143,33 @@ class TestCallTool:
         mock_origin.connection.model_dump.return_value = {"host": "localhost"}
         mock_config.origins = [mock_origin]
 
-        with patch(
-            "src.mcp_server.server._get_config",
-            return_value=mock_config,
-        ), patch(
-            "src.mcp_server.tools.discover_schema.create_connector"
-        ) as mock_create:
+        with (
+            patch(
+                "src.mcp_server.server._get_config",
+                return_value=mock_config,
+            ),
+            patch("src.mcp_server.tools.discover_schema.create_connector") as mock_create,
+        ):
             mock_conn = MagicMock()
             mock_conn.close = AsyncMock()
-            mock_conn.discover_schema = AsyncMock(return_value={
-                "tables": [],
-            })
+            mock_conn.discover_schema = AsyncMock(
+                return_value={
+                    "tables": [],
+                }
+            )
             mock_create.return_value = mock_conn
 
-            result = await call_tool("discover_schema", {
-                "origin_id": "test_origin",
-            })
+            result = await call_tool(
+                "discover_schema",
+                {
+                    "origin_id": "test_origin",
+                },
+            )
 
         assert len(result) == 1
         assert result[0].type == "text"
         import json
+
         parsed = json.loads(result[0].text)
         assert "origin_id" in parsed
 

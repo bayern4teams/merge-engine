@@ -25,9 +25,9 @@ from __future__ import annotations
 import json
 import logging
 import time
-import shutil
+from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any
 
 from src.orchestrator.utils.retry import DataQualityError
 
@@ -44,9 +44,7 @@ _INSERT_CHUNK = 2000
 _SPOOL_MIN_AGE_SECONDS = 6 * 60 * 60
 
 
-def _bulk_insert(
-    con: Any, table: str, columns: list[str], rows: list[tuple]
-) -> None:
+def _bulk_insert(con: Any, table: str, columns: list[str], rows: list[tuple]) -> None:
     """Insert many rows at once, the only way DuckDB does this quickly.
 
     ``executemany`` looks like the obvious call and is unusably slow here: it
@@ -76,15 +74,13 @@ def _bulk_insert(
             con.unregister("_incoming_rows")
         return
     except ImportError:
-        logger.warning(
-            "pandas unavailable; falling back to slow row-by-row spool inserts"
-        )
+        logger.warning("pandas unavailable; falling back to slow row-by-row spool inserts")
 
     placeholders = ", ".join("?" for _ in columns)
     for i in range(0, len(rows), _INSERT_CHUNK):
         con.executemany(
             f"INSERT INTO {table} VALUES ({placeholders})",
-            rows[i:i + _INSERT_CHUNK],
+            rows[i : i + _INSERT_CHUNK],
         )
 
 
@@ -174,27 +170,26 @@ class RunSpool:
         table = _table_for(entity_type)
         with self._connect() as con:
             self._ensure_table(con, table)
-            start = con.execute(
-                f"SELECT COALESCE(MAX(seq), -1) + 1 FROM {table}"
-            ).fetchone()[0]
+            start = con.execute(f"SELECT COALESCE(MAX(seq), -1) + 1 FROM {table}").fetchone()[0]
 
             payload_rows = []
             for offset, row in enumerate(batch):
                 origin_id = str(row.get("_origin_id", ""))
                 origin_table = str(row.get("_origin_table", ""))
-                record_id = (
-                    f"{origin_id}:{origin_table}:{row.get('_origin_id_row', '')}"
+                record_id = f"{origin_id}:{origin_table}:{row.get('_origin_id_row', '')}"
+                payload_rows.append(
+                    (
+                        start + offset,
+                        record_id,
+                        origin_id,
+                        origin_table,
+                        json.dumps(row, default=str),
+                    )
                 )
-                payload_rows.append((
-                    start + offset,
-                    record_id,
-                    origin_id,
-                    origin_table,
-                    json.dumps(row, default=str),
-                ))
 
             _bulk_insert(
-                con, table,
+                con,
+                table,
                 ["seq", "record_id", "origin_id", "origin_table", "payload"],
                 payload_rows,
             )
@@ -257,12 +252,13 @@ class RunSpool:
             return []
         with self._connect() as con:
             names = [
-                r[0] for r in con.execute(
+                r[0]
+                for r in con.execute(
                     "SELECT table_name FROM information_schema.tables "
                     "WHERE table_name LIKE 'rows_%'"
                 ).fetchall()
             ]
-        return [n[len("rows_"):] for n in names]
+        return [n[len("rows_") :] for n in names]
 
     def read_all(self, entity_type: str) -> list[dict[str, Any]]:
         """Every row for an entity, in extraction order.
@@ -274,9 +270,7 @@ class RunSpool:
         """
         return list(self.iter_rows(entity_type))
 
-    def iter_rows(
-        self, entity_type: str, chunk: int = 10000
-    ) -> Iterator[dict[str, Any]]:
+    def iter_rows(self, entity_type: str, chunk: int = 10000) -> Iterator[dict[str, Any]]:
         """Stream an entity's rows without materialising them all at once."""
         table = _table_for(entity_type)
         if not self.exists():
@@ -316,9 +310,7 @@ class RunSpool:
                 ).fetchall()
             }
 
-    def read_by_ids(
-        self, entity_type: str, record_ids: list[str]
-    ) -> dict[str, dict[str, Any]]:
+    def read_by_ids(self, entity_type: str, record_ids: list[str]) -> dict[str, dict[str, Any]]:
         """Fetch specific records by their cross-node key.
 
         This is what makes cluster-at-a-time unification possible: only the
@@ -332,11 +324,10 @@ class RunSpool:
                 return {}
             found: dict[str, dict[str, Any]] = {}
             for i in range(0, len(record_ids), _INSERT_CHUNK):
-                block = record_ids[i:i + _INSERT_CHUNK]
+                block = record_ids[i : i + _INSERT_CHUNK]
                 placeholders = ", ".join("?" for _ in block)
                 for record_id, payload in con.execute(
-                    f"SELECT record_id, payload FROM {table} "
-                    f"WHERE record_id IN ({placeholders})",
+                    f"SELECT record_id, payload FROM {table} WHERE record_id IN ({placeholders})",
                     block,
                 ).fetchall():
                     found[record_id] = json.loads(payload)
@@ -346,21 +337,14 @@ class RunSpool:
     # Same storage, different kind. These are outputs rather than inputs, so
     # they are written whole rather than appended batch by batch.
 
-    def put_records(
-        self, kind: str, entity_type: str, records: list[dict[str, Any]]
-    ) -> int:
+    def put_records(self, kind: str, entity_type: str, records: list[dict[str, Any]]) -> int:
         """Replace an entity's records of `kind`. Returns how many were stored."""
         table = _table_for(entity_type, kind)
         with self._connect() as con:
             con.execute(f"DROP TABLE IF EXISTS {table}")
-            con.execute(
-                f"CREATE TABLE {table} (seq BIGINT, payload JSON)"
-            )
+            con.execute(f"CREATE TABLE {table} (seq BIGINT, payload JSON)")
             if records:
-                rows = [
-                    (i, json.dumps(r, default=str))
-                    for i, r in enumerate(records)
-                ]
+                rows = [(i, json.dumps(r, default=str)) for i, r in enumerate(records)]
                 _bulk_insert(con, table, ["seq", "payload"], rows)
         return len(records)
 
@@ -403,10 +387,12 @@ class RunSpool:
 
     @staticmethod
     def _table_exists(con: Any, table: str) -> bool:
-        return bool(con.execute(
-            "SELECT COUNT(*) FROM information_schema.tables "
-            "WHERE table_name = ?", [table],
-        ).fetchone()[0])
+        return bool(
+            con.execute(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ?",
+                [table],
+            ).fetchone()[0]
+        )
 
     @classmethod
     def _ensure_table(cls, con: Any, table: str) -> None:
@@ -445,8 +431,12 @@ def make_handle(
 
 
 def store_clusters(
-    run_id: str, entity_type: str, clusters: list[dict[str, Any]],
-    *, needs_review: int = 0, multi_record: int = 0,
+    run_id: str,
+    entity_type: str,
+    clusters: list[dict[str, Any]],
+    *,
+    needs_review: int = 0,
+    multi_record: int = 0,
 ) -> dict[str, Any]:
     """Spool an entity's clusters, returning a handle that carries the summary.
 
@@ -463,29 +453,27 @@ def store_clusters(
 
 def clusters_for(state: dict[str, Any], entity_type: str) -> list[dict[str, Any]]:
     """One entity's clusters, from a handle or an inline list."""
-    return collection_records(
-        state.get("entity_clusters") or {}, entity_type, kind="clusters"
-    )
+    return collection_records(state.get("entity_clusters") or {}, entity_type, kind="clusters")
 
 
 def unified_for(state: dict[str, Any], entity_type: str) -> list[dict[str, Any]]:
     """One entity's unified output records, from a handle or an inline list."""
-    return collection_records(
-        state.get("unified_entities") or {}, entity_type, kind="unified"
-    )
+    return collection_records(state.get("unified_entities") or {}, entity_type, kind="unified")
 
 
-def store_unified(
-    run_id: str, entity_type: str, records: list[dict[str, Any]]
-) -> dict[str, Any]:
+def store_unified(run_id: str, entity_type: str, records: list[dict[str, Any]]) -> dict[str, Any]:
     """Spool an entity's unified records, returning the handle for state."""
     RunSpool(run_id).put_records("unified", entity_type, records)
     return make_handle(run_id, entity_type, len(records), kind="unified")
 
 
 def spool_collection(
-    state: dict[str, Any], channel: str, kind: str, run_id: str,
-    entity_type: str, records: list[dict[str, Any]],
+    state: dict[str, Any],
+    channel: str,
+    kind: str,
+    run_id: str,
+    entity_type: str,
+    records: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Write `records` to the spool and return the handle to store in state.
 
@@ -542,9 +530,7 @@ def entity_origin_counts(state: dict[str, Any], entity_type: str) -> dict[str, i
     """Per-origin row counts for an entity, without loading its rows."""
     value = (state.get("extracted_data") or {}).get(entity_type)
     if is_handle(value):
-        return RunSpool(value.get("run_id", "")).per_origin_counts(
-            value.get("entity", entity_type)
-        )
+        return RunSpool(value.get("run_id", "")).per_origin_counts(value.get("entity", entity_type))
     counts: dict[str, int] = {}
     for row in value or []:
         origin = row.get("_origin_id", "unknown")
@@ -553,7 +539,9 @@ def entity_origin_counts(state: dict[str, Any], entity_type: str) -> dict[str, i
 
 
 def entity_records_by_id(
-    state: dict[str, Any], entity_type: str, record_ids: list[str],
+    state: dict[str, Any],
+    entity_type: str,
+    record_ids: list[str],
 ) -> dict[str, dict[str, Any]]:
     """Look up specific records by their cross-node key.
 
@@ -569,10 +557,7 @@ def entity_records_by_id(
     wanted = set(record_ids)
     found: dict[str, dict[str, Any]] = {}
     for row in value or []:
-        key = (
-            f"{row.get('_origin_id')}:{row.get('_origin_table')}:"
-            f"{row.get('_origin_id_row')}"
-        )
+        key = f"{row.get('_origin_id')}:{row.get('_origin_table')}:{row.get('_origin_id_row')}"
         if key in wanted:
             found[key] = row
     return found
@@ -606,6 +591,13 @@ def cleanup_old_spools(
     removed = 0
     for path in SPOOL_DIR.glob("*.duckdb"):
         if path.name in keep:
+            continue
+        # Part 1.5 D.7: `_resolve_cache.duckdb` is not a per-run spool — it
+        # deliberately outlives any single run (that is the whole point of a
+        # cross-run matching-decision cache) and manages its own lifetime,
+        # not this run-scoped sweep. A leading underscore is reserved for
+        # exactly this: any spool-directory file that isn't one run's rows.
+        if path.name.startswith("_"):
             continue
         try:
             # A file still being written to is by definition in use, whether

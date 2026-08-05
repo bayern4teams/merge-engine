@@ -8,8 +8,7 @@ Maps unified fields to destination columns with a hybrid pipeline:
 2. Everything the heuristic can't confidently place (weak substring
    matches, aliases, unknowns) goes to the LLM in one call per entity
    type, with sample values and the full destination schema. The LLM
-   decides per field: map onto an existing column, propose a new
-   column, or skip.
+   decides per field: map onto an existing column or skip.
 3. On LLM failure (or when disabled via ``llm.field_mapping_enabled``),
    the original heuristic fallback tiers apply — mapping still works,
    just with less semantic insight.
@@ -30,14 +29,15 @@ logger = logging.getLogger("merge-engine.tools.map_fields")
 # Heuristic scores >= this are accepted without consulting the LLM.
 _HEURISTIC_ACCEPT = 0.85
 
-# Allowed generic SQL types for LLM-proposed new columns (anything else
-# falls back to TEXT).
-_ALLOWED_NEW_COLUMN_TYPES = {
-    "TEXT", "BIGINT", "INTEGER", "DOUBLE PRECISION", "BOOLEAN",
-    "TIMESTAMP", "DATE",
-}
-
-_IDENTIFIER_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+# Destination columns the merge engine populates itself (the generated
+# identity and the provenance list) — never a mapping target. Without this,
+# an origin-local surrogate key like `companyID` heuristically matches `id`
+# via plain substring containment (`"id" in "companyid"`) at 0.8 confidence,
+# and the low-confidence fallback tier (>=0.5) accepts it: an origin's
+# random hex string would land directly in the destination's own primary
+# key, bypassing `_transform_records`' `id is None` autogeneration and
+# corrupting the upsert key. Found live while verifying Bug A/B.
+_RESERVED_DEST_COLUMNS = {"id", "_source_ids"}
 
 
 async def map_fields_impl(
@@ -76,14 +76,26 @@ async def map_fields_impl(
             "schema_changes": [{"column": str, "data_type": str, "table": str}],
         }
     """
-    logger.debug("ENTER map_fields_impl: entity_type=%s, source_fields=%d, dest_columns=%d",
-                  entity_type, len(unified_schema), len(destination_schema.get("columns", [])))
+    logger.debug(
+        "ENTER map_fields_impl: entity_type=%s, source_fields=%d, dest_columns=%d",
+        entity_type,
+        len(unified_schema),
+        len(destination_schema.get("columns", [])),
+    )
 
     source_fields = list(unified_schema.keys())
-    dest_columns = {col["name"]: col for col in destination_schema.get("columns", [])}
+    dest_columns = {
+        col["name"]: col
+        for col in destination_schema.get("columns", [])
+        if col["name"] not in _RESERVED_DEST_COLUMNS
+    }
     dest_table = destination_schema.get("table", entity_type)
-    logger.debug("Source fields: %d, Destination columns: %d, Dest table: %s",
-                  len(source_fields), len(dest_columns), dest_table)
+    logger.debug(
+        "Source fields: %d, Destination columns: %d, Dest table: %s",
+        len(source_fields),
+        len(dest_columns),
+        dest_table,
+    )
 
     field_mapping: dict[str, dict[str, Any]] = {}
     unmapped_fields: list[dict[str, Any]] = []
@@ -98,10 +110,7 @@ async def map_fields_impl(
                 field, field, dest_columns, unified_schema
             )
             if incompatible:
-                _propose_incompatible_fallback(
-                    field, reason, dest_table, dest_columns,
-                    field_mapping, unmapped_fields, schema_changes,
-                )
+                _refuse_incompatible(field, reason, unmapped_fields)
                 continue
             field_mapping[field] = {
                 "dest_column": field,
@@ -114,28 +123,35 @@ async def map_fields_impl(
     remaining_fields = [f for f in source_fields if f not in field_mapping]
     taken_columns = {m["dest_column"] for m in field_mapping.values()}
     heuristic_scores: dict[str, tuple[str | None, float]] = {}
+    # Best match ignoring `taken_columns` — feeds the Phase 3 coalesce check
+    # below (a field whose only strong candidate is a column another field
+    # already claimed, e.g. `entityName` once `name` is taken).
+    heuristic_scores_any: dict[str, tuple[str | None, float]] = {}
 
     heuristic_matches = 0
     for field in remaining_fields:
         best_match = None
         best_score = 0.0
+        best_match_any = None
+        best_score_any = 0.0
         for dest_col in dest_columns:
+            score = _heuristic_match(field, dest_col)
+            if score > best_score_any:
+                best_score_any = score
+                best_match_any = dest_col
             if dest_col in taken_columns:
                 continue
-            score = _heuristic_match(field, dest_col)
             if score > best_score:
                 best_score = score
                 best_match = dest_col
         heuristic_scores[field] = (best_match, best_score)
+        heuristic_scores_any[field] = (best_match_any, best_score_any)
         if best_match and best_score >= _HEURISTIC_ACCEPT:
             incompatible, reason = _incompatible_with_column(
                 field, best_match, dest_columns, unified_schema
             )
             if incompatible:
-                _propose_incompatible_fallback(
-                    field, reason, dest_table, dest_columns,
-                    field_mapping, unmapped_fields, schema_changes,
-                )
+                _refuse_incompatible(field, reason, unmapped_fields)
                 continue
             field_mapping[field] = {
                 "dest_column": best_match,
@@ -152,19 +168,20 @@ async def map_fields_impl(
     if undecided and llm_enabled:
         logger.info(
             "Sending %d undecided fields for entity '%s' to LLM mapping",
-            len(undecided), entity_type,
+            len(undecided),
+            entity_type,
         )
         llm_decisions = await _decide_fields_with_llm(
             entity_type=entity_type,
             fields=undecided,
             unified_schema=unified_schema,
-            destination_schema=destination_schema,
+            destination_schema={"table": dest_table, "columns": list(dest_columns.values())},
             llm_config=llm_config,
         )
     elif undecided:
         logger.info(
-            "LLM field mapping disabled/unavailable; using heuristic tiers "
-            "for %d fields", len(undecided),
+            "LLM field mapping disabled/unavailable; using heuristic tiers for %d fields",
+            len(undecided),
         )
 
     llm_mapped = 0
@@ -172,26 +189,40 @@ async def map_fields_impl(
         decision = (llm_decisions or {}).get(field)
         if decision is not None:
             applied = _apply_llm_decision(
-                field, decision, dest_columns, taken_columns, dest_table,
-                unified_schema, field_mapping, unmapped_fields, schema_changes,
+                field,
+                decision,
+                dest_columns,
+                taken_columns,
+                unified_schema,
+                field_mapping,
+                unmapped_fields,
             )
             if applied:
                 llm_mapped += 1
                 continue
             # Invalid decision — fall through to heuristic tiers below
         _apply_heuristic_tier(
-            field, heuristic_scores.get(field, (None, 0.0)),
-            dest_table, unified_schema, field_mapping, unmapped_fields,
-            schema_changes, taken_columns, dest_columns,
+            field,
+            heuristic_scores.get(field, (None, 0.0)),
+            heuristic_scores_any.get(field, (None, 0.0)),
+            unified_schema,
+            field_mapping,
+            unmapped_fields,
+            taken_columns,
+            dest_columns,
         )
 
     logger.debug(
         "Phase 3 complete: llm_decided=%d, unmapped=%d, schema_changes=%d",
-        llm_mapped, len(unmapped_fields), len(schema_changes),
+        llm_mapped,
+        len(unmapped_fields),
+        len(schema_changes),
     )
     logger.debug(
         "EXIT map_fields_impl: total_mappings=%d, unmapped=%d, schema_changes=%d",
-        len(field_mapping), len(unmapped_fields), len(schema_changes),
+        len(field_mapping),
+        len(unmapped_fields),
+        len(schema_changes),
     )
     return {
         "entity_type": entity_type,
@@ -214,7 +245,7 @@ def _incompatible_with_column(
     fastest of the three crash classes fixed here (Fix #3) is a single bad
     row aborting the whole atomic load with no warning until then.
     """
-    from src.mcp_server.tools.value_coercion import is_compatible
+    from src.utils.value_coercion import is_compatible
 
     col_type = str((dest_columns.get(dest_col) or {}).get("type", ""))
     if not col_type:
@@ -228,40 +259,29 @@ def _incompatible_with_column(
     return (not ok), reason
 
 
-def _propose_incompatible_fallback(
+def _refuse_incompatible(
     field: str,
     reason: str,
-    dest_table: str,
-    dest_columns: dict[str, Any],
-    field_mapping: dict[str, dict[str, Any]],
     unmapped_fields: list[dict[str, Any]],
-    schema_changes: list[dict[str, str]],
 ) -> None:
-    """Refuse an incompatible existing-column mapping; preserve the value in
-    a new TEXT column instead of letting the load crash on it, and flag the
-    redirect at the ``human_review_mappings`` gate so a reviewer sees why.
+    """Refuse a mapping whose sample values would crash the load.
+
+    Previously the value was preserved by inventing a ``<field>_raw`` TEXT
+    column. The destination schema is a fixed contract, so the field is left
+    unmapped and surfaced at the ``human_review_mappings`` gate instead.
     """
-    base = re.sub(r"[^a-z0-9_]", "_", field.strip().lower()) or "field"
-    name = f"{base}_raw"
-    suffix = 2
-    while name in dest_columns:
-        name = f"{base}_raw{suffix}"
-        suffix += 1
-    schema_changes.append({"table": dest_table, "column": name, "data_type": "TEXT"})
-    field_mapping[field] = {
-        "dest_column": name,
-        "confidence": 0.0,
-        "requires_schema_change": True,
-        "reason": reason,
-    }
-    unmapped_fields.append({
-        "field": field,
-        "confidence": 0.0,
-        "suggested_column": name,
-        "reason": reason,
-    })
+    unmapped_fields.append(
+        {
+            "field": field,
+            "confidence": 0.0,
+            "suggested_column": None,
+            "reason": reason,
+        }
+    )
     logger.info(
-        "Field '%s' redirected to new column '%s' (TEXT): %s", field, name, reason,
+        "Field '%s' incompatible with destination column type; left unmapped (%s)",
+        field,
+        reason,
     )
 
 
@@ -270,11 +290,9 @@ def _apply_llm_decision(
     decision: dict[str, Any],
     dest_columns: dict[str, Any],
     taken_columns: set[str],
-    dest_table: str,
     unified_schema: dict[str, Any],
     field_mapping: dict[str, dict[str, Any]],
     unmapped_fields: list[dict[str, Any]],
-    schema_changes: list[dict[str, str]],
 ) -> bool:
     """Apply one validated LLM decision. Returns False if invalid."""
     action = decision.get("action")
@@ -284,7 +302,8 @@ def _apply_llm_decision(
         if dest_col not in dest_columns:
             logger.warning(
                 "LLM mapped '%s' to nonexistent column '%s'; ignoring",
-                field, dest_col,
+                field,
+                dest_col,
             )
             return False
         incompatible, reason = _incompatible_with_column(
@@ -293,14 +312,13 @@ def _apply_llm_decision(
         if incompatible:
             logger.warning(
                 "LLM mapped '%s' -> '%s' but the sample values are "
-                "incompatible with that column's type (%s); redirecting to "
-                "a new column instead of letting the load crash on it.",
-                field, dest_col, reason,
+                "incompatible with that column's type (%s); leaving it "
+                "unmapped instead of letting the load crash on it.",
+                field,
+                dest_col,
+                reason,
             )
-            _propose_incompatible_fallback(
-                field, reason, dest_table, dest_columns,
-                field_mapping, unmapped_fields, schema_changes,
-            )
+            _refuse_incompatible(field, reason, unmapped_fields)
             return True
         field_mapping[field] = {
             "dest_column": dest_col,
@@ -312,43 +330,25 @@ def _apply_llm_decision(
         return True
 
     if action == "new_column":
-        name = str(decision.get("name") or field).strip().lower()
-        if not _IDENTIFIER_RE.match(name):
-            logger.warning("LLM proposed invalid column name '%s'; ignoring", name)
-            return False
-        if name in dest_columns:
-            logger.warning(
-                "LLM proposed new column '%s' colliding with existing column; ignoring",
-                name,
-            )
-            return False
-        col_type = str(decision.get("type", "TEXT")).upper()
-        if col_type not in _ALLOWED_NEW_COLUMN_TYPES:
-            col_type = "TEXT"
-        schema_changes.append({
-            "table": dest_table,
-            "column": name,
-            "data_type": col_type,
-        })
-        field_mapping[field] = {
-            "dest_column": name,
-            "confidence": 0.9,
-            "requires_schema_change": True,
-            "mapped_by": "llm",
-        }
-        logger.info(
-            "LLM proposed new column '%s' (%s) for field '%s'", name, col_type, field,
+        # Phase 0.0 BUG A FIX: destination schema is authoritative.
+        # LLM should never propose new columns — log and reject.
+        logger.warning(
+            "LLM proposed new_column for field '%s' but destination schema is authoritative; "
+            "rejecting (this field will fall through to heuristic tiers or be unmapped)",
+            field,
         )
-        return True
+        return False
 
     if action == "skip":
         # Skips still surface at the review gate so a human can override.
-        unmapped_fields.append({
-            "field": field,
-            "confidence": 0.0,
-            "suggested_column": None,
-            "reason": f"LLM proposed skipping: {decision.get('reason', 'no reason given')}",
-        })
+        unmapped_fields.append(
+            {
+                "field": field,
+                "confidence": 0.0,
+                "suggested_column": None,
+                "reason": f"LLM proposed skipping: {decision.get('reason', 'no reason given')}",
+            }
+        )
         logger.info("LLM proposed skipping field '%s': %s", field, decision.get("reason"))
         return True
 
@@ -359,11 +359,10 @@ def _apply_llm_decision(
 def _apply_heuristic_tier(
     field: str,
     best: tuple[str | None, float],
-    dest_table: str,
+    best_any: tuple[str | None, float],
     unified_schema: dict[str, Any],
     field_mapping: dict[str, dict[str, Any]],
     unmapped_fields: list[dict[str, Any]],
-    schema_changes: list[dict[str, str]],
     taken_columns: set[str],
     dest_columns: dict[str, Any] | None = None,
 ) -> None:
@@ -377,38 +376,65 @@ def _apply_heuristic_tier(
             field, best_match, dest_columns or {}, unified_schema
         )
         if incompatible:
-            _propose_incompatible_fallback(
-                field, reason, dest_table, dest_columns or {},
-                field_mapping, unmapped_fields, schema_changes,
-            )
+            _refuse_incompatible(field, reason, unmapped_fields)
             return
         field_mapping[field] = {
             "dest_column": best_match,
             "confidence": best_score,
         }
         taken_columns.add(best_match)
-    elif best_score >= 0.3:
+        return
+
+    # Coalesce: this field's strongest candidate is a column a different
+    # field already claimed (e.g. `entityName` once `name` is taken by a
+    # literal `name` field from another origin). Rather than drop it, record
+    # it as an additional source for that column — `_transform_records`
+    # (load_data.py) already coalesces multiple sources per record,
+    # preferring whichever is non-null, so this only needs to stop dropping
+    # the mapping here.
+    #
+    # Gated on `_safe_coalesce_target`, NOT on score alone: `entityName` and
+    # `fullName` both score identically well against `name` by plain string
+    # similarity (both trivially contain the substring "name"), but they are
+    # different concepts — `fullName` means `legal_name` (see the
+    # field_mapping prompt's worked example). Coalescing on score alone was
+    # tried and reproduced exactly this corruption live: `fullName`'s legal
+    # name silently overwrote the correct `name` value. The qualifier
+    # allowlist only trusts unambiguous scope-narrowing prefixes.
+    any_match, any_score = best_any
+    if any_match and any_match in taken_columns and _safe_coalesce_target(field, any_match):
+        incompatible, reason = _incompatible_with_column(
+            field, any_match, dest_columns or {}, unified_schema
+        )
+        if not incompatible:
+            field_mapping[field] = {
+                "dest_column": any_match,
+                "confidence": any_score,
+                "mapped_by": "coalesce",
+            }
+            return
+
+    if best_score >= 0.3:
         # Low confidence — flag as unmapped for human review
-        unmapped_fields.append({
-            "field": field,
-            "confidence": best_score,
-            "suggested_column": best_match,
-            "reason": "Low confidence match; requires human review",
-        })
+        unmapped_fields.append(
+            {
+                "field": field,
+                "confidence": best_score,
+                "suggested_column": best_match,
+                "reason": "Low confidence match; requires human review",
+            }
+        )
     else:
-        # No match found — may need new column
-        source_type = unified_schema.get(field, {}).get("type", "STRING")
-        dest_type = _map_type_generic(source_type)
-        schema_changes.append({
-            "table": dest_table,
-            "column": field,
-            "data_type": dest_type,
-        })
-        field_mapping[field] = {
-            "dest_column": field,  # Will be added via schema change
-            "confidence": 0.0,
-            "requires_schema_change": True,
-        }
+        # No match found — BUG A FIX: destination schema is authoritative.
+        # Do not create new columns; mark as unmapped instead.
+        unmapped_fields.append(
+            {
+                "field": field,
+                "confidence": 0.0,
+                "suggested_column": None,
+                "reason": "No matching destination column found; destination schema is authoritative",
+            }
+        )
 
 
 # ── LLM decision call ────────────────────────────────────────────────
@@ -426,9 +452,7 @@ def _format_source_fields_block(
         if not samples:
             sample = info.get("sample_value")
             samples = [sample] if sample is not None else []
-        samples_str = ", ".join(
-            json.dumps(s, ensure_ascii=False, default=str) for s in samples[:3]
-        )
+        samples_str = ", ".join(json.dumps(s, ensure_ascii=False, default=str) for s in samples[:3])
         lines.append(
             f"- {field} (type: {info.get('type', 'unknown')}; "
             f"sample values: {samples_str or 'none'})"
@@ -448,7 +472,7 @@ async def _decide_fields_with_llm(
     Returns {field: decision} or None on failure (caller falls back to
     heuristic tiers — the run never blocks on the LLM).
     """
-    from src.llm import LLMClient, PROMPT_TEMPLATES
+    from src.llm import PROMPT_TEMPLATES, LLMClient
 
     try:
         prompts = PROMPT_TEMPLATES.get("field_mapping", {})
@@ -465,17 +489,16 @@ async def _decide_fields_with_llm(
         )
 
         user_prompt = (
-            human_template
-            .replace("{entity_type}", entity_type)
+            human_template.replace("{entity_type}", entity_type)
             .replace("{dest_table}", str(dest_table))
             .replace("{destination_schema}", dest_cols_str)
-            .replace("{source_fields_block}",
-                     _format_source_fields_block(fields, unified_schema))
+            .replace("{source_fields_block}", _format_source_fields_block(fields, unified_schema))
         )
         # Set when a reviewer sent the mappings gate back for rework.
         hint = str((llm_config or {}).get("retry_hint") or "").strip()
         if hint:
             from src.orchestrator.utils.retry_hints import apply_retry_hint
+
             user_prompt = apply_retry_hint(
                 user_prompt, {"retry_hints": {"map_fields": hint}}, "map_fields"
             )
@@ -490,27 +513,120 @@ async def _decide_fields_with_llm(
             return None
 
         decisions = {
-            field: dec for field, dec in result.items()
-            if field in fields and isinstance(dec, dict)
+            field: dec for field, dec in result.items() if field in fields and isinstance(dec, dict)
         }
         logger.info(
             "LLM decided %d/%d undecided fields for entity '%s'",
-            len(decisions), len(fields), entity_type,
+            len(decisions),
+            len(fields),
+            entity_type,
         )
         return decisions
 
     except Exception as exc:
         logger.warning(
             "LLM field-mapping failed (%s); using heuristic tiers for %d fields",
-            exc, len(fields),
+            exc,
+            len(fields),
         )
         return None
+
+
+_CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+
+
+def _tokenize_field(name: str) -> list[str]:
+    """Split a field name into lowercase words, camelCase included.
+
+    ``foundingDate`` -> ``["founding", "date"]``, so it can be compared with
+    the destination's ``founded_date``. Raw string comparison could not see
+    those as the same concept, which is how origin1's camelCase names ended
+    up unmapped.
+    """
+    spaced = _CAMEL_BOUNDARY_RE.sub("_", name)
+    return [t for t in re.split(r"[^a-z0-9]+", spaced.lower()) if t]
+
+
+def _stem(token: str) -> str:
+    """Strip one inflectional ending so ``founded``/``founding`` agree.
+
+    Deliberately not a general prefix match: ``descriptors`` and
+    ``description`` share eight leading characters but are different
+    concepts, and a prefix rule mapped the former onto the latter.
+    """
+    if token.endswith("ing") and len(token) > 5:
+        return token[:-3]
+    if token.endswith("ed") and len(token) > 4:
+        return token[:-2]
+    if token.endswith("s") and not token.endswith("ss") and len(token) > 3:
+        return token[:-1]
+    return token
+
+
+def _tokens_equivalent(a: str, b: str) -> bool:
+    """Two word-tokens naming the same thing, allowing inflection."""
+    return a == b or _stem(a) == _stem(b)
+
+
+def _token_overlap(source: str, dest: str) -> float:
+    """Jaccard overlap of two field names' word tokens (0.0-1.0)."""
+    st, dt = _tokenize_field(source), _tokenize_field(dest)
+    if not st or not dt:
+        return 0.0
+    matched = [t for t in st if any(_tokens_equivalent(t, u) for u in dt)]
+    union = len(st) + len(dt) - len(matched)
+    return len(matched) / union if union else 0.0
+
+
+# Generic qualifier words that only narrow SCOPE, never MEANING, of the
+# concept they precede — "entityName" means the same thing as "name", just
+# scoped to "this entity" explicitly. Deliberately small and conservative: a
+# qualifier that changes meaning ("full", "legal", "short", "display",
+# "ceo", "founder") must NOT be here, or `fullName` (which the field_mapping
+# prompt already knows means `legal_name`, not `name` — see its worked
+# example) would silently coalesce onto an already-correct `name` column
+# and overwrite it, instead of needing the LLM/human judgment call it
+# actually requires. Found live: exactly this corruption, reproduced
+# against a real cross-origin Boeing pair.
+_SAFE_COALESCE_QUALIFIERS = frozenset(
+    {
+        "entity",
+        "org",
+        "organization",
+        "company",
+        "business",
+        "record",
+        "source",
+    }
+)
+
+
+def _safe_coalesce_target(field: str, dest_col: str) -> bool:
+    """True when ``field`` is *only* ``dest_col`` behind one safe qualifier.
+
+    e.g. ``entityName`` -> ``name``. Heuristic string similarity cannot
+    distinguish "same concept, scoped" from "different concept that happens
+    to share a word" — ``entityName`` and ``fullName`` both score equally
+    well against ``name`` by substring/token overlap alone. Only this
+    explicit, narrow allowlist is trusted to let a field coalesce onto a
+    column another field already claimed; anything else is left unmapped
+    for the LLM or a human to resolve.
+    """
+    field_tokens = _tokenize_field(field)
+    dest_tokens = _tokenize_field(dest_col)
+    if len(field_tokens) != len(dest_tokens) + 1:
+        return False
+    # Every field token must either match a destination token, or be the
+    # single allowed qualifier — two qualifiers, or a field token that
+    # matches nothing at all, both fail closed.
+    extra = [t for t in field_tokens if not any(_tokens_equivalent(t, d) for d in dest_tokens)]
+    return len(extra) == 1 and extra[0] in _SAFE_COALESCE_QUALIFIERS
 
 
 def _heuristic_match(source: str, dest: str) -> float:
     """Compute a heuristic match score between a source field and dest column.
 
-    Returns 0.0–1.0 confidence score.
+    Returns 0.0-1.0 confidence score.
     """
     s = source.lower().replace(" ", "_").replace("-", "_")
     d = dest.lower().replace(" ", "_").replace("-", "_")
@@ -521,6 +637,15 @@ def _heuristic_match(source: str, dest: str) -> float:
         return 0.8
     if s.replace("_", "") == d.replace("_", ""):
         return 0.85
+
+    # Word-level comparison, so camelCase source names can reach their
+    # snake_case destination column. Deliberately requires a strong overlap:
+    # `ceoName` and `founderName` both share the token `name` with the `name`
+    # column and must NOT be mapped onto it, so a single shared token
+    # (Jaccard 0.5) stays below the bar and is left for the LLM to judge.
+    overlap = _token_overlap(source, dest)
+    if overlap >= 0.6:
+        return 0.5 + 0.35 * overlap
     # Check common aliases
     aliases: dict[str, list[str]] = {
         "first_name": ["fname", "forename", "given_name"],
@@ -535,9 +660,12 @@ def _heuristic_match(source: str, dest: str) -> float:
         for v in variants:
             variant_to_canonical[v] = canonical
         variant_to_canonical[canonical] = canonical  # canonical maps to itself
-    if s in variant_to_canonical and d in variant_to_canonical:
-        if variant_to_canonical[s] == variant_to_canonical[d]:
-            return 0.7
+    if (
+        s in variant_to_canonical
+        and d in variant_to_canonical
+        and variant_to_canonical[s] == variant_to_canonical[d]
+    ):
+        return 0.7
     return 0.0
 
 

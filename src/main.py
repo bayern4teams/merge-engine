@@ -24,7 +24,6 @@ from typing import Any
 
 from src.utils.config_loader import load_config
 from src.utils.logging_config import setup_logging
-from src.mcp_server.server import app as mcp_app, initialize_server
 
 
 def parse_args() -> argparse.Namespace:
@@ -79,7 +78,6 @@ async def run_mcp_server(config: Any, port: int = 8000) -> None:
     port : int
         Port to listen on.
     """
-    import asyncio
 
     try:
         from mcp.server.fastmcp import FastMCP
@@ -90,13 +88,14 @@ async def run_mcp_server(config: Any, port: int = 8000) -> None:
         )
 
         # Register all tools from the server module
-        from src.mcp_server.server import _TOOL_HANDLERS, list_tools, call_tool
+        from src.mcp_server.server import _TOOL_HANDLERS
 
         # Register tool list
         @mcp.tool()
         async def discover_schema(origin_id: str) -> str:
             result = await _TOOL_HANDLERS["discover_schema"]({"origin_id": origin_id})
             import json
+
             return json.dumps(result, default=str)
 
         @mcp.tool()
@@ -108,15 +107,18 @@ async def run_mcp_server(config: Any, port: int = 8000) -> None:
             cursor: str | None = None,
             filter: dict[str, Any] | None = None,
         ) -> str:
-            result = await _TOOL_HANDLERS["extract_data"]({
-                "origin_id": origin_id,
-                "table_name": table_name,
-                "columns": columns,
-                "batch_size": batch_size,
-                "cursor": cursor,
-                "filter": filter,
-            })
+            result = await _TOOL_HANDLERS["extract_data"](
+                {
+                    "origin_id": origin_id,
+                    "table_name": table_name,
+                    "columns": columns,
+                    "batch_size": batch_size,
+                    "cursor": cursor,
+                    "filter": filter,
+                }
+            )
             import json
+
             return json.dumps(result, default=str)
 
         # Start MCP server
@@ -150,9 +152,19 @@ def run_web_ui(config: Any, port: int = 7860, config_path: str = "config/config.
 
     os.environ["NO_PROXY"] = "localhost,127.0.0.1,0.0.0.0,::1"
 
-    logging.info("Starting web UI (FastAPI + React) on http://127.0.0.1:%d ...", port)
+    # Loopback-only by default (today's behaviour, unchanged for every
+    # native/non-Docker run). Part 1.6.C's Dockerfile sets
+    # MERGE_ENGINE_HOST=0.0.0.0 — a container's own loopback is not the
+    # network interface Docker's `-p` port-forwarding reaches, so the app
+    # must bind on every interface to be reachable from outside the
+    # container at all (verified live: with 127.0.0.1, the published port
+    # accepted the TCP connection but every request got an empty reply,
+    # since nothing inside the container was listening on the interface
+    # Docker actually forwards to).
+    host = os.environ.get("MERGE_ENGINE_HOST", "127.0.0.1")
+    logging.info("Starting web UI (FastAPI + React) on http://%s:%d ...", host, port)
     app = create_api(config_path=config_path)
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 def main() -> None:

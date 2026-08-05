@@ -41,10 +41,10 @@ logger = logging.getLogger("merge-engine.tools.fellegi_sunter")
 # Comparison outcomes, strongest first. Each gets its own m/u pair so a
 # fuzzy match is not treated as equal evidence to an exact one.
 LEVEL_EXACT = "exact"
-LEVEL_STRONG = "strong"      # minor typo / formatting difference
-LEVEL_WEAK = "weak"          # loosely similar
+LEVEL_STRONG = "strong"  # minor typo / formatting difference
+LEVEL_WEAK = "weak"  # loosely similar
 LEVEL_DISAGREE = "disagree"
-LEVEL_NULL = "null"          # one side missing — no evidence either way
+LEVEL_NULL = "null"  # one side missing — no evidence either way
 
 _LEVELS = (LEVEL_EXACT, LEVEL_STRONG, LEVEL_WEAK, LEVEL_DISAGREE)
 
@@ -148,13 +148,11 @@ def _sigmoid_bits(weight: float) -> float:
         return 1.0
     if weight < -60:
         return 0.0
-    odds = 2.0 ** weight
+    odds = 2.0**weight
     return odds / (1.0 + odds)
 
 
-def build_term_frequencies(
-    records: list[dict[str, Any]], normalise
-) -> dict[str, dict[str, float]]:
+def build_term_frequencies(records: list[dict[str, Any]], normalise) -> dict[str, dict[str, float]]:
     """Value frequencies per field across the whole record set.
 
     This is what makes a match on a common value count for less. Computed
@@ -216,16 +214,37 @@ def estimate_model(
         non_match_mass = len(responsibilities) - match_mass
 
         # M-step: re-estimate each level's probabilities.
-        for name, fmodel in fields.items():
-            m_counts = {lvl: _PRIOR_M[lvl] * _PRIOR_WEIGHT for lvl in _LEVELS}
-            u_counts = {lvl: _PRIOR_U[lvl] * _PRIOR_WEIGHT for lvl in _LEVELS}
-            for vec, resp in zip(comparison_vectors, responsibilities):
-                level = vec.get(name, (LEVEL_NULL, None))[0]
+        #
+        # Part 1.5 A.7: this used to be `for field: for pair: vec.get(field,
+        # NULL)` — re-scanning every comparison vector once per DISTINCT
+        # FIELD NAME across the whole run, regardless of whether that vector
+        # even carries the field. `_project_to_canonical` (Bug C0a) carries
+        # unrecognised raw fields through verbatim, so a wide entity type
+        # accumulates far more distinct field names than a narrow one, and
+        # this loop is O(iterations * fields * pairs) — the field-count
+        # factor is pure waste, since a vector missing a field contributes
+        # nothing (`continue`s immediately). Measured live: this was 94% of
+        # resolve_entities' wall time for a wide entity type (`experience`,
+        # 907 of 966s) vs. 77% for a narrow one (`technology`, 112 of 146s).
+        # A single pass that only visits each vector's own (present) keys
+        # does the identical accumulation in O(iterations * sum of
+        # per-vector field counts) — the field-count factor drops out.
+        m_counts_by_field = {
+            name: {lvl: _PRIOR_M[lvl] * _PRIOR_WEIGHT for lvl in _LEVELS} for name in fields
+        }
+        u_counts_by_field = {
+            name: {lvl: _PRIOR_U[lvl] * _PRIOR_WEIGHT for lvl in _LEVELS} for name in fields
+        }
+        for vec, resp in zip(comparison_vectors, responsibilities, strict=True):
+            for name, (level, _value) in vec.items():
                 if level == LEVEL_NULL:
                     continue  # carries no evidence, so it trains nothing
-                m_counts[level] += resp
-                u_counts[level] += 1.0 - resp
+                m_counts_by_field[name][level] += resp
+                u_counts_by_field[name][level] += 1.0 - resp
 
+        for name, fmodel in fields.items():
+            m_counts = m_counts_by_field[name]
+            u_counts = u_counts_by_field[name]
             m_total = sum(m_counts.values()) or 1.0
             u_total = sum(u_counts.values()) or 1.0
             fmodel.m = {lvl: m_counts[lvl] / m_total for lvl in _LEVELS}
@@ -238,6 +257,8 @@ def estimate_model(
 
     logger.debug(
         "Estimated match model over %d pairs: match_prior=%.3f, fields=%s",
-        len(comparison_vectors), model.match_prior, sorted(fields),
+        len(comparison_vectors),
+        model.match_prior,
+        sorted(fields),
     )
     return model

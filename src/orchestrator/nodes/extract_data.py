@@ -8,14 +8,16 @@ in batches until all rows are fetched.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import Any
 
+from src.mcp_server.connectors.clickhouse import ClickHouseConnector
 from src.mcp_server.tools.extract_data import extract_data_impl
 from src.mcp_server.tools.load_data import _get_destination_connector
 from src.orchestrator.spool import RunSpool, is_handle, make_handle
 from src.orchestrator.utils.dependency_sort import find_execution_groups
-from src.orchestrator.utils.retry import TransientError, classify_exception
+from src.orchestrator.utils.retry import classify_exception
 
 logger = logging.getLogger("merge-engine.orchestrator.extract_data")
 
@@ -40,14 +42,51 @@ def _chunked_filters(
     """
     if not scope_filter:
         return [scope_filter]
-    (column, cond), = scope_filter.items()
+    ((column, cond),) = scope_filter.items()
     values = cond.get("value")
     if cond.get("op") != "in" or not isinstance(values, list) or len(values) <= chunk_size:
         return [scope_filter]
     return [
-        {column: {"op": "in", "value": values[i:i + chunk_size]}}
+        {column: {"op": "in", "value": values[i : i + chunk_size]}}
         for i in range(0, len(values), chunk_size)
     ]
+
+
+async def _scratch_filter(
+    origin_config: dict[str, Any], column: str, values: list[Any]
+) -> tuple[dict[str, Any] | None, Any]:
+    """Try a ClickHouse scratch-table filter for a large id list (Part 1.5 D.6).
+
+    Returns ``(filter, cleanup)``: ``filter`` is a single
+    ``{column: {"op": "in_scratch", ...}}`` covering every value in ONE
+    query, replacing what would otherwise be several ``_chunked_filters``
+    round-trips. ``cleanup`` is a zero-arg async callable the caller must
+    invoke (in a ``finally``, on every path including failure) to drop the
+    scratch table.
+
+    Returns ``(None, None)`` — meaning "fall back to ``_chunked_filters``" —
+    for any origin type other than ClickHouse, for a list small enough that
+    chunking is already cheap, or if scratch-table setup itself fails for
+    any reason. This must never be the thing that breaks an extraction.
+    """
+    if origin_config.get("type") != "clickhouse" or len(values) <= _MAX_IN_FILTER_VALUES:
+        return None, None
+    try:
+        connector = ClickHouseConnector(origin_config.get("connection", {}))
+        table_name = await connector.create_id_scratch_table(values)
+    except Exception as exc:
+        logger.warning(
+            "Scratch-table filter setup failed for %s (%s) — falling back to chunked IN filters.",
+            origin_config.get("id"),
+            exc,
+        )
+        return None, None
+
+    async def _cleanup() -> None:
+        await connector.drop_scratch_table(table_name)
+        await connector.close()
+
+    return {column: {"op": "in_scratch", "value": table_name}}, _cleanup
 
 
 def _handle_count(value: Any) -> int:
@@ -84,7 +123,10 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
     # — the watermark lives in the destination's tracking table, not the entity
     # tables, so an incremental run would otherwise see nothing new and load 0.
     force_full_extraction: bool = bool(state.get("force_full_extraction"))
-    errors: list[str] = list(state.get("errors", []))
+    # Only THIS call's own errors (Phase 0 Sec 0.8) - see load_data_node's
+    # identical fix for why seeding with the existing history double-counted
+    # it through operator.add's reducer.
+    errors: list[str] = []
     extracted_data: dict[str, list[dict]] = dict(state.get("extracted_data", {}))
     extraction_watermarks: dict[str, Any] = dict(state.get("extraction_watermarks", {}))
 
@@ -104,7 +146,7 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
     # was all wildcard-inferred") and must not be treated the same as "absent" --
     # `state.get(...) or fallback` would wrongly collapse `[]` into the fallback
     # since an empty list is falsy in Python.
-    _explicit_raw = state.get("explicit_target_entities", None)
+    _explicit_raw = state.get("explicit_target_entities")
     explicit_target_entities: set[str] = set(
         _explicit_raw if _explicit_raw is not None else state.get("target_entities", [])
     )
@@ -126,9 +168,13 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
     # merge_engine_extraction_state tracking table, looked up once per table.
     dest_connector = None
     try:
-        dest_connector = _get_destination_connector(destination if isinstance(destination, dict) else None)
+        dest_connector = _get_destination_connector(
+            destination if isinstance(destination, dict) else None
+        )
     except Exception as exc:
-        logger.warning("Could not create destination connector for extraction-state lookup: %s", exc)
+        logger.warning(
+            "Could not create destination connector for extraction-state lookup: %s", exc
+        )
 
     # Scoped merge ("everything about Nova"): the plan says how to restrict
     # each table. Two-phase — the subject entity (company) is matched by name
@@ -146,7 +192,8 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
     if scope_active:
         logger.info(
             "Scoped extraction for subject %r (entity %r).",
-            subject, subject_entity_name,
+            subject,
+            subject_entity_name,
         )
 
     # Group entities that can be extracted in parallel
@@ -162,12 +209,12 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
             # Determine which origin tables contain this entity. The
             # LLM-chosen, human-confirmed selection wins; the alias-name
             # heuristic is the fallback when selection produced nothing.
-            table_candidates = _candidates_from_selection(
-                entity_type, entity_tables, schemas
-            )
+            table_candidates = _candidates_from_selection(entity_type, entity_tables, schemas)
             if not table_candidates:
                 table_candidates = _find_entity_tables(entity_type, schemas)
-            logger.debug("Found %d table candidates for entity '%s'", len(table_candidates), entity_type)
+            logger.debug(
+                "Found %d table candidates for entity '%s'", len(table_candidates), entity_type
+            )
             for tc in table_candidates:
                 logger.debug("  Candidate: %s (%s)", tc["table_name"], tc["origin_id"])
 
@@ -204,9 +251,7 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                 if not columns:
                     columns = ["*"]
 
-                origin_config = next(
-                    (o for o in origins if o.get("id") == origin_id), None
-                )
+                origin_config = next((o for o in origins if o.get("id") == origin_id), None)
                 if origin_config is None:
                     msg = f"No origin config found for '{origin_id}'; skipping {table_name}."
                     logger.warning(msg)
@@ -219,13 +264,13 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                 # would pull in every other organisation's rows.
                 scope_filter = None
                 if scope_active and entity_type in scope_entities:
-                    entry = _scope_entry_for(
-                        scope_entities[entity_type], origin_id, table_name
-                    )
+                    entry = _scope_entry_for(scope_entities[entity_type], origin_id, table_name)
                     if entry is None:
                         logger.info(
                             "Scoped merge: %s:%s is not in the plan for '%s' — skipping.",
-                            origin_id, table_name, entity_type,
+                            origin_id,
+                            table_name,
+                            entity_type,
                         )
                         continue
                     ids_here = subject_ids.get(origin_id, [])
@@ -236,31 +281,30 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                         if not ids_here:
                             logger.info(
                                 "Scoped merge: no subject ids in %s — %s skipped.",
-                                origin_id, table_name,
+                                origin_id,
+                                table_name,
                             )
                             continue
-                        via_keys = await _resolve_link_via(
-                            origin_config, entry, ids_here
-                        )
+                        via_keys = await _resolve_link_via(origin_config, entry, ids_here)
                         if not via_keys:
                             logger.info(
                                 "Scoped merge: junction %s linked no %s to the "
                                 "subject — %s skipped.",
-                                entry.get("via_table"), entity_type, table_name,
+                                entry.get("via_table"),
+                                entity_type,
+                                table_name,
                             )
                             continue
-                        scope_filter = {
-                            entry["columns"][0]: {"op": "in", "value": via_keys}
-                        }
+                        scope_filter = {entry["columns"][0]: {"op": "in", "value": via_keys}}
                     else:
-                        scope_filter, skip = _scope_filter_for(
-                            entry, subject, ids_here
-                        )
+                        scope_filter, skip = _scope_filter_for(entry, subject, ids_here)
                         if skip:
                             logger.info(
                                 "Scoped merge: no subject ids for %r in origin %s "
                                 "— %s contributes nothing.",
-                                subject, origin_id, table_name,
+                                subject,
+                                origin_id,
+                                table_name,
                             )
                             continue
 
@@ -283,7 +327,9 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                     try:
                         tracked_state = dest_connector.get_extraction_state(origin_id, table_name)
                     except Exception as exc:
-                        logger.warning("Could not read extraction state for %s: %s", tracking_key, exc)
+                        logger.warning(
+                            "Could not read extraction state for %s: %s", tracking_key, exc
+                        )
                         tracked_state = None
                     last_value = tracked_state.get("last_value") if tracked_state else None
                     if last_value is not None:
@@ -294,21 +340,35 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                             try:
                                 last_value = int(last_value)
                             except (TypeError, ValueError):
-                                try:
+                                with contextlib.suppress(TypeError, ValueError):
                                     last_value = float(last_value)
-                                except (TypeError, ValueError):
-                                    pass
-                        watermark = {"column": watermark_column, "since": last_value, "kind": watermark_kind}
-                    logger.debug("Watermark for %s: column=%s, kind=%s, since=%s",
-                                 tracking_key, watermark_column, watermark_kind, last_value)
+                        watermark = {
+                            "column": watermark_column,
+                            "since": last_value,
+                            "kind": watermark_kind,
+                        }
+                    logger.debug(
+                        "Watermark for %s: column=%s, kind=%s, since=%s",
+                        tracking_key,
+                        watermark_column,
+                        watermark_kind,
+                        last_value,
+                    )
                 elif not watermark_column:
                     logger.warning(
                         "No usable watermark column for %s:%s (no timestamp or monotonic "
                         "PK found) — extracting the full table every run.",
-                        origin_id, table_name,
+                        origin_id,
+                        table_name,
                     )
 
-                logger.debug("Extracting from %s:%s (columns=%s, batch_size=%d)", origin_id, table_name, columns[:5], default_batch_size)
+                logger.debug(
+                    "Extracting from %s:%s (columns=%s, batch_size=%d)",
+                    origin_id,
+                    table_name,
+                    columns[:5],
+                    default_batch_size,
+                )
 
                 # Extract all batches. A scoped merge's linked-entity filter
                 # can be a many-thousand-id IN (...) list (see
@@ -324,12 +384,35 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                 # roll them back out of the entity's spooled rows.
                 rows_before_table = rows_written
 
-                for filter_chunk in _chunked_filters(scope_filter):
+                # Part 1.5 D.6: a large linked-id filter against ClickHouse
+                # gets one scratch-table subquery instead of many chunked IN
+                # round-trips. scratch_cleanup is called right after the loop
+                # below (both the success and the table_failed paths converge
+                # there — see the loop's own comments), never left dangling.
+                scratch_chunk: dict[str, Any] | None = None
+                scratch_cleanup = None
+                if scope_filter:
+                    ((_sf_col, _sf_cond),) = scope_filter.items()
+                    if _sf_cond.get("op") == "in":
+                        scratch_chunk, scratch_cleanup = await _scratch_filter(
+                            origin_config, _sf_col, list(_sf_cond.get("value") or [])
+                        )
+                filter_chunks = (
+                    [scratch_chunk] if scratch_chunk is not None else _chunked_filters(scope_filter)
+                )
+
+                for filter_chunk in filter_chunks:
                     cursor = None
                     while True:
                         batch_num += 1
                         try:
-                            logger.debug("  Batch %d for %s:%s, cursor=%s", batch_num, origin_id, table_name, cursor)
+                            logger.debug(
+                                "  Batch %d for %s:%s, cursor=%s",
+                                batch_num,
+                                origin_id,
+                                table_name,
+                                cursor,
+                            )
                             result = await extract_data_impl(
                                 origin_config=origin_config,
                                 table_name=table_name,
@@ -343,7 +426,13 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
 
                             batch_rows = result.get("rows", [])
                             total_fetched += len(batch_rows)
-                            logger.debug("  Batch %d returned %d rows, total=%d, next_cursor=%s", batch_num, len(batch_rows), total_fetched, result.get("next_cursor"))
+                            logger.debug(
+                                "  Batch %d returned %d rows, total=%d, next_cursor=%s",
+                                batch_num,
+                                len(batch_rows),
+                                total_fetched,
+                                result.get("next_cursor"),
+                            )
 
                             # Tag rows with origin metadata. _origin_id_row must be
                             # stable and unique: resolve/unify use
@@ -368,11 +457,7 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                             # Phase 1: collect the subject entity's ids so the
                             # dependent tables can be restricted to them. Uses the
                             # primary key, which is what a foreign key references.
-                            if (
-                                scope_active
-                                and entity_type == subject_entity_name
-                                and pk_columns
-                            ):
+                            if scope_active and entity_type == subject_entity_name and pk_columns:
                                 pk = pk_columns[0]
                                 bucket = subject_ids.setdefault(origin_id, [])
                                 for row in batch_rows:
@@ -392,7 +477,10 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                                     last_watermark_value = candidate_wm
                                 else:
                                     try:
-                                        if candidate_wm is not None and candidate_wm > last_watermark_value:
+                                        if (
+                                            candidate_wm is not None
+                                            and candidate_wm > last_watermark_value
+                                        ):
                                             last_watermark_value = candidate_wm
                                     except TypeError:
                                         last_watermark_value = candidate_wm
@@ -420,6 +508,9 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                     if table_failed:
                         break
 
+                if scratch_cleanup is not None:
+                    await scratch_cleanup()
+
                 if table_failed:
                     # Roll the partial rows back out. No watermark is recorded
                     # either, so a later re-run re-reads this table from its
@@ -427,17 +518,21 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                     # this attempt never managed to read.
                     discarded = spool.truncate_after(entity_type, rows_before_table)
                     rows_written = rows_before_table
-                    failed_tables.append({
-                        "entity_type": entity_type,
-                        "origin_id": origin_id,
-                        "table_name": table_name,
-                        "rows_discarded": discarded,
-                        "detail": table_failed,
-                    })
+                    failed_tables.append(
+                        {
+                            "entity_type": entity_type,
+                            "origin_id": origin_id,
+                            "table_name": table_name,
+                            "rows_discarded": discarded,
+                            "detail": table_failed,
+                        }
+                    )
                     logger.error(
                         "Discarding %d partially-extracted row(s) from %s:%s — "
                         "a partial table cannot be merged as if it were whole.",
-                        discarded, origin_id, table_name,
+                        discarded,
+                        origin_id,
+                        table_name,
                     )
                     continue
 
@@ -460,9 +555,7 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                 )
 
             # State gets a handle, not the rows.
-            extracted_data[entity_type] = make_handle(
-                run_id, entity_type, rows_written
-            )
+            extracted_data[entity_type] = make_handle(run_id, entity_type, rows_written)
             logger.debug("Entity '%s' total rows: %d", entity_type, rows_written)
 
     logger.debug("Total entities in extracted_data: %d", len(extracted_data))
@@ -484,8 +577,7 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
             )
         if missing_explicit:
             parts.append(
-                "no source table could be found for entity(s): "
-                + ", ".join(missing_explicit)
+                "no source table could be found for entity(s): " + ", ".join(missing_explicit)
             )
         failure = {
             "node": "extract_data",
@@ -499,9 +591,7 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                 "failed_tables": failed_tables,
                 "missing_entities": missing_explicit,
                 "dropped_inferred_entities": missing_inferred,
-                "rows_kept": {
-                    e: _handle_count(h) for e, h in extracted_data.items()
-                },
+                "rows_kept": {e: _handle_count(h) for e, h in extracted_data.items()},
             },
         }
         logger.error("extract_data failing loudly: %s", failure["error"][:400])
@@ -509,33 +599,21 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
         logger.warning(
             "extract_data: %d inferred entity type(s) had no source table and "
             "were silently dropped (not explicitly requested): %s",
-            len(missing_inferred), missing_inferred,
+            len(missing_inferred),
+            missing_inferred,
         )
 
     logger.debug("EXIT extract_data")
 
+    # Only the keys this node actually computes (Phase 0 Sec 0.8) - a key it
+    # omits is left untouched by LangGraph's per-key TypedDict state update,
+    # not cleared.
     return {
         "extracted_data": extracted_data,
         "extraction_watermarks": extraction_watermarks,
         "errors": errors,
         "failure": failure,
         "dropped_inferred_entities": missing_inferred,
-        "origins": state.get("origins", []),
-        "destination": state.get("destination", {}),
-        "llm_config": state.get("llm_config", {}),
-        "extraction_config": state.get("extraction_config", {}),
-        "target_entities": state.get("target_entities", []),
-        "explicit_target_entities": state.get("explicit_target_entities", []),
-        "schemas": state.get("schemas", {}),
-        "dependency_tree": state.get("dependency_tree", {}),
-        "extraction_order": state.get("extraction_order", []),
-        "entity_clusters": state.get("entity_clusters", {}),
-        "unified_entities": state.get("unified_entities", {}),
-        "field_mappings": state.get("field_mappings", {}),
-        "pending_schema_changes": state.get("pending_schema_changes", []),
-        "human_feedback": state.get("human_feedback"),
-        "load_approval": state.get("load_approval"),
-        "retry_counts": state.get("retry_counts", {}),
         "interrupt_data": None,
     }
 
@@ -578,25 +656,38 @@ async def _resolve_link_via(
     keys: list[Any] = []
     # A broad scope match can produce many subject ids (e.g. every company
     # matching a common name); chunk here too rather than assume the subject
-    # side is always small.
-    for filter_chunk in _chunked_filters({from_col: {"op": "in", "value": list(subject_ids)}}):
-        cursor = None
-        while True:
-            result = await extract_data_impl(
-                origin_config=origin_config,
-                table_name=via_table,
-                columns=[to_col],
-                batch_size=2000,
-                cursor=cursor,
-                filter=filter_chunk,
-            )
-            for row in result.get("rows", []):
-                val = row.get(to_col)
-                if val is not None:
-                    keys.append(val)
-            cursor = result.get("next_cursor")
-            if cursor is None:
-                break
+    # side is always small. Part 1.5 D.6: for ClickHouse, a large id list
+    # gets one scratch-table subquery instead of many chunked round-trips.
+    scratch_chunk, scratch_cleanup = await _scratch_filter(
+        origin_config, from_col, list(subject_ids)
+    )
+    filter_chunks = (
+        [scratch_chunk]
+        if scratch_chunk is not None
+        else _chunked_filters({from_col: {"op": "in", "value": list(subject_ids)}})
+    )
+    try:
+        for filter_chunk in filter_chunks:
+            cursor = None
+            while True:
+                result = await extract_data_impl(
+                    origin_config=origin_config,
+                    table_name=via_table,
+                    columns=[to_col],
+                    batch_size=2000,
+                    cursor=cursor,
+                    filter=filter_chunk,
+                )
+                for row in result.get("rows", []):
+                    val = row.get(to_col)
+                    if val is not None:
+                        keys.append(val)
+                cursor = result.get("next_cursor")
+                if cursor is None:
+                    break
+    finally:
+        if scratch_cleanup is not None:
+            await scratch_cleanup()
     return list(dict.fromkeys(keys))
 
 
@@ -657,30 +748,33 @@ def _candidates_from_selection(
         if found is None:
             logger.warning(
                 "Selected table %s:%s for entity '%s' is not in the discovered "
-                "schema — skipping it.", origin_id, table_name, entity_type,
+                "schema — skipping it.",
+                origin_id,
+                table_name,
+                entity_type,
             )
             continue
         table, full_name = found
         if (origin_id, full_name) in seen:
             continue
         seen.add((origin_id, full_name))
-        candidates.append({
-            "origin_id": origin_id,
-            "table_name": full_name,
-            "columns": table.get("columns", []),
-            "foreign_keys": table.get("foreign_keys", []),
-            "primary_key": table.get("primary_key", []),
-            "watermark_column": table.get("watermark_column"),
-            "watermark_kind": table.get("watermark_kind"),
-            "selection_reason": item.get("reason", ""),
-            "selection_source": item.get("source", ""),
-        })
+        candidates.append(
+            {
+                "origin_id": origin_id,
+                "table_name": full_name,
+                "columns": table.get("columns", []),
+                "foreign_keys": table.get("foreign_keys", []),
+                "primary_key": table.get("primary_key", []),
+                "watermark_column": table.get("watermark_column"),
+                "watermark_kind": table.get("watermark_kind"),
+                "selection_reason": item.get("reason", ""),
+                "selection_source": item.get("source", ""),
+            }
+        )
     return candidates
 
 
-def _stable_row_key(
-    row: dict[str, Any], pk_columns: list[str], ordinal: int
-) -> str:
+def _stable_row_key(row: dict[str, Any], pk_columns: list[str], ordinal: int) -> str:
     """Identify a source row the same way on every run.
 
     Uses the table's primary key when the extracted columns include it (the
@@ -699,9 +793,7 @@ def _stable_row_key(
     return f"#{ordinal}"
 
 
-def _find_entity_tables(
-    entity_type: str, schemas: dict[str, Any]
-) -> list[dict[str, Any]]:
+def _find_entity_tables(entity_type: str, schemas: dict[str, Any]) -> list[dict[str, Any]]:
     """Find tables that plausibly contain the given entity type.
 
     Returns list of {origin_id, table_name, columns, full_name}.
@@ -714,15 +806,17 @@ def _find_entity_tables(
             full_name = table.get("full_name", table_name)
 
             if _table_matches_entity(table_name, full_name, entity_type):
-                candidates.append({
-                    "origin_id": origin_id,
-                    "table_name": full_name,
-                    "columns": table.get("columns", []),
-                    "foreign_keys": table.get("foreign_keys", []),
-                    "primary_key": table.get("primary_key", []),
-                    "watermark_column": table.get("watermark_column"),
-                    "watermark_kind": table.get("watermark_kind"),
-                })
+                candidates.append(
+                    {
+                        "origin_id": origin_id,
+                        "table_name": full_name,
+                        "columns": table.get("columns", []),
+                        "foreign_keys": table.get("foreign_keys", []),
+                        "primary_key": table.get("primary_key", []),
+                        "watermark_column": table.get("watermark_column"),
+                        "watermark_kind": table.get("watermark_kind"),
+                    }
+                )
 
     return candidates
 

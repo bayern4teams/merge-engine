@@ -1,0 +1,88 @@
+# Server-side CI (Part 1.6.D / Phase 0 §0.3).
+#
+# NOT VERIFIED LIVE. git.n4t.com's git protocol (SSH, what `origin` actually
+# uses) is unreachable as of 2026-08-05 — see
+# docs/decisions/0003-server-ci-unreachable.md, including that day's
+# re-check (port 443 now answers with an unrelated Kestrel service; SSH
+# still times out). No runner can be registered until that changes. This
+# file is prepared so the day it does, activating CI is "register a runner
+# and push this file" rather than a from-scratch design exercise.
+#
+# Gitea Actions uses GitHub-Actions-compatible syntax, per the revisit
+# trigger in ADR 0003. If git.n4t.com turns out to run GitLab instead, this
+# needs the equivalent .gitlab-ci.yml shape — check
+# `curl -sI https://git.n4t.com` for a real Gitea/Forgejo or GitLab
+# signature (not just any 200) before trusting this file's syntax choice.
+#
+# The one rule that must never be violated here: this workflow runs exactly
+# `python scripts/check.py all` (plus the from-scratch smoke tests below) —
+# nothing a developer can't also run locally. If CI ever needs logic beyond
+# that command, the logic belongs in check.py, not duplicated into YAML.
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install
+        run: pip install -e ".[dev,perf]"
+
+      - name: The one verification command
+        run: python scripts/check.py all
+
+  portability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # From-scratch venv boot (Part 1.6.C): a clean checkout, a plain venv
+      # (no conda anywhere in this job), install, build the frontend, and
+      # confirm the app imports and the API layer builds — the same proof
+      # scripts/bootstrap.py gives a human, run unattended.
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+      - name: Bootstrap from scratch
+        run: python scripts/bootstrap.py
+      - name: Import sanity (the real proof — no ImportError, routes present)
+        run: |
+          .venv/bin/python -c "
+          import src.api.main as m
+          app = m.create_api()
+          assert any('/api/workflow/start' == getattr(r, 'path', None) for r in app.routes)
+          print('OK:', len(app.routes), 'routes registered')
+          "
+
+      # Docker boot smoke test (Part 1.6.C): build the real Dockerfile and
+      # confirm the container serves the actual React SPA, not the
+      # api-only stub — this is exactly the check that caught the
+      # MERGE_ENGINE_HOST=127.0.0.1 bug (Docker's port-forwarding cannot
+      # reach a loopback-only bind) during 1.6.C's own live verification.
+      - name: Build image
+        run: docker build -t merge-engine:ci .
+      - name: Boot and verify
+        run: |
+          docker run -d --name ci-boot -p 7860:7860 -e LLM_API_KEY=ci-placeholder merge-engine:ci
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:7860/ > /tmp/index.html && break
+            sleep 1
+          done
+          grep -q '<title>merge-engine</title>' /tmp/index.html
+          docker rm -f ci-boot

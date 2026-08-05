@@ -11,38 +11,38 @@ Supports two modes:
 
 from __future__ import annotations
 
+import functools
 import logging
-from typing import Any
-
-from typing import TypedDict, Annotated, Dict, Any, List
 import operator
+import time
+from collections.abc import Awaitable, Callable
+from typing import Annotated, Any, TypedDict
 
-from langgraph.graph import StateGraph, END
+from langgraph.graph import END, StateGraph
 from langgraph.types import RetryPolicy
 
-from src.orchestrator.utils.retry import TransientError, classify_exception
-
 from src.orchestrator.nodes import (
-    parse_request,
-    discover_schemas,
     analyze_dependencies,
-    plan_scope,
+    discover_schemas,
     extract_data,
-    resolve_entities,
-    has_low_confidence_clusters,
-    unify_entity_groups,
-    map_fields,
-    has_unmapped_fields,
-    load_data_node,
-    update_extraction_state_node,
-    human_review_deps,
-    human_review_scope,
-    human_review_matches,
-    human_review_mappings,
-    human_final_approval,
     handle_error,
+    has_low_confidence_clusters,
+    has_unmapped_fields,
+    human_final_approval,
+    human_review_deps,
+    human_review_mappings,
+    human_review_matches,
+    human_review_scope,
+    load_data_node,
+    map_fields,
+    parse_request,
+    plan_scope,
+    resolve_entities,
+    unify_entity_groups,
+    update_extraction_state_node,
 )
 from src.orchestrator.nodes.preflight import preflight
+from src.orchestrator.utils.retry import TransientError, classify_exception
 
 logger = logging.getLogger("merge-engine.orchestrator.graph")
 
@@ -152,12 +152,16 @@ def _gate_router(gate: str, forward: str):
                 logger.warning(
                     "Gate '%s' retried %d times (limit %d) — continuing "
                     "forward instead of looping again.",
-                    gate, attempts, MAX_GATE_RETRIES,
+                    gate,
+                    attempts,
+                    MAX_GATE_RETRIES,
                 )
                 return "forward"
             logger.info(
                 "Gate '%s' sent back to '%s' (attempt %d).",
-                gate, producer, attempts,
+                gate,
+                producer,
+                attempts,
             )
             return "retry"
 
@@ -239,8 +243,10 @@ def _error_gate_router(state: dict[str, Any]) -> str:
         attempts = (state.get("retry_counts") or {}).get(failed_node, 0)
         if attempts > MAX_GATE_RETRIES:
             logger.warning(
-                "Node '%s' retried %d times (limit %d) — aborting instead of "
-                "looping.", failed_node, attempts, MAX_GATE_RETRIES,
+                "Node '%s' retried %d times (limit %d) — aborting instead of looping.",
+                failed_node,
+                attempts,
+                MAX_GATE_RETRIES,
             )
             return "abort"
         logger.info("Error gate: retrying '%s' (attempt %d).", failed_node, attempts)
@@ -250,7 +256,9 @@ def _error_gate_router(state: dict[str, Any]) -> str:
         successor = NODE_SUCCESSOR[failed_node]
         logger.warning(
             "Error gate: skipping failed node '%s' and continuing at '%s'. "
-            "The run is knowingly incomplete.", failed_node, successor,
+            "The run is knowingly incomplete.",
+            failed_node,
+            successor,
         )
         return successor
 
@@ -266,7 +274,7 @@ def _scope_router(state: dict[str, Any]) -> str:
     """
     merge_scope = state.get("merge_scope") or {}
     scope_plan = state.get("scope_plan") or {}
-    has_plan = bool((scope_plan.get("entities") or {}))
+    has_plan = bool(scope_plan.get("entities") or {})
     if merge_scope.get("active") and has_plan:
         return "review"
     return "continue"
@@ -297,6 +305,32 @@ def _error_gate_destinations() -> dict[str, str]:
     return destinations
 
 
+NodeFn = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+
+
+def _timed(name: str, fn: NodeFn) -> NodeFn:
+    """Wrap a node so its wall-clock seconds land in MergeState.timings.
+
+    Centralised here rather than added to each node file, so that adding a
+    new node (or a branch's own node) never requires touching every node's
+    body just to keep the timing budget (Phase 0 Sec 0.6) accurate. A node
+    that never actually runs its body on a given step (a HITL gate resumed
+    via `interrupt_before`) correctly contributes no timing entry for that
+    step - there is nothing to time.
+    """
+
+    @functools.wraps(fn)
+    async def wrapper(state: dict[str, Any]) -> dict[str, Any]:
+        start = time.monotonic()
+        result = await fn(state)
+        elapsed = time.monotonic() - start
+        result = dict(result) if result else {}
+        result["timings"] = {name: elapsed}
+        return result
+
+    return wrapper
+
+
 def _build_builder() -> StateGraph:
     """Build the raw StateGraph (nodes + edges) without compiling."""
     builder = StateGraph(MergeState)
@@ -305,28 +339,45 @@ def _build_builder() -> StateGraph:
     # Every node that reaches out to a database or the LLM carries the
     # network retry policy. Pure-compute nodes (unify_entities) and the
     # HITL gates deliberately do not: retrying them cannot help.
-    builder.add_node("preflight", preflight, retry_policy=NETWORK_RETRY)
-    builder.add_node("parse_request", parse_request, retry_policy=NETWORK_RETRY)
-    builder.add_node("discover_schemas", discover_schemas, retry_policy=NETWORK_RETRY)
+    builder.add_node("preflight", _timed("preflight", preflight), retry_policy=NETWORK_RETRY)
     builder.add_node(
-        "analyze_dependencies", analyze_dependencies, retry_policy=NETWORK_RETRY
+        "parse_request", _timed("parse_request", parse_request), retry_policy=NETWORK_RETRY
     )
-    builder.add_node("human_review_deps", human_review_deps)
+    builder.add_node(
+        "discover_schemas",
+        _timed("discover_schemas", discover_schemas),
+        retry_policy=NETWORK_RETRY,
+    )
+    builder.add_node(
+        "analyze_dependencies",
+        _timed("analyze_dependencies", analyze_dependencies),
+        retry_policy=NETWORK_RETRY,
+    )
+    builder.add_node("human_review_deps", _timed("human_review_deps", human_review_deps))
     # Scope planning for a "merge everything about Nova" request. Carries the
     # network retry policy because it probes the origins for candidate subject
     # rows to show at the confirmation gate.
-    builder.add_node("plan_scope", plan_scope, retry_policy=NETWORK_RETRY)
-    builder.add_node("human_review_scope", human_review_scope)
-    builder.add_node("extract_data", extract_data, retry_policy=NETWORK_RETRY)
-    builder.add_node("resolve_entities", resolve_entities, retry_policy=NETWORK_RETRY)
-    builder.add_node("human_review_matches", human_review_matches)
-    builder.add_node("unify_entities", unify_entity_groups)
-    builder.add_node("map_fields", map_fields, retry_policy=NETWORK_RETRY)
-    builder.add_node("human_review_mappings", human_review_mappings)
-    builder.add_node("human_final_approval", human_final_approval)
-    builder.add_node("load_data", load_data_node, retry_policy=NETWORK_RETRY)
-    builder.add_node("update_extraction_state", update_extraction_state_node)
-    builder.add_node("handle_error", handle_error)
+    builder.add_node("plan_scope", _timed("plan_scope", plan_scope), retry_policy=NETWORK_RETRY)
+    builder.add_node("human_review_scope", _timed("human_review_scope", human_review_scope))
+    builder.add_node(
+        "extract_data", _timed("extract_data", extract_data), retry_policy=NETWORK_RETRY
+    )
+    builder.add_node(
+        "resolve_entities", _timed("resolve_entities", resolve_entities), retry_policy=NETWORK_RETRY
+    )
+    builder.add_node("human_review_matches", _timed("human_review_matches", human_review_matches))
+    builder.add_node("unify_entities", _timed("unify_entities", unify_entity_groups))
+    builder.add_node("map_fields", _timed("map_fields", map_fields), retry_policy=NETWORK_RETRY)
+    builder.add_node(
+        "human_review_mappings", _timed("human_review_mappings", human_review_mappings)
+    )
+    builder.add_node("human_final_approval", _timed("human_final_approval", human_final_approval))
+    builder.add_node("load_data", _timed("load_data", load_data_node), retry_policy=NETWORK_RETRY)
+    builder.add_node(
+        "update_extraction_state",
+        _timed("update_extraction_state", update_extraction_state_node),
+    )
+    builder.add_node("handle_error", _timed("handle_error", handle_error))
 
     # ── Main flow edges ─────────────────────────────────────────────
     # Preflight runs before anything else so an unreachable database or a
@@ -338,8 +389,13 @@ def _build_builder() -> StateGraph:
     # records a `failure` stops the run at the error gate instead of
     # continuing with partial output.
     for node in (
-        "preflight", "parse_request", "discover_schemas",
-        "analyze_dependencies", "extract_data", "unify_entities", "load_data",
+        "preflight",
+        "parse_request",
+        "discover_schemas",
+        "analyze_dependencies",
+        "extract_data",
+        "unify_entities",
+        "load_data",
     ):
         forward = NODE_SUCCESSOR[node]
         builder.add_conditional_edges(
@@ -423,67 +479,77 @@ def _build_builder() -> StateGraph:
     # how many attempts were made, then routes on the user's decision:
     # retry that node, skip it and continue knowingly incomplete, or abort.
     builder.add_conditional_edges(
-        "handle_error", _error_gate_router, _error_gate_destinations(),
+        "handle_error",
+        _error_gate_router,
+        _error_gate_destinations(),
     )
 
     return builder
+
 
 class MergeState(TypedDict):
     user_request: str
     run_id: str
 
-    target_entities: List[Any]
+    target_entities: list[Any]
     # Subset of target_entities the user actually named/asked for, as opposed to
     # types a wildcard rule (e.g. "Company Wildcards") merely inferred. Added
     # 2026-07-30 (remediation #1, merge-engine-remediation-1-to-6 in project
     # memory) so extract_data can escalate a missing EXPLICIT entity (a real gap)
     # while only warning on a missing INFERRED one (a wildcard guessed wrong).
-    explicit_target_entities: List[Any]
+    explicit_target_entities: list[Any]
     # Inferred (non-explicit) entity types that had no source table anywhere and
     # were dropped without escalating -- set by extract_data.py, surfaced in the
     # reconciliation report / data-quality scorecard (remediation #6).
-    dropped_inferred_entities: List[Any]
+    dropped_inferred_entities: list[Any]
     # Set by parse_request when the request targets one named organisation
     # ("all information about Nova"): {active, subject, scope_type}. When
     # active, scope planning, extraction and dedup all restrict to the subject.
-    merge_scope: Dict[str, Any]
-    origins: List[Dict[str, Any]]
-    destination: Dict[str, Any]
+    merge_scope: dict[str, Any]
+    origins: list[dict[str, Any]]
+    destination: dict[str, Any]
 
-    llm_config: Dict[str, Any]
-    extraction_config: Dict[str, Any]
+    llm_config: dict[str, Any]
+    extraction_config: dict[str, Any]
 
-    schemas: Dict[str, Any]
-    dependency_tree: Dict[str, Any]
+    schemas: dict[str, Any]
+    dependency_tree: dict[str, Any]
     # Set by analyze_dependencies when the LLM call fails and it falls back
     # to a flat (unordered) dependency tree, so a human sees the tree is
     # unverified rather than mistaking it for a real analysis.
     dependency_analysis_warning: str
-    extraction_order: List[Any]
+    extraction_order: list[Any]
 
     # Which source tables hold each entity, chosen by the LLM over the FULL
     # table catalog and confirmed by the human at the dependency gate:
     # {entity: [{origin_id, table, confidence, reason, source}]}. Empty means
     # extraction falls back to the alias-name heuristic.
-    entity_tables: Dict[str, Any]
+    entity_tables: dict[str, Any]
     table_selection_notes: str
 
     # Built by plan_scope for a scoped merge: how to restrict each entity's
     # tables to the subject — {subject, subject_entity, entities: {entity:
     # [{origin_id, table, mode: match|link, columns, ...}]}}. Empty for an
     # unscoped merge, in which case extraction reads whole tables as before.
-    scope_plan: Dict[str, Any]
+    scope_plan: dict[str, Any]
 
     # Phase O — decisions a saved profile pins so a re-run is a re-run.
     # {entity: {blocking_keys, unique_id_fields, deterministic_id_fields,
     #           strictness}} (O.2; deterministic_id_fields added in Phase 3.1
     # of merge-engine-remediation-1-to-6 — operator-declared identity keys
     # like a customer_ref that settle a match/non-match directly)
-    matching_rules: Dict[str, Any]
+    matching_rules: dict[str, Any]
     # {field: [rule, ...]} survivorship, "_default" covers the rest (O.3)
-    conflict_policy: Dict[str, Any]
+    conflict_policy: dict[str, Any]
     # Name of the profile this run was started from, "" when ad-hoc (O.4)
     profile_name: str
+    # Part 1.6.A: gate names (from REVIEW_GATES) this run should resume
+    # through automatically instead of pausing for a human. Opt-in per run
+    # via the Advanced panel; empty means every gate pauses as before.
+    # Checked in WorkflowManager._finalize_stream_status, never in a node
+    # body (a HITL node's body never runs on resume — see the module
+    # docstring's "HITL resume trap").
+    auto_approve_gates: list[str]
 
     # When True, extraction ignores any tracked watermark and re-reads every
     # table in full. Set for a fresh run (a new/uncompleted profile) or the
@@ -491,41 +557,41 @@ class MergeState(TypedDict):
     # destination and want them back", which an incremental run cannot give.
     force_full_extraction: bool
 
-    extracted_data: Dict[str, Any]
+    extracted_data: dict[str, Any]
     # Watermarks observed during extraction this run, keyed by
     # "{origin_id}:{table_name}" -> {watermark_column, watermark_kind,
     # last_value, rows_extracted}. Written to merge_engine_extraction_state
     # by update_extraction_state_node after a successful load.
-    extraction_watermarks: Annotated[Dict[str, Any], operator.or_]
+    extraction_watermarks: Annotated[dict[str, Any], operator.or_]
 
     # ⚠️ IMPORTANT: these must be merge-safe
-    entity_clusters: Annotated[Dict[str, Any], operator.or_]
+    entity_clusters: Annotated[dict[str, Any], operator.or_]
     # Per-entity resolution audit numbers ({entity: {auto_matched,
     # auto_excluded, llm_scored, total_records, clusters_formed}}) so the
     # HITL gates can show what the system decided without review.
-    resolution_stats: Annotated[Dict[str, Any], operator.or_]
-    unified_entities: Annotated[Dict[str, Any], operator.or_]
-    field_mappings: Annotated[Dict[str, Any], operator.or_]
-    unmapped_fields: Annotated[Dict[str, Any], operator.or_]
+    resolution_stats: Annotated[dict[str, Any], operator.or_]
+    unified_entities: Annotated[dict[str, Any], operator.or_]
+    field_mappings: Annotated[dict[str, Any], operator.or_]
+    unmapped_fields: Annotated[dict[str, Any], operator.or_]
 
     # Replace semantics (no reducer): the only writer (map_fields) already
     # copies-and-extends the prior list, and the mapping review gate must be
     # able to REMOVE cancelled proposals on resume — an add reducer would
     # duplicate and never delete.
-    pending_schema_changes: List[Any]
+    pending_schema_changes: list[Any]
 
     human_feedback: Any
     load_approval: Any
 
     # How many times the user has sent each gate back for rework, keyed by
     # gate node name. Bounded by MAX_GATE_RETRIES so a retry can't loop forever.
-    gate_retry_counts: Dict[str, int]
+    gate_retry_counts: dict[str, int]
     # Free-text reason the user gave when rejecting a gate's output, keyed by
     # the PRODUCING node name. That node injects it into its LLM prompt on the
     # rerun so the second attempt actually differs from the first.
-    retry_hints: Dict[str, str]
+    retry_hints: dict[str, str]
 
-    errors: Annotated[List[Any], operator.add]
+    errors: Annotated[list[Any], operator.add]
 
     # The single open failure that stopped the pipeline, if any:
     # {node, error, error_class, disposition, context, attempt}. A node that
@@ -533,19 +599,26 @@ class MergeState(TypedDict):
     # a stop at the error gate. Cleared when a human dispositions it, with
     # the original appended to `handled_failures` for the audit trail.
     # Replace semantics (no reducer) — it must be clearable.
-    failure: Dict[str, Any]
-    handled_failures: Annotated[List[Any], operator.add]
+    failure: dict[str, Any]
+    handled_failures: Annotated[list[Any], operator.add]
 
     # What preflight checked and what it found, so a run that stopped before
     # reading any data can say exactly which check failed.
-    preflight_report: Dict[str, Any]
+    preflight_report: dict[str, Any]
 
-    retry_counts: Dict[str, int]
+    retry_counts: dict[str, int]
     interrupt_data: Any
 
     # Per-entity audit numbers built by load_data_node; also written to
     # logs/run_reports/<run_id>.json
-    reconciliation_report: Dict[str, Any]
+    reconciliation_report: dict[str, Any]
+
+    # Per-node wall-clock seconds, merged across every node invocation this
+    # run (Phase 0 Sec 0.6 - observable-completion budgets, see
+    # docs/verification/BUDGETS.yaml and drive_app.py --assert-budgets).
+    # Written centrally by _timed() in _build_builder(), not by each node, so
+    # adding a node never requires touching this concern.
+    timings: Annotated[dict[str, float], operator.or_]
 
 
 def build_graph(checkpointer: Any = None) -> Any:
@@ -572,20 +645,26 @@ def build_graph(checkpointer: Any = None) -> Any:
                 interrupt_before=HITL_NODES,
                 interrupt_after=[],
             )
-            logger.info("Compiled merge workflow graph with %d HITL interrupt points", len(HITL_NODES))
+            logger.info(
+                "Compiled merge workflow graph with %d HITL interrupt points", len(HITL_NODES)
+            )
         except Exception:
             logger.warning("Failed to compile with checkpointer, compiling without")
             graph = builder.compile()
     else:
         try:
             from langgraph.checkpoint.memory import MemorySaver
+
             memory = MemorySaver()
             graph = builder.compile(
                 checkpointer=memory,
                 interrupt_before=HITL_NODES,
                 interrupt_after=[],
             )
-            logger.info("Compiled merge workflow graph with MemorySaver and %d HITL interrupt points", len(HITL_NODES))
+            logger.info(
+                "Compiled merge workflow graph with MemorySaver and %d HITL interrupt points",
+                len(HITL_NODES),
+            )
         except ImportError:
             logger.warning("langgraph-checkpoint not installed; compiling without checkpointer")
             graph = builder.compile()
@@ -593,12 +672,31 @@ def build_graph(checkpointer: Any = None) -> Any:
     return graph
 
 
-def _error_router(state: dict[str, Any]) -> str:
-    """Route to error handler if errors list is non-empty."""
-    errors = state.get("errors", [])
-    if errors:
-        return "error"
-    return "continue"
+def _apply_run_config_overrides(
+    llm_config: dict[str, Any],
+    extraction_config: dict[str, Any],
+    run_config: dict[str, Any] | None,
+) -> None:
+    """Part 1.6.A: apply this run's UI-set overrides in place.
+
+    ``run_config`` only ever carries keys the caller explicitly set (the API
+    layer omits unset fields) — anything absent leaves the file-loaded value
+    untouched, so a partial override (e.g. only ``temperature``) never
+    silently resets everything else to a default.
+    """
+    if not run_config:
+        return
+    for key in (
+        "model",
+        "fallback_models",
+        "temperature",
+        "entity_resolution_enabled",
+        "field_mapping_enabled",
+    ):
+        if run_config.get(key) is not None:
+            llm_config[key] = run_config[key]
+    if run_config.get("batch_size") is not None:
+        extraction_config["default_batch_size"] = run_config["batch_size"]
 
 
 def get_initial_state(
@@ -609,6 +707,8 @@ def get_initial_state(
     destination: dict[str, Any] | None = None,
     run_id: str = "",
     conflict_policy: dict[str, Any] | None = None,
+    matching_rules: dict[str, Any] | None = None,
+    run_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create the initial state dict for a new workflow.
 
@@ -635,6 +735,17 @@ def get_initial_state(
         the caller for this run — e.g. from ``WorkflowStart.conflict_policy``.
         Takes effect ahead of a saved profile's pinned ``conflict_policy``,
         since ``apply_profile`` only fills a key the state hasn't already set.
+    matching_rules : dict, optional
+        Per-entity matching overrides (O.2) keyed by entity type, plus an
+        optional ``_default`` entry applied when no per-entity type is known
+        yet (Part 1.6.A — the Advanced panel submits this before
+        ``target_entities`` exists). Same precedence as ``conflict_policy``.
+    run_config : dict, optional
+        Part 1.6.A run-by-run overrides from the UI's Advanced panel: any of
+        ``model``, ``fallback_models``, ``temperature``,
+        ``entity_resolution_enabled``, ``field_mapping_enabled``,
+        ``batch_size``, ``auto_approve_gates``. Only keys actually present
+        override the file-loaded config; everything else is left alone.
 
     Returns
     -------
@@ -644,6 +755,8 @@ def get_initial_state(
     # Handle UI-originated workflows (origins + destination dicts)
     if origins is not None and destination is not None:
         llm_config = _load_llm_config(config_path)
+        extraction_config: dict[str, Any] = {"default_batch_size": 1000}
+        _apply_run_config_overrides(llm_config, extraction_config, run_config)
         return {
             "user_request": user_request,
             "run_id": run_id,
@@ -655,9 +768,7 @@ def get_initial_state(
             # run_id rides along so every LLM call can be attributed to this
             # run in the cost ledger (O.5) — without it every run reports zero.
             "llm_config": {**llm_config, "run_id": run_id},
-            "extraction_config": {
-                "default_batch_size": 1000,
-            },
+            "extraction_config": extraction_config,
             "schemas": {},
             "dependency_tree": {},
             "dependency_analysis_warning": "",
@@ -665,9 +776,10 @@ def get_initial_state(
             "entity_tables": {},
             "table_selection_notes": "",
             "scope_plan": {},
-            "matching_rules": {},
+            "matching_rules": matching_rules or {},
             "conflict_policy": conflict_policy or {},
             "profile_name": "",
+            "auto_approve_gates": list((run_config or {}).get("auto_approve_gates") or []),
             "force_full_extraction": False,
             "extracted_data": {},
             "extraction_watermarks": {},
@@ -714,6 +826,12 @@ def get_initial_state(
         llm_config = {
             "provider": config.llm.provider,
             "model": config.llm.model,
+            # Without this, a run started via this legacy Config-object path
+            # gets no quota-fallback chain at all - the first model failure
+            # is fatal instead of walking config.yaml's llm.fallback_models
+            # (Phase 0 Sec 0.8, found stale relative to _load_llm_config,
+            # the UI path's equivalent helper, which already includes it).
+            "fallback_models": config.llm.fallback_models,
             "api_key": config.llm.api_key,
             "base_url": config.llm.base_url,
             "temperature": config.llm.temperature,
@@ -741,8 +859,13 @@ def get_initial_state(
             "entity_tables": {},
             "table_selection_notes": "",
             "scope_plan": {},
-            "matching_rules": {},
-            "conflict_policy": {},
+            "matching_rules": matching_rules or {},
+            # Was hardcoded to {}, silently ignoring the caller's
+            # conflict_policy parameter entirely - the UI path (above)
+            # already respects it via `conflict_policy or {}` (Phase 0 Sec
+            # 0.8, found stale relative to that path).
+            "conflict_policy": conflict_policy or {},
+            "auto_approve_gates": list((run_config or {}).get("auto_approve_gates") or []),
             "profile_name": "",
             "force_full_extraction": False,
             "extracted_data": {},
@@ -783,6 +906,7 @@ def _load_llm_config(config_path: str | None) -> dict[str, Any]:
     """
     try:
         from src.utils.config_loader import load_config
+
         cfg = load_config(config_path)
         return {
             "provider": cfg.llm.provider,
@@ -816,9 +940,10 @@ def _load_llm_config(config_path: str | None) -> dict[str, Any]:
 # a checkpointer for the CLI server path. The server adds its own
 # persistence layer at runtime.
 
+
 def _get_server_graph():
     """Create a compiled graph for LangGraph CLI server mode.
-    
+
     The LangGraph API handles persistence automatically. Custom
     checkpointer (MemorySaver/SqliteSaver/etc.) are NOT allowed in
     server mode — the API overrides them with its own persistence.
@@ -832,5 +957,21 @@ def _get_server_graph():
     return graph
 
 
-# Module-level graph export for LangGraph CLI
-graph = _get_server_graph()
+# Lazy module-level export for LangGraph CLI (Phase 0 Sec 0.8): compiling a
+# StateGraph is not free, and `graph = _get_server_graph()` at module scope
+# used to pay that cost on EVERY import of this module, including from
+# WorkflowManager's in-process mode, which never touches this export at all
+# and calls build_graph() instead. PEP 562 module __getattr__ defers the
+# compile until something actually accesses `graph` (the LangGraph CLI
+# server's expected entry point, `langgraph.json`'s "./graph.py:graph"),
+# and caches the result so a second access doesn't recompile.
+_server_graph_cache: Any = None
+
+
+def __getattr__(name: str) -> Any:
+    global _server_graph_cache
+    if name == "graph":
+        if _server_graph_cache is None:
+            _server_graph_cache = _get_server_graph()
+        return _server_graph_cache
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

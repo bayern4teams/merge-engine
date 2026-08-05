@@ -8,10 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.mcp_server.tools.map_fields import (
-    map_fields_impl,
-    map_fields_handler,
     _heuristic_match,
     _map_type_generic,
+    _safe_coalesce_target,
+    map_fields_handler,
+    map_fields_impl,
 )
 
 
@@ -114,10 +115,11 @@ class TestMapFieldsImpl:
         assert len(result["unmapped_fields"]) >= 0  # May or may not have unmapped
 
     @pytest.mark.asyncio
-    async def test_map_fields_schema_changes(
+    async def test_map_fields_no_destination_equivalent_is_unmapped(
         self,
     ) -> None:
-        """Test mapping when new columns need to be added."""
+        """A field with no destination equivalent is left unmapped, never
+        given a new column — the destination schema is a fixed contract."""
         unified_schema = {
             "new_field": {"type": "STRING", "sample_value": "value"},
         }
@@ -134,9 +136,9 @@ class TestMapFieldsImpl:
             mock_get_config.return_value = MagicMock()
             result = await map_fields_impl("person", unified_schema, dest_schema)
 
-        # Should have a mapping entry with requires_schema_change
-        assert "new_field" in result["field_mapping"]
-        assert result["field_mapping"]["new_field"]["requires_schema_change"] is True
+        assert "new_field" not in result["field_mapping"]
+        assert result["schema_changes"] == []
+        assert [u["field"] for u in result["unmapped_fields"]] == ["new_field"]
 
     @pytest.mark.asyncio
     async def test_map_fields_empty_unified_schema(
@@ -206,6 +208,162 @@ class TestMapFieldsImpl:
             result = await map_fields_impl("person", unified_schema, dest_schema)
 
         assert "name" in result["field_mapping"]
+
+
+class TestSynonymCoalesce:
+    """Bug B follow-up: when a cluster merges records from two origins whose
+    schemas spell the same concept differently, the unified record carries
+    BOTH spellings as separate keys (unify_entity_group.py unions raw field
+    names, it has no synonym concept). map_fields_impl must not silently
+    drop whichever spelling didn't win the destination column outright —
+    only one field name gets a column per batch, but per RECORD the loser
+    may be the only one populated.
+    """
+
+    @pytest.fixture
+    def company_dest_schema(self) -> dict[str, Any]:
+        return {
+            "table": "company",
+            "columns": [
+                {"name": "id", "type": "TEXT"},
+                {"name": "name", "type": "TEXT"},
+                {"name": "legal_name", "type": "TEXT"},
+                {"name": "website", "type": "TEXT"},
+            ],
+        }
+
+    @pytest.mark.asyncio
+    async def test_single_synonym_present_maps_normally(
+        self, company_dest_schema: dict[str, Any]
+    ) -> None:
+        """A batch with only `entityName` (no literal `name` field at all,
+        e.g. an origin1-only run with no cross-origin merge) must map it
+        directly — no coalescing needed since nothing else claims `name`."""
+        unified_schema = {
+            "entityName": {"type": "str", "sample_values": ["Lockheed Martin"]},
+        }
+        result = await map_fields_impl(
+            "company",
+            unified_schema,
+            company_dest_schema,
+            llm_config=None,
+        )
+        assert result["field_mapping"]["entityName"]["dest_column"] == "name"
+        assert result["unmapped_fields"] == []
+
+    @pytest.mark.asyncio
+    async def test_merged_record_coalesces_synonym_instead_of_dropping_it(
+        self, company_dest_schema: dict[str, Any]
+    ) -> None:
+        """A batch containing BOTH `name` (wins the column outright, exact
+        match) and `entityName` (a qualified synonym) must map entityName
+        onto `name` too, tagged `mapped_by=coalesce`, instead of leaving it
+        unmapped. Reproduces a real cross-origin Boeing cluster live: the
+        unified record after resolve_entities+unify_entity_group carries
+        both keys, and dropping the loser meant a company merged from
+        origin1 (entityName only, no literal `name` field) still ended up
+        with a NULL `name` in the destination even after the camelCase
+        heuristic fix — because in THAT SAME BATCH, some other cluster's
+        merged record also carried a literal `name` key, which won the
+        column globally and starved every entityName-only record."""
+        unified_schema = {
+            "name": {"type": "str", "sample_values": ["Boeing"]},
+            "entityName": {"type": "str", "sample_values": ["Boeing"]},
+        }
+        result = await map_fields_impl(
+            "company",
+            unified_schema,
+            company_dest_schema,
+            llm_config=None,
+        )
+        assert result["field_mapping"]["name"]["dest_column"] == "name"
+        assert result["field_mapping"]["entityName"]["dest_column"] == "name"
+        assert result["field_mapping"]["entityName"]["mapped_by"] == "coalesce"
+        assert result["unmapped_fields"] == []
+
+    @pytest.mark.asyncio
+    async def test_coalesce_does_not_let_a_different_concept_corrupt_the_column(
+        self, company_dest_schema: dict[str, Any]
+    ) -> None:
+        """`fullName` means `legal_name`, not `name` — even though it scores
+        identically to `entityName` against `name` by plain string
+        similarity (both merely contain the substring "name"). It must NOT
+        coalesce onto the already-claimed `name` column: reproduced live as
+        real corruption where fullName's legal-name value silently
+        overwrote a correct `name` value ("Boeing" -> "The Boeing
+        Company") on the same record."""
+        unified_schema = {
+            "name": {"type": "str", "sample_values": ["Boeing"]},
+            "fullName": {"type": "str", "sample_values": ["The Boeing Company"]},
+        }
+        result = await map_fields_impl(
+            "company",
+            unified_schema,
+            company_dest_schema,
+            llm_config=None,
+        )
+        assert result["field_mapping"]["name"]["dest_column"] == "name"
+        assert "fullName" not in result["field_mapping"]
+        assert [u["field"] for u in result["unmapped_fields"]] == ["fullName"]
+
+    @pytest.mark.asyncio
+    async def test_load_transform_coalesces_per_record_preferring_non_null(
+        self, company_dest_schema: dict[str, Any]
+    ) -> None:
+        """End-to-end: map_fields_impl's coalesced mapping, fed through
+        load_data._transform_records, must not drop either origin's value —
+        a merged record with both populated keeps the exact-match winner; a
+        record where only the synonym is populated (no cross-origin merge
+        for that particular company) still gets a `name`."""
+        from src.mcp_server.tools.load_data import _transform_records
+
+        unified_schema = {
+            "name": {"type": "str", "sample_values": ["Boeing"]},
+            "entityName": {"type": "str", "sample_values": ["Boeing"]},
+        }
+        result = await map_fields_impl(
+            "company",
+            unified_schema,
+            company_dest_schema,
+            llm_config=None,
+        )
+        records = [
+            {"_cluster_id": "merged", "name": "Boeing", "entityName": "Boeing"},
+            {"_cluster_id": "solo-origin1", "entityName": "Lockheed Martin"},
+            {"_cluster_id": "solo-origin2", "name": "Airbus"},
+        ]
+        transformed = _transform_records(records, result["field_mapping"], "company")
+        # `id` falls back to `_cluster_id` when nothing mapped onto it.
+        by_cluster = {t["id"]: t for t in transformed}
+        assert by_cluster["merged"]["name"] == "Boeing"
+        assert by_cluster["solo-origin1"]["name"] == "Lockheed Martin"
+        assert by_cluster["solo-origin2"]["name"] == "Airbus"
+
+
+class TestSafeCoalesceTarget:
+    """`_safe_coalesce_target` gates coalescing on a narrow qualifier
+    allowlist, not on raw string-similarity score — see
+    TestSynonymCoalesce.test_coalesce_does_not_let_a_different_concept_corrupt_the_column
+    for why score alone is unsafe."""
+
+    def test_allowed_qualifier_prefix(self) -> None:
+        assert _safe_coalesce_target("entityName", "name") is True
+        assert _safe_coalesce_target("companyName", "name") is True
+        assert _safe_coalesce_target("orgWebsite", "website") is True
+
+    def test_meaning_changing_prefix_rejected(self) -> None:
+        assert _safe_coalesce_target("fullName", "name") is False
+        assert _safe_coalesce_target("legalName", "name") is False
+        assert _safe_coalesce_target("ceoName", "name") is False
+        assert _safe_coalesce_target("founderName", "name") is False
+
+    def test_unrelated_field_rejected(self) -> None:
+        assert _safe_coalesce_target("revenueRange", "revenue") is False
+
+    def test_no_qualifier_at_all_rejected(self) -> None:
+        # Same word count as dest_col (0 extra tokens) — not a coalesce
+        # candidate at all, this would already be an exact/near-exact match.
+        assert _safe_coalesce_target("name", "name") is False
 
 
 class TestHeuristicMatch:
@@ -309,27 +467,31 @@ class TestMapFieldsHandler:
     @pytest.mark.asyncio
     async def test_handler_calls_impl(self) -> None:
         """Test handler delegates to impl."""
-        mock_impl = AsyncMock(return_value={
-            "entity_type": "person",
-            "field_mapping": {
-                "name": {"dest_column": "full_name", "confidence": 1.0},
-            },
-            "unmapped_fields": [],
-            "schema_changes": [],
-        })
+        mock_impl = AsyncMock(
+            return_value={
+                "entity_type": "person",
+                "field_mapping": {
+                    "name": {"dest_column": "full_name", "confidence": 1.0},
+                },
+                "unmapped_fields": [],
+                "schema_changes": [],
+            }
+        )
 
         with patch(
             "src.mcp_server.tools.map_fields.map_fields_impl",
             mock_impl,
         ):
-            result = await map_fields_handler({
-                "entity_type": "person",
-                "unified_schema": {"name": {"type": "STRING"}},
-                "destination_schema": {
-                    "table": "users",
-                    "columns": [{"name": "full_name", "type": "STRING"}],
-                },
-            })
+            result = await map_fields_handler(
+                {
+                    "entity_type": "person",
+                    "unified_schema": {"name": {"type": "STRING"}},
+                    "destination_schema": {
+                        "table": "users",
+                        "columns": [{"name": "full_name", "type": "STRING"}],
+                    },
+                }
+            )
 
         mock_impl.assert_called_once()
         assert result["entity_type"] == "person"

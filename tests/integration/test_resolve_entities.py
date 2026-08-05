@@ -7,10 +7,10 @@ from typing import Any
 import pytest
 
 from src.mcp_server.tools.resolve_entities import (
-    resolve_entities_impl,
     _compute_heuristic_confidence,
     _normalize,
     _record_id,
+    resolve_entities_impl,
 )
 
 

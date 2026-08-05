@@ -2,20 +2,20 @@
 Tests for src/utils/config_loader.py - Configuration loader with Pydantic validation.
 """
 
-import os
-import pytest
 import tempfile
+
+import pytest
 import yaml
+
 from src.utils.config_loader import (
-    Config,
     DestinationConfig,
+    ExtractionConfig,
     LLMConfig,
     RetryConfig,
-    ExtractionConfig,
-    load_config,
+    _resolve_env_vars,
     build_destination_config,
     build_origin_config,
-    _resolve_env_vars,
+    load_config,
 )
 
 
@@ -94,7 +94,8 @@ class TestLLMConfig:
 
     def test_fallback_models_accepted_in_order(self):
         config = LLMConfig(
-            model="gpt-4", api_key="test-key",
+            model="gpt-4",
+            api_key="test-key",
             fallback_models=["gpt-4-mini", "gpt-3.5"],
         )
         assert config.fallback_models == ["gpt-4-mini", "gpt-3.5"]
@@ -271,9 +272,7 @@ class TestLoadConfig:
                 "api_key": "test-key",
             },
         }
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump(config_data, f)
             f.flush()
             config = load_config(f.name)
@@ -294,9 +293,7 @@ class TestLoadConfig:
                 "api_key": "test-key",
             },
         }
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump(config_data, f)
             f.flush()
             with pytest.MonkeyPatch.context() as mp:
@@ -327,9 +324,7 @@ class TestLoadConfig:
                 "api_key": "test-key",
             },
         }
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump(config_data, f)
             f.flush()
             config = load_config(f.name)
@@ -351,9 +346,7 @@ class TestLoadConfig:
                 "api_key": "test-key",
             },
         }
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump(config_data, f)
             f.flush()
             with pytest.raises(Exception):  # Pydantic ValidationError

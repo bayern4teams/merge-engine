@@ -1,0 +1,35 @@
+# Keep the build context (and the resulting image) free of anything that
+# isn't source: secrets, local env state, generated artifacts, and anything
+# CLAUDE.md already says must never be committed. The old Dockerfile had no
+# .dockerignore at all, so `COPY src/ src/` / `COPY config/ config/` would
+# have silently baked in .env, logs/, and any local config/profiles/ or
+# config/platform_overrides.yaml sitting in the working tree (Part 1.6.C).
+
+.git/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+.env
+.env.*
+!.env.example
+
+logs/
+data/
+sample_databases/
+config/profiles/
+config/platform_overrides.yaml
+
+node_modules/
+src/ui/frontend/dist/
+src/ui/frontend/node_modules/
+
+docs/
+*.md
+
+.claude/
+docker/langfuse.env

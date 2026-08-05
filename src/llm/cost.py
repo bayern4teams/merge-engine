@@ -148,11 +148,17 @@ class CostLedger:
         cached: bool = False,
     ) -> None:
         with self._lock:
-            entry = self._runs.setdefault(run_id, {
-                "calls": 0, "cached_calls": 0,
-                "input_tokens": 0, "output_tokens": 0,
-                "tokens_saved": 0, "models": {},
-            })
+            entry = self._runs.setdefault(
+                run_id,
+                {
+                    "calls": 0,
+                    "cached_calls": 0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "tokens_saved": 0,
+                    "models": {},
+                },
+            )
             entry["calls"] += 1
             if cached:
                 entry["cached_calls"] += 1
@@ -170,18 +176,20 @@ class CostLedger:
             entry = self._runs.get(run_id)
             if not entry:
                 return {
-                    "calls": 0, "cached_calls": 0, "input_tokens": 0,
-                    "output_tokens": 0, "total_tokens": 0,
-                    "tokens_saved": 0, "cache_hit_rate": 0.0, "models": {},
+                    "calls": 0,
+                    "cached_calls": 0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                    "tokens_saved": 0,
+                    "cache_hit_rate": 0.0,
+                    "models": {},
                 }
             snapshot = dict(entry)
             snapshot["models"] = dict(entry["models"])
-        snapshot["total_tokens"] = (
-            snapshot["input_tokens"] + snapshot["output_tokens"]
-        )
+        snapshot["total_tokens"] = snapshot["input_tokens"] + snapshot["output_tokens"]
         snapshot["cache_hit_rate"] = (
-            round(snapshot["cached_calls"] / snapshot["calls"], 4)
-            if snapshot["calls"] else 0.0
+            round(snapshot["cached_calls"] / snapshot["calls"], 4) if snapshot["calls"] else 0.0
         )
         return snapshot
 

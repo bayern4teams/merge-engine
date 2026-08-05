@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import os
 import tempfile
-from pathlib import Path
 
 import pytest
 import yaml
@@ -57,21 +56,24 @@ class TestConfigResolutionIntegration:
         """Test that config loads correctly from a YAML file."""
         from src.utils.config_loader import load_config
 
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump(minimal_config_data, f)
-            try:
-                monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-                monkeypatch.setenv("OPENAI_API_KEY", "env_api_key")
-                cfg = load_config(f.name)
-                assert cfg.destination.type == "postgresql"
-                assert cfg.destination.host == "localhost"
-                assert cfg.destination.port == 5432
-                assert cfg.llm.provider == "openai"
-                assert cfg.llm.model == "gpt-4o"
-            finally:
-                os.unlink(f.name)
+            temp_path = f.name
+        # unlink after the `with` block closes the handle - Windows refuses to
+        # delete a file that's still open by the same process, unlike POSIX
+        # (Phase 0 Sec 0.7, found intermittently failing while wiring
+        # tests/integration into the default gate for the first time).
+        try:
+            monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+            monkeypatch.setenv("OPENAI_API_KEY", "env_api_key")
+            cfg = load_config(temp_path)
+            assert cfg.destination.type == "postgresql"
+            assert cfg.destination.host == "localhost"
+            assert cfg.destination.port == 5432
+            assert cfg.llm.provider == "openai"
+            assert cfg.llm.model == "gpt-4o"
+        finally:
+            os.unlink(temp_path)
 
     def test_env_var_resolution(
         self,
@@ -108,18 +110,17 @@ class TestConfigResolutionIntegration:
             },
         }
 
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump(config_with_env, f)
-            try:
-                monkeypatch.setenv("DB_HOST", "remote-host.example.com")
-                monkeypatch.setenv("DB_USER", "remote_user")
-                cfg = load_config(f.name)
-                assert cfg.destination.host == "remote-host.example.com"
-                assert cfg.destination.user == "remote_user"
-            finally:
-                os.unlink(f.name)
+            temp_path = f.name
+        try:
+            monkeypatch.setenv("DB_HOST", "remote-host.example.com")
+            monkeypatch.setenv("DB_USER", "remote_user")
+            cfg = load_config(temp_path)
+            assert cfg.destination.host == "remote-host.example.com"
+            assert cfg.destination.user == "remote_user"
+        finally:
+            os.unlink(temp_path)
 
     def test_env_var_missing_unchanged(
         self,
@@ -156,15 +157,14 @@ class TestConfigResolutionIntegration:
             },
         }
 
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump(config_with_env, f)
-            try:
-                cfg = load_config(f.name)
-                assert cfg.destination.host == "${NONEXISTENT_VAR_XYZ}"
-            finally:
-                os.unlink(f.name)
+            temp_path = f.name
+        try:
+            cfg = load_config(temp_path)
+            assert cfg.destination.host == "${NONEXISTENT_VAR_XYZ}"
+        finally:
+            os.unlink(temp_path)
 
     def test_build_destination_config(
         self,
@@ -228,7 +228,11 @@ class TestConfigResolutionIntegration:
         """Test that invalid destination type raises ValidationError."""
         from src.utils.config_loader import DestinationConfig
 
-        with pytest.raises(ValidationError, match="must be 'postgresql'"):
+        # Message updated when clickhouse destinations were added - the
+        # destination type contract is "postgresql or clickhouse", not just
+        # "postgresql" (Phase 0 Sec 0.7, stale assertion found while wiring
+        # tests/integration into the default gate for the first time).
+        with pytest.raises(ValidationError, match="must be one of"):
             DestinationConfig(type="databricks")  # type: ignore
 
     def test_config_validation_missing_fields(self) -> None:

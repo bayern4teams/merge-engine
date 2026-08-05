@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 
 from src.orchestrator.nodes.human_nodes import (
-    human_review_deps,
-    human_review_matches,
-    human_review_mappings,
-    human_final_approval,
     handle_error,
+    human_final_approval,
+    human_review_deps,
+    human_review_mappings,
+    human_review_matches,
 )
 
 
@@ -44,13 +43,9 @@ class TestHumanReviewDeps:
         assert interrupt["data"]["extraction_order"] == ["company", "person"]
 
     @pytest.mark.asyncio
-    async def test_human_review_deps_approved(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_human_review_deps_approved(self, base_state: dict[str, Any]) -> None:
         """Test that human_review_deps processes approved feedback."""
-        base_state["human_feedback"] = {
-            "dependency_tree": {"person": [], "company": []}
-        }
+        base_state["human_feedback"] = {"dependency_tree": {"person": [], "company": []}}
 
         result = await human_review_deps(base_state)
 
@@ -58,9 +53,7 @@ class TestHumanReviewDeps:
         assert result["dependency_tree"] == {"person": [], "company": []}
 
     @pytest.mark.asyncio
-    async def test_human_review_deps_modified_feedback(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_human_review_deps_modified_feedback(self, base_state: dict[str, Any]) -> None:
         """Test that human_review_deps uses modified dependency tree."""
         base_state["human_feedback"] = {
             "dependency_tree": {"person": ["company"], "company": ["country"]},
@@ -73,7 +66,10 @@ class TestHumanReviewDeps:
             "person": ["company"],
             "company": ["country"],
         }
-        assert "some error" in result["errors"]
+        # This gate adds no new errors of its own (Phase 0 Sec 0.8); the
+        # existing history survives via MergeState's real operator.add
+        # reducer, not because this node re-returns it.
+        assert "errors" not in result
 
 
 class TestHumanReviewMatches:
@@ -124,9 +120,7 @@ class TestHumanReviewMatches:
         assert len(data["low_confidence_clusters"]) == 2
 
     @pytest.mark.asyncio
-    async def test_human_review_matches_no_low_confidence(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_human_review_matches_no_low_confidence(self, base_state: dict[str, Any]) -> None:
         """Test that human_review_matches with no low-confidence clusters."""
         base_state["entity_clusters"] = {
             "company": [
@@ -145,25 +139,19 @@ class TestHumanReviewMatches:
         assert data["total_clustering_decisions"] == 0
 
     @pytest.mark.asyncio
-    async def test_human_review_matches_approved(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_human_review_matches_approved(self, base_state: dict[str, Any]) -> None:
         """Test that human_review_matches processes cluster decisions."""
         base_state["human_feedback"] = {
-            "cluster_decisions": [
-                {"cluster_id": "c1", "action": "merge", "keep_ids": ["r1", "r2"]}
-            ]
+            "cluster_decisions": [{"cluster_id": "c1", "action": "merge", "keep_ids": ["r1", "r2"]}]
         }
 
         result = await human_review_matches(base_state)
 
         assert "interrupt_data" not in result
-        assert not result["errors"]
+        assert "errors" not in result
 
     @pytest.mark.asyncio
-    async def test_human_review_matches_empty_clusters(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_human_review_matches_empty_clusters(self, base_state: dict[str, Any]) -> None:
         """Test with empty entity clusters."""
         base_state["entity_clusters"] = {}
 
@@ -196,17 +184,13 @@ class TestHumanReviewMappings:
                     }
                 ],
             },
-            "pending_schema_changes": [
-                {"column": "new_column", "data_type": "VARCHAR"}
-            ],
+            "pending_schema_changes": [{"column": "new_column", "data_type": "VARCHAR"}],
             "errors": [],
             "human_feedback": None,
         }
 
     @pytest.mark.asyncio
-    async def test_human_review_mappings_interrupts(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_human_review_mappings_interrupts(self, base_state: dict[str, Any]) -> None:
         """Test that human_review_mappings returns interrupt_data."""
         result = await human_review_mappings(base_state)
 
@@ -217,23 +201,17 @@ class TestHumanReviewMappings:
         assert len(data["pending_schema_changes"]) == 1
 
     @pytest.mark.asyncio
-    async def test_human_review_mappings_approved(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_human_review_mappings_approved(self, base_state: dict[str, Any]) -> None:
         """Test that human_review_mappings processes mapping decisions."""
         base_state["human_feedback"] = {
             "mapping_decisions": [],
-            "schema_changes": [
-                {"column": "approved_col", "data_type": "TEXT"}
-            ],
+            "schema_changes": [{"column": "approved_col", "data_type": "TEXT"}],
         }
 
         result = await human_review_mappings(base_state)
 
         assert "interrupt_data" not in result
-        assert result["pending_schema_changes"] == [
-            {"column": "approved_col", "data_type": "TEXT"}
-        ]
+        assert result["pending_schema_changes"] == [{"column": "approved_col", "data_type": "TEXT"}]
 
     @pytest.mark.asyncio
     async def test_human_review_mappings_no_unmapped_no_changes(
@@ -297,9 +275,7 @@ class TestHumanFinalApproval:
         }
 
     @pytest.mark.asyncio
-    async def test_human_final_approval_interrupts(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_human_final_approval_interrupts(self, base_state: dict[str, Any]) -> None:
         """Test that human_final_approval returns interrupt_data."""
         result = await human_final_approval(base_state)
 
@@ -314,9 +290,7 @@ class TestHumanFinalApproval:
         assert summary["errors"] == 1
 
     @pytest.mark.asyncio
-    async def test_human_final_approval_approved(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_human_final_approval_approved(self, base_state: dict[str, Any]) -> None:
         """Test that human_final_approval processes approval."""
         base_state["human_feedback"] = {"approved": True}
 
@@ -324,12 +298,10 @@ class TestHumanFinalApproval:
 
         assert "interrupt_data" not in result
         assert result["load_approval"] is True
-        assert "warning 1" in result["errors"]
+        assert "errors" not in result
 
     @pytest.mark.asyncio
-    async def test_human_final_approval_rejected(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_human_final_approval_rejected(self, base_state: dict[str, Any]) -> None:
         """Test that human_final_approval does not approve when not approved."""
         base_state["human_feedback"] = {"approved": False}
 
@@ -435,9 +407,7 @@ class TestHandleError:
         assert result["retry_counts"]["extract_data"] == 2
 
     @pytest.mark.asyncio
-    async def test_skip_does_not_count_as_an_attempt(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_skip_does_not_count_as_an_attempt(self, base_state: dict[str, Any]) -> None:
         """Skipping is not retrying — it must not consume a retry budget."""
         base_state["human_feedback"] = {"decision": "skip"}
 
@@ -447,9 +417,7 @@ class TestHandleError:
         assert result["handled_failures"][0]["decision"] == "skip"
 
     @pytest.mark.asyncio
-    async def test_missing_feedback_is_recorded_as_abort(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_missing_feedback_is_recorded_as_abort(self, base_state: dict[str, Any]) -> None:
         """No decision must never be read as permission to continue."""
         base_state["human_feedback"] = None
 
@@ -458,9 +426,7 @@ class TestHandleError:
         assert result["handled_failures"][0]["decision"] == "abort"
 
     @pytest.mark.asyncio
-    async def test_retry_counts_are_per_node(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_retry_counts_are_per_node(self, base_state: dict[str, Any]) -> None:
         """A failure in one node must not spend another node's budget."""
         base_state["failure"] = {**base_state["failure"], "node": "resolve_entities"}
         base_state["retry_counts"] = {"extract_data": 3}
@@ -508,10 +474,8 @@ class TestBuildErrorInterrupt:
 
         assert [o["decision"] for o in options] == ["retry", "skip", "abort"]
 
-    def test_skip_option_says_where_the_run_would_resume(
-        self, state: dict[str, Any]
-    ) -> None:
-        """"Skip" sounds harmless; the wording has to say what it costs."""
+    def test_skip_option_says_where_the_run_would_resume(self, state: dict[str, Any]) -> None:
+        """ "Skip" sounds harmless; the wording has to say what it costs."""
         from src.orchestrator.nodes.human_nodes import build_error_interrupt
 
         options = build_error_interrupt(state)["data"]["options"]
@@ -525,5 +489,9 @@ class TestBuildErrorInterrupt:
         from src.orchestrator.nodes.human_nodes import build_error_interrupt
 
         assert build_error_interrupt(state)["data"]["recent_errors"] == [
-            "c", "d", "e", "f", "g",
+            "c",
+            "d",
+            "e",
+            "f",
+            "g",
         ]

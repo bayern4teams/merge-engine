@@ -1,6 +1,6 @@
 Contract checks OK for: request_parsing, dependency_analysis, entity_table_selection, scope_planning, entity_resolution, field_mapping
 
-Model: openai/qwen3.6-flash-2026-04-16
+Model: openai/qwen3.5-27b
 
 ── request_parsing ──
   ✓ rp-01-single-company
@@ -17,22 +17,22 @@ Model: openai/qwen3.6-flash-2026-04-16
   ✓ rp-12-address
   ✓ rp-13-company-wildcard
   ✓ rp-14-explicit-subset
-  score: 14/14  malformed-JSON: 0  avg latency: 6473 ms
+  score: 14/14  malformed-JSON: 0  avg latency: 15214 ms
 
 ── dependency_analysis ──
   ✓ da-01-person-depends-on-company
   ✓ da-02-three-level-chain
-  score: 2/2  malformed-JSON: 0  avg latency: 6344 ms
+  score: 2/2  malformed-JSON: 0  avg latency: 10211 ms
 
 ── entity_table_selection ──
   ✓ ets-01-basic
   ✓ ets-02-cross-origin-alias
-  score: 2/2  malformed-JSON: 0  avg latency: 6492 ms
+  score: 2/2  malformed-JSON: 0  avg latency: 25971 ms
 
 ── scope_planning ──
   ✓ sp-01-basic-link
   ✓ sp-02-link-via-junction
-  score: 2/2  malformed-JSON: 0  avg latency: 8785 ms
+  score: 2/2  malformed-JSON: 0  avg latency: 33062 ms
 
 ── entity_resolution ──
   ✓ er-01-abbreviated-company
@@ -46,17 +46,18 @@ Model: openai/qwen3.6-flash-2026-04-16
   ✓ er-09-generic-name-different-branch
   ✓ er-10-name-changed-after-merger
   ✓ er-11-conflicting-identifier-beats-name
-  score: 11/11  malformed-JSON: 0  avg latency: 7145 ms
+  score: 11/11  malformed-JSON: 0  avg latency: 16559 ms
 
 ── field_mapping ──
   ✓ fm-01-company-semantic-renames
   ✓ fm-02-person-semantic-renames
-  ✓ fm-03-genuinely-new-column
+  ✓ fm-03-genuinely-unmappable-numeric
   ✓ fm-04-sample-values-beat-names
   ✓ fm-05-cryptic-abbreviations
   ✓ fm-06-two-letter-name-sample-values-decide
   ✓ fm-07-numeric-vs-text-disambiguation
-  ✓ fm-08-genuinely-unmappable-new-column
-  score: 8/8  malformed-JSON: 0  avg latency: 6262 ms
+  ✓ fm-08-genuinely-unmappable-is-skipped
+  ✓ fm-09-camelcase-origin-names
+  score: 9/9  malformed-JSON: 0  avg latency: 5843 ms
 
 TOTAL failures: 0

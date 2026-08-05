@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -43,15 +43,15 @@ _SECRET_KEYS = ("password", "passwd", "secret", "api_key", "token")
 # The parts of a run that a profile pins. Anything not listed here is
 # recomputed every run on purpose — schemas and row data must stay live.
 PINNED_KEYS = (
-    "entity_tables",      # O.1 — which source tables hold each entity
-    "matching_rules",     # O.2 — blocking keys / unique ids / strictness
-    "conflict_policy",    # O.3 — per-field survivorship
-    "field_mappings",     # O.4 — unified field -> destination column
+    "entity_tables",  # O.1 — which source tables hold each entity
+    "matching_rules",  # O.2 — blocking keys / unique ids / strictness
+    "conflict_policy",  # O.3 — per-field survivorship
+    "field_mappings",  # O.4 — unified field -> destination column
 )
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def safe_name(name: str) -> str:
@@ -86,10 +86,11 @@ def connection_key(origin: dict[str, Any]) -> str:
     Used to re-attach a live password to a saved (password-free) origin.
     """
     conn = origin.get("connection") or {}
-    return "|".join(
-        str(conn.get(k, "")).strip().lower()
-        for k in ("host", "port", "database", "user")
-    ) + "|" + str(origin.get("type", "")).strip().lower()
+    return (
+        "|".join(str(conn.get(k, "")).strip().lower() for k in ("host", "port", "database", "user"))
+        + "|"
+        + str(origin.get("type", "")).strip().lower()
+    )
 
 
 def profile_path(name: str) -> Path:
@@ -135,9 +136,7 @@ def save_profile(profile: dict[str, Any]) -> Path:
     if path.exists():
         try:
             existing = json.loads(path.read_text(encoding="utf-8"))
-            profile["created_at"] = existing.get(
-                "created_at", profile.get("created_at")
-            )
+            profile["created_at"] = existing.get("created_at", profile.get("created_at"))
         except (OSError, json.JSONDecodeError):
             logger.warning("could not read existing profile %s; overwriting", path)
 
@@ -177,17 +176,19 @@ def list_profiles() -> list[dict[str, Any]]:
         except (OSError, json.JSONDecodeError):
             logger.warning("skipping unreadable profile %s", path)
             continue
-        out.append({
-            "name": data.get("name", path.stem),
-            "id": data.get("id", path.stem),
-            "description": data.get("description", ""),
-            "user_request": data.get("user_request", ""),
-            "origin_count": len(data.get("origins") or []),
-            "entities": sorted((data.get("entity_tables") or {}).keys()),
-            "pins": [k for k in PINNED_KEYS if data.get(k)],
-            "created_at": data.get("created_at", ""),
-            "updated_at": data.get("updated_at", ""),
-        })
+        out.append(
+            {
+                "name": data.get("name", path.stem),
+                "id": data.get("id", path.stem),
+                "description": data.get("description", ""),
+                "user_request": data.get("user_request", ""),
+                "origin_count": len(data.get("origins") or []),
+                "entities": sorted((data.get("entity_tables") or {}).keys()),
+                "pins": [k for k in PINNED_KEYS if data.get(k)],
+                "created_at": data.get("created_at", ""),
+                "updated_at": data.get("updated_at", ""),
+            }
+        )
     out.sort(key=lambda p: p.get("updated_at", ""), reverse=True)
     return out
 
@@ -226,11 +227,10 @@ def restore_credentials(
             for key in _SECRET_KEYS:
                 if live_conn.get(key):
                     conn[key] = live_conn[key]
-        if not conn.get("password"):
-            # MongoDB and local trust-auth setups legitimately have no
-            # password; only report a gap when one was expected.
-            if origin.get("_requires_password", True) and match is None:
-                missing.append(connection_key(origin))
+        # MongoDB and local trust-auth setups legitimately have no password;
+        # only report a gap when one was expected.
+        if not conn.get("password") and origin.get("_requires_password", True) and match is None:
+            missing.append(connection_key(origin))
         restored.append(merged)
 
     return restored, missing
@@ -253,9 +253,7 @@ def apply_profile(state: dict[str, Any], profile: dict[str, Any]) -> dict[str, A
     return state
 
 
-def capture_from_state(
-    profile: dict[str, Any], state: dict[str, Any]
-) -> dict[str, Any]:
+def capture_from_state(profile: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
     """Update a profile with the decisions a completed run actually made.
 
     This is what turns the first (LLM-driven) run into a pinned, repeatable

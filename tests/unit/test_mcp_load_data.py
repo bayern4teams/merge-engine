@@ -9,11 +9,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.mcp_server.tools.load_data import (
-    load_data_impl,
-    load_data_handler,
+    _get_destination_connector,
     _transform_records,
     _translate_foreign_keys,
-    _get_destination_connector,
+    load_data_handler,
+    load_data_impl,
 )
 
 
@@ -62,10 +62,12 @@ class TestLoadDataImpl:
     ) -> None:
         """Test successful data loading."""
         mock_connector = MagicMock()
-        mock_connector.load_batch = MagicMock(return_value={
-            "inserted": 2,
-            "updated": 0,
-        })
+        mock_connector.load_batch = MagicMock(
+            return_value={
+                "inserted": 2,
+                "updated": 0,
+            }
+        )
 
         with patch(
             "src.mcp_server.tools.load_data._get_destination_connector",
@@ -135,10 +137,12 @@ class TestLoadDataImpl:
             "email": {"dest_column": "email_address", "confidence": 0.90},
         }
         mock_connector = MagicMock()
-        mock_connector.load_batch = MagicMock(return_value={
-            "inserted": 2,
-            "updated": 0,
-        })
+        mock_connector.load_batch = MagicMock(
+            return_value={
+                "inserted": 2,
+                "updated": 0,
+            }
+        )
 
         with patch(
             "src.mcp_server.tools.load_data._get_destination_connector",
@@ -161,16 +165,23 @@ class TestLoadDataImpl:
         records = [
             {
                 "id": "uuid-1",
-                "name": {"conflicts": [{"origin": "A", "value": "Alice"}, {"origin": "B", "value": "Alicia"}]},
+                "name": {
+                    "conflicts": [
+                        {"origin": "A", "value": "Alice"},
+                        {"origin": "B", "value": "Alicia"},
+                    ]
+                },
                 "_cluster_id": "cluster-1",
                 "_source_ids": json.dumps([{"cluster_id": "uuid-1"}]),
             },
         ]
         mock_connector = MagicMock()
-        mock_connector.load_batch = MagicMock(return_value={
-            "inserted": 1,
-            "updated": 0,
-        })
+        mock_connector.load_batch = MagicMock(
+            return_value={
+                "inserted": 1,
+                "updated": 0,
+            }
+        )
 
         with patch(
             "src.mcp_server.tools.load_data._get_destination_connector",
@@ -192,6 +203,7 @@ class TestLoadDataImpl:
             side_effect=Exception("Destination config error"),
         ):
             from src.orchestrator.utils.retry import PermanentError
+
             with pytest.raises(PermanentError, match="Failed to create destination connector"):
                 await load_data_impl(
                     entity_type="person",
@@ -205,15 +217,14 @@ class TestLoadDataImpl:
     ) -> None:
         """Test load_data when load_batch fails."""
         mock_connector = MagicMock()
-        mock_connector.load_batch = MagicMock(
-            side_effect=Exception("INSERT failed")
-        )
+        mock_connector.load_batch = MagicMock(side_effect=Exception("INSERT failed"))
 
         with patch(
             "src.mcp_server.tools.load_data._get_destination_connector",
             return_value=mock_connector,
         ):
             from src.orchestrator.utils.retry import PermanentError
+
             with pytest.raises(PermanentError, match="Load failed for entity 'person'"):
                 await load_data_impl(
                     entity_type="person",
@@ -235,10 +246,12 @@ class TestLoadDataImpl:
             "schema": "custom_schema",
         }
         mock_connector = MagicMock()
-        mock_connector.load_batch = MagicMock(return_value={
-            "inserted": 2,
-            "updated": 0,
-        })
+        mock_connector.load_batch = MagicMock(
+            return_value={
+                "inserted": 2,
+                "updated": 0,
+            }
+        )
 
         with patch(
             "src.mcp_server.tools.load_data._get_destination_connector",
@@ -300,9 +313,7 @@ class TestTranslateForeignKeys:
         # table to an entity type) is different from "resolved, zero
         # clusters" — leave it for the database to judge instead of guessing.
         records = [{"category_id": "some-id"}]
-        translated = _translate_foreign_keys(
-            records, {"category_id": "technologic_category"}, {}
-        )
+        translated = _translate_foreign_keys(records, {"category_id": "technologic_category"}, {})
         assert translated == 0
         assert records[0]["category_id"] == "some-id"
 
@@ -423,10 +434,12 @@ class TestTransformRecords:
             {
                 "id": "uuid-1",
                 "_cluster_id": "cluster-1",
-                "_source_ids": json.dumps([
-                    {"cluster_id": "uuid-1"},
-                    {"row_id": "row_1"},
-                ]),
+                "_source_ids": json.dumps(
+                    [
+                        {"cluster_id": "uuid-1"},
+                        {"row_id": "row_1"},
+                    ]
+                ),
             },
         ]
 
@@ -465,21 +478,21 @@ class TestGetDestinationConnector:
             "schema": "custom_schema",
         }
 
-        with patch(
-            "src.mcp_server.tools.load_data.PostgreSQLDestinationConnector"
-        ) as mock_cls:
+        with patch("src.mcp_server.tools.load_data.PostgreSQLDestinationConnector") as mock_cls:
             mock_instance = MagicMock()
             mock_cls.return_value = mock_instance
             result = _get_destination_connector(config)
 
-        mock_cls.assert_called_once_with({
-            "host": "custom-host",
-            "port": 9999,
-            "user": "custom_user",
-            "password": "custom_pass",
-            "database": "custom_db",
-            "schema": "custom_schema",
-        })
+        mock_cls.assert_called_once_with(
+            {
+                "host": "custom-host",
+                "port": 9999,
+                "user": "custom_user",
+                "password": "custom_pass",
+                "database": "custom_db",
+                "schema": "custom_schema",
+            }
+        )
         assert result == mock_instance
 
     def test_get_destination_connector_with_defaults(self) -> None:
@@ -495,12 +508,15 @@ class TestGetDestinationConnector:
 
         mock_connector_instance = MagicMock()
 
-        with patch(
-            "src.mcp_server.server._get_config",
-            return_value=mock_config,
-        ), patch(
-            "src.mcp_server.tools.load_data.PostgreSQLDestinationConnector",
-            return_value=mock_connector_instance,
+        with (
+            patch(
+                "src.mcp_server.server._get_config",
+                return_value=mock_config,
+            ),
+            patch(
+                "src.mcp_server.tools.load_data.PostgreSQLDestinationConnector",
+                return_value=mock_connector_instance,
+            ),
         ):
             result = _get_destination_connector(None)
 
@@ -515,24 +531,28 @@ class TestLoadDataHandler:
         self,
     ) -> None:
         """Test handler delegates to impl."""
-        mock_impl = AsyncMock(return_value={
-            "success": True,
-            "entity_type": "person",
-            "total_records": 5,
-            "inserted": 5,
-            "updated": 0,
-            "failed": 0,
-        })
+        mock_impl = AsyncMock(
+            return_value={
+                "success": True,
+                "entity_type": "person",
+                "total_records": 5,
+                "inserted": 5,
+                "updated": 0,
+                "failed": 0,
+            }
+        )
 
         with patch(
             "src.mcp_server.tools.load_data.load_data_impl",
             mock_impl,
         ):
-            result = await load_data_handler({
-                "entity_type": "person",
-                "records": [{"id": "1"}, {"id": "2"}],
-                "mapping": {"name": {"dest_column": "full_name", "confidence": 0.9}},
-            })
+            result = await load_data_handler(
+                {
+                    "entity_type": "person",
+                    "records": [{"id": "1"}, {"id": "2"}],
+                    "mapping": {"name": {"dest_column": "full_name", "confidence": 0.9}},
+                }
+            )
 
         mock_impl.assert_called_once()
         assert result["total_records"] == 5

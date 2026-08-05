@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
-from typing import Any, AsyncGenerator
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
-
 
 # ──────────────────────────── Test Data Fixtures ─────────────────────────────
 
@@ -52,6 +50,7 @@ extraction:
 def mock_config(test_config_path: Path) -> Any:
     """Load a test config object."""
     from src.utils.config_loader import load_config
+
     return load_config(str(test_config_path))
 
 
@@ -351,12 +350,12 @@ async def mock_llm_client(mock_llm_responses: dict[str, Any]) -> AsyncMock:
     client.structured_parse = _structured_parse
     client.score_pair = _score_pair
     client.unify_records = _unify_records
-    client.batch_score = AsyncMock(side_effect=lambda pairs, et: [
-        mock_llm_responses["entity_resolution_score"] for _ in pairs
-    ])
-    client.batch_unify = AsyncMock(side_effect=lambda groups, et: [
-        mock_llm_responses["entity_unification"] for _ in groups
-    ])
+    client.batch_score = AsyncMock(
+        side_effect=lambda pairs, et: [mock_llm_responses["entity_resolution_score"] for _ in pairs]
+    )
+    client.batch_unify = AsyncMock(
+        side_effect=lambda groups, et: [mock_llm_responses["entity_unification"] for _ in groups]
+    )
     client.is_available = True
 
     return client
@@ -370,6 +369,7 @@ def patch_config_loader(test_config_path: Path) -> Any:
     """Patch config loader to use the test config file."""
     with patch("src.utils.config_loader.load_config") as mock_load:
         from src.utils.config_loader import load_config
+
         mock_load.return_value = load_config(str(test_config_path))
         mock_load.side_effect = None
         yield mock_load
@@ -384,6 +384,7 @@ def patch_server_config(test_config_path: Path, mock_config: Any) -> Any:
     """
     # Set the global config directly to avoid importing server.py
     import src.mcp_server.server as server_mod
+
     original = server_mod._config
     server_mod._config = mock_config
     yield mock_config

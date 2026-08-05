@@ -7,7 +7,9 @@ databases, schemas, and tables for different connector types.
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import re
 from typing import Any
 
 logger = logging.getLogger("merge-engine.ui.db_discovery")
@@ -116,9 +118,7 @@ def _discover_postgres(
         cur = conn.cursor()
 
         # List databases
-        cur.execute(
-            "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname"
-        )
+        cur.execute("SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname")
         result["databases"] = [row[0] for row in cur.fetchall()]
 
         # If a database was specified, also discover schemas, tables, and columns
@@ -172,18 +172,18 @@ def _discover_postgres(
                         current_table = table_name
                         result["tables"].append(table_name)
                         result["table_columns"][table_name] = []
-                    result["table_columns"][table_name].append({
-                        "name": col_name,
-                        "type": data_type,
-                        "nullable": is_nullable == "YES",
-                    })
+                    result["table_columns"][table_name].append(
+                        {
+                            "name": col_name,
+                            "type": data_type,
+                            "nullable": is_nullable == "YES",
+                        }
+                    )
 
                 # Get row counts for discovered tables
                 for table_name in result["tables"]:
                     try:
-                        db_cur.execute(
-                            f'SELECT COUNT(*) FROM "{target_schema}"."{table_name}"'
-                        )
+                        db_cur.execute(f'SELECT COUNT(*) FROM "{target_schema}"."{table_name}"')
                         result["table_row_counts"][table_name] = db_cur.fetchone()[0]
                     except Exception:
                         result["table_row_counts"][table_name] = -1
@@ -389,9 +389,112 @@ def _discover_clickhouse(
         result["error"] = f"Connection failed: {exc}"
     finally:
         if client:
-            try:
+            with contextlib.suppress(Exception):
                 client.raw_close()
-            except Exception:
-                pass
 
+    return result
+
+
+# ── Part 1.6.B: bounded, read-only row sampling for the data explorer ──────
+
+_MAX_SAMPLE_LIMIT = 200
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_$]+$")
+
+
+def _safe_identifier(name: str) -> str:
+    """Reject anything that isn't a plain identifier.
+
+    Table/schema/column names cannot be parameterised in SQL like values
+    can. This is the sampler's only defence against injection via a crafted
+    name, so it is deliberately strict (letters/digits/underscore/dollar
+    only) rather than trying to escape special characters.
+    """
+    if not _IDENTIFIER_RE.match(name):
+        raise ValueError(f"Not a valid identifier: {name!r}")
+    return name
+
+
+def sample_table_rows(
+    conn_type: str,
+    host: str,
+    port: int,
+    user: str,
+    password: str,
+    database: str,
+    table: str,
+    schema: str = "",
+    limit: int = 20,
+) -> dict[str, Any]:
+    """A small, bounded, read-only sample of rows from one table/collection.
+
+    Never used by the merge pipeline itself — this exists only for the
+    Settings/Pipeline "Data explorer" investigation tool (Part 1.6.B), so a
+    hard ceiling on ``limit`` matters more here than pipeline throughput.
+    """
+    limit = max(1, min(int(limit), _MAX_SAMPLE_LIMIT))
+    result: dict[str, Any] = {"connected": False, "error": None, "columns": [], "rows": []}
+    try:
+        table = _safe_identifier(table)
+        if conn_type in ("postgres", "postgresql"):
+            import psycopg2
+            import psycopg2.extras
+
+            schema_name = _safe_identifier(schema or "public")
+            conn = psycopg2.connect(
+                host=host,
+                port=port,
+                user=user,
+                password=password,
+                dbname=database,
+                connect_timeout=10,
+            )
+            try:
+                cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                cur.execute(f'SELECT * FROM "{schema_name}"."{table}" LIMIT %s', (limit,))
+                rows = [dict(r) for r in cur.fetchall()]
+                result["columns"] = list(rows[0].keys()) if rows else []
+                result["rows"] = rows
+                result["connected"] = True
+            finally:
+                conn.close()
+        elif conn_type == "clickhouse":
+            import clickhouse_connect
+
+            db_name = _safe_identifier(database)
+            client = clickhouse_connect.get_client(
+                host=host, port=port, username=user, password=password, connect_timeout=10
+            )
+            try:
+                q = client.query(f"SELECT * FROM `{db_name}`.`{table}` LIMIT {limit}")
+                result["columns"] = list(q.column_names)
+                result["rows"] = [
+                    dict(zip(q.column_names, row, strict=True)) for row in q.result_rows
+                ]
+                result["connected"] = True
+            finally:
+                with contextlib.suppress(Exception):
+                    client.raw_close()
+        elif conn_type == "mongodb":
+            from pymongo import MongoClient
+
+            uri = f"mongodb://{user}:{password}@{host}:{port}/"
+            mongo_client: MongoClient[dict[str, Any]] = MongoClient(
+                uri, serverSelectionTimeoutMS=10000, connectTimeoutMS=5000
+            )
+            try:
+                docs = list(mongo_client[database][table].find().limit(limit))
+                for d in docs:
+                    d["_id"] = str(d.get("_id"))
+                result["columns"] = sorted({k for d in docs for k in d}) if docs else []
+                result["rows"] = docs
+                result["connected"] = True
+            finally:
+                mongo_client.close()
+        else:
+            result["error"] = f"Unsupported type: {conn_type}"
+    except Exception as exc:
+        logger.warning(
+            "Sampling failed for %s://%s:%s/%s.%s: %s", conn_type, host, port, database, table, exc
+        )
+        result["error"] = str(exc)
     return result

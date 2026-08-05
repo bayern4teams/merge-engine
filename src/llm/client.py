@@ -13,21 +13,19 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 
-from src.llm.tracing import trace_config
 from src.llm.cost import (
     COST_LEDGER,
     SEMANTIC_CACHE,
     cache_key,
     token_usage,
 )
+from src.llm.tracing import trace_config
 
 logger = logging.getLogger("merge-engine.llm.client")
 
@@ -37,8 +35,14 @@ logger = logging.getLogger("merge-engine.llm.client")
 # trigger for moving to the next model in the fallback chain instead of
 # just re-raising.
 _QUOTA_ERROR_MARKERS = (
-    "quota", "429", "403", "rate limit", "rate_limit",
-    "insufficient_quota", "allocationquota", "billing",
+    "quota",
+    "429",
+    "403",
+    "rate limit",
+    "rate_limit",
+    "insufficient_quota",
+    "allocationquota",
+    "billing",
 )
 
 
@@ -89,15 +93,19 @@ class LLMClient:
         # A quota/billing error on one account-bound model is never going to
         # resolve itself mid-run, so call() advances through this chain
         # instead of surfacing the failure and waiting for a manual restart.
-        self.model_chain: list[str] = [self.model_name] + list(
-            config.get("fallback_models") or []
-        )
+        self.model_chain: list[str] = [self.model_name, *(config.get("fallback_models") or [])]
         self._model_chain_idx = 0
-        logger.debug("Initialized LLMClient (provider=%s, model=%s, base_url=%s, temp=%.1f)",
-                     self.provider, self.model_name, self.base_url, self.temperature)
+        logger.debug(
+            "Initialized LLMClient (provider=%s, model=%s, base_url=%s, temp=%.1f)",
+            self.provider,
+            self.model_name,
+            self.base_url,
+            self.temperature,
+        )
         if len(self.model_chain) > 1:
-            logger.debug("LLM fallback chain (%d models): %s",
-                         len(self.model_chain), self.model_chain)
+            logger.debug(
+                "LLM fallback chain (%d models): %s", len(self.model_chain), self.model_chain
+            )
 
     def _advance_model(self) -> bool:
         """Move to the next model in the fallback chain.
@@ -111,9 +119,10 @@ class LLMClient:
         self.model_name = self.model_chain[self._model_chain_idx]
         self._model = None  # force _get_model() to rebuild for the new name
         logger.warning(
-            "LLM quota/billing error — falling back to next model in the "
-            "chain (%d/%d): %s",
-            self._model_chain_idx + 1, len(self.model_chain), self.model_name,
+            "LLM quota/billing error — falling back to next model in the chain (%d/%d): %s",
+            self._model_chain_idx + 1,
+            len(self.model_chain),
+            self.model_name,
         )
         return True
 
@@ -154,6 +163,7 @@ class LLMClient:
         user_prompt: str,
         response_format: dict[str, Any] | None = None,
         json_mode: bool = False,
+        validate_before_cache: bool = False,
     ) -> Any:
         """Call the LLM with system and user prompts.
 
@@ -171,13 +181,27 @@ class LLMClient:
             formatting (looser than ``response_format`` — just constrains
             output to be valid JSON, no fixed schema). Silently skipped if
             an earlier call showed the endpoint doesn't support it.
+        validate_before_cache : bool
+            When True, the response is only written to ``SEMANTIC_CACHE`` if
+            it parses as JSON (``_parse_json_content``). Without this, a
+            malformed response used to get cached unconditionally, so a
+            later identical call would replay the same unparseable content
+            forever instead of ever retrying the real LLM (Phase 0 Sec 0.8).
+            ``call_json`` is the caller that needs this; a caller expecting
+            plain text has nothing to "successfully parse" and should leave
+            this False.
 
         Returns
         -------
         Any
             Parsed response content.
         """
-        logger.debug("ENTER LLMClient.call (provider=%s, model=%s, json_mode=%s)", self.provider, self.model_name, json_mode)
+        logger.debug(
+            "ENTER LLMClient.call (provider=%s, model=%s, json_mode=%s)",
+            self.provider,
+            self.model_name,
+            json_mode,
+        )
         logger.debug("system_prompt (truncated): %.200s", system_prompt)
         logger.debug("user_prompt (truncated): %.500s", user_prompt)
 
@@ -194,7 +218,9 @@ class LLMClient:
             if found:
                 logger.debug("LLM cache hit (%s…)", key[:12])
                 COST_LEDGER.record(
-                    self.run_id, model=self.model_name, cached=True,
+                    self.run_id,
+                    model=self.model_name,
+                    cached=True,
                     input_tokens=_estimate_tokens(system_prompt, user_prompt),
                 )
                 return cached
@@ -210,20 +236,30 @@ class LLMClient:
             if response_format:
                 model = base_model.with_structured_output(response_format)
                 logger.debug("Structured output mode enabled")
-            elif json_mode and self.provider in ("openai", "azure") and not self._json_mode_unsupported:
+            elif (
+                json_mode
+                and self.provider in ("openai", "azure")
+                and not self._json_mode_unsupported
+            ):
                 model = base_model.bind(response_format={"type": "json_object"})
                 logger.debug("JSON-object response format requested")
             else:
                 model = base_model
 
-            logger.debug("Calling model.ainvoke() with %d messages (model=%s)",
-                         len(messages), self.model_name)
+            logger.debug(
+                "Calling model.ainvoke() with %d messages (model=%s)",
+                len(messages),
+                self.model_name,
+            )
             try:
                 response = await model.ainvoke(messages, config=cfg)
                 break
             except Exception as exc:
                 if json_mode and not response_format and not self._json_mode_unsupported:
-                    logger.warning("json_object response_format rejected by endpoint, retrying without it: %s", exc)
+                    logger.warning(
+                        "json_object response_format rejected by endpoint, retrying without it: %s",
+                        exc,
+                    )
                     self._json_mode_unsupported = True
                     try:
                         response = await base_model.ainvoke(messages, config=cfg)
@@ -233,16 +269,30 @@ class LLMClient:
                 if _is_quota_error(exc) and self._advance_model():
                     continue
                 raise
-        logger.debug("LLM response received: type=%s, len=%d chars", type(response.content).__name__, len(str(response.content)))
+        logger.debug(
+            "LLM response received: type=%s, len=%d chars",
+            type(response.content).__name__,
+            len(str(response.content)),
+        )
         logger.debug("LLM response (first 500 chars): %s", str(response.content)[:500])
 
         prompt_tokens, completion_tokens = token_usage(response)
         COST_LEDGER.record(
-            self.run_id, model=self.model_name,
-            input_tokens=prompt_tokens, output_tokens=completion_tokens,
+            self.run_id,
+            model=self.model_name,
+            input_tokens=prompt_tokens,
+            output_tokens=completion_tokens,
         )
         if self.cache_enabled:
-            SEMANTIC_CACHE.put(key, response.content)
+            should_cache = True
+            if validate_before_cache:
+                try:
+                    self._parse_json_content(response.content)
+                except json.JSONDecodeError:
+                    should_cache = False
+                    logger.debug("Not caching: response did not parse as JSON")
+            if should_cache:
+                SEMANTIC_CACHE.put(key, response.content)
 
         logger.debug("EXIT LLMClient.call")
         return response.content
@@ -254,6 +304,7 @@ class LLMClient:
             return json.loads(content)
         except json.JSONDecodeError:
             import re
+
             match = re.search(r"```(?:json)?\s*(.*?)```", content, re.DOTALL)
             if match:
                 return json.loads(match.group(1).strip())
@@ -289,7 +340,12 @@ class LLMClient:
             If neither attempt produces valid JSON.
         """
         logger.debug("ENTER LLMClient.call_json")
-        content = await self.call(system_prompt, user_prompt, json_mode=self.structured_output)
+        content = await self.call(
+            system_prompt,
+            user_prompt,
+            json_mode=self.structured_output,
+            validate_before_cache=True,
+        )
 
         try:
             result = self._parse_json_content(content)
@@ -297,24 +353,31 @@ class LLMClient:
             logger.debug("EXIT LLMClient.call_json (first attempt)")
             return result
         except json.JSONDecodeError as exc:
-            logger.warning("LLM output was not valid JSON, retrying once with error feedback: %s", exc)
+            logger.warning(
+                "LLM output was not valid JSON, retrying once with error feedback: %s", exc
+            )
             retry_prompt = (
                 f"{user_prompt}\n\n---\n"
                 f"Your previous output was not valid JSON: {exc}. "
                 f"Return ONLY the JSON object, with no surrounding text or markdown fences."
             )
-            content = await self.call(system_prompt, retry_prompt, json_mode=self.structured_output)
+            content = await self.call(
+                system_prompt,
+                retry_prompt,
+                json_mode=self.structured_output,
+                validate_before_cache=True,
+            )
             try:
                 result = self._parse_json_content(content)
                 logger.debug("EXIT LLMClient.call_json (retry succeeded)")
                 return result
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as retry_exc:
                 logger.error("Retry also failed to produce valid JSON")
                 raise json.JSONDecodeError(
                     f"Response is not valid JSON after retry: {content[:200]}",
                     content,
                     0,
-                )
+                ) from retry_exc
 
     async def call_batch(
         self,
@@ -340,7 +403,7 @@ class LLMClient:
         messages = [SystemMessage(content=system_prompt)]
         all_messages = []
 
-        for i, prompt in enumerate(prompts):
+        for prompt in prompts:
             msg = HumanMessage(content=prompt)
             all_messages.append([messages[0], msg])
 

@@ -10,16 +10,16 @@ from __future__ import annotations
 
 import json
 import logging
-from contextlib import contextmanager
-from typing import Any
+from contextlib import contextmanager, suppress
+from typing import Any, ClassVar
 
 import psycopg2
 import psycopg2.extras
 from psycopg2 import OperationalError as Psycopg2OperationalError
 from psycopg2.extensions import connection as Psycopg2Connection
 
-from src.mcp_server.tools.value_coercion import coerce_value
-from src.orchestrator.utils.retry import TransientError, retry_on_transient
+from src.orchestrator.utils.retry import retry_on_transient
+from src.utils.value_coercion import coerce_value
 
 logger = logging.getLogger("merge-engine.connectors.postgresql_destination")
 
@@ -63,7 +63,10 @@ def _coerce_to_column_type(
             stats["failed"] = stats.get("failed", 0) + 1
     if not ok:
         logger.warning(
-            "Could not coerce value %r to column type %r: %s", value, column_type, reason,
+            "Could not coerce value %r to column type %r: %s",
+            value,
+            column_type,
+            reason,
         )
         return value
     return coerced
@@ -138,16 +141,12 @@ class PostgreSQLDestinationConnector:
             yield self
         except Exception:
             conn.rollback()
-            logger.error(
-                "Transaction rolled back — the destination is unchanged."
-            )
+            logger.error("Transaction rolled back — the destination is unchanged.")
             raise
         else:
             if dry_run:
                 conn.rollback()
-                logger.info(
-                    "Dry run: transaction rolled back, destination unchanged."
-                )
+                logger.info("Dry run: transaction rolled back, destination unchanged.")
             else:
                 conn.commit()
                 logger.info("Transaction committed.")
@@ -213,24 +212,30 @@ class PostgreSQLDestinationConnector:
         # Check if table exists
         cursor = conn.cursor()
         try:
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT EXISTS (
                     SELECT FROM information_schema.tables
                     WHERE table_schema = %s AND table_name = %s
                 );
-            """, (self._schema, table_name))
+            """,
+                (self._schema, table_name),
+            )
             exists = cursor.fetchone()[0]
 
             if not exists:
                 return {"columns": [], "primary_key": None}
 
             # Get column info
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT column_name, data_type, is_nullable
                 FROM information_schema.columns
                 WHERE table_schema = %s AND table_name = %s
                 ORDER BY ordinal_position;
-            """, (self._schema, table_name))
+            """,
+                (self._schema, table_name),
+            )
             columns = [
                 {
                     "name": row[0],
@@ -241,7 +246,8 @@ class PostgreSQLDestinationConnector:
             ]
 
             # Get primary key
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT kcu.column_name
                 FROM information_schema.table_constraints tc
                 JOIN information_schema.key_column_usage kcu
@@ -250,7 +256,9 @@ class PostgreSQLDestinationConnector:
                 WHERE tc.constraint_type = 'PRIMARY KEY'
                     AND tc.table_schema = %s
                     AND tc.table_name = %s;
-            """, (self._schema, table_name))
+            """,
+                (self._schema, table_name),
+            )
             pk_row = cursor.fetchone()
             primary_key = pk_row[0] if pk_row else None
 
@@ -270,7 +278,8 @@ class PostgreSQLDestinationConnector:
         conn = self._ensure_connection()
         cursor = conn.cursor()
         try:
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT kcu.column_name, ccu.table_name AS referenced_table
                 FROM information_schema.table_constraints tc
                 JOIN information_schema.key_column_usage kcu
@@ -282,7 +291,9 @@ class PostgreSQLDestinationConnector:
                 WHERE tc.constraint_type = 'FOREIGN KEY'
                     AND tc.table_schema = %s
                     AND tc.table_name = %s;
-            """, (self._schema, table_name))
+            """,
+                (self._schema, table_name),
+            )
             return {row[0]: row[1] for row in cursor.fetchall()}
         finally:
             cursor.close()
@@ -298,11 +309,14 @@ class PostgreSQLDestinationConnector:
         conn = self._ensure_connection()
         cursor = conn.cursor()
         try:
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT table_name
                 FROM information_schema.tables
                 WHERE table_schema = %s AND table_type = 'BASE TABLE';
-            """, (self._schema,))
+            """,
+                (self._schema,),
+            )
             return [row[0] for row in cursor.fetchall()]
         finally:
             cursor.close()
@@ -334,24 +348,17 @@ class PostgreSQLDestinationConnector:
                     clauses.append(f'"{c}"::text ILIKE %s')
                     params.append(f"%{subject}%")
                 where = " WHERE " + " OR ".join(clauses)
-            sql = (
-                f'SELECT * FROM "{self._schema}"."{table_name}"{where} '
-                f"LIMIT {int(limit)}"
-            )
+            sql = f'SELECT * FROM "{self._schema}"."{table_name}"{where} LIMIT {int(limit)}'
             cursor.execute(sql, params)
             colnames = [d[0] for d in cursor.description]
-            return [dict(zip(colnames, row)) for row in cursor.fetchall()]
+            return [dict(zip(colnames, row, strict=True)) for row in cursor.fetchall()]
         except Exception as exc:
-            logger.warning(
-                "Could not read destination rows from %s: %s", table_name, exc
-            )
+            logger.warning("Could not read destination rows from %s: %s", table_name, exc)
             # A read failure must not stop a merge — dedup is an enhancement,
             # not a prerequisite. Roll back so the aborted SELECT does not
             # leave the shared connection in a failed-transaction state.
-            try:
+            with suppress(Exception):
                 conn.rollback()
-            except Exception:
-                pass
             return []
         finally:
             cursor.close()
@@ -374,12 +381,15 @@ class PostgreSQLDestinationConnector:
         conn = self._ensure_connection()
         cursor = conn.cursor()
         try:
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT EXISTS (
                     SELECT FROM information_schema.columns
                     WHERE table_schema = %s AND table_name = %s AND column_name = %s
                 );
-            """, (self._schema, table_name, column_name))
+            """,
+                (self._schema, table_name, column_name),
+            )
             return cursor.fetchone()[0]
         finally:
             cursor.close()
@@ -429,9 +439,7 @@ class PostgreSQLDestinationConnector:
         # staff (active BOOLEAN) with its customer (active INTEGER) into one
         # person table — without coercion the whole entity load fails on
         # "column active is of type boolean but expression is of type integer".
-        column_types = {
-            c["name"]: str(c.get("type", "")).lower() for c in dest_columns
-        }
+        column_types = {c["name"]: str(c.get("type", "")).lower() for c in dest_columns}
         record_columns = list(records[0].keys())
         if existing_columns:
             target_columns = [c for c in record_columns if c in existing_columns]
@@ -562,6 +570,7 @@ class PostgreSQLDestinationConnector:
 
                 # Use execute_values for bulk insert
                 from psycopg2.extras import execute_values
+
                 execute_values(
                     cursor,
                     sql.replace("VALUES (%s)", "VALUES %(col1)s").replace("%(col1)s", ""),
@@ -634,8 +643,7 @@ class PostgreSQLDestinationConnector:
         cursor = conn.cursor()
         try:
             cursor.execute(
-                f'CREATE TABLE IF NOT EXISTS "{self._schema}"."{table_name}" '
-                f'(id TEXT PRIMARY KEY)'
+                f'CREATE TABLE IF NOT EXISTS "{self._schema}"."{table_name}" (id TEXT PRIMARY KEY)'
             )
             created = cursor.rowcount != 0 or True
             self._commit(conn)
@@ -685,9 +693,7 @@ class PostgreSQLDestinationConnector:
                     if "already exists" in str(exc).lower():
                         added += 1
                     else:
-                        logger.warning(
-                            "Failed to add column %s.%s: %s", table, col, exc
-                        )
+                        logger.warning("Failed to add column %s.%s: %s", table, col, exc)
                         failed += 1
             self._commit(conn)
         except Exception:
@@ -701,7 +707,7 @@ class PostgreSQLDestinationConnector:
     # ── Helper ────────────────────────────────────────────────────────
 
     # Foreign/generic type names (ClickHouse, LLM-suggested) → valid Postgres DDL types
-    _DDL_TYPE_MAP = {
+    _DDL_TYPE_MAP: ClassVar[dict[str, str]] = {
         "string": "TEXT",
         "str": "TEXT",
         "fixedstring": "TEXT",
@@ -728,12 +734,32 @@ class PostgreSQLDestinationConnector:
     }
 
     # Postgres types that may legitimately appear in DDL requests (pass through)
-    _VALID_PG_TYPES = {
-        "text", "varchar", "character varying", "char", "uuid", "boolean",
-        "smallint", "integer", "bigint", "numeric", "decimal", "real",
-        "double precision", "date", "time", "timestamp", "timestamptz",
-        "timestamp with time zone", "timestamp without time zone",
-        "json", "jsonb", "bytea", "serial", "bigserial", "interval",
+    _VALID_PG_TYPES: ClassVar[set[str]] = {
+        "text",
+        "varchar",
+        "character varying",
+        "char",
+        "uuid",
+        "boolean",
+        "smallint",
+        "integer",
+        "bigint",
+        "numeric",
+        "decimal",
+        "real",
+        "double precision",
+        "date",
+        "time",
+        "timestamp",
+        "timestamptz",
+        "timestamp with time zone",
+        "timestamp without time zone",
+        "json",
+        "jsonb",
+        "bytea",
+        "serial",
+        "bigserial",
+        "interval",
     }
 
     @classmethod
@@ -750,7 +776,7 @@ class PostgreSQLDestinationConnector:
         low = dt.lower()
         for wrapper in ("nullable(", "lowcardinality("):
             if low.startswith(wrapper) and low.endswith(")"):
-                dt = dt[len(wrapper):-1].strip()
+                dt = dt[len(wrapper) : -1].strip()
                 low = dt.lower()
         # Strip length/precision qualifiers for lookup, e.g. varchar(255)
         base = low.split("(", 1)[0].strip()
@@ -825,11 +851,14 @@ class PostgreSQLDestinationConnector:
         conn = self._ensure_connection()
         cursor = conn.cursor()
         try:
-            cursor.execute(f"""
+            cursor.execute(
+                f"""
                 SELECT record_id, cluster_id
                 FROM "{self._schema}"."merge_engine_entity_map"
                 WHERE entity_type = %s
-            """, (entity_type,))
+            """,
+                (entity_type,),
+            )
             return {row[0]: row[1] for row in cursor.fetchall()}
         finally:
             cursor.close()
@@ -847,16 +876,20 @@ class PostgreSQLDestinationConnector:
         conn = self._ensure_connection()
         cursor = conn.cursor()
         try:
-            psycopg2.extras.execute_batch(cursor, f"""
+            psycopg2.extras.execute_batch(
+                cursor,
+                f"""
                 INSERT INTO "{self._schema}"."merge_engine_entity_map"
                     (entity_type, record_id, cluster_id, first_seen_run, updated_at)
                 VALUES (%s, %s, %s, %s, now())
                 ON CONFLICT (entity_type, record_id) DO UPDATE
                     SET cluster_id = EXCLUDED.cluster_id, updated_at = now()
-            """, [
-                (entity_type, record_id, cluster_id, run_id)
-                for record_id, cluster_id in assignments.items()
-            ])
+            """,
+                [
+                    (entity_type, record_id, cluster_id, run_id)
+                    for record_id, cluster_id in assignments.items()
+                ],
+            )
             self._commit(conn)
             return len(assignments)
         finally:
@@ -868,11 +901,14 @@ class PostgreSQLDestinationConnector:
         conn = self._ensure_connection()
         cursor = conn.cursor()
         try:
-            cursor.execute(f"""
+            cursor.execute(
+                f"""
                 SELECT watermark_column, watermark_kind, last_value, last_run_id, rows_extracted_last_run
                 FROM "{self._schema}"."merge_engine_extraction_state"
                 WHERE origin_id = %s AND table_name = %s
-            """, (origin_id, table_name))
+            """,
+                (origin_id, table_name),
+            )
             row = cursor.fetchone()
             if row is None:
                 return None
@@ -901,7 +937,8 @@ class PostgreSQLDestinationConnector:
         conn = self._ensure_connection()
         cursor = conn.cursor()
         try:
-            cursor.execute(f"""
+            cursor.execute(
+                f"""
                 INSERT INTO "{self._schema}"."merge_engine_extraction_state"
                     (origin_id, table_name, watermark_column, watermark_kind, last_value, last_run_id, last_extracted_at, rows_extracted_last_run)
                 VALUES (%s, %s, %s, %s, %s, %s, NOW(), %s)
@@ -912,7 +949,17 @@ class PostgreSQLDestinationConnector:
                     last_run_id = EXCLUDED.last_run_id,
                     last_extracted_at = EXCLUDED.last_extracted_at,
                     rows_extracted_last_run = EXCLUDED.rows_extracted_last_run
-            """, (origin_id, table_name, watermark_column, watermark_kind, last_value, run_id, rows_extracted))
+            """,
+                (
+                    origin_id,
+                    table_name,
+                    watermark_column,
+                    watermark_kind,
+                    last_value,
+                    run_id,
+                    rows_extracted,
+                ),
+            )
             self._commit(conn)
         finally:
             cursor.close()
@@ -950,8 +997,10 @@ class PostgreSQLDestinationConnector:
             removed = cursor.rowcount or 0
             self._commit(conn)
             logger.info(
-                "Cleared %d extraction-state row(s) for a full re-merge "
-                "(origin=%s, table=%s)", removed, origin_id, table_name,
+                "Cleared %d extraction-state row(s) for a full re-merge (origin=%s, table=%s)",
+                removed,
+                origin_id,
+                table_name,
             )
             return removed
         finally:

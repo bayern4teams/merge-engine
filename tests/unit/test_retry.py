@@ -3,11 +3,12 @@ Tests for src/orchestrator/utils/retry.py - Retry logic wrapper using tenacity.
 """
 
 import pytest
+
 from src.orchestrator.utils.retry import (
-    TransientError,
     PermanentError,
-    retry_on_transient,
+    TransientError,
     _build_wait_strategy,
+    retry_on_transient,
 )
 
 
@@ -71,6 +72,7 @@ class TestRetryOnTransientSync:
 
     def test_success_on_first_attempt(self):
         """Function that succeeds should return immediately."""
+
         @retry_on_transient(max_attempts=3)
         def success_func():
             return "success"
@@ -163,6 +165,7 @@ class TestRetryOnTransientAsync:
     @pytest.mark.asyncio
     async def test_async_success_on_first_attempt(self):
         """Async function that succeeds should return immediately."""
+
         @retry_on_transient(max_attempts=3)
         async def async_success():
             return "async_success"

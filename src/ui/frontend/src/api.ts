@@ -91,6 +91,25 @@ async function get<T>(url: string): Promise<T> {
   return res.json();
 }
 
+async function put<T>(url: string, body: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const j = await res.json();
+      detail = j.detail || detail;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
 export function testConnection(body: {
   conn_type: string;
   host: string;
@@ -126,6 +145,41 @@ export interface ProfileSummary {
   updated_at: string;
 }
 
+// Part 1.6.A: run-by-run overrides submitted from the Pipeline screen's
+// Advanced panel. Every field is optional -- omitting one leaves the
+// file-loaded (or platform-overridden) default untouched for this run.
+export interface RunConfig {
+  model?: string;
+  fallback_models?: string[];
+  temperature?: number;
+  entity_resolution_enabled?: boolean;
+  field_mapping_enabled?: boolean;
+  batch_size?: number;
+  /** Gate names (a subset of REVIEW_GATES) to resume through automatically
+   * instead of pausing for human review. Empty/omitted pauses at every gate,
+   * same as before this existed. */
+  auto_approve_gates?: string[];
+}
+
+// The gate names REVIEW_GATES actually contains (graph.py), kept in sync by
+// hand -- "handle_error" is deliberately excluded, its resume semantics
+// aren't a plain approve.
+export const REVIEW_GATES = [
+  "human_review_deps",
+  "human_review_scope",
+  "human_review_matches",
+  "human_review_mappings",
+  "human_final_approval",
+] as const;
+
+export const GATE_LABELS: Record<string, string> = {
+  human_review_deps: "Dependency review",
+  human_review_scope: "Scope confirmation",
+  human_review_matches: "Entity match review",
+  human_review_mappings: "Field mapping review",
+  human_final_approval: "Final approval",
+};
+
 export function startWorkflow(body: {
   request: string;
   origins: OriginConfig[];
@@ -136,8 +190,100 @@ export function startWorkflow(body: {
   save_as_profile?: string;
   /** Ignore tracked watermarks and re-extract every table in full. */
   full_remerge?: boolean;
+  /** Per-field survivorship override for this run (e.g. {_default: [...]}). */
+  conflict_policy?: Record<string, any>;
+  /** Per-entity matching override for this run, keyed by entity type with
+   * an optional "_default" entry (target_entities isn't known yet). */
+  matching_rules?: Record<string, any>;
+  /** Advanced-panel run-by-run overrides. */
+  run_config?: RunConfig;
 }): Promise<{ thread_id: string; profile_name?: string }> {
   return post("/api/workflow/start", body);
+}
+
+// ── Config (Part 1.6.A Settings page) ──────────────────────────────────────
+
+export interface EffectiveConfig {
+  effective: Record<string, any>;
+  platform_overrides: Record<string, any>;
+  sources: Record<string, Record<string, "override" | "env" | "file">>;
+  env_present: Record<string, boolean>;
+}
+
+export function getConfig(): Promise<EffectiveConfig> {
+  return get("/api/config");
+}
+
+export function updatePlatformConfig(
+  body: Record<string, any>
+): Promise<{ platform_overrides: Record<string, any> }> {
+  return put("/api/config/platform", body);
+}
+
+// ── Investigation tools (Part 1.6.B) ────────────────────────────────────────
+// All four are read-only. None can mutate a run or write to any database.
+
+export interface MatchInspection {
+  found: boolean;
+  entity_types: string[];
+  resolution_stats: Record<string, any>;
+  requested_entity_type: string | null;
+  clusters: Array<Record<string, any>>;
+}
+
+export function getMatches(threadId: string, entityType?: string): Promise<MatchInspection> {
+  const q = entityType ? `?entity_type=${encodeURIComponent(entityType)}` : "";
+  return get(`/api/workflow/${threadId}/matches${q}`);
+}
+
+export interface RunTimeline {
+  found: boolean;
+  timings: Record<string, number>;
+  entities: Record<string, any>;
+  generated_at: string | null;
+  cost: { run: Record<string, any>; cache: Record<string, any> };
+}
+
+export function getTimeline(threadId: string): Promise<RunTimeline> {
+  return get(`/api/workflow/${threadId}/timeline`);
+}
+
+export interface SampleResult {
+  connected: boolean;
+  error: string | null;
+  columns: string[];
+  rows: Array<Record<string, any>>;
+}
+
+export function sampleRows(body: {
+  conn_type: string;
+  host: string;
+  port: number;
+  user?: string;
+  password?: string;
+  database?: string;
+  table: string;
+  schema_name?: string;
+  limit?: number;
+}): Promise<SampleResult> {
+  return post("/api/explore/sample", body);
+}
+
+export interface GoldenDiff {
+  subject: string;
+  totals: { golden_rows: number; app_rows: number; matched_rows: number; overall_parity_pct: number };
+  families: {
+    golden_family_count: number;
+    app_family_count: number;
+    golden_families: string[];
+    app_families: string[];
+    missing_families: string[];
+  };
+  tables: Array<{ table: string; golden_rows: number; app_rows: number; matched: number; parity_pct: number }>;
+}
+
+export function getGoldenDiff(subject: string): Promise<GoldenDiff> {
+  return get(`/api/runs/diff/golden/${encodeURIComponent(subject)}`);
 }
 
 export function listProfiles(): Promise<{ profiles: ProfileSummary[] }> {

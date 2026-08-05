@@ -64,11 +64,13 @@ class TestLoadDataNode:
     @pytest.fixture
     def mock_load_impl(self) -> AsyncMock:
         """Mock load_data_impl."""
-        return AsyncMock(return_value={
-            "total_records": 2,
-            "inserted": 2,
-            "updated": 0,
-        })
+        return AsyncMock(
+            return_value={
+                "total_records": 2,
+                "inserted": 2,
+                "updated": 0,
+            }
+        )
 
     @pytest.mark.asyncio
     async def test_load_data_success(
@@ -115,10 +117,9 @@ class TestLoadDataNode:
         mock_load_impl.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_load_data_load_failure(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_load_data_load_failure(self, base_state: dict[str, Any]) -> None:
         """Test handling of load failure."""
+
         async def fail_impl(*args: Any, **kwargs: Any) -> dict[str, Any]:
             raise Exception("Load service error")
 
@@ -135,7 +136,11 @@ class TestLoadDataNode:
     async def test_load_data_preserves_existing_errors(
         self, base_state: dict[str, Any], mock_load_impl: AsyncMock
     ) -> None:
-        """Test that existing errors are preserved."""
+        """Existing errors survive a call to this node via MergeState's real
+        operator.add reducer, not because the node re-returns the old
+        history itself (Phase 0 Sec 0.8 - see analyze_dependencies' test of
+        the same name for why the previous version of this test asserted
+        the actual bug)."""
         base_state["errors"] = ["pre-existing"]
 
         with patch(
@@ -144,13 +149,16 @@ class TestLoadDataNode:
         ):
             result = await load_data_node(base_state)
 
-        assert "pre-existing" in result["errors"]
+        assert "pre-existing" not in result.get("errors", [])
+        combined = base_state["errors"] + result.get("errors", [])
+        assert "pre-existing" in combined
 
     @pytest.mark.asyncio
-    async def test_load_data_applies_schema_changes(
+    async def test_load_data_refuses_schema_changes(
         self, base_state: dict[str, Any], mock_load_impl: AsyncMock
     ) -> None:
-        """Test that pending schema changes are applied before loading."""
+        """The destination schema is a fixed contract: pending schema changes
+        are refused and recorded as an error, never applied."""
         base_state["pending_schema_changes"] = [
             {
                 "column": "phone",
@@ -164,11 +172,13 @@ class TestLoadDataNode:
         mock_connector.extend_schema_batch = MagicMock(return_value={"added": 1, "failed": 0})
 
         mock_dest_config = MagicMock()
-        mock_dest_config.model_dump = MagicMock(return_value={
-            "type": "postgresql",
-            "host": "localhost",
-            "port": 5432,
-        })
+        mock_dest_config.model_dump = MagicMock(
+            return_value={
+                "type": "postgresql",
+                "host": "localhost",
+                "port": 5432,
+            }
+        )
 
         mock_destination = MagicMock()
         mock_destination.type = "postgresql"
@@ -177,16 +187,20 @@ class TestLoadDataNode:
 
         base_state["destination"] = mock_destination
 
-        with patch(
-            "src.orchestrator.nodes.load_data.load_data_impl",
-            mock_load_impl,
-        ), patch(
-            "src.mcp_server.tools.load_data._get_destination_connector",
-            return_value=mock_connector,
+        with (
+            patch(
+                "src.orchestrator.nodes.load_data.load_data_impl",
+                mock_load_impl,
+            ),
+            patch(
+                "src.mcp_server.tools.load_data._get_destination_connector",
+                return_value=mock_connector,
+            ),
         ):
-            await load_data_node(base_state)
+            result = await load_data_node(base_state)
 
-        mock_connector.extend_schema_batch.assert_called_once()
+        mock_connector.extend_schema_batch.assert_not_called()
+        assert any("fixed contract" in e for e in result["errors"])
 
     @pytest.mark.asyncio
     async def test_load_data_dict_destination(
@@ -304,11 +318,13 @@ class TestSchemaRollbackAndEscalation:
     @pytest.fixture
     def mock_load_impl(self) -> AsyncMock:
         """Mock load_data_impl."""
-        return AsyncMock(return_value={
-            "total_records": 2,
-            "inserted": 2,
-            "updated": 0,
-        })
+        return AsyncMock(
+            return_value={
+                "total_records": 2,
+                "inserted": 2,
+                "updated": 0,
+            }
+        )
 
     @pytest.fixture
     def mock_connector(self) -> MagicMock:
@@ -342,43 +358,46 @@ class TestSchemaRollbackAndEscalation:
         return connector
 
     @pytest.mark.asyncio
-    async def test_schema_change_reuses_the_load_connector_not_a_second_one(
+    async def test_schema_change_is_refused_not_applied(
         self, base_state: dict[str, Any], mock_load_impl: AsyncMock, mock_connector: MagicMock
     ) -> None:
-        """Before Fix #4, _apply_schema_changes opened its own standalone
-        connector whose ALTERs committed immediately, outside the load's
-        transaction. Now it must reuse the same connector the data load
-        uses — proven here by the connector factory being called exactly
-        once for the whole node, not once per schema-change application."""
+        """The destination schema is a fixed contract (Phase 0 Bug A): a
+        pending schema change — however it got there — is never applied.
+        It is recorded as an error, and the rest of the load (which does not
+        depend on the missing column) still commits."""
         base_state["pending_schema_changes"] = [
             {"table": "merged_companies", "column": "phone", "data_type": "VARCHAR"}
         ]
         get_connector_mock = MagicMock(return_value=mock_connector)
 
-        with patch(
-            "src.orchestrator.nodes.load_data.load_data_impl", mock_load_impl,
-        ), patch(
-            "src.orchestrator.nodes.load_data._get_destination_connector",
-            get_connector_mock,
-        ), patch(
-            "src.mcp_server.tools.load_data._get_destination_connector",
-            get_connector_mock,
+        with (
+            patch(
+                "src.orchestrator.nodes.load_data.load_data_impl",
+                mock_load_impl,
+            ),
+            patch(
+                "src.orchestrator.nodes.load_data._get_destination_connector",
+                get_connector_mock,
+            ),
+            patch(
+                "src.mcp_server.tools.load_data._get_destination_connector",
+                get_connector_mock,
+            ),
         ):
             result = await load_data_node(base_state)
 
-        assert get_connector_mock.call_count == 1
-        mock_connector.extend_schema_batch.assert_called_once()
-        assert not result["errors"]
+        mock_connector.extend_schema_batch.assert_not_called()
+        assert any("fixed contract" in e for e in result["errors"])
         assert "commit" in mock_connector.transaction_log
         assert "rollback" not in mock_connector.transaction_log
 
     @pytest.mark.asyncio
-    async def test_schema_change_rolls_back_together_with_a_failed_load(
+    async def test_refused_schema_change_does_not_block_a_failed_loads_rollback(
         self, base_state: dict[str, Any], mock_connector: MagicMock
     ) -> None:
-        """Fix #4 proof: when a later entity's load fails inside the same
-        atomic() block, the schema ALTER — applied through the shared
-        connector — rolls back with it instead of surviving on its own."""
+        """A refused schema change is just an error entry, not an exception —
+        it must not mask or interfere with a genuine load failure rolling
+        back the transaction."""
         base_state["pending_schema_changes"] = [
             {"table": "merged_companies", "column": "phone", "data_type": "VARCHAR"}
         ]
@@ -388,19 +407,24 @@ class TestSchemaRollbackAndEscalation:
 
         get_connector_mock = MagicMock(return_value=mock_connector)
 
-        with patch(
-            "src.orchestrator.nodes.load_data.load_data_impl",
-            side_effect=fail_impl,
-        ), patch(
-            "src.orchestrator.nodes.load_data._get_destination_connector",
-            get_connector_mock,
-        ), patch(
-            "src.mcp_server.tools.load_data._get_destination_connector",
-            get_connector_mock,
+        with (
+            patch(
+                "src.orchestrator.nodes.load_data.load_data_impl",
+                side_effect=fail_impl,
+            ),
+            patch(
+                "src.orchestrator.nodes.load_data._get_destination_connector",
+                get_connector_mock,
+            ),
+            patch(
+                "src.mcp_server.tools.load_data._get_destination_connector",
+                get_connector_mock,
+            ),
         ):
             result = await load_data_node(base_state)
 
-        mock_connector.extend_schema_batch.assert_called_once()
+        mock_connector.extend_schema_batch.assert_not_called()
+        assert any("fixed contract" in e for e in result["errors"])
         assert "rollback" in mock_connector.transaction_log
         assert "commit" not in mock_connector.transaction_log
         assert result["reconciliation_report"]["load_rolled_back"] is True
@@ -413,6 +437,7 @@ class TestSchemaRollbackAndEscalation:
         escalating disposition so the run stops at the human error gate
         instead of flowing on to update_extraction_state as if nothing
         had happened."""
+
         async def fail_impl(*args: Any, **kwargs: Any) -> dict[str, Any]:
             raise Exception("Load service error")
 
@@ -436,7 +461,8 @@ class TestSchemaRollbackAndEscalation:
         may escalate, or every successful run would also route to
         handle_error."""
         with patch(
-            "src.orchestrator.nodes.load_data.load_data_impl", mock_load_impl,
+            "src.orchestrator.nodes.load_data.load_data_impl",
+            mock_load_impl,
         ):
             result = await load_data_node(base_state)
 
@@ -463,9 +489,7 @@ class TestPreLoadGuardrail:
                 ],
             },
             "unified_entities": {
-                "company": [
-                    {"id": f"cluster-{i}", "name": f"Acme {i}"} for i in range(6)
-                ],
+                "company": [{"id": f"cluster-{i}", "name": f"Acme {i}"} for i in range(6)],
             },
             "field_mappings": {
                 "company": {"name": {"dest_column": "name", "requires_schema_change": False}},
@@ -478,16 +502,21 @@ class TestPreLoadGuardrail:
 
     @pytest.mark.asyncio
     async def test_guardrail_refuses_the_load_before_touching_a_connector(
-        self, base_state: dict[str, Any],
+        self,
+        base_state: dict[str, Any],
     ) -> None:
         mock_load_impl = AsyncMock(return_value={"total_records": 1, "inserted": 1, "updated": 0})
         mock_get_connector = MagicMock()
 
-        with patch(
-            "src.orchestrator.nodes.load_data.load_data_impl", mock_load_impl,
-        ), patch(
-            "src.orchestrator.nodes.load_data._get_destination_connector",
-            mock_get_connector,
+        with (
+            patch(
+                "src.orchestrator.nodes.load_data.load_data_impl",
+                mock_load_impl,
+            ),
+            patch(
+                "src.orchestrator.nodes.load_data._get_destination_connector",
+                mock_get_connector,
+            ),
         ):
             result = await load_data_node(base_state)
 
@@ -499,7 +528,8 @@ class TestPreLoadGuardrail:
 
     @pytest.mark.asyncio
     async def test_a_healthy_scoped_merge_is_not_blocked(
-        self, base_state: dict[str, Any],
+        self,
+        base_state: dict[str, Any],
     ) -> None:
         """Only the zero-auto-merge signature fires the guardrail — a scoped
         merge where clusters DID auto-merge must load normally."""
@@ -507,7 +537,8 @@ class TestPreLoadGuardrail:
         mock_load_impl = AsyncMock(return_value={"total_records": 6, "inserted": 6, "updated": 0})
 
         with patch(
-            "src.orchestrator.nodes.load_data.load_data_impl", mock_load_impl,
+            "src.orchestrator.nodes.load_data.load_data_impl",
+            mock_load_impl,
         ):
             result = await load_data_node(base_state)
 
@@ -551,9 +582,7 @@ class TestUpdateExtractionStateNode:
         }
 
     @pytest.mark.asyncio
-    async def test_updates_extraction_state_success(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_updates_extraction_state_success(self, base_state: dict[str, Any]) -> None:
         """Test successful extraction-state updates."""
         mock_connector = MagicMock()
         mock_connector.update_extraction_state = MagicMock()
@@ -568,9 +597,7 @@ class TestUpdateExtractionStateNode:
         assert mock_connector.update_extraction_state.call_count == 2  # once per tracked table
 
     @pytest.mark.asyncio
-    async def test_passes_run_id_and_watermark_fields(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_passes_run_id_and_watermark_fields(self, base_state: dict[str, Any]) -> None:
         """Test that run_id and watermark fields are passed through."""
         mock_connector = MagicMock()
         mock_connector.update_extraction_state = MagicMock()
@@ -588,14 +615,10 @@ class TestUpdateExtractionStateNode:
         assert kwargs_by_origin["postgres_main"]["rows_extracted"] == 150
 
     @pytest.mark.asyncio
-    async def test_handles_update_failure(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_handles_update_failure(self, base_state: dict[str, Any]) -> None:
         """Test handling of an update_extraction_state failure."""
         mock_connector = MagicMock()
-        mock_connector.update_extraction_state = MagicMock(
-            side_effect=Exception("write failed")
-        )
+        mock_connector.update_extraction_state = MagicMock(side_effect=Exception("write failed"))
 
         with patch(
             "src.orchestrator.nodes.load_data._get_destination_connector",
@@ -607,10 +630,12 @@ class TestUpdateExtractionStateNode:
         assert any("Failed to update extraction state" in e for e in result["errors"])
 
     @pytest.mark.asyncio
-    async def test_preserves_existing_errors(
-        self, base_state: dict[str, Any]
-    ) -> None:
-        """Test that existing errors are preserved."""
+    async def test_preserves_existing_errors(self, base_state: dict[str, Any]) -> None:
+        """Existing errors survive a call to this node via MergeState's real
+        operator.add reducer, not because the node re-returns the old
+        history itself (Phase 0 Sec 0.8 - see analyze_dependencies' test of
+        the same name for why the previous version of this test asserted
+        the actual bug)."""
         base_state["errors"] = ["pre-existing"]
         mock_connector = MagicMock()
         mock_connector.update_extraction_state = MagicMock()
@@ -621,12 +646,12 @@ class TestUpdateExtractionStateNode:
         ):
             result = await update_extraction_state_node(base_state)
 
-        assert "pre-existing" in result["errors"]
+        assert "pre-existing" not in result.get("errors", [])
+        combined = base_state["errors"] + result.get("errors", [])
+        assert "pre-existing" in combined
 
     @pytest.mark.asyncio
-    async def test_no_watermarks_skips_connector_creation(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_no_watermarks_skips_connector_creation(self, base_state: dict[str, Any]) -> None:
         """Test that no connector is created when nothing was observed."""
         base_state["extraction_watermarks"] = {}
 
@@ -639,9 +664,7 @@ class TestUpdateExtractionStateNode:
         mock_create.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_connector_creation_failure_recorded(
-        self, base_state: dict[str, Any]
-    ) -> None:
+    async def test_connector_creation_failure_recorded(self, base_state: dict[str, Any]) -> None:
         """Test that a destination-connector creation failure is recorded."""
         with patch(
             "src.orchestrator.nodes.load_data._get_destination_connector",
@@ -673,9 +696,7 @@ class TestForeignKeyTranslation:
 
     def test_cluster_without_id_is_skipped(self) -> None:
         state = {
-            "entity_clusters": {
-                "company": [{"cluster_id": "", "record_ids": ["o1:Company:ABC"]}]
-            }
+            "entity_clusters": {"company": [{"cluster_id": "", "record_ids": ["o1:Company:ABC"]}]}
         }
         assert _source_id_to_cluster_id(state, "company") == {}
 

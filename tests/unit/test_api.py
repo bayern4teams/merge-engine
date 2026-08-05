@@ -55,9 +55,7 @@ def test_add_recent_persists_and_labels(client: TestClient):
 
     # It should now appear in the recent list too.
     listed = client.get("/api/connections/recent").json()
-    assert any(
-        it["connection"]["database"] == "d" for it in listed["recent_origins"]
-    )
+    assert any(it["connection"]["database"] == "d" for it in listed["recent_origins"])
 
 
 def test_connection_test_delegates(client: TestClient):
@@ -73,8 +71,14 @@ def test_connection_test_delegates(client: TestClient):
     with patch("src.api.main.test_and_discover_schemas", return_value=fake) as td:
         resp = client.post(
             "/api/connections/test",
-            json={"conn_type": "postgres", "host": "h", "port": 5432, "user": "u",
-                  "password": "p", "database": "d"},
+            json={
+                "conn_type": "postgres",
+                "host": "h",
+                "port": 5432,
+                "user": "u",
+                "password": "p",
+                "database": "d",
+            },
         )
     assert resp.status_code == 200
     assert resp.json()["databases"] == ["a"]
@@ -135,8 +139,17 @@ def test_feedback_passes_mapping_edits(client: TestClient, mock_manager):
         "status": "interrupted",
         "current_interrupt_node": "human_review_mappings",
     }
-    edits = [{"entity_type": "company", "source_field": "nm", "action": "map",
-              "dest_column": "name", "new_column_name": "", "new_column_type": "", "confidence": 1.0}]
+    edits = [
+        {
+            "entity_type": "company",
+            "source_field": "nm",
+            "action": "map",
+            "dest_column": "name",
+            "new_column_name": "",
+            "new_column_type": "",
+            "confidence": 1.0,
+        }
+    ]
     resp = client.post(
         "/api/workflow/wf_1/feedback",
         json={"decision": "approve", "mapping_edits": edits},
@@ -178,25 +191,35 @@ def isolated_profiles(tmp_path):
 
 
 ORIGIN = {
-    "id": "pg", "type": "postgresql", "priority": 1,
-    "connection": {"host": "h", "port": 5432, "user": "u",
-                   "password": "s3cret", "database": "d"},
+    "id": "pg",
+    "type": "postgresql",
+    "priority": 1,
+    "connection": {"host": "h", "port": 5432, "user": "u", "password": "s3cret", "database": "d"},
 }
-DEST = {"type": "postgresql", "host": "h", "port": 5432, "user": "u",
-        "password": "s3cret", "database": "dest"}
+DEST = {
+    "type": "postgresql",
+    "host": "h",
+    "port": 5432,
+    "user": "u",
+    "password": "s3cret",
+    "database": "dest",
+}
 
 
-def test_profiles_list_is_empty_before_any_are_saved(
-    client: TestClient, isolated_profiles
-):
+def test_profiles_list_is_empty_before_any_are_saved(client: TestClient, isolated_profiles):
     assert client.get("/api/profiles").json() == {"profiles": []}
 
 
 def test_profile_save_then_list_then_get(client: TestClient, isolated_profiles):
-    saved = client.post("/api/profiles", json={
-        "name": "nightly", "request": "merge people",
-        "origins": [ORIGIN], "destination": DEST,
-    })
+    saved = client.post(
+        "/api/profiles",
+        json={
+            "name": "nightly",
+            "request": "merge people",
+            "origins": [ORIGIN],
+            "destination": DEST,
+        },
+    )
     assert saved.status_code == 200
 
     listed = client.get("/api/profiles").json()["profiles"]
@@ -206,20 +229,29 @@ def test_profile_save_then_list_then_get(client: TestClient, isolated_profiles):
     assert fetched["user_request"] == "merge people"
 
 
-def test_a_saved_profile_never_returns_a_password(
-    client: TestClient, isolated_profiles
-):
-    client.post("/api/profiles", json={
-        "name": "nightly", "request": "r",
-        "origins": [ORIGIN], "destination": DEST,
-    })
+def test_a_saved_profile_never_returns_a_password(client: TestClient, isolated_profiles):
+    client.post(
+        "/api/profiles",
+        json={
+            "name": "nightly",
+            "request": "r",
+            "origins": [ORIGIN],
+            "destination": DEST,
+        },
+    )
     assert "s3cret" not in client.get("/api/profiles/nightly").text
 
 
 def test_an_unnamed_profile_is_rejected(client: TestClient, isolated_profiles):
-    resp = client.post("/api/profiles", json={
-        "name": "  ", "request": "r", "origins": [], "destination": {},
-    })
+    resp = client.post(
+        "/api/profiles",
+        json={
+            "name": "  ",
+            "request": "r",
+            "origins": [],
+            "destination": {},
+        },
+    )
     assert resp.status_code == 422
 
 
@@ -229,10 +261,15 @@ def test_missing_profile_is_a_404(client: TestClient, isolated_profiles):
 
 
 def test_profile_delete(client: TestClient, isolated_profiles):
-    client.post("/api/profiles", json={
-        "name": "nightly", "request": "r",
-        "origins": [ORIGIN], "destination": DEST,
-    })
+    client.post(
+        "/api/profiles",
+        json={
+            "name": "nightly",
+            "request": "r",
+            "origins": [ORIGIN],
+            "destination": DEST,
+        },
+    )
     assert client.delete("/api/profiles/nightly").status_code == 200
     assert client.get("/api/profiles").json() == {"profiles": []}
 
@@ -241,25 +278,31 @@ def test_starting_from_an_unknown_profile_is_a_404(
     client: TestClient, mock_manager, isolated_profiles
 ):
     """A typo in the profile name must not silently run an ad-hoc merge."""
-    mock_manager.start_workflow.side_effect = ValueError(
-        "No saved profile named 'ghost'.")
-    resp = client.post("/api/workflow/start", json={
-        "request": "merge people", "origins": [ORIGIN], "destination": DEST,
-        "profile_name": "ghost",
-    })
+    mock_manager.start_workflow.side_effect = ValueError("No saved profile named 'ghost'.")
+    resp = client.post(
+        "/api/workflow/start",
+        json={
+            "request": "merge people",
+            "origins": [ORIGIN],
+            "destination": DEST,
+            "profile_name": "ghost",
+        },
+    )
     assert resp.status_code == 404
 
 
-def test_start_passes_the_profile_through(
-    client: TestClient, mock_manager, isolated_profiles
-):
+def test_start_passes_the_profile_through(client: TestClient, mock_manager, isolated_profiles):
     mock_manager.start_workflow.return_value = "wf_1"
-    client.post("/api/workflow/start", json={
-        "request": "merge people", "origins": [ORIGIN], "destination": DEST,
-        "profile_name": "nightly",
-    })
-    assert mock_manager.start_workflow.call_args.kwargs["profile_name"] == (
-        "nightly")
+    client.post(
+        "/api/workflow/start",
+        json={
+            "request": "merge people",
+            "origins": [ORIGIN],
+            "destination": DEST,
+            "profile_name": "nightly",
+        },
+    )
+    assert mock_manager.start_workflow.call_args.kwargs["profile_name"] == ("nightly")
 
 
 def test_start_passes_a_conflict_policy_override_through(
@@ -270,10 +313,15 @@ def test_start_passes_a_conflict_policy_override_through(
     survivorship for one run without first saving a profile."""
     mock_manager.start_workflow.return_value = "wf_1"
     policy = {"revenue": ["numeric_max"], "_default": ["priority", "recency"]}
-    client.post("/api/workflow/start", json={
-        "request": "merge people", "origins": [ORIGIN], "destination": DEST,
-        "conflict_policy": policy,
-    })
+    client.post(
+        "/api/workflow/start",
+        json={
+            "request": "merge people",
+            "origins": [ORIGIN],
+            "destination": DEST,
+            "conflict_policy": policy,
+        },
+    )
     assert mock_manager.start_workflow.call_args.kwargs["conflict_policy"] == policy
 
 
@@ -283,9 +331,14 @@ def test_start_without_a_conflict_policy_passes_none_through(
     """Omitting conflict_policy must not silently invent an empty override —
     None lets a saved profile's pinned policy (if any) still apply."""
     mock_manager.start_workflow.return_value = "wf_1"
-    client.post("/api/workflow/start", json={
-        "request": "merge people", "origins": [ORIGIN], "destination": DEST,
-    })
+    client.post(
+        "/api/workflow/start",
+        json={
+            "request": "merge people",
+            "origins": [ORIGIN],
+            "destination": DEST,
+        },
+    )
     assert mock_manager.start_workflow.call_args.kwargs["conflict_policy"] is None
 
 
@@ -293,10 +346,15 @@ def test_save_as_profile_creates_it_before_the_run(
     client: TestClient, mock_manager, isolated_profiles
 ):
     mock_manager.start_workflow.return_value = "wf_1"
-    resp = client.post("/api/workflow/start", json={
-        "request": "merge people", "origins": [ORIGIN], "destination": DEST,
-        "save_as_profile": "nightly",
-    })
+    resp = client.post(
+        "/api/workflow/start",
+        json={
+            "request": "merge people",
+            "origins": [ORIGIN],
+            "destination": DEST,
+            "save_as_profile": "nightly",
+        },
+    )
     assert resp.json()["profile_name"] == "nightly"
     assert client.get("/api/profiles/nightly").status_code == 200
 

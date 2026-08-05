@@ -8,16 +8,39 @@ Usage:
     python restore_pristine.py                                   # global_warehouse.public
     python restore_pristine.py --db global_warehouse_golden --schema boeing
 """
+
 import argparse
 
 import psycopg2
 
 ORIGINAL = {
-    "company": ["id", "name", "legal_name", "website", "industry_id", "location_id",
-                "employee_count", "revenue", "revenue_currency", "founded_date",
-                "status", "description", "created_at", "updated_at"],
-    "person": ["id", "first_name", "middle_name", "last_name", "date_of_birth",
-               "gender", "location_id", "created_at", "updated_at"],
+    "company": [
+        "id",
+        "name",
+        "legal_name",
+        "website",
+        "industry_id",
+        "location_id",
+        "employee_count",
+        "revenue",
+        "revenue_currency",
+        "founded_date",
+        "status",
+        "description",
+        "created_at",
+        "updated_at",
+    ],
+    "person": [
+        "id",
+        "first_name",
+        "middle_name",
+        "last_name",
+        "date_of_birth",
+        "gender",
+        "location_id",
+        "created_at",
+        "updated_at",
+    ],
 }
 
 ap = argparse.ArgumentParser(description=__doc__)
@@ -29,16 +52,20 @@ ap.add_argument("--db", default="global_warehouse")
 ap.add_argument("--schema", default="public")
 args = ap.parse_args()
 
-c = psycopg2.connect(host=args.host, port=args.port, user=args.user,
-                      password=args.password, dbname=args.db)
+c = psycopg2.connect(
+    host=args.host, port=args.port, user=args.user, password=args.password, dbname=args.db
+)
 c.autocommit = True
 cur = c.cursor()
-cur.execute('SET search_path TO %s', (args.schema,))
+cur.execute("SET search_path TO %s", (args.schema,))
 
 # Drop app-added columns
 for tbl, keep in ORIGINAL.items():
-    cur.execute("""SELECT column_name FROM information_schema.columns
-                   WHERE table_schema = %s AND table_name = %s""", (args.schema, tbl))
+    cur.execute(
+        """SELECT column_name FROM information_schema.columns
+                   WHERE table_schema = %s AND table_name = %s""",
+        (args.schema, tbl),
+    )
     present = [r[0] for r in cur.fetchall()]
     extra = [col for col in present if col not in keep]
     for col in extra:
@@ -50,7 +77,9 @@ for helper in ("merge_engine_entity_map", "merge_engine_extraction_state"):
     cur.execute(f'DROP TABLE IF EXISTS "{args.schema}".{helper} CASCADE')
 
 # Truncate everything
-cur.execute("SELECT tablename FROM pg_tables WHERE schemaname = %s ORDER BY tablename", (args.schema,))
+cur.execute(
+    "SELECT tablename FROM pg_tables WHERE schemaname = %s ORDER BY tablename", (args.schema,)
+)
 tables = [r[0] for r in cur.fetchall()]
 if tables:
     qualified = ", ".join(f'"{args.schema}"."{t}"' for t in tables)

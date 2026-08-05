@@ -16,7 +16,6 @@ from typing import Any
 import pytest
 
 import src.orchestrator.spool as spool_mod
-from src.orchestrator.utils.retry import DataQualityError
 from src.orchestrator.spool import (
     RunSpool,
     cleanup_old_spools,
@@ -27,6 +26,7 @@ from src.orchestrator.spool import (
     is_handle,
     make_handle,
 )
+from src.orchestrator.utils.retry import DataQualityError
 
 
 @pytest.fixture(autouse=True)
@@ -70,7 +70,10 @@ class TestRoundTrip:
         spool.append("person", [{"a": 1, "b": None, "c": [1, 2], "d": {"e": "f"}}])
 
         assert spool.read_all("person")[0] == {
-            "a": 1, "b": None, "c": [1, 2], "d": {"e": "f"},
+            "a": 1,
+            "b": None,
+            "c": [1, 2],
+            "d": {"e": "f"},
         }
 
     def test_reset_clears_a_previous_attempt(self) -> None:
@@ -96,8 +99,10 @@ class TestRoundTrip:
 
     def test_runs_are_independent(self) -> None:
         a, b = RunSpool("runA"), RunSpool("runB")
-        a.reset_entity("person"); a.append("person", [_row(0)])
-        b.reset_entity("person"); b.append("person", [_row(0), _row(1)])
+        a.reset_entity("person")
+        a.append("person", [_row(0)])
+        b.reset_entity("person")
+        b.append("person", [_row(0), _row(1)])
 
         assert a.row_count("person") == 1
         assert b.row_count("person") == 2

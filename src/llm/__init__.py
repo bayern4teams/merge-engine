@@ -46,7 +46,7 @@ PROMPT_TEMPLATES: dict[str, dict[str, str]] = {
 }
 
 __all__ = [
+    "PROMPT_TEMPLATES",
     "LLMClient",
     "create_llm_client",
-    "PROMPT_TEMPLATES",
 ]

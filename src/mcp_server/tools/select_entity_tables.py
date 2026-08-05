@@ -33,9 +33,7 @@ logger = logging.getLogger("merge-engine.tools.select_entity_tables")
 _MAX_CATALOG_COLUMNS = 40
 
 
-def build_table_catalog(
-    schemas: dict[str, Any], include_foreign_keys: bool = False
-) -> str:
+def build_table_catalog(schemas: dict[str, Any], include_foreign_keys: bool = False) -> str:
     """Render every table in every origin as a compact catalog for the prompt.
 
     Deliberately unfiltered: the whole point of this stage is to consider
@@ -56,8 +54,11 @@ def build_table_catalog(
             name = table.get("full_name") or table.get("name") or "?"
             columns = [c.get("name", "?") for c in table.get("columns", [])]
             shown = columns[:_MAX_CATALOG_COLUMNS]
-            more = "" if len(columns) <= _MAX_CATALOG_COLUMNS else \
-                f", …(+{len(columns) - _MAX_CATALOG_COLUMNS} more)"
+            more = (
+                ""
+                if len(columns) <= _MAX_CATALOG_COLUMNS
+                else f", …(+{len(columns) - _MAX_CATALOG_COLUMNS} more)"
+            )
             row_count = table.get("row_count")
             count_str = f" [{row_count} rows]" if row_count is not None else ""
             lines.append(f"  {name}{count_str} — {', '.join(shown)}{more}")
@@ -65,17 +66,14 @@ def build_table_catalog(
                 fks = table.get("foreign_keys") or []
                 if fks:
                     rendered = ", ".join(
-                        f"{fk.get('column')} -> {fk.get('ref_table')}."
-                        f"{fk.get('ref_column')}"
+                        f"{fk.get('column')} -> {fk.get('ref_table')}.{fk.get('ref_column')}"
                         for fk in fks
                     )
                     lines.append(f"      FK: {rendered}")
     return "\n".join(lines)
 
 
-def heuristic_candidates(
-    entity_type: str, schemas: dict[str, Any]
-) -> list[dict[str, Any]]:
+def heuristic_candidates(entity_type: str, schemas: dict[str, Any]) -> list[dict[str, Any]]:
     """Alias-group matches for an entity — the offline floor.
 
     Mirrors the original ``_find_entity_tables`` name matching so a run without
@@ -88,24 +86,23 @@ def heuristic_candidates(
         for table in schema_data.get("tables", []):
             table_name = table.get("name", "")
             full_name = table.get("full_name", table_name)
-            matched = any(
-                concept_matches(entity_type, n) for n in (table_name, full_name)
-            )
+            matched = any(concept_matches(entity_type, n) for n in (table_name, full_name))
             if not matched:
                 bare = full_name.lower().split(".")[-1].strip() or table_name.lower()
                 if _group_of(bare) is None:
                     matched = any(
-                        concept_matches(entity_type, tok)
-                        for tok in bare.split("_") if tok
+                        concept_matches(entity_type, tok) for tok in bare.split("_") if tok
                     )
             if matched:
-                out.append({
-                    "origin_id": origin_id,
-                    "table": full_name,
-                    "confidence": 0.8,
-                    "reason": "name matches known aliases for this concept",
-                    "source": "heuristic",
-                })
+                out.append(
+                    {
+                        "origin_id": origin_id,
+                        "table": full_name,
+                        "confidence": 0.8,
+                        "reason": "name matches known aliases for this concept",
+                        "source": "heuristic",
+                    }
+                )
     return out
 
 
@@ -135,12 +132,9 @@ def _resolve_table(
     origin_id: str, table: str, known: dict[str, dict[str, str]]
 ) -> tuple[str, str] | None:
     """Map an LLM-named (origin, table) to its canonical form, or None."""
-    if origin_id in known:
-        candidates = {origin_id: known[origin_id]}
-    else:
-        # The model may have abbreviated or reordered the origin id; fall back
-        # to searching every origin rather than dropping a real table.
-        candidates = known
+    # The model may have abbreviated or reordered the origin id; fall back to
+    # searching every origin rather than dropping a real table.
+    candidates = {origin_id: known[origin_id]} if origin_id in known else known
 
     for oid, aliases in candidates.items():
         canonical = aliases.get(table) or aliases.get(table.split(".")[-1])
@@ -166,7 +160,8 @@ async def select_entity_tables_impl(
     """
     logger.debug(
         "ENTER select_entity_tables_impl: entities=%s, origins=%d",
-        target_entities, len(schemas or {}),
+        target_entities,
+        len(schemas or {}),
     )
 
     selected: dict[str, list[dict[str, Any]]] = {}
@@ -183,22 +178,18 @@ async def select_entity_tables_impl(
         )
         return {"entity_tables": selected, "notes": "", "llm_used": False}
 
-    from src.llm import LLMClient, PROMPT_TEMPLATES
+    from src.llm import PROMPT_TEMPLATES, LLMClient
 
     prompts = PROMPT_TEMPLATES.get("entity_table_selection", {})
     system_prompt = prompts.get("system", "")
     human_template = prompts.get("human", "")
     if not system_prompt or not human_template:
-        logger.warning(
-            "entity_table_selection prompts missing; keeping heuristic candidates"
-        )
+        logger.warning("entity_table_selection prompts missing; keeping heuristic candidates")
         return {"entity_tables": selected, "notes": "", "llm_used": False}
 
     catalog = build_table_catalog(schemas)
-    user_prompt = (
-        human_template
-        .replace("{target_entities}", json.dumps(target_entities))
-        .replace("{table_catalog}", catalog)
+    user_prompt = human_template.replace("{target_entities}", json.dumps(target_entities)).replace(
+        "{table_catalog}", catalog
     )
     if user_request:
         user_prompt += f"\n\n(The user's original request was: {user_request})\n"
@@ -206,9 +197,7 @@ async def select_entity_tables_impl(
     notes = ""
     try:
         client = LLMClient(llm_config)
-        result = await client.call_json(
-            system_prompt=system_prompt, user_prompt=user_prompt
-        )
+        result = await client.call_json(system_prompt=system_prompt, user_prompt=user_prompt)
         proposed = result.get("entity_tables", {}) if isinstance(result, dict) else {}
         notes = str(result.get("notes", "")) if isinstance(result, dict) else ""
 
@@ -229,7 +218,9 @@ async def select_entity_tables_impl(
                 if resolved is None:
                     logger.warning(
                         "LLM proposed a table that is not in any discovered "
-                        "schema: %s.%s — dropped.", origin_id, table,
+                        "schema: %s.%s — dropped.",
+                        origin_id,
+                        table,
                     )
                     invented += 1
                     continue
@@ -241,18 +232,19 @@ async def select_entity_tables_impl(
                     confidence = float(item.get("confidence", 0.7))
                 except (TypeError, ValueError):
                     confidence = 0.7
-                selected[entity].append({
-                    "origin_id": key[0],
-                    "table": key[1],
-                    "confidence": max(0.0, min(1.0, confidence)),
-                    "reason": str(item.get("reason", ""))[:200],
-                    "source": "llm",
-                })
+                selected[entity].append(
+                    {
+                        "origin_id": key[0],
+                        "table": key[1],
+                        "confidence": max(0.0, min(1.0, confidence)),
+                        "reason": str(item.get("reason", ""))[:200],
+                        "source": "llm",
+                    }
+                )
                 added += 1
 
         logger.info(
-            "Table selection: LLM added %d table(s) beyond the name heuristic"
-            "%s. Final: %s",
+            "Table selection: LLM added %d table(s) beyond the name heuristic%s. Final: %s",
             added,
             f", dropped {invented} invented" if invented else "",
             {e: len(v) for e, v in selected.items()},
@@ -263,7 +255,8 @@ async def select_entity_tables_impl(
         logger.warning(
             "LLM table selection failed (%s); falling back to the name "
             "heuristic alone. Tables whose names don't resemble the entity "
-            "will not be included this run.", exc,
+            "will not be included this run.",
+            exc,
         )
         return {
             "entity_tables": selected,

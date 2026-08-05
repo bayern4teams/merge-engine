@@ -1,6 +1,6 @@
 """Utility modules for merge-engine."""
 
-from src.utils.config_loader import load_config, Config
+from src.utils.config_loader import Config, load_config
 from src.utils.id_utils import (
     generate_uuid,
     generate_uuid_with_dash,
@@ -10,11 +10,11 @@ from src.utils.id_utils import (
 from src.utils.logging_config import setup_logging
 
 __all__ = [
-    "load_config",
     "Config",
     "generate_uuid",
     "generate_uuid_with_dash",
+    "load_config",
+    "setup_logging",
     "validate_uuid",
     "validate_uuid_with_dash",
-    "setup_logging",
 ]

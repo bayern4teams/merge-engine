@@ -31,7 +31,8 @@ class TestRehydrateWorkflow:
 
     def test_completed_workflow(self, manager):
         manager.graph.get_state.return_value = MagicMock(
-            values={"unified_entities": {}}, next=(),
+            values={"unified_entities": {}},
+            next=(),
         )
         status = manager.get_workflow_status("t-done")
         assert status["status"] == "completed"
@@ -44,7 +45,8 @@ class TestRehydrateWorkflow:
 
     def test_died_mid_node_reports_failed(self, manager):
         manager.graph.get_state.return_value = MagicMock(
-            values={"target_entities": ["company"]}, next=("extract_data",),
+            values={"target_entities": ["company"]},
+            next=("extract_data",),
         )
         status = manager.get_workflow_status("t-dead")
         assert status["status"] == "failed"
@@ -56,8 +58,11 @@ class TestRehydrateWorkflow:
 
     def test_in_memory_entry_wins(self, manager):
         manager._active_workflows["t-live"] = {
-            "thread_id": "t-live", "config": {"configurable": {"thread_id": "t-live"}},
-            "status": "running", "current_interrupt_node": None, "interrupt_data": None,
+            "thread_id": "t-live",
+            "config": {"configurable": {"thread_id": "t-live"}},
+            "status": "running",
+            "current_interrupt_node": None,
+            "interrupt_data": None,
         }
         status = manager.get_workflow_status("t-live")
         assert status["status"] == "running"
@@ -67,9 +72,11 @@ class TestRehydrateWorkflow:
 class TestCreateCheckpointer:
     def test_returns_sqlite_saver(self, tmp_path):
         import src.orchestrator.workflow_manager as wm_mod
+
         with patch.object(wm_mod, "_CHECKPOINT_DB", tmp_path / "cp.db"):
             cp = wm_mod._create_checkpointer()
         assert cp is not None
         from langgraph.checkpoint.sqlite import SqliteSaver
+
         assert isinstance(cp, SqliteSaver)
         assert (tmp_path / "cp.db").exists()

@@ -10,22 +10,22 @@ import logging
 import re
 from typing import Any
 
-from sqlalchemy import MetaData, Table, text
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from src.mcp_server.connectors.base import BaseConnector
 from src.mcp_server.connectors.filters import normalize_filter
-from src.mcp_server.connectors.watermark import detect_watermark_column
 from src.mcp_server.connectors.keyset import (
     advance_boundary,
-    drop_consumed,
     assert_key_unique,
     choose_keyset,
-    keyset_is_unique,
     decode_cursor,
+    drop_consumed,
     encode_cursor,
+    keyset_is_unique,
 )
-from src.orchestrator.utils.retry import TransientError, retry_on_transient
+from src.mcp_server.connectors.watermark import detect_watermark_column
+from src.orchestrator.utils.retry import retry_on_transient
 
 logger = logging.getLogger("merge-engine.connectors.postgres")
 
@@ -35,9 +35,7 @@ logger = logging.getLogger("merge-engine.connectors.postgres")
 _TIMESTAMPTZ_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?([+-]\d{2}:?\d{2}|Z)$"
 )
-_TIMESTAMP_RE = re.compile(
-    r"^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}:\d{2}(\.\d+)?)?$"
-)
+_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}:\d{2}(\.\d+)?)?$")
 
 # Alias the extracted table so the whole row can be hashed for a deterministic
 # tiebreak when the ordering key is not provably unique.
@@ -102,7 +100,10 @@ class PostgresConnector(BaseConnector):
         url = f"{drivername}://{user}:{password}@{host}:{port}/{database}"
         logger.debug(
             "Creating PostgreSQL async engine: host=%s, port=%d, database=%s, user=%s",
-            host, port, database, user,
+            host,
+            port,
+            database,
+            user,
         )
         self._engine = create_async_engine(
             url,
@@ -127,7 +128,6 @@ class PostgresConnector(BaseConnector):
         """Discover tables, columns, types, FKs, and one sample row per table."""
         logger.debug("ENTER discover_schema")
         engine = await self._ensure_engine()
-        meta = MetaData()
 
         # ── Fetch all user tables ──────────────────────────────────────
         query = text(
@@ -171,11 +171,15 @@ class PostgresConnector(BaseConnector):
 
                 columns: list[dict[str, Any]] = []
                 for c in col_rows:
-                    columns.append({
-                        "name": c["column_name"],
-                        "type": self._map_sql_type(c["data_type"], c.get("character_maximum_length")),
-                        "nullable": c["is_nullable"] == "YES",
-                    })
+                    columns.append(
+                        {
+                            "name": c["column_name"],
+                            "type": self._map_sql_type(
+                                c["data_type"], c.get("character_maximum_length")
+                            ),
+                            "nullable": c["is_nullable"] == "YES",
+                        }
+                    )
                 logger.debug("  Table %s: %d columns", full_name, len(columns))
 
                 # Fetch foreign keys
@@ -241,19 +245,26 @@ class PostgresConnector(BaseConnector):
                     await conn.commit()
 
                 watermark_column, watermark_kind = detect_watermark_column(columns, primary_key)
-                logger.debug("  Table %s: watermark_column=%s, watermark_kind=%s", full_name, watermark_column, watermark_kind)
+                logger.debug(
+                    "  Table %s: watermark_column=%s, watermark_kind=%s",
+                    full_name,
+                    watermark_column,
+                    watermark_kind,
+                )
 
-                tables.append({
-                    "schema": schema_name,
-                    "name": table_name,
-                    "full_name": full_name,
-                    "columns": columns,
-                    "foreign_keys": foreign_keys,
-                    "primary_key": primary_key,
-                    "watermark_column": watermark_column,
-                    "watermark_kind": watermark_kind,
-                    "sample_row": dict(sample) if sample else {},
-                })
+                tables.append(
+                    {
+                        "schema": schema_name,
+                        "name": table_name,
+                        "full_name": full_name,
+                        "columns": columns,
+                        "foreign_keys": foreign_keys,
+                        "primary_key": primary_key,
+                        "watermark_column": watermark_column,
+                        "watermark_kind": watermark_kind,
+                        "sample_row": dict(sample) if sample else {},
+                    }
+                )
             except Exception as exc:
                 logger.warning("Failed to discover schema for %s: %s", full_name, exc)
                 logger.debug("Continuing to next table after error for %s", full_name)
@@ -295,12 +306,18 @@ class PostgresConnector(BaseConnector):
             Primary key columns, used to break ties in a non-unique watermark
             so a batch boundary cannot skip or repeat rows.
         """
-        logger.debug("ENTER extract: table=%s, columns=%s, filter=%s, batch_size=%d, cursor=%s, watermark=%s",
-                      table_name, columns, filter, batch_size, cursor, watermark)
+        logger.debug(
+            "ENTER extract: table=%s, columns=%s, filter=%s, batch_size=%d, cursor=%s, watermark=%s",
+            table_name,
+            columns,
+            filter,
+            batch_size,
+            cursor,
+            watermark,
+        )
         engine = await self._ensure_engine()
 
         # Resolve schema-qualified table name (default to public)
-        original_table_name = table_name
         if "." not in table_name:
             table_name = f"public.{table_name}"
         logger.debug("Resolved table name: %s", table_name)
@@ -321,10 +338,8 @@ class PostgresConnector(BaseConnector):
                 params[f"f{i}"] = f"%{val}%"
             elif op == "in":
                 names = [f"f{i}_{j}" for j in range(len(val))]
-                conditions.append(
-                    f'"{col}" IN (' + ", ".join(f":{n}" for n in names) + ")"
-                )
-                for n, v in zip(names, val):
+                conditions.append(f'"{col}" IN (' + ", ".join(f":{n}" for n in names) + ")")
+                for n, v in zip(names, val, strict=True):
                     params[n] = v
             else:
                 conditions.append(f'"{col}" = :f{i}')
@@ -339,12 +354,8 @@ class PostgresConnector(BaseConnector):
                 # stored watermark is TEXT, so the parameter must be pinned
                 # to text before PostgreSQL parses it as a timestamp.
                 since_text = str(watermark.get("since") or "")
-                sql_type = (
-                    "TIMESTAMPTZ" if _TIMESTAMPTZ_RE.match(since_text) else "TIMESTAMP"
-                )
-                conditions.append(
-                    f'"{watermark_col}" > {_text_cast(":wm_since", sql_type)}'
-                )
+                sql_type = "TIMESTAMPTZ" if _TIMESTAMPTZ_RE.match(since_text) else "TIMESTAMP"
+                conditions.append(f'"{watermark_col}" > {_text_cast(":wm_since", sql_type)}')
                 params["wm_since"] = since_text
             else:
                 conditions.append(f'"{watermark_col}" > :wm_since')
@@ -380,13 +391,10 @@ class PostgresConnector(BaseConnector):
                 # to compare it. Casting in SQL is the same fix the watermark
                 # filter above already uses.
                 placeholders = ", ".join(
-                    _keyset_placeholder(i, value)
-                    for i, value in enumerate(position["keyset"])
+                    _keyset_placeholder(i, value) for i, value in enumerate(position["keyset"])
                 )
                 comparison = ">" if unique_key else ">="
-                conditions.append(
-                    f"({quoted_keyset}) {comparison} ({placeholders})"
-                )
+                conditions.append(f"({quoted_keyset}) {comparison} ({placeholders})")
                 for i, value in enumerate(position["keyset"]):
                     params[f"ks_{i}"] = value
             order_by = quoted_keyset
@@ -397,15 +405,11 @@ class PostgresConnector(BaseConnector):
                 # Hashing the whole row gives a deterministic tiebreak, so
                 # "skip the ones already returned" means the same rows twice.
                 order_by += f", md5({_ROW_ALIAS}::text)"
-            logger.debug("Keyset pagination on (%s), after=%s",
-                         quoted_keyset, position["keyset"])
+            logger.debug("Keyset pagination on (%s), after=%s", quoted_keyset, position["keyset"])
         else:
             # No unique ordering available: fall back to offset paging and
             # say so, because this is the case that will not scale.
-            order_by = (
-                f'"{watermark["column"]}"'
-                if watermark and watermark.get("column") else "1"
-            )
+            order_by = f'"{watermark["column"]}"' if watermark and watermark.get("column") else "1"
             logger.warning(
                 "Table %s has no watermark or primary key to seek on — using "
                 "OFFSET pagination, which slows down as the table is read.",
@@ -446,9 +450,7 @@ class PostgresConnector(BaseConnector):
         if keyset and unique_key:
             assert_key_unique(rows, keyset, table_name)
         elif keyset:
-            rows = drop_consumed(
-                rows, keyset, position["keyset"], boundary_seen
-            )[:batch_size]
+            rows = drop_consumed(rows, keyset, position["keyset"], boundary_seen)[:batch_size]
         logger.debug("Extracted %d rows", len(rows))
 
         next_cursor = None
@@ -466,9 +468,7 @@ class PostgresConnector(BaseConnector):
                     boundary_seen=next_seen,
                 )
         elif len(rows) == batch_size:
-            next_cursor = encode_cursor(
-                offset=offset + len(rows), total_count=total_count
-            )
+            next_cursor = encode_cursor(offset=offset + len(rows), total_count=total_count)
 
         origin_ids = [str(i) for i in range(offset, offset + len(rows))]
 

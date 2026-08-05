@@ -21,8 +21,10 @@ dependencies = [
     # Database connectors
     "sqlalchemy>=2.0.0",
     "psycopg2-binary>=2.9.0",
+    "asyncpg>=0.29.0",
     "pymongo>=4.6.0",
     "databricks-sql-connector>=3.0.0",
+    "clickhouse-connect>=0.7.0",
     # Configuration & validation
     "pydantic>=2.0.0",
     "pyyaml>=6.0",
@@ -32,10 +34,18 @@ dependencies = [
     # UI (FastAPI serves the built React frontend)
     "fastapi>=0.115.0",
     "uvicorn>=0.30.0",
-    # Observability (self-hosted Langfuse — docker/langfuse-compose.yml)
-    "langfuse>=3.0.0",
+    # Observability (self-hosted Langfuse — docker/langfuse-compose.yml).
+    # Pinned to the v4.x OTel-based SDK explicitly (Part 1.5 C.1): the
+    # installed SDK is 4.x while the compose stack pins server images to
+    # `:3` (langfuse/langfuse:3, langfuse-worker:3) — verified live that
+    # v4's OTLP export round-trips against that v3 server (emit -> flush
+    # -> read back via client.api.trace.get() all succeeded), so the
+    # server images were deliberately left as-is rather than upgraded.
+    "langfuse>=4.0,<5",
     # Logging
     "structlog>=24.0.0",
+    # Per-run extraction spool: rows live here instead of in graph state.
+    "duckdb>=1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -43,10 +53,22 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=5.0.0",
+    "pytest-xdist>=3.5.0",
     "mypy>=1.8.0",
     "ruff>=0.4.0",
     "pre-commit>=3.6.0",
 ]
+# Phase 0 §0.1: every branch's dependency is pre-declared here so no branch
+# ever has to edit pyproject.toml — the single worst six-way merge conflict
+# file. Each group belongs to exactly one planned branch (see
+# docs/plans/ — the harness-foundation plan's branch ownership table);
+# installing one does not pull in another branch's engine.
+dspy = ["dspy-ai>=2.6"]
+splink = ["splink>=4.0.0"]
+dq = ["great-expectations>=1.0.0"]
+lineage = ["sqlglot>=25.0.0"]
+swarm = ["langgraph-swarm>=0.0.11"]
+perf = ["numpy>=1.26", "pandas>=2.2"]
 
 [project.scripts]
 merge-engine = "src.main:main"
@@ -58,6 +80,51 @@ include = ["src*"]
 target-version = "py311"
 line-length = 100
 
+[tool.ruff.lint]
+# Phase 0 Sec 0.2: previously only the default E4/E7/E9/F set ran (ruff's
+# bare default), so an entire category of real bugs (bare except:pass,
+# unsorted/unused imports, mutable-default-argument footguns) was never
+# checked. Selected per the harness-foundation plan; RUF/SIM/B findings that
+# need a human judgment call (not auto-fixable) are ignored per-rule below
+# with a reason, rather than hand-editing files across the codebase in one
+# unreviewed pass - shrink this list over time, never grow it silently.
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+    "E501",   # line length is enforced by `line-length` + formatter, not this
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Test files intentionally construct fixtures/mocks in ways SIM/B flag
+# (broad excepts to assert failure paths, long literal dicts).
+#
+# Phase 0 Sec 0.2: enabling the wider rule set above found 503 findings.
+# `src/` was fixed to zero by hand, one finding at a time (see the git log
+# around this change) — real dead-code removals, `from exc` chaining,
+# `zip(strict=True)` where the invariant was verified, contextlib.suppress
+# conversions. The remaining ~96 findings are entirely in tests/ and
+# scripts/ (one-off golden-generation scripts, not the runtime pipeline) and
+# were judged lower value per finding reviewed manually in one session
+# against a codebase this agent does not have full behavioural context on —
+# ignored here explicitly rather than silently, the same ratchet principle
+# applied to mypy below. Shrink this list over time; never add a rule to it
+# without a reason, and never widen it to cover src/.
+"tests/**" = [
+    "SIM117", "B011",
+    "RUF059",  # unpacked-but-unused tuple members in assertions (readability)
+    "F841",    # unused locals in test setup/fixtures
+    "B007",    # unused loop vars in test iteration
+    "RUF012",  # mutable class defaults in test doubles/mocks
+    "B905",    # zip() without strict= in test data assembly
+    "SIM105",  # try/except/pass in test cleanup
+    "RUF013",  # implicit Optional in test helper signatures
+    "B017",    # pytest.raises(Exception) - intentionally broad in some tests
+    "RUF005",  # list concatenation in test fixtures
+    "SIM108", "SIM116",
+]
+"scripts/**" = [
+    "RUF059", "F841", "B007", "RUF012", "B905", "SIM105", "RUF013",
+]
+
 [tool.mypy]
 python_version = "3.11"
 strict = true
@@ -65,3 +132,17 @@ strict = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Phase 0 Sec 0.7. "unit"/"integration" are applied automatically by
+# tests/conftest.py's pytest_collection_modifyitems based on directory, so
+# individual test files never need a decorator for those two. "live" (needs
+# real Docker containers or a live LLM endpoint) and "slow" are opt-in via
+# @pytest.mark.live / @pytest.mark.slow on the specific tests that need them.
+# `-m "not live"` is the default exclusion; nothing is marked `live` yet, so
+# this is currently a no-op, not a claim that live coverage exists in pytest.
+markers = [
+    "unit: fast, fully-mocked test (auto-applied to everything under tests/unit)",
+    "integration: exercises multiple components together, still mocked at the DB/LLM boundary (auto-applied to everything under tests/integration)",
+    "live: requires real Docker containers or a live LLM endpoint; excluded by default",
+    "slow: takes non-trivial wall time even without live infra",
+]
+addopts = "-m \"not live\""

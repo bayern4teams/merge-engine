@@ -16,7 +16,7 @@ import logging
 from typing import Any
 
 from src.mcp_server.connectors import create_connector
-from src.orchestrator.utils.retry import TransientError, PermanentError
+from src.orchestrator.utils.retry import PermanentError
 
 logger = logging.getLogger("merge-engine.tools.discover_schema")
 
@@ -57,8 +57,11 @@ async def discover_schema_impl(origin_config: dict[str, Any]) -> dict[str, Any]:
     PermanentError
         If the connector fails during discovery.
     """
-    logger.debug("ENTER discover_schema_impl: origin_id=%s, origin_type=%s",
-                  origin_config.get("id"), origin_config.get("type"))
+    logger.debug(
+        "ENTER discover_schema_impl: origin_id=%s, origin_type=%s",
+        origin_config.get("id"),
+        origin_config.get("type"),
+    )
     origin_id = origin_config.get("id", "unknown")
     origin_type = origin_config.get("type", "postgres")
     connection = origin_config.get("connection", {})
@@ -87,9 +90,7 @@ async def discover_schema_impl(origin_config: dict[str, Any]) -> dict[str, Any]:
         }
     except Exception as exc:
         logger.error("Schema discovery failed for origin %s: %s", origin_id, exc)
-        raise PermanentError(
-            f"Schema discovery failed for origin '{origin_id}': {exc}"
-        ) from exc
+        raise PermanentError(f"Schema discovery failed for origin '{origin_id}': {exc}") from exc
     finally:
         if connector is not None:
             await connector.close()
@@ -122,6 +123,7 @@ async def discover_schema_handler(arguments: dict[str, Any]) -> dict[str, Any]:
 
     # For backward compatibility, look up origin config
     from src.mcp_server.server import _get_config
+
     config = _get_config()
     origin_cfg = None
     for o in config.origins:
@@ -133,9 +135,11 @@ async def discover_schema_handler(arguments: dict[str, Any]) -> dict[str, Any]:
         available = [o.id for o in config.origins]
         raise ValueError(f"Unknown origin '{origin_id}'. Available: {available}")
 
-    return await discover_schema_impl({
-        "id": origin_cfg.id,
-        "type": origin_cfg.type,
-        "connection": origin_cfg.connection.model_dump(),
-        "priority": origin_cfg.priority,
-    })
+    return await discover_schema_impl(
+        {
+            "id": origin_cfg.id,
+            "type": origin_cfg.type,
+            "connection": origin_cfg.connection.model_dump(),
+            "priority": origin_cfg.priority,
+        }
+    )

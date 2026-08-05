@@ -21,7 +21,6 @@ from src.orchestrator.nodes.load_data import load_data_node
 from src.orchestrator.utils.cluster_edits import apply_cluster_decisions
 from src.utils.id_utils import deterministic_uuid, validate_uuid
 
-
 # ── K.1 / K.2: the load approval guard ───────────────────────────────
 
 
@@ -44,8 +43,10 @@ def _loadable_state(**overrides: Any) -> dict[str, Any]:
 async def test_load_refuses_without_explicit_approval(approval: Any) -> None:
     """Anything other than a literal True writes nothing."""
     mock_load = AsyncMock()
-    with patch("src.orchestrator.nodes.load_data.load_data_impl", mock_load), \
-         patch("src.orchestrator.nodes.load_data._write_run_report"):
+    with (
+        patch("src.orchestrator.nodes.load_data.load_data_impl", mock_load),
+        patch("src.orchestrator.nodes.load_data._write_run_report"),
+    ):
         result = await load_data_node(_loadable_state(load_approval=approval))
 
     mock_load.assert_not_called()
@@ -58,8 +59,10 @@ async def test_load_reports_the_rejection_reason() -> None:
         load_approval=False,
         human_feedback={"decision": "reject", "reason": "wrong destination"},
     )
-    with patch("src.orchestrator.nodes.load_data.load_data_impl", AsyncMock()), \
-         patch("src.orchestrator.nodes.load_data._write_run_report"):
+    with (
+        patch("src.orchestrator.nodes.load_data.load_data_impl", AsyncMock()),
+        patch("src.orchestrator.nodes.load_data._write_run_report"),
+    ):
         result = await load_data_node(state)
 
     assert result["reconciliation_report"]["load_rejected_reason"] == "wrong destination"
@@ -76,10 +79,10 @@ async def test_load_reports_the_rejection_reason() -> None:
         ({"decision": "retry"}, "retry"),
         ({"decision": "reject"}, "abort"),
         ({"decision": "abort"}, "abort"),
-        ({"decision": "REJECT"}, "abort"),        # case-insensitive
-        ({"approved": False}, "abort"),           # legacy shape
-        ({"approved": True}, "forward"),          # legacy shape
-        ({}, "forward"),                          # no feedback yet
+        ({"decision": "REJECT"}, "abort"),  # case-insensitive
+        ({"approved": False}, "abort"),  # legacy shape
+        ({"approved": True}, "forward"),  # legacy shape
+        ({}, "forward"),  # no feedback yet
         (None, "forward"),
     ],
 )
@@ -122,11 +125,11 @@ def clusters() -> dict[str, list[dict[str, Any]]]:
 
 
 def test_split_breaks_a_cluster_into_singletons(clusters) -> None:
-    out, stats = apply_cluster_decisions(
-        clusters, [{"cluster_id": "c1", "action": "split"}]
-    )
+    out, stats = apply_cluster_decisions(clusters, [{"cluster_id": "c1", "action": "split"}])
     assert [c["record_ids"] for c in out["person"]] == [
-        ["pg:staff:1"], ["pg:staff:2"], ["pg:staff:3"],
+        ["pg:staff:1"],
+        ["pg:staff:2"],
+        ["pg:staff:3"],
     ]
     assert stats["split"] == 1
 
@@ -134,23 +137,24 @@ def test_split_breaks_a_cluster_into_singletons(clusters) -> None:
 def test_split_with_groups_honours_the_partition(clusters) -> None:
     out, _ = apply_cluster_decisions(
         clusters,
-        [{
-            "cluster_id": "c1",
-            "action": "split",
-            "groups": [["pg:staff:1", "pg:staff:2"]],
-        }],
+        [
+            {
+                "cluster_id": "c1",
+                "action": "split",
+                "groups": [["pg:staff:1", "pg:staff:2"]],
+            }
+        ],
     )
     # staff:3 wasn't placed by the reviewer — it must survive on its own,
     # not be dropped from the run.
     assert [c["record_ids"] for c in out["person"]] == [
-        ["pg:staff:1", "pg:staff:2"], ["pg:staff:3"],
+        ["pg:staff:1", "pg:staff:2"],
+        ["pg:staff:3"],
     ]
 
 
 def test_keep_marks_the_cluster_reviewed(clusters) -> None:
-    out, stats = apply_cluster_decisions(
-        clusters, [{"cluster_id": "c1", "action": "keep"}]
-    )
+    out, stats = apply_cluster_decisions(clusters, [{"cluster_id": "c1", "action": "keep"}])
     assert len(out["person"]) == 1
     assert out["person"][0]["required_human_review"] is False
     assert out["person"][0]["reviewed_by_human"] is True
@@ -159,9 +163,7 @@ def test_keep_marks_the_cluster_reviewed(clusters) -> None:
 
 def test_unknown_action_splits_rather_than_merges(clusters) -> None:
     """Over-merging is unrecoverable, so ambiguity resolves toward splitting."""
-    out, stats = apply_cluster_decisions(
-        clusters, [{"cluster_id": "c1", "action": "banana"}]
-    )
+    out, stats = apply_cluster_decisions(clusters, [{"cluster_id": "c1", "action": "banana"}])
     assert len(out["person"]) == 3
     assert stats["unknown"] == 1
 
@@ -198,10 +200,22 @@ async def test_resolve_entities_produces_stable_cluster_ids() -> None:
     from src.mcp_server.tools.resolve_entities import resolve_entities_impl
 
     records = [
-        {"_origin_id": "pg", "_origin_table": "staff", "_origin_id_row": "1",
-         "first_name": "Rory", "last_name": "Ledner", "email": "a@x.com"},
-        {"_origin_id": "pg", "_origin_table": "staff", "_origin_id_row": "2",
-         "first_name": "Rory", "last_name": "Lowe", "email": "b@x.com"},
+        {
+            "_origin_id": "pg",
+            "_origin_table": "staff",
+            "_origin_id_row": "1",
+            "first_name": "Rory",
+            "last_name": "Ledner",
+            "email": "a@x.com",
+        },
+        {
+            "_origin_id": "pg",
+            "_origin_table": "staff",
+            "_origin_id_row": "2",
+            "first_name": "Rory",
+            "last_name": "Lowe",
+            "email": "b@x.com",
+        },
     ]
     first = await resolve_entities_impl("person", records)
     second = await resolve_entities_impl("person", records)

@@ -7,8 +7,6 @@ temperature, a different response format, a different question.
 
 from __future__ import annotations
 
-import pytest
-
 from src.llm.cost import (
     CostLedger,
     SemanticCache,
@@ -85,8 +83,8 @@ class TestSemanticCache:
         cache = SemanticCache(max_entries=2)
         cache.put("a", 1)
         cache.put("b", 2)
-        cache.get("a")            # 'a' is now the most recent
-        cache.put("c", 3)         # evicts 'b'
+        cache.get("a")  # 'a' is now the most recent
+        cache.put("c", 3)  # evicts 'b'
         assert cache.get("a")[0] is True
         assert cache.get("b")[0] is False
 
@@ -106,8 +104,11 @@ class TestSemanticCache:
         cache.get("k")
         cache.clear()
         assert cache.stats() == {
-            "hits": 0, "misses": 0, "lookups": 0,
-            "hit_rate": 0.0, "entries": 0,
+            "hits": 0,
+            "misses": 0,
+            "lookups": 0,
+            "hit_rate": 0.0,
+            "entries": 0,
         }
 
     def test_it_survives_concurrent_use(self) -> None:
@@ -122,7 +123,7 @@ class TestSemanticCache:
                 for i in range(200):
                     cache.put(f"k{offset}-{i}", i)
                     cache.get(f"k{offset}-{i}")
-            except Exception as exc:  # noqa: BLE001 - surfaced below
+            except Exception as exc:
                 errors.append(exc)
 
         threads = [threading.Thread(target=hammer, args=(n,)) for n in range(4)]
@@ -187,8 +188,7 @@ class TestTokenUsageExtraction:
 
     def test_openai_style_names_are_read(self) -> None:
         class R:
-            response_metadata = {
-                "token_usage": {"prompt_tokens": 7, "completion_tokens": 2}}
+            response_metadata = {"token_usage": {"prompt_tokens": 7, "completion_tokens": 2}}
 
         assert token_usage(R()) == (7, 2)
 

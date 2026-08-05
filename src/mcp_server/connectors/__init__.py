@@ -47,18 +47,17 @@ def create_connector(origin_type: str, config: dict[str, Any]) -> BaseConnector:
     connector_cls = _CONNECTOR_REGISTRY.get(origin_type)
     if connector_cls is None:
         raise ValueError(
-            f"Unknown connector type '{origin_type}'. "
-            f"Available: {list(_CONNECTOR_REGISTRY.keys())}"
+            f"Unknown connector type '{origin_type}'. Available: {list(_CONNECTOR_REGISTRY.keys())}"
         )
     return connector_cls(config)
 
 
 __all__ = [
+    "_CONNECTOR_REGISTRY",
     "BaseConnector",
     "ClickHouseConnector",
     "DatabricksConnector",
     "MongoDBConnector",
     "PostgresConnector",
     "create_connector",
-    "_CONNECTOR_REGISTRY",
 ]

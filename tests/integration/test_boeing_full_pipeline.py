@@ -12,9 +12,17 @@ import asyncio
 import json
 import logging
 import sys
-import time
 import uuid
 from datetime import datetime
+
+# This is a standalone manual driver (its own __main__ calls each test_*
+# function directly with a step counter), not a pytest suite - its
+# functions only happen to match pytest's test_* collection glob. __test__
+# = False (an official pytest convention) stops it being collected at all,
+# rather than erroring on a missing `step` fixture that was never meant to
+# exist (Phase 0 Sec 0.7, found while wiring tests/integration into the
+# default gate for the first time).
+__test__ = False
 
 logging.basicConfig(
     level=logging.INFO,
@@ -86,13 +94,15 @@ def next_step(description: str):
 
 
 def record_result(step: int, description: str, status: str, details: str = ""):
-    results.append({
-        "step": step,
-        "description": description,
-        "status": status,
-        "details": details,
-        "timestamp": datetime.now().isoformat(),
-    })
+    results.append(
+        {
+            "step": step,
+            "description": description,
+            "status": status,
+            "details": details,
+            "timestamp": datetime.now().isoformat(),
+        }
+    )
     icon = {"pass": "✅", "fail": "❌", "skip": "⏭️", "warn": "⚠️"}.get(status, "❓")
     log.info("%s STEP %d: %s - %s", icon, step, description, status.upper())
     if details:
@@ -103,9 +113,11 @@ def record_result(step: int, description: str, status: str, details: str = ""):
 # PHASE 1: Infrastructure Checks
 # ============================================================
 
+
 def check_service(url: str, name: str, step: int) -> bool:
     """Check if a service is responding."""
     import urllib.request
+
     try:
         req = urllib.request.Request(url)
         resp = urllib.request.urlopen(req, timeout=5)
@@ -124,6 +136,7 @@ def check_service(url: str, name: str, step: int) -> bool:
 # PHASE 2: Config and Components
 # ============================================================
 
+
 def test_config_loading(step: int):
     """Load config from config.yaml."""
     from src.utils.config_loader import load_config
@@ -135,8 +148,9 @@ def test_config_loading(step: int):
         # Check LLM config
         if hasattr(config, "llm"):
             llm = config.llm
-            record_result(step, "LLM Config", "pass",
-                         f"Provider: {llm.provider}, Model: {llm.model}")
+            record_result(
+                step, "LLM Config", "pass", f"Provider: {llm.provider}, Model: {llm.model}"
+            )
         else:
             record_result(step, "LLM Config", "fail", "LLM config missing")
 
@@ -153,13 +167,17 @@ def test_graph_structure(step: int):
     1. A graph WITH checkpointer (for WorkflowManager-style use)
     2. A graph WITHOUT checkpointer (for direct astream with initial_state)
     """
-    from src.orchestrator.graph import build_graph, _build_builder, HITL_NODES
+    from src.orchestrator.graph import HITL_NODES, _build_builder, build_graph
 
     try:
         # Graph with MemorySaver checkpointer (same as WorkflowManager uses)
         graph_with_checkpointer = build_graph()
-        record_result(step, "Graph Construction (with checkpointer)", "pass",
-                     "Graph built with MemorySaver checkpointer")
+        record_result(
+            step,
+            "Graph Construction (with checkpointer)",
+            "pass",
+            "Graph built with MemorySaver checkpointer",
+        )
 
         # Graph WITHOUT checkpointer for direct initial_state use
         # When using astream(initial_state) directly, we need no checkpointer
@@ -168,8 +186,12 @@ def test_graph_structure(step: int):
             interrupt_before=HITL_NODES,
             interrupt_after=[],
         )
-        record_result(step, "Graph Construction (no checkpointer)", "pass",
-                     "Graph built without checkpointer for direct astream")
+        record_result(
+            step,
+            "Graph Construction (no checkpointer)",
+            "pass",
+            "Graph built without checkpointer for direct astream",
+        )
 
         return graph_with_checkpointer, graph_no_checkpointer
     except Exception as e:
@@ -187,12 +209,24 @@ def test_state_initialization(step: int):
             origins=[ORIGIN_1, ORIGIN_2],
             destination=DESTINATION,
         )
-        record_result(step, "State Initialization", "pass",
-                     f"State created with {len(state['origins'])} origins")
+        record_result(
+            step,
+            "State Initialization",
+            "pass",
+            f"State created with {len(state['origins'])} origins",
+        )
 
         # Verify key fields
-        required = ["user_request", "target_entities", "origins", "destination",
-                    "llm_config", "schemas", "extracted_data", "errors"]
+        required = [
+            "user_request",
+            "target_entities",
+            "origins",
+            "destination",
+            "llm_config",
+            "schemas",
+            "extracted_data",
+            "errors",
+        ]
         for field in required:
             if field in state:
                 record_result(step, f"State Field: {field}", "pass", "Present")
@@ -208,6 +242,7 @@ def test_state_initialization(step: int):
 # ============================================================
 # PHASE 3: Full Pipeline Execution
 # ============================================================
+
 
 def run_full_pipeline(graph, initial_state, step_start: int):
     """Run the full pipeline through all HITL checkpoints.
@@ -236,8 +271,7 @@ def run_full_pipeline(graph, initial_state, step_start: int):
                 "interrupt_data": None,
             }
 
-        record_result(step_start, "Workflow Started", "pass",
-                     f"Thread ID: {thread_id}")
+        record_result(step_start, "Workflow Started", "pass", f"Thread ID: {thread_id}")
 
         # Run async stream
         async def _run():
@@ -245,8 +279,11 @@ def run_full_pipeline(graph, initial_state, step_start: int):
             async for event in graph.astream(initial_state, config=config_dict):
                 events.append(event)
                 for node_name, output in event.items():
-                    log.info("  --> Node '%s' output keys: %s",
-                           node_name, list(output.keys()) if output else "None")
+                    log.info(
+                        "  --> Node '%s' output keys: %s",
+                        node_name,
+                        list(output.keys()) if output else "None",
+                    )
 
                     # Check for interrupt data
                     if output and output.get("interrupt_data"):
@@ -255,7 +292,7 @@ def run_full_pipeline(graph, initial_state, step_start: int):
                             step_start + 10,  # Will be updated per node
                             f"HITL: {node_name}",
                             "interrupted",
-                            f"Interrupt data keys: {list(interrupt_data.keys())}"
+                            f"Interrupt data keys: {list(interrupt_data.keys())}",
                         )
             return events
 
@@ -272,13 +309,18 @@ def run_full_pipeline(graph, initial_state, step_start: int):
             status = wf["status"] if wf else "unknown"
             interrupt_node = wf.get("current_interrupt_node") if wf else None
 
-        record_result(step_start + 100, "Pipeline Execution Result", "pass",
-                     f"Final status: {status}, Interrupts: {len(events)} events")
+        record_result(
+            step_start + 100,
+            "Pipeline Execution Result",
+            "pass",
+            f"Final status: {status}, Interrupts: {len(events)} events",
+        )
 
         return thread_id, wm, events
 
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         record_result(step_start, "Full Pipeline", "fail", str(e))
         return None, None, []
@@ -287,6 +329,7 @@ def run_full_pipeline(graph, initial_state, step_start: int):
 # ============================================================
 # PHASE 4: Direct Graph Test (bypass WorkflowManager)
 # ============================================================
+
 
 def run_direct_pipeline(graph_with_cp, initial_state, step_start: int):
     """Run pipeline using WorkflowManager which properly handles state.
@@ -306,11 +349,13 @@ def run_direct_pipeline(graph_with_cp, initial_state, step_start: int):
             destination=DESTINATION,
         )
 
-        record_result(step_start, "WorkflowManager Pipeline Start", "pass",
-                     f"Thread ID: {thread_id}")
+        record_result(
+            step_start, "WorkflowManager Pipeline Start", "pass", f"Thread ID: {thread_id}"
+        )
 
         # Poll status to see what happens
         import time
+
         max_wait = 120  # 2 minutes max for LLM calls
         start_time = time.time()
         interrupted_nodes = []
@@ -326,7 +371,7 @@ def run_direct_pipeline(graph_with_cp, initial_state, step_start: int):
                     step_start + 20,
                     f"HITL: {interrupt_node}",
                     "interrupted",
-                    f"Status: {status_str}"
+                    f"Status: {status_str}",
                 )
                 log.info("  --> Workflow interrupted at: %s", interrupt_node)
 
@@ -349,18 +394,23 @@ def run_direct_pipeline(graph_with_cp, initial_state, step_start: int):
                     step_start + 40,
                     "Pipeline Final Status",
                     "pass" if status_str == "completed" else status_str,
-                    f"Status: {status_str}"
+                    f"Status: {status_str}",
                 )
                 break
             else:
                 time.sleep(1)
 
-        record_result(step_start + 50, "Pipeline Execution", "pass",
-                     f"Thread: {thread_id}, Interrupted at: {interrupted_nodes}")
+        record_result(
+            step_start + 50,
+            "Pipeline Execution",
+            "pass",
+            f"Thread: {thread_id}, Interrupted at: {interrupted_nodes}",
+        )
         return thread_id, wm
 
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         record_result(step_start, "WorkflowManager Pipeline", "fail", str(e))
         return None, None
@@ -370,6 +420,7 @@ def run_direct_pipeline(graph_with_cp, initial_state, step_start: int):
 # PHASE 5: LLM Integration Test
 # ============================================================
 
+
 def test_llm_parse_request(step: int):
     """Test LLM parse_request with Boeing prompt."""
     from src.llm.client import LLMClient
@@ -377,6 +428,7 @@ def test_llm_parse_request(step: int):
     try:
         # Load LLM config from config.yaml
         from src.utils.config_loader import load_config
+
         config = load_config("config/config.yaml")
 
         llm_config = {
@@ -388,8 +440,12 @@ def test_llm_parse_request(step: int):
         }
 
         client = LLMClient(llm_config)
-        record_result(step, "LLMClient Created", "pass",
-                     f"Provider: {client.provider}, Model: {client.model_name}")
+        record_result(
+            step,
+            "LLMClient Created",
+            "pass",
+            f"Provider: {client.provider}, Model: {client.model_name}",
+        )
 
         # Call parse_request (async)
         async def _call():
@@ -407,8 +463,12 @@ def test_llm_parse_request(step: int):
             loop.close()
 
         if result:
-            record_result(step + 1, "LLM parse_request", "pass",
-                        f"Result type: {type(result)}, content: {result}")
+            record_result(
+                step + 1,
+                "LLM parse_request",
+                "pass",
+                f"Result type: {type(result)}, content: {result}",
+            )
         else:
             record_result(step + 1, "LLM parse_request", "warn", "Empty result")
 
@@ -416,6 +476,7 @@ def test_llm_parse_request(step: int):
 
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         record_result(step, "LLM parse_request", "fail", str(e))
         return None
@@ -424,6 +485,7 @@ def test_llm_parse_request(step: int):
 # ============================================================
 # PHASE 6: Langfuse Verification
 # ============================================================
+
 
 def check_langfuse_traces(step: int):
     """Check Langfuse for traces."""
@@ -445,6 +507,7 @@ def check_langfuse_traces(step: int):
 # ============================================================
 # PHASE 7: Report Generation
 # ============================================================
+
 
 def generate_report():
     """Generate final test report."""
@@ -472,9 +535,14 @@ def generate_report():
     log.info("-" * 80)
 
     for r in results:
-        icon = {"pass": "✅", "fail": "❌", "warn": "⚠️",
-                "interrupted": "🔶", "aborted": "🛑", "skip": "⏭️"}.get(
-                    r["status"], "❓")
+        icon = {
+            "pass": "✅",
+            "fail": "❌",
+            "warn": "⚠️",
+            "interrupted": "🔶",
+            "aborted": "🛑",
+            "skip": "⏭️",
+        }.get(r["status"], "❓")
         log.info("  %s  Step %d: %s - %s", icon, r["step"], r["description"], r["status"].upper())
         if r.get("details"):
             log.info("       %s", r["details"])
@@ -493,17 +561,21 @@ def generate_report():
     # Save report
     report_path = "tests/integration/test_boeing_report.json"
     with open(report_path, "w") as f:
-        json.dump({
-            "timestamp": datetime.now().isoformat(),
-            "summary": {
-                "total": total,
-                "passed": passed,
-                "failed": failed,
-                "warnings": warnings,
-                "interrupted": interrupted,
+        json.dump(
+            {
+                "timestamp": datetime.now().isoformat(),
+                "summary": {
+                    "total": total,
+                    "passed": passed,
+                    "failed": failed,
+                    "warnings": warnings,
+                    "interrupted": interrupted,
+                },
+                "results": results,
             },
-            "results": results,
-        }, f, indent=2)
+            f,
+            indent=2,
+        )
 
     log.info("Report saved to: %s", report_path)
     log.info("")
@@ -515,6 +587,7 @@ def generate_report():
 # ============================================================
 # MAIN
 # ============================================================
+
 
 def main():
     """Run the full Boeing pipeline test."""
@@ -547,8 +620,9 @@ def main():
     graph_with_cp, graph_no_cp = test_graph_structure(step)
 
     if graph_no_cp is None:
-        record_result(next_step("Skip tests"), "Graph Required", "fail",
-                     "Cannot proceed without graph")
+        record_result(
+            next_step("Skip tests"), "Graph Required", "fail", "Cannot proceed without graph"
+        )
         generate_report()
         sys.exit(1)
         return
@@ -557,8 +631,12 @@ def main():
     initial_state = test_state_initialization(step)
 
     if initial_state is None:
-        record_result(next_step("Skip tests"), "State Required", "fail",
-                     "Cannot proceed without initial state")
+        record_result(
+            next_step("Skip tests"),
+            "State Required",
+            "fail",
+            "Cannot proceed without initial state",
+        )
         generate_report()
         sys.exit(1)
         return
@@ -591,13 +669,17 @@ def main():
     step = next_step("Test WorkflowManager integration")
     try:
         from src.orchestrator.workflow_manager import WorkflowManager
+
         wm = WorkflowManager()
-        record_result(step, "WorkflowManager Created", "pass",
-                     "Manager instantiated with graph")
+        record_result(step, "WorkflowManager Created", "pass", "Manager instantiated with graph")
 
         # Test methods exist
-        for method in ["get_workflow_status", "resume_workflow", "abort_workflow",
-                       "list_active_workflows"]:
+        for method in [
+            "get_workflow_status",
+            "resume_workflow",
+            "abort_workflow",
+            "list_active_workflows",
+        ]:
             if hasattr(wm, method):
                 record_result(step, f"Method: {method}", "pass", "Exists")
             else:

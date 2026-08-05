@@ -10,6 +10,7 @@ group, and finance/industry/technology_category/company_relation had no alias
 group at all, which is why the heuristic table-selection floor could never find
 CompanyFinancials no matter what the LLM proposed).
 """
+
 from __future__ import annotations
 
 import pytest

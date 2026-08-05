@@ -11,10 +11,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # =============================================================================
 # Fixtures
 # =============================================================================
+
 
 @pytest.fixture
 def mock_config_data():
@@ -51,12 +51,12 @@ def mock_config_data():
 # Graph Building Tests
 # =============================================================================
 
+
 class TestGraphBuilding:
     """Tests for LangGraph state graph construction."""
 
     def test_build_graph_creates_state_graph(self):
         """build_graph should create a StateGraph instance."""
-        from langgraph.graph import StateGraph
 
         from src.orchestrator.graph import build_graph
 
@@ -220,6 +220,7 @@ class TestGraphBuilding:
 # Graph Edge Tests
 # =============================================================================
 
+
 class TestGraphEdges:
     """Tests for graph edge/connectivity configuration."""
 
@@ -258,6 +259,7 @@ class TestGraphEdges:
 # Workflow Manager Integration Tests
 # =============================================================================
 
+
 class TestWorkflowManagerIntegration:
     """Integration tests for workflow manager with mocked graph."""
 
@@ -278,8 +280,29 @@ class TestWorkflowManagerIntegration:
         result = manager.start_workflow(
             user_request="Import all companies",
             config_path="config/config.yaml",
-            origins=[{"id": "origin_1", "type": "postgres", "connection": {"host": "localhost", "port": 5432, "user": "u", "password": "p", "database": "d"}, "priority": 0}],
-            destination={"type": "postgresql", "host": "localhost", "port": 5432, "user": "admin", "password": "pass", "database": "mergedb", "schema": "public"},
+            origins=[
+                {
+                    "id": "origin_1",
+                    "type": "postgres",
+                    "connection": {
+                        "host": "localhost",
+                        "port": 5432,
+                        "user": "u",
+                        "password": "p",
+                        "database": "d",
+                    },
+                    "priority": 0,
+                }
+            ],
+            destination={
+                "type": "postgresql",
+                "host": "localhost",
+                "port": 5432,
+                "user": "admin",
+                "password": "pass",
+                "database": "mergedb",
+                "schema": "public",
+            },
         )
 
         assert result is not None
@@ -386,6 +409,7 @@ class TestWorkflowManagerIntegration:
 # State Transition Tests
 # =============================================================================
 
+
 class TestStateTransitions:
     """Tests for pipeline state transitions through workflow."""
 
@@ -427,7 +451,10 @@ class TestStateTransitions:
         state: dict = {
             "schemas": {
                 "companies": {
-                    "columns": [{"name": "id", "type": "VARCHAR"}, {"name": "name", "type": "VARCHAR"}],
+                    "columns": [
+                        {"name": "id", "type": "VARCHAR"},
+                        {"name": "name", "type": "VARCHAR"},
+                    ],
                     "foreign_keys": [],
                 }
             },
@@ -526,6 +553,7 @@ class TestStateTransitions:
 # End-to-End Mock Integration Tests
 # =============================================================================
 
+
 class TestEndToEndMockWorkflow:
     """Mock end-to-end workflow tests."""
 
@@ -566,7 +594,13 @@ class TestEndToEndMockWorkflow:
             {
                 "id": "crm1",
                 "type": "postgres",
-                "connection": {"host": "crm1.example.com", "port": 5432, "user": "u", "password": "p", "database": "crm"},
+                "connection": {
+                    "host": "crm1.example.com",
+                    "port": 5432,
+                    "user": "u",
+                    "password": "p",
+                    "database": "crm",
+                },
                 "priority": 10,
             },
             {
@@ -581,7 +615,15 @@ class TestEndToEndMockWorkflow:
             user_request="Merge CRM data from all sources",
             config_path="config/config.yaml",
             origins=origins,
-            destination={"type": "postgresql", "host": "localhost", "port": 5432, "user": "admin", "password": "pass", "database": "mergedb", "schema": "public"},
+            destination={
+                "type": "postgresql",
+                "host": "localhost",
+                "port": 5432,
+                "user": "admin",
+                "password": "pass",
+                "database": "mergedb",
+                "schema": "public",
+            },
         )
 
         assert thread_id is not None

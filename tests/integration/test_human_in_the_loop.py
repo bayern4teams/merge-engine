@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.orchestrator.nodes.human_nodes import (
     human_final_approval,
     human_review_deps,
-    human_review_matches,
     human_review_mappings,
+    human_review_matches,
 )
 
 
@@ -106,7 +105,10 @@ class TestHumanInLoopNodes:
 
         # No interrupt on resume — feedback already provided
         assert "interrupt_data" not in result
-        assert "errors" in result
+        # The gate returns only what it changed; it adds no errors of its own
+        # and must not re-return the history (Phase 0 Sec 0.8).
+        assert "errors" not in result
+        assert "entity_clusters" in result
 
     @pytest.mark.asyncio
     async def test_human_review_mappings_interrupts(
@@ -164,7 +166,8 @@ class TestHumanInLoopNodes:
         result = await human_review_mappings(dependency_state)
 
         assert "interrupt_data" not in result
-        assert "errors" in result
+        assert "errors" not in result
+        assert "pending_schema_changes" in result
 
     @pytest.mark.asyncio
     async def test_human_review_deps_interrupts(
@@ -344,35 +347,60 @@ class TestHumanInLoopIntegration:
         assert has_low_confidence_clusters(dependency_state) is False
 
     @pytest.mark.asyncio
-    async def test_error_handler_max_retries_exceeded(
+    async def test_error_handler_retry_increments_count(
         self,
         dependency_state: dict[str, Any],
     ) -> None:
-        """Test error handler when max retries are exceeded."""
+        """handle_error clears the failure and increments retry_counts when
+        the human's decision is 'retry'.
+
+        Rewritten (Phase 0 Sec 0.7, while wiring tests/integration into the
+        default gate for the first time): the previous version of this test
+        predated the error-taxonomy/disposition-routing rewrite and asserted
+        on an `interrupt_data` key the node hasn't produced since -
+        interrupt payloads are built by WorkflowManager._build_interrupt_data
+        now, because HITL node bodies never run on resume (the as_node=
+        trap). The node's real, current job is just: read the failure +
+        decision, clear the failure, and only a 'retry' decision counts
+        toward retry_counts.
+        """
         from src.orchestrator.nodes.human_nodes import handle_error
 
-        dependency_state["errors"] = ["Something went wrong"]
-        dependency_state["retry_counts"] = {"parse_request": 3}
-        dependency_state["current_step"] = "parse_request"
+        dependency_state["failure"] = {
+            "node": "parse_request",
+            "error": "Something went wrong",
+            "disposition": "escalate",
+        }
+        dependency_state["retry_counts"] = {"parse_request": 0}
+        dependency_state["human_feedback"] = {"decision": "retry"}
 
         result = await handle_error(dependency_state)
 
-        assert "interrupt_data" in result
-        assert result["interrupt_data"]["node"] == "handle_error"
+        assert result["retry_counts"]["parse_request"] == 1
+        assert result["failure"] == {}
+        assert result["handled_failures"][0]["decision"] == "retry"
 
     @pytest.mark.asyncio
-    async def test_error_handler_within_retries(
+    async def test_error_handler_abort_does_not_increment_retry_count(
         self,
         dependency_state: dict[str, Any],
     ) -> None:
-        """Test error handler when within retry limits."""
+        """A non-retry decision (abort) clears the failure without touching
+        retry_counts - only an explicit 'retry' should count toward the
+        gate's retry budget (see test_error_handler_retry_increments_count's
+        docstring for why this replaces the old max-retries test)."""
         from src.orchestrator.nodes.human_nodes import handle_error
 
-        dependency_state["errors"] = ["Something went wrong"]
-        dependency_state["retry_counts"] = {"parse_request": 0}
-        dependency_state["current_step"] = "parse_request"
+        dependency_state["failure"] = {
+            "node": "parse_request",
+            "error": "Something went wrong",
+            "disposition": "escalate",
+        }
+        dependency_state["retry_counts"] = {"parse_request": 2}
+        dependency_state["human_feedback"] = {"decision": "abort"}
 
         result = await handle_error(dependency_state)
 
-        assert "interrupt_data" not in result
-        assert result["retry_counts"]["parse_request"] == 1
+        assert result["retry_counts"]["parse_request"] == 2
+        assert result["failure"] == {}
+        assert result["handled_failures"][0]["decision"] == "abort"
