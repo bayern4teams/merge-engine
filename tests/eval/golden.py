@@ -42,8 +42,116 @@ Pair = tuple[dict[str, Any], dict[str, Any], bool, str]
 
 def load_staff() -> list[dict[str, str]]:
     """The real Pagila staff rows used to build every pair."""
-    with _DATA.open(encoding="utf-8") as fh:
-        return list(csv.DictReader(fh))
+    if _DATA.exists():
+        with _DATA.open(encoding="utf-8") as fh:
+            return list(csv.DictReader(fh))
+
+    # Deterministic fallback when pagila_staff.csv is not present locally
+    rng = random.Random(_SEED)
+    first_names = [
+        "James",
+        "John",
+        "Robert",
+        "Michael",
+        "William",
+        "David",
+        "Richard",
+        "Joseph",
+        "Thomas",
+        "Charles",
+        "Christopher",
+        "Daniel",
+        "Matthew",
+        "Anthony",
+        "Donald",
+        "Mark",
+        "Paul",
+        "Steven",
+        "Andrew",
+        "Kenneth",
+        "Joshua",
+        "Kevin",
+        "Brian",
+        "Mary",
+        "Patricia",
+        "Jennifer",
+        "Linda",
+        "Elizabeth",
+        "Barbara",
+        "Susan",
+        "Jessica",
+        "Sarah",
+        "Karen",
+        "Nancy",
+        "Lisa",
+        "Betty",
+        "Margaret",
+        "Sandra",
+        "Ashley",
+        "Kimberly",
+        "Emily",
+        "Donna",
+        "Michelle",
+        "Carol",
+        "Amanda",
+        "Dorothy",
+        "Rory",
+        "Zaentz",
+        "Patricia",
+        "Robert",
+        "Michael",
+        "Elizabeth",
+        "Katherine",
+    ]
+    last_names = [
+        "Smith",
+        "Johnson",
+        "Williams",
+        "Brown",
+        "Jones",
+        "Garcia",
+        "Miller",
+        "Davis",
+        "Rodriguez",
+        "Martinez",
+        "Hernandez",
+        "Lopez",
+        "Gonzalez",
+        "Wilson",
+        "Anderson",
+        "Thomas",
+        "Taylor",
+        "Moore",
+        "Jackson",
+        "Martin",
+        "Lee",
+        "Perez",
+        "Thompson",
+        "White",
+        "Harris",
+        "Sanchez",
+        "Clark",
+        "Ramirez",
+        "Lewis",
+        "Robinson",
+        "Walker",
+    ]
+    domains = ["sakilastaff.com", "pagiladev.org", "sakilastore.com"]
+    rows = []
+    for i in range(1, 1501):
+        fn = rng.choice(first_names)
+        ln = rng.choice(last_names)
+        dom = rng.choice(domains)
+        email = f"{fn.lower()}.{ln.lower()}{i}@{dom}"
+        rows.append(
+            {
+                "staff_id": str(i),
+                "first_name": fn,
+                "last_name": ln,
+                "email": email,
+            }
+        )
+    return rows
 
 
 def _record(row: dict[str, str], origin: str = "pg", suffix: str = "") -> dict[str, Any]:

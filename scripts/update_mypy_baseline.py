@@ -34,7 +34,8 @@ def normalize(mypy_line: str) -> str | None:
     m = _LINE_NUM_RE.match(mypy_line)
     if not m:
         return None
-    return f"{m.group('file')}: {m.group('rest')}"
+    file_path = m.group("file").replace("\\", "/")
+    return f"{file_path}: {m.group('rest')}"
 
 
 def main() -> int:

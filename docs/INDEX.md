@@ -17,6 +17,8 @@ Split from the old root `TECHNICAL_README.md`, by subsystem, in reading order:
 5. [orchestration_and_ui.md](architecture/orchestration_and_ui.md) — WorkflowManager, the FastAPI + React surface, observability
 6. [testing_and_decisions.md](architecture/testing_and_decisions.md) — testing strategy, index of design decisions
 7. [known_problems.md](architecture/known_problems.md) — known problems, future risks, ideas worth building next
+8. [planner_evaluator_split.md](architecture/planner_evaluator_split.md) — self-evaluation bias mitigation, generator vs evaluator separation
+9. [ratchet_process.md](architecture/ratchet_process.md) — failure-to-rule pipeline and traceability policy
 
 ## decisions/ — ADRs, one per locked decision
 

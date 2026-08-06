@@ -71,7 +71,8 @@ Check a box only after running the thing against the real app/DBs and
 confirming with an *independent* check — direct SQL, log inspection, a
 regenerated report — never the app's own success message. The matcher once
 reported `uncompared_pairs = 0` while having silently dropped 465 pairs; the
-app said everything was fine.
+app said everything was fine. See [docs/architecture/planner_evaluator_split.md](docs/architecture/planner_evaluator_split.md)
+and [docs/architecture/ratchet_process.md](docs/architecture/ratchet_process.md).
 
 ## HITL resume trap
 

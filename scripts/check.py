@@ -110,7 +110,8 @@ def check_types() -> bool:
         m = line_num_re.match(line)
         if not m:
             continue
-        normalized = f"{m.group('file')}: {m.group('rest')}"
+        file_path = m.group("file").replace("\\", "/")
+        normalized = f"{file_path}: {m.group('rest')}"
         if normalized not in baseline:
             new_errors.append(line)
 
@@ -158,7 +159,7 @@ def check_frontend() -> bool:
     if not FRONTEND_DIR.exists():
         print("(no src/ui/frontend - skipping)")
         return True
-    npm = shutil.which("npm")
+    npm = shutil.which("npm.cmd") or shutil.which("npm")
     if npm is None:
         print("(npm not found on PATH - skipping frontend checks)")
         return True
