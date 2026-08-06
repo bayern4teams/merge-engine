@@ -1,0 +1,115 @@
+{
+  "predictor": {
+    "traces": [],
+    "train": [],
+    "demos": [
+      {
+        "entity_type": "company",
+        "dest_table": "companies",
+        "destination_schema": "[{\"name\": \"id\", \"type\": \"BIGINT\"}, {\"name\": \"name\", \"type\": \"TEXT\"}, {\"name\": \"employee_count\", \"type\": \"INTEGER\"}, {\"name\": \"industry\", \"type\": \"TEXT\"}, {\"name\": \"_source_ids\", \"type\": \"TEXT\"}]",
+        "source_fields": "[{\"name\": \"org\", \"type\": \"str\", \"sample_values\": [\"Acme Corp\", \"Globex GmbH\"]}, {\"name\": \"org_size\", \"type\": \"int\", \"sample_values\": [45, 230]}]",
+        "expected": {
+          "org": {
+            "action": "map",
+            "dest_column": "name"
+          },
+          "org_size": {
+            "action": "map",
+            "dest_column": "employee_count"
+          }
+        }
+      },
+      {
+        "entity_type": "company",
+        "dest_table": "company",
+        "destination_schema": "[{\"name\": \"id\", \"type\": \"TEXT\"}, {\"name\": \"name\", \"type\": \"TEXT\"}, {\"name\": \"legal_name\", \"type\": \"TEXT\"}, {\"name\": \"website\", \"type\": \"TEXT\"}, {\"name\": \"description\", \"type\": \"TEXT\"}, {\"name\": \"_source_ids\", \"type\": \"TEXT\"}]",
+        "source_fields": "[{\"name\": \"entityName\", \"type\": \"str\", \"sample_values\": [\"Boeing Defense & Space Group\", \"Boeing Capital Corporation\"]}, {\"name\": \"fullName\", \"type\": \"str\", \"sample_values\": [\"Boeing (China) Investment Co., Ltd.\", \"Boeing United Kingdom Limited\"]}, {\"name\": \"companyID\", \"type\": \"str\", \"sample_values\": [\"ba34c3bb1541495295e82f2\", \"c71f0a9e22884d1a9f0e77b\"]}]",
+        "expected": {
+          "entityName": {
+            "action": "map",
+            "dest_column": "name"
+          },
+          "fullName": {
+            "action": "map",
+            "dest_column": "legal_name"
+          },
+          "companyID": {
+            "action": "skip"
+          }
+        }
+      },
+      {
+        "entity_type": "company",
+        "dest_table": "companies",
+        "destination_schema": "[{\"name\": \"id\", \"type\": \"BIGINT\"}, {\"name\": \"name\", \"type\": \"TEXT\"}, {\"name\": \"industry\", \"type\": \"TEXT\"}, {\"name\": \"city\", \"type\": \"TEXT\"}, {\"name\": \"founded_year\", \"type\": \"INTEGER\"}, {\"name\": \"_source_ids\", \"type\": \"TEXT\"}]",
+        "source_fields": "[{\"name\": \"org_title\", \"type\": \"str\", \"sample_values\": [\"Acme Intl Corporation\", \"Globex GmbH\", \"Northwind Trading Co\"]}, {\"name\": \"sector\", \"type\": \"str\", \"sample_values\": [\"Logistics\", \"Manufacturing\"]}, {\"name\": \"hq_city\", \"type\": \"str\", \"sample_values\": [\"Berlin\", \"Munich\"]}, {\"name\": \"established\", \"type\": \"int\", \"sample_values\": [1998, 2004]}]",
+        "expected": {
+          "org_title": {
+            "action": "map",
+            "dest_column": "name"
+          },
+          "sector": {
+            "action": "map",
+            "dest_column": "industry"
+          },
+          "hq_city": {
+            "action": "map",
+            "dest_column": "city"
+          },
+          "established": {
+            "action": "map",
+            "dest_column": "founded_year"
+          }
+        }
+      },
+      {
+        "entity_type": "company",
+        "dest_table": "companies",
+        "destination_schema": "[{\"name\": \"id\", \"type\": \"BIGINT\"}, {\"name\": \"name\", \"type\": \"TEXT\"}, {\"name\": \"_source_ids\", \"type\": \"TEXT\"}]",
+        "source_fields": "[{\"name\": \"esg_risk_score\", \"type\": \"float\", \"sample_values\": [0.42, 0.77]}, {\"name\": \"org_title\", \"type\": \"str\", \"sample_values\": [\"Acme Corp\"]}]",
+        "expected": {
+          "esg_risk_score": {
+            "action": "skip"
+          },
+          "org_title": {
+            "action": "map",
+            "dest_column": "name"
+          }
+        }
+      }
+    ],
+    "signature": {
+      "instructions": "Field mapping stage signature.\n\nMap unmapped source fields to authoritative destination table schema columns.",
+      "fields": [
+        {
+          "prefix": "Entity Type:",
+          "description": "Target entity type name (e.g. company, person)"
+        },
+        {
+          "prefix": "Dest Table:",
+          "description": "Target destination table name"
+        },
+        {
+          "prefix": "Destination Schema:",
+          "description": "Destination table schema JSON string"
+        },
+        {
+          "prefix": "Source Fields:",
+          "description": "Source fields to map JSON string"
+        },
+        {
+          "prefix": "Output:",
+          "description": "List of FieldDecision items for all source fields"
+        }
+      ]
+    },
+    "lm": null
+  },
+  "metadata": {
+    "dependency_versions": {
+      "python": "3.11",
+      "dspy": "3.3.0",
+      "cloudpickle": "3.1"
+    }
+  }
+}

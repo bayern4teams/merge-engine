@@ -14,6 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from src.llm.client import LLMClient, create_llm_client
+from src.llm.dspy_adapter import LLMClientDSPyAdapter
 
 # ── Prompt template paths ───────────────────────────────────────────
 
@@ -49,4 +50,6 @@ __all__ = [
     "PROMPT_TEMPLATES",
     "LLMClient",
     "create_llm_client",
+    "LLMClientDSPyAdapter",
 ]
+

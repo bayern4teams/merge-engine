@@ -1,0 +1,82 @@
+{
+  "predictor": {
+    "traces": [],
+    "train": [],
+    "demos": [
+      {
+        "user_request": "Merge company and finance records only",
+        "expected": {
+          "entity_types": [
+            "company",
+            "finance"
+          ],
+          "explicit_entity_types": [
+            "company",
+            "finance"
+          ]
+        }
+      },
+      {
+        "user_request": "لطفا merge کن all customers with their orders",
+        "expected": {
+          "entity_types": [
+            "person",
+            "order"
+          ]
+        }
+      },
+      {
+        "user_request": "Bring over all information about Nova",
+        "expected": {
+          "entity_types": [
+            "company",
+            "person",
+            "product",
+            "address",
+            "finance",
+            "industry",
+            "location",
+            "experience",
+            "education",
+            "skill",
+            "technology",
+            "technology_category",
+            "contact",
+            "company_relation",
+            "contract"
+          ],
+          "explicit_entity_types": []
+        }
+      },
+      {
+        "user_request": "Merge all company records from both origins",
+        "expected": {
+          "entity_types": [
+            "company"
+          ]
+        }
+      }
+    ],
+    "signature": {
+      "instructions": "Parse natural language merge request into target entity types and scope.\n\nUse ONLY allowed entity types: person, company, product, country, address, account,\norder, finance, industry, location, experience, education, skill, technology,\ntechnology_category, contact, company_relation, contract.",
+      "fields": [
+        {
+          "prefix": "User Request:",
+          "description": "User natural language request string"
+        },
+        {
+          "prefix": "Output:",
+          "description": "Structured output containing entity_types, explicit_entity_types, subject, scope_type"
+        }
+      ]
+    },
+    "lm": null
+  },
+  "metadata": {
+    "dependency_versions": {
+      "python": "3.11",
+      "dspy": "3.3.0",
+      "cloudpickle": "3.1"
+    }
+  }
+}

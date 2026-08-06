@@ -121,19 +121,32 @@ def _build_prompt(stage: str, case: dict[str, Any]) -> tuple[str, str]:
         )
 
     if stage == "entity_table_selection":
-        return system, (
-            human.replace("{target_entities}", json.dumps(inp["target_entities"])).replace(
-                "{table_catalog}", inp["table_catalog"]
-            )
+        user_prompt = human.replace("{target_entities}", json.dumps(inp["target_entities"])).replace(
+            "{table_catalog}", inp["table_catalog"]
         )
+        user_request = inp.get("user_request", "")
+        if user_request:
+            user_prompt += f"\n\n(The user's original request was: {user_request})\n"
+        return system, user_prompt
+
+    if stage == "dependency_analysis":
+        user_prompt = human.replace("{target_entities}", json.dumps(inp["target_entities"])).replace(
+            "{schema_info}", inp["schema_info"]
+        )
+        if inp.get("retry_hint"):
+            user_prompt += f"\n\n[HUMAN FEEDBACK ON PREVIOUS RERUN]: {inp['retry_hint']}\nPlease address this feedback in your new output."
+        return system, user_prompt
 
     if stage == "scope_planning":
-        return system, (
+        user_prompt = (
             human.replace("{subject}", inp["subject"])
             .replace("{subject_entity}", inp["subject_entity"])
             .replace("{target_entities}", json.dumps(inp["target_entities"]))
             .replace("{table_catalog}", inp["table_catalog"])
         )
+        if inp.get("retry_hint"):
+            user_prompt += f"\n\n[HUMAN FEEDBACK ON PREVIOUS RERUN]: {inp['retry_hint']}\nPlease address this feedback in your new output."
+        return system, user_prompt
 
     if stage == "entity_resolution":
         from src.mcp_server.tools.resolve_entities import _format_pairs_block
@@ -141,11 +154,14 @@ def _build_prompt(stage: str, case: dict[str, Any]) -> tuple[str, str]:
         borderline = [
             (f"a{i}", f"b{i}", pair["a"], pair["b"], 0.8) for i, pair in enumerate(inp["pairs"], 1)
         ]
-        return system, (
+        user_prompt = (
             human.replace("{entity_type}", inp["entity_type"])
             .replace("{pair_count}", str(len(borderline)))
             .replace("{pairs_block}", _format_pairs_block(borderline))
         )
+        if inp.get("retry_hint"):
+            user_prompt += f"\n\n[HUMAN FEEDBACK ON PREVIOUS RERUN]: {inp['retry_hint']}\nPlease address this feedback in your new output."
+        return system, user_prompt
 
     if stage == "field_mapping":
         from src.mcp_server.tools.map_fields import (
