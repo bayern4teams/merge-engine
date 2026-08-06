@@ -320,6 +320,19 @@ function SummaryBody({
   const stats = data.auto_match_stats || {};
   const mappings: MappingRow[] = data.field_mappings_rows || [];
 
+  const qualityReport =
+    data.quality_report ||
+    (data.reconciliation || {}).quality_report ||
+    (data.summary || {}).quality_report;
+  const hasQualityFailure = Boolean(
+    data.has_quality_failure || qualityReport?.severity === "fail"
+  );
+  const lineageData =
+    data.lineage ||
+    (data.reconciliation || {}).lineage ||
+    (data.summary || {}).lineage;
+  const [showLineage, setShowLineage] = useState(false);
+
   // Phase 5.4 (O.3): which survivorship rule actually decided each conflict,
   // read-only — summed across every entity so the reviewer can see at a
   // glance whether, say, most conflicts fell through to an arbitrary
@@ -343,6 +356,61 @@ function SummaryBody({
         Final check before loading into the destination. You're approving these
         numbers — review them below.
       </div>
+
+      {qualityReport && (
+        <div style={{ marginTop: 16, marginBottom: 16 }}>
+          <div className="section-label">Data Quality Summary</div>
+          {hasQualityFailure && (
+            <div className="banner banner-danger" style={{ marginBottom: 12 }}>
+              🚨 <strong>DATA QUALITY FAILURE:</strong> One or more critical expectations failed (row count or uniqueness). Review before approving.
+            </div>
+          )}
+          {qualityReport.severity === "warn" && !hasQualityFailure && (
+            <div className="banner banner-warning" style={{ marginBottom: 12 }}>
+              ⚠️ <strong>Data Quality Warnings:</strong> Non-critical data quality warnings detected.
+            </div>
+          )}
+          {qualityReport.severity === "pass" && (
+            <div className="banner banner-info" style={{ marginBottom: 12 }}>
+              ✅ <strong>Data Quality Passed:</strong> All expectations evaluated cleanly.
+            </div>
+          )}
+          {qualityReport.entities && (
+            <div className="table-scroll" style={{ marginBottom: 12 }}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Entity</th>
+                    <th>Status</th>
+                    <th>Row Count</th>
+                    <th>Checks Run</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(qualityReport.entities || {}).map(([ent, res]: [string, any]) => (
+                    <tr key={ent}>
+                      <td className="mono">{ent}</td>
+                      <td>
+                        <span className={`badge badge-${res.severity === "fail" ? "danger" : res.severity === "warn" ? "warning" : "success"}`}>
+                          {res.severity?.toUpperCase()}
+                        </span>
+                      </td>
+                      <td>{res.row_count ?? 0}</td>
+                      <td>
+                        {(res.checks || []).map((c: any, idx: number) => (
+                          <div key={idx} style={{ fontSize: 12, color: c.success ? "#2e7d32" : "#c62828" }}>
+                            {c.success ? "✓" : "✗"} {c.details}
+                          </div>
+                        ))}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="summary-grid">
         <Stat label="Entities" value={summary.total_entities ?? 0} />
@@ -463,6 +531,75 @@ function SummaryBody({
           </div>
         </>
       )}
+
+      <div style={{ marginTop: 16, marginBottom: 16 }}>
+        <button
+          className="btn btn-secondary"
+          style={{ marginBottom: 8 }}
+          onClick={() => setShowLineage(!showLineage)}
+        >
+          {showLineage ? "▼ Hide Data Lineage" : "▶ View Column-Level Data Lineage"}
+        </button>
+        {showLineage && (
+          <div className="card" style={{ padding: 12, background: "#f8f9fa" }}>
+            <div className="section-label">Column-Level Lineage & Provenance</div>
+            {lineageData?.entities && Object.keys(lineageData.entities).length > 0 ? (
+              Object.entries(lineageData.entities).map(([ent, info]: [string, any]) => (
+                <div key={ent} style={{ marginBottom: 12 }}>
+                  <strong className="mono">{ent}</strong>
+                  <div className="table-scroll" style={{ marginTop: 6 }}>
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Dest Column</th>
+                          <th>Source Field</th>
+                          <th>Origins</th>
+                          <th>Conflicts / Winning Rule</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Object.entries(info.columns || {}).map(([col, details]: [string, any]) => (
+                          <tr key={col}>
+                            <td className="mono">{col}</td>
+                            <td className="mono">{details.source_field}</td>
+                            <td>
+                              {(details.origins || []).map((o: any, i: number) => (
+                                <div key={i} className="mono" style={{ fontSize: 12 }}>
+                                  {o.origin_id} ({o.origin_table})
+                                </div>
+                              ))}
+                            </td>
+                            <td>
+                              {(details.conflicts || []).length > 0 ? (
+                                (details.conflicts || []).map((cf: any, i: number) => (
+                                  <div key={i} style={{ fontSize: 12 }}>
+                                    Rule: <strong>{cf.winning_rule || "priority"}</strong> (selected {cf.selected_origin})
+                                  </div>
+                                ))
+                              ) : (
+                                <span className="muted">—</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="muted" style={{ fontSize: 13 }}>
+                Lineage data is derived from field mappings and spool origin metadata.
+              </p>
+            )}
+            {lineageData?.limitations && (
+              <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+                ℹ️ <em>Limitations:</em> {lineageData.limitations.source_ids_granularity} | {lineageData.limitations.durable_entity_map}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

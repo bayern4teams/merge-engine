@@ -482,7 +482,9 @@ class TestBuildErrorInterrupt:
         skip = next(o for o in options if o["decision"] == "skip")
 
         # extract_data's successor per NODE_SUCCESSOR.
-        assert "resolve_entities" in skip["detail"]
+        from src.orchestrator.graph import NODE_SUCCESSOR
+
+        assert NODE_SUCCESSOR["extract_data"] in skip["detail"]
         assert "incomplete" in skip["detail"].lower()
 
     def test_recent_errors_are_capped(self, state: dict[str, Any]) -> None:

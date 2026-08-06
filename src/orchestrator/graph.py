@@ -42,6 +42,7 @@ from src.orchestrator.nodes import (
     update_extraction_state_node,
 )
 from src.orchestrator.nodes.preflight import preflight
+from src.orchestrator.nodes.validate_data import validate_data_node
 from src.orchestrator.utils.retry import TransientError, classify_exception
 
 logger = logging.getLogger("merge-engine.orchestrator.graph")
@@ -94,11 +95,21 @@ NODE_SUCCESSOR = {
     "parse_request": "discover_schemas",
     "discover_schemas": "analyze_dependencies",
     "analyze_dependencies": "human_review_deps",
-    "extract_data": "resolve_entities",
+    "extract_data": "validate_data",
+    "validate_data": "resolve_entities",
     "resolve_entities": "unify_entities",
     "unify_entities": "map_fields",
     "map_fields": "human_final_approval",
     "load_data": "update_extraction_state",
+}
+
+# NODE_SPECS registry for branch-declared nodes (R3 requirement)
+NODE_SPECS = {
+    "validate_data": {
+        "fn": validate_data_node,
+        "successor": "resolve_entities",
+        "retry_policy": None,
+    },
 }
 
 # Which node produced the data a gate reviews. "retry" at a gate re-runs that
@@ -362,6 +373,7 @@ def _build_builder() -> StateGraph:
     builder.add_node(
         "extract_data", _timed("extract_data", extract_data), retry_policy=NETWORK_RETRY
     )
+    builder.add_node("validate_data", _timed("validate_data", validate_data_node))
     builder.add_node(
         "resolve_entities", _timed("resolve_entities", resolve_entities), retry_policy=NETWORK_RETRY
     )
@@ -394,6 +406,7 @@ def _build_builder() -> StateGraph:
         "discover_schemas",
         "analyze_dependencies",
         "extract_data",
+        "validate_data",
         "unify_entities",
         "load_data",
     ):
@@ -612,6 +625,11 @@ class MergeState(TypedDict):
     # Per-entity audit numbers built by load_data_node; also written to
     # logs/run_reports/<run_id>.json
     reconciliation_report: dict[str, Any]
+
+    # B3 — Quality & Lineage state keys
+    quality_report: dict[str, Any]
+    has_quality_failure: bool
+    lineage: dict[str, Any]
 
     # Per-node wall-clock seconds, merged across every node invocation this
     # run (Phase 0 Sec 0.6 - observable-completion budgets, see
