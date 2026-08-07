@@ -456,6 +456,20 @@ async def resolve_entities_impl(
     # behaviour it had before: auto-detected blocking, hint-derived unique
     # identifiers, and the standard thresholds.
     rules = matching_rules or {}
+    engine = rules.get("engine", "builtin")
+    if engine == "splink":
+        from src.mcp_server.tools.splink_matcher import resolve_with_splink
+
+        splink_res = await resolve_with_splink(
+            entity_type,
+            records,
+            matching_rules=rules,
+            known_cluster_ids=known_cluster_ids,
+            build_clusters_fn=_build_clusters,
+        )
+        if splink_res is not None:
+            return splink_res
+
     blocking_keys = blocking_keys or rules.get("blocking_keys") or None
     # auto_match/unique_ids here are for the log line below and the cache
     # key only — _resolve_core (Part 1.5 B.3) re-derives its own copies
@@ -1819,17 +1833,34 @@ def _cross_name_similarity(
 # ── LLM judgment for borderline pairs ────────────────────────────────
 
 
+def _format_ditto_col_val(rec: dict[str, Any]) -> str:
+    """Serialize a record in Ditto-style COL/VAL format (Ditto, VLDB 2020).
+
+    Projects to canonical schema and formats as:
+    COL field_name VAL value_content ...
+    """
+    proj, _ = _project_to_canonical(rec)
+    tokens: list[str] = []
+    for k, v in proj.items():
+        if k.startswith("_") or v is None:
+            continue
+        tokens.append(f"COL {k} VAL {v}")
+    return (
+        " ".join(tokens)
+        if tokens
+        else json.dumps({k: v for k, v in rec.items() if not k.startswith("_")}, default=str)
+    )
+
+
 def _format_pairs_block(
     borderline: list[tuple[str, str, dict, dict, float]],
 ) -> str:
-    """Format numbered pairs (non-null public fields only) for the prompt."""
+    """Format numbered pairs (Ditto COL/VAL format) for LLM adjudication prompt."""
     lines: list[str] = []
     for n, (_id1, _id2, rec1, rec2, _conf) in enumerate(borderline, 1):
-        f1 = {k: v for k, v in rec1.items() if not k.startswith("_") and v is not None}
-        f2 = {k: v for k, v in rec2.items() if not k.startswith("_") and v is not None}
         lines.append(f"Pair {n}:")
-        lines.append(f"  Record A: {json.dumps(f1, ensure_ascii=False, default=str)}")
-        lines.append(f"  Record B: {json.dumps(f2, ensure_ascii=False, default=str)}")
+        lines.append(f"  Record A: {_format_ditto_col_val(rec1)}")
+        lines.append(f"  Record B: {_format_ditto_col_val(rec2)}")
     return "\n".join(lines)
 
 
@@ -1848,7 +1879,6 @@ async def _judge_pairs_with_llm(
     scores so the pipeline never blocks on the LLM.
     """
     from src.llm import PROMPT_TEMPLATES, LLMClient
-    from src.orchestrator.utils.retry_hints import apply_retry_hint
 
     hint = str((llm_config or {}).get("retry_hint") or "").strip()
     prompts = PROMPT_TEMPLATES.get("entity_resolution", {})
@@ -1876,12 +1906,8 @@ async def _judge_pairs_with_llm(
                 .replace("{pair_count}", str(len(chunk)))
                 .replace("{pairs_block}", _format_pairs_block(chunk))
             )
-            # Set when a reviewer sent the matches gate back for rework.
-            user_prompt = apply_retry_hint(
-                user_prompt,
-                {"retry_hints": {"resolve_entities": hint}},
-                "resolve_entities",
-            )
+            if hint:
+                user_prompt += f"\n\n--- REVIEWER FEEDBACK ON YOUR PREVIOUS ANSWER ---\nA human reviewed your previous output for this exact task and rejected it for the reason below. Produce a different answer that addresses it directly. Do not repeat the previous answer.\n\nReason: {hint}\n"
             async with semaphore:
                 result = await client.call_json(
                     system_prompt=system_prompt,

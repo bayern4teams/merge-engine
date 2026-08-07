@@ -215,16 +215,35 @@ def evaluate_clustering(
 
 def main() -> int:
     from src.mcp_server.tools.resolve_entities import _compute_heuristic_confidence
+    from tests.eval.cross_origin_golden import build_cross_origin_golden_pairs
     from tests.eval.golden import _record, load_staff
 
     pairs = build_golden_pairs()
     same = sum(1 for _, _, s, _ in pairs if s)
     print(
-        f"\nGolden set: {len(pairs)} labelled pairs "
+        f"\nGeneral-dedup Golden set: {len(pairs)} labelled pairs "
         f"({same} same entity, {len(pairs) - same} different)\n"
     )
 
-    print(evaluate(_compute_heuristic_confidence, pairs, name="pairwise: heuristic only").render())
+    print(
+        evaluate(
+            _compute_heuristic_confidence, pairs, name="pairwise: heuristic only (general dedup)"
+        ).render()
+    )
+    print()
+
+    xo_pairs = build_cross_origin_golden_pairs()
+    xo_same = sum(1 for _, _, s, _ in xo_pairs if s)
+    print(
+        f"Cross-origin Golden set: {len(xo_pairs)} labelled pairs "
+        f"({xo_same} same entity, {len(xo_pairs) - xo_same} different)\n"
+    )
+
+    print(
+        evaluate(
+            _compute_heuristic_confidence, xo_pairs, name="pairwise: heuristic only (cross-origin)"
+        ).render()
+    )
     print()
 
     # The probabilistic model needs to see the whole record set (for term
