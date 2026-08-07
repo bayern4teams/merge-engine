@@ -49,6 +49,32 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
         table_count = len(schema_data.get("tables", []))
         logger.debug("Schema %s: %d tables", origin_id, table_count)
 
+    planning_cfg = state.get("planning") or state.get("config", {}).get("planning") or {}
+    engine = planning_cfg.get("engine") if isinstance(planning_cfg, dict) else None
+    if not engine:
+        engine = (
+            state.get("llm_config", {}).get("planning.engine")
+            or state.get("planning.engine")
+            or "sequential"
+        )
+
+    if str(engine).lower() == "swarm":
+        from src.orchestrator.planning.bounded_runner import run_planning_swarm
+
+        swarm_res = await run_planning_swarm(state)
+        return {
+            "target_entities": swarm_res.get("target_entities", target_entities),
+            "explicit_target_entities": swarm_res.get(
+                "explicit_target_entities", state.get("explicit_target_entities", [])
+            ),
+            "dependency_tree": swarm_res.get("dependency_tree", {}),
+            "dependency_analysis_warning": "",
+            "extraction_order": swarm_res.get("extraction_order", []),
+            "entity_tables": swarm_res.get("entity_tables", {}),
+            "table_selection_notes": swarm_res.get("table_selection_notes", ""),
+            "interrupt_data": None,
+        }
+
     if not target_entities:
         msg = "No target entities parsed; skipping dependency analysis."
         logger.warning(msg)

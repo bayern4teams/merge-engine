@@ -119,6 +119,29 @@ async def parse_request(state: dict[str, Any]) -> dict[str, Any]:
         # also re-append the entire `errors` history through its
         # operator.add reducer on every single call - quadratic growth over
         # a long-running graph (Phase 0 Sec 0.8).
+        # Check if swarm engine is enabled (B2.5)
+        planning_cfg = state.get("planning") or state.get("config", {}).get("planning") or {}
+        engine = planning_cfg.get("engine") if isinstance(planning_cfg, dict) else None
+        if not engine:
+            engine = (
+                state.get("llm_config", {}).get("planning.engine")
+                or state.get("planning.engine")
+                or "sequential"
+            )
+
+        if str(engine).lower() == "swarm":
+            from src.orchestrator.planning.bounded_runner import run_planning_swarm
+
+            swarm_res = await run_planning_swarm(state)
+            return {
+                "target_entities": swarm_res.get("target_entities", target_entities),
+                "explicit_target_entities": swarm_res.get(
+                    "explicit_target_entities", explicit_target_entities
+                ),
+                "merge_scope": swarm_res.get("merge_scope", merge_scope),
+                "interrupt_data": None,
+            }
+
         return {
             "target_entities": target_entities,
             "explicit_target_entities": explicit_target_entities,

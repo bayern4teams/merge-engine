@@ -82,7 +82,16 @@ ALIAS_GROUPS: list[set[str]] = [
         "degree",
         "degrees",
     },
-    {"technology", "technologies", "tech", "technologic", "technologics"},
+    {
+        "technology",
+        "technologies",
+        "tech",
+        "technologic",
+        "technologics",
+        "technographics",
+        "technographic",
+        "companytechnographics",
+    },
     {"skill", "skills", "competency", "competencies", "person_skill", "person_skills"},
     {
         "technology_category",

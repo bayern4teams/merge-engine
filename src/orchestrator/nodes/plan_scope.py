@@ -23,6 +23,22 @@ async def plan_scope(state: dict[str, Any]) -> dict[str, Any]:
     merge_scope = state.get("merge_scope") or {}
     target_entities = state.get("target_entities", []) or []
 
+    planning_cfg = state.get("planning") or state.get("config", {}).get("planning") or {}
+    engine = planning_cfg.get("engine") if isinstance(planning_cfg, dict) else None
+    if not engine:
+        engine = (
+            state.get("llm_config", {}).get("planning.engine")
+            or state.get("planning.engine")
+            or "sequential"
+        )
+
+    if str(engine).lower() == "swarm" and state.get("scope_plan"):
+        logger.debug("EXIT plan_scope (swarm scope_plan already populated)")
+        return {
+            "scope_plan": state.get("scope_plan", {}),
+            "table_selection_notes": state.get("table_selection_notes", ""),
+        }
+
     if not merge_scope.get("active") or not target_entities:
         logger.debug("EXIT plan_scope (not a scoped merge)")
         return {"scope_plan": {}, "table_selection_notes": state.get("table_selection_notes", "")}
