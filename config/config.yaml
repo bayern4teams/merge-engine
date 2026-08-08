@@ -23,7 +23,7 @@ destination:
 # ── LLM Configuration ──────────────────────────────────────────────────────
 llm:
   provider: "openai"      # "openai" | "azure" | "anthropic"
-  model: "qwen3.5-27b"
+  model: "qwen3.5-122b-a10b"
   # Tried in this exact order (LLMClient.call) whenever the active model
   # hits a quota/billing error — a same-account retry can't recover from
   # that, so the client advances to the next entry instead of failing.

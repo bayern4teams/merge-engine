@@ -751,14 +751,16 @@ that calls these helpers directly keeps working unchanged:
 
 ```python
 def _build_comparison_vector(
-    rec1, rec2, normalise=_normalize,
+    rec1,
+    rec2,
+    normalise=_normalize,
     projections: dict[str, tuple[dict, set]] | None = None,
 ) -> dict[str, tuple[str, str | None]]:
     if projections is not None:
         proj1, _ = projections[_record_id(rec1)]
         proj2, _ = projections[_record_id(rec2)]
     else:
-        proj1, _ = _project_to_canonical(rec1)   # unchanged fallback
+        proj1, _ = _project_to_canonical(rec1)  # unchanged fallback
         proj2, _ = _project_to_canonical(rec2)
     ...
 ```
@@ -792,9 +794,13 @@ comparison-level work.
 `_comparison_level` (`:1206-1212`) executes
 
 ```python
-    from src.mcp_server.tools.fellegi_sunter import (
-        LEVEL_DISAGREE, LEVEL_EXACT, LEVEL_NULL, LEVEL_STRONG, LEVEL_WEAK,
-    )
+from src.mcp_server.tools.fellegi_sunter import (
+    LEVEL_DISAGREE,
+    LEVEL_EXACT,
+    LEVEL_NULL,
+    LEVEL_STRONG,
+    LEVEL_WEAK,
+)
 ```
 
 **inside the function**, i.e. once per field per pair — order 5–10 million
@@ -811,10 +817,10 @@ zero risk, measurable.
 the double loop:
 
 ```python
-        for i in range(n):
-            for j in range(i + 1, n):
-                id1 = _record_id(block_records[i])   # recomputed n-i-1 times
-                id2 = _record_id(block_records[j])
+for i in range(n):
+    for j in range(i + 1, n):
+        id1 = _record_id(block_records[i])  # recomputed n-i-1 times
+        id2 = _record_id(block_records[j])
 ```
 
 `_record_id` (`:1975-1980`) does three `dict.get` calls and builds an
@@ -838,16 +844,16 @@ per record, store alongside the projection).
 inner double loop:
 
 ```python
-    for _key, block_records in sorted(usable.items(), key=...):
-        n = len(block_records)
-        if budget_reached:
-            overflow_pairs_estimate += n * (n - 1) // 2
-            continue
-        for i in range(n):            # <- fully expands this block
-            for j in range(i + 1, n): #    regardless of budget
-                ...
-        if len(pairs) >= _MAX_COMPARISONS:   # <- only checked afterwards
-            budget_reached = True
+for _key, block_records in sorted(usable.items(), key=...):
+    n = len(block_records)
+    if budget_reached:
+        overflow_pairs_estimate += n * (n - 1) // 2
+        continue
+    for i in range(n):  # <- fully expands this block
+        for j in range(i + 1, n):  #    regardless of budget
+            ...
+    if len(pairs) >= _MAX_COMPARISONS:  # <- only checked afterwards
+        budget_reached = True
 ```
 
 Blocks are sorted smallest-first, so today the budget is normally reached

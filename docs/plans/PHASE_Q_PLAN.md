@@ -150,17 +150,23 @@ records, blocking_keys, llm_config, known_cluster_ids, matching_rules)` at
 ### The result-dict contract `resolve_with_splink` MUST reproduce (line 331–351)
 ```python
 {
-  "entity_type": str,
-  "clusters": [               # each cluster:
-    {"cluster_id": str,       # deterministic, destination-PK-stable (see below)
-     "record_ids": [str],     # "{_origin_id}:{_origin_table}:{_origin_id_row}"
-     "match_confidence": float,
-     "required_human_review": bool}          # True if len>1 and min_conf < 0.85
-  ],
-  "total_records": int,
-  "auto_matched": int, "auto_excluded": int, "llm_scored": int,
-  "uncompared_pairs": int, "candidate_pairs": int, "blocks_purged": int,
-  "pending_merge_candidates": [{"record_ids": [str,str], "confidence": float}],
+    "entity_type": str,
+    "clusters": [  # each cluster:
+        {
+            "cluster_id": str,  # deterministic, destination-PK-stable (see below)
+            "record_ids": [str],  # "{_origin_id}:{_origin_table}:{_origin_id_row}"
+            "match_confidence": float,
+            "required_human_review": bool,
+        }  # True if len>1 and min_conf < 0.85
+    ],
+    "total_records": int,
+    "auto_matched": int,
+    "auto_excluded": int,
+    "llm_scored": int,
+    "uncompared_pairs": int,
+    "candidate_pairs": int,
+    "blocks_purged": int,
+    "pending_merge_candidates": [{"record_ids": [str, str], "confidence": float}],
 }
 ```
 
