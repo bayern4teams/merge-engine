@@ -45,6 +45,14 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
         logger.debug("Schema %s: %d tables", origin_id, table_count)
 
     if not target_entities:
+        # Phase 3's deterministic entity grouping should make this
+        # unreachable, but as a defensive backstop: returning {} here
+        # silently used to let the run sail on to human_review_deps with an
+        # empty tree, looking like a normal (if boring) merge instead of the
+        # broken one it is. Set failure so _fallible_router stops the run at
+        # the error gate — same disposition discover_schemas uses for "we
+        # have less data than we need to proceed safely" — rather than
+        # forwarding through as if nothing were wrong.
         msg = "No target entities parsed; skipping dependency analysis."
         logger.warning(msg)
         logger.debug("EXIT analyze_dependencies (no entities)")
@@ -52,6 +60,16 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
             "dependency_tree": {},
             "extraction_order": [],
             "errors": [*errors, msg],
+            "failure": {
+                "node": "analyze_dependencies",
+                "error": (
+                    f"{msg} Merging now would produce an empty extraction "
+                    "plan and silently drop every entity."
+                ),
+                "error_class": "PermanentError",
+                "disposition": "escalate",
+                "context": {"target_entities": target_entities},
+            },
         }
 
     # Retrieve entity_tables from state (populated by parse_request or pinned profile)

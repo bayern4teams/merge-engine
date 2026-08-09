@@ -11,6 +11,7 @@ import logging
 from typing import Any
 
 from src.llm import PROMPT_TEMPLATES, LLMClient
+from src.orchestrator.utils.retry import classify_exception
 
 logger = logging.getLogger("merge-engine.orchestrator.parse_request")
 
@@ -160,13 +161,27 @@ async def parse_request(state: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         logger.error("Failed to parse request: %s", exc, exc_info=True)
         logger.error("Exception type: %s, exception class: %s", type(exc).__name__, exc.__class__)
+        classified = classify_exception(exc)
+        error_msg = f"Request parsing failed: {exc}"
+        # Silently continuing here means a parse failure produces zero target
+        # entities and the run sails on to analyze_dependencies, which then
+        # reports "No target entities parsed" and an empty tree with no error
+        # gate ever firing (Phase 1.5) — set failure so _fallible_router
+        # actually stops the run and asks a human instead.
         return {
             "target_entities": [],
             "explicit_target_entities": [],
             "merge_scope": {"active": False, "subject": "", "scope_type": "none"},
             "entity_tables": {},
             "table_selection_notes": "",
-            "errors": [f"Request parsing failed: {exc}"],
+            "errors": [error_msg],
+            "failure": {
+                "node": "parse_request",
+                "error": error_msg,
+                "error_class": type(classified).__name__,
+                "disposition": classified.disposition,
+                "context": {},
+            },
             "interrupt_data": None,
         }
     finally:

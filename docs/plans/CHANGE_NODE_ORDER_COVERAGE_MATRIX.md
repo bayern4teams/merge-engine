@@ -38,6 +38,20 @@ Fix multiple issues in the merge-engine pipeline: reorder nodes so schema discov
 
 3. Verify `get_initial_state()` — no changes needed; `schemas: {}` is already initialized before `discover_schemas` runs.
 
+> [!NOTE]
+> **Undocumented at implementation time, recorded here in retrospect (Phase 1.2 of the follow-up fix-bugs plan):** the shipped commit also moved
+> `map_fields` from after `unify_entities` to before `extract_data` —
+> `"map_fields": "plan_scope"` replaces `"unify_entities": "map_fields"` /
+> `"map_fields": "human_final_approval"` in `NODE_SUCCESSOR`, and
+> `HITL_NODES`/`GATE_PRODUCER` were re-sequenced to match. This plan never
+> specified that move. It is not a bug — `map_fields_node.py`'s
+> `_build_source_schema_from_discovered` exists specifically to build a
+> mapping schema from discovered columns rather than unified records — but
+> it means `map_fields` now runs with no extracted or unified data at all,
+> and the mapping gate now happens before the scope gate. See
+> `docs/architecture/orchestration_and_ui.md` §13.5 for the current,
+> authoritative topology.
+
 ---
 
 ### Component 2: Schema-Grounded `parse_request` Node

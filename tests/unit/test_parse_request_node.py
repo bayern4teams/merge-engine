@@ -413,3 +413,125 @@ class TestParseRequest:
             result = await parse_request(base_state)
 
         assert result["explicit_target_entities"] == []
+
+    @pytest.mark.asyncio
+    async def test_llm_failure_sets_failure_for_error_gate(
+        self, base_state: dict[str, Any], mock_llm_client: MagicMock
+    ) -> None:
+        """An exception must set state["failure"] (Phase 1.5) so
+        _fallible_router routes to the error gate instead of the run
+        silently continuing to analyze_dependencies with zero entities."""
+        mock_llm_client.call_json = AsyncMock(side_effect=Exception("boom"))
+        with (
+            patch(
+                "src.orchestrator.nodes.parse_request.LLMClient",
+                return_value=mock_llm_client,
+            ),
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                self._prompts(),
+            ),
+        ):
+            result = await parse_request(base_state)
+
+        assert result["failure"]["node"] == "parse_request"
+        assert "boom" in result["failure"]["error"]
+        assert result["failure"]["disposition"] in ("fail", "escalate", "retry")
+
+    # -- schema grounding (Phase 1.8 / Phase 9 Component 2) --
+
+    @pytest.mark.asyncio
+    async def test_schema_summary_reaches_the_prompt(
+        self, base_state: dict[str, Any], mock_llm_client: MagicMock
+    ) -> None:
+        """When schemas is populated, the rendered prompt must contain real
+        table and column names and must not leave the literal {schema_info}
+        placeholder token unsubstituted."""
+        base_state["schemas"] = {
+            "origin_1": {
+                "origin_type": "clickhouse",
+                "tables": [
+                    {
+                        "name": "CompanyExperience",
+                        "columns": [{"name": "companyID"}, {"name": "personID"}],
+                    }
+                ],
+            }
+        }
+        with (
+            patch(
+                "src.orchestrator.nodes.parse_request.LLMClient",
+                return_value=mock_llm_client,
+            ),
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                self._prompts(human="Schema:\n{schema_info}\n\nRequest: {user_request}"),
+            ),
+        ):
+            await parse_request(base_state)
+
+        user_prompt = mock_llm_client.call_json.call_args[1]["user_prompt"]
+        assert "CompanyExperience" in user_prompt
+        assert "companyID" in user_prompt
+        assert "personID" in user_prompt
+        assert "{schema_info}" not in user_prompt
+
+    @pytest.mark.asyncio
+    async def test_entity_tables_shape_is_returned(
+        self, base_state: dict[str, Any], mock_llm_client: MagicMock
+    ) -> None:
+        """entity_tables must come back as {entity: [{origin_id, table}, ...]}."""
+        with (
+            patch(
+                "src.orchestrator.nodes.parse_request.LLMClient",
+                return_value=mock_llm_client,
+            ),
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                self._prompts(),
+            ),
+        ):
+            result = await parse_request(base_state)
+
+        assert result["entity_tables"] == {
+            "person": [{"origin_id": "origin_1", "table": "Person"}],
+            "company": [{"origin_id": "origin_1", "table": "Company"}],
+        }
+
+    @pytest.mark.asyncio
+    async def test_malformed_entity_table_entries_are_dropped(
+        self, base_state: dict[str, Any], mock_llm_client: MagicMock
+    ) -> None:
+        """A malformed entity_tables entry (missing origin_id/table, not a
+        dict, or not a list at all) must be cleaned out rather than passed
+        through — see the cleaning loop at parse_request.py:102-111."""
+        mock_llm_client.call_json = AsyncMock(
+            return_value={
+                "entity_types": ["company", "person", "ghost"],
+                "entity_tables": {
+                    "company": [
+                        {"origin_id": "origin_1", "table": "Company"},
+                        {"origin_id": "origin_1"},  # missing "table" -- dropped
+                        {"table": "Company"},  # missing "origin_id" -- dropped
+                        "not_a_dict",  # dropped
+                    ],
+                    "person": "not_a_list",  # whole value dropped for this entity
+                },
+            }
+        )
+        with (
+            patch(
+                "src.orchestrator.nodes.parse_request.LLMClient",
+                return_value=mock_llm_client,
+            ),
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                self._prompts(),
+            ),
+        ):
+            result = await parse_request(base_state)
+
+        assert result["entity_tables"]["company"] == [
+            {"origin_id": "origin_1", "table": "Company"}
+        ]
+        assert "person" not in result["entity_tables"]

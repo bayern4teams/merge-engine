@@ -225,7 +225,7 @@ class TestGraphEdges:
     """Tests for graph edge/connectivity configuration."""
 
     def test_graph_has_start_edge(self):
-        """Graph should have a START edge to parse_request."""
+        """Graph should have a START edge to preflight."""
         from src.orchestrator.graph import build_graph
 
         with patch("src.orchestrator.graph.StateGraph") as mock_sg:
@@ -236,8 +236,10 @@ class TestGraphEdges:
 
             build_graph()
 
-            # Should call set_entry_point to define START
-            mock_graph.set_entry_point.assert_called()
+            # Should call set_entry_point to define START, at "preflight" —
+            # not "parse_request": preflight always was, and still is, the
+            # entry point regardless of where parse_request sits downstream.
+            mock_graph.set_entry_point.assert_called_once_with("preflight")
 
     def test_graph_has_conditional_edges(self):
         """Graph should have conditional edges for human-in-the-loop flow."""
@@ -253,6 +255,47 @@ class TestGraphEdges:
             build_graph()
 
             mock_graph.add_conditional_edges.assert_called()
+
+
+# =============================================================================
+# Node Order Tests
+#
+# NODE_SUCCESSOR is the single source of truth for pipeline order (see
+# docs/architecture/orchestration_and_ui.md §13.5). These assertions cover
+# both the documented Phase 9 reorder (discover_schemas before parse_request)
+# and the undocumented one that shipped in the same commit (map_fields moved
+# from after unify_entities to before extract_data) — Phase 1.7 of the
+# fix-bugs follow-up plan, closing a gap this file never covered before.
+# =============================================================================
+
+
+class TestNodeOrder:
+    """Tests asserting the exact pipeline topology in NODE_SUCCESSOR."""
+
+    def test_discover_schemas_precedes_parse_request(self):
+        """Schema discovery must run before entity parsing (Phase 9)."""
+        from src.orchestrator.graph import NODE_SUCCESSOR
+
+        assert NODE_SUCCESSOR["preflight"] == "discover_schemas"
+        assert NODE_SUCCESSOR["discover_schemas"] == "parse_request"
+        assert NODE_SUCCESSOR["parse_request"] == "analyze_dependencies"
+
+    def test_map_fields_precedes_extraction(self):
+        """map_fields runs before extract_data, not after unify_entities.
+
+        This move shipped alongside the discover_schemas/parse_request
+        reorder but was never written into the plan doc it belonged to
+        (see docs/plans/CHANGE_NODE_ORDER_COVERAGE_MATRIX.md's retrospective
+        note on Component 1). Asserted here so a future change to either
+        successor can't silently drift the two apart again.
+        """
+        from src.orchestrator.graph import NODE_SUCCESSOR
+
+        assert NODE_SUCCESSOR["map_fields"] == "plan_scope"
+        assert NODE_SUCCESSOR["unify_entities"] == "human_final_approval"
+        assert "map_fields" not in {
+            NODE_SUCCESSOR.get("unify_entities"),
+        }, "map_fields must not still be wired to run after unify_entities"
 
 
 # =============================================================================

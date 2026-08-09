@@ -10,7 +10,8 @@ Move field mapping upfront in the graph execution pipeline (after dependency ana
 
 - [x] **1.1 Graph Sequence Re-ordering in `graph.py`**
   - Updated `HITL_NODES`, `NODE_SUCCESSOR`, `GATE_PRODUCER`, and `_build_builder()` conditional routing in [graph.py](file:///d:/transfer/merging/.worktrees/fix-bugs/src/orchestrator/graph.py).
-  - Sequence set to: `preflight` -> `parse_request` -> `discover_schemas` -> `analyze_dependencies` -> `human_review_deps` -> `map_fields` -> `human_review_mappings` -> `plan_scope` -> `human_review_scope` -> `extract_data` -> `resolve_entities` -> `human_review_matches` -> `unify_entities` -> `human_final_approval` -> `load_data` -> `update_extraction_state` -> `END`.
+  - Sequence set to: `preflight` -> `discover_schemas` -> `parse_request` -> `analyze_dependencies` -> `human_review_deps` -> `map_fields` -> `human_review_mappings` -> `plan_scope` -> `human_review_scope` -> `extract_data` -> `resolve_entities` -> `human_review_matches` -> `unify_entities` -> `human_final_approval` -> `load_data` -> `update_extraction_state` -> `END`.
+  - Note: `discover_schemas`/`parse_request` order was superseded by Phase 9.1 below (schema-grounded parsing needs schemas first); this line is corrected to match the order actually shipped.
   - *Evidence:* Graph compiled with `map_fields` -> `human_review_mappings` -> `plan_scope`. `unify_entities` routes directly to `human_final_approval`.
 
 - [x] **1.2 Upfront Schema Discovery in `map_fields_node.py`**

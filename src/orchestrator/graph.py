@@ -855,6 +855,7 @@ def get_initial_state(
             },
             "schemas": {},
             "dependency_tree": {},
+            "column_dependencies": [],
             "dependency_analysis_warning": "",
             "extraction_order": [],
             "entity_tables": {},

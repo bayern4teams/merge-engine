@@ -45,7 +45,7 @@ _STAGES = (
 # Placeholders the production call sites substitute into each stage's
 # human template (system templates carry no placeholders).
 _REQUIRED_PLACEHOLDERS = {
-    "request_parsing": ["{user_request}"],
+    "request_parsing": ["{user_request}", "{schema_info}"],
     "dependency_analysis": ["{target_entities}", "{schema_info}"],
     "entity_table_selection": ["{target_entities}", "{table_catalog}"],
     "scope_planning": ["{subject}", "{subject_entity}", "{target_entities}", "{table_catalog}"],
@@ -111,7 +111,15 @@ def _build_prompt(stage: str, case: dict[str, Any]) -> tuple[str, str]:
     inp = case["input"]
 
     if stage == "request_parsing":
-        return system, human.replace("{user_request}", inp["user_request"])
+        # Falls back to the same "(No discovered schemas available)" string
+        # production emits when schemas is empty (parse_request.py's
+        # _build_full_schema_summary), so a golden case that omits
+        # schema_info still substitutes real text rather than leaving the
+        # literal {schema_info} token in the prompt sent to the model.
+        schema_info = inp.get("schema_info", "(No discovered schemas available)")
+        return system, human.replace("{user_request}", inp["user_request"]).replace(
+            "{schema_info}", schema_info
+        )
 
     if stage == "dependency_analysis":
         return system, (
@@ -213,7 +221,7 @@ def _score(stage: str, case: dict[str, Any], result: Any) -> tuple[bool, str]:
         ok = not missing and not wrong
         return ok, f"missing={missing} unexpected={wrong}" if not ok else "all edges correct"
 
-    if stage == "cls":
+    if stage == "entity_table_selection":
         tables = result.get("entity_tables", {}) or {}
 
         def _pairs(entity: str) -> set[tuple[str, str]]:
