@@ -47,18 +47,32 @@ export interface MappingRow {
   source_field: string;
   action: string;
   dest_column: string;
-  new_column_name: string;
-  new_column_type: string;
   confidence: number;
   origin_id?: string;
   table?: string;
   is_coalesced?: boolean;
+  reason?: string;
+}
+
+export interface ColumnDependency {
+  child_origin: string;
+  child_table: string;
+  child_column: string;
+  parent_origin: string;
+  parent_table: string;
+  parent_column: string;
+  rationale?: string;
 }
 
 export interface InterruptData {
   node: string;
   title: string;
   data: Record<string, any>;
+  // Content hash of `data`, set by WorkflowManager._build_interrupt_data.
+  // Changes only when the gate's actual content does, unlike `data` itself
+  // (a fresh object on every poll's JSON round-trip) — see MappingBody's
+  // sync effect for why that distinction matters.
+  payload_version?: string;
 }
 
 export interface WorkflowStatus {
@@ -328,11 +342,13 @@ export function getStatus(threadId: string): Promise<WorkflowStatus> {
 export function sendFeedback(
   threadId: string,
   decision: "approve" | "reject",
-  mappingEdits?: MappingRow[]
+  mappingEdits?: MappingRow[],
+  columnDependencies?: ColumnDependency[]
 ): Promise<WorkflowStatus> {
   return post(`/api/workflow/${threadId}/feedback`, {
     decision,
     mapping_edits: mappingEdits ?? null,
+    column_dependencies: columnDependencies ?? null,
   });
 }
 

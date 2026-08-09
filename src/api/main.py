@@ -217,6 +217,10 @@ class Feedback(BaseModel):
     mapping_edits: list[dict[str, Any]] | None = None
     cluster_decisions: list[dict[str, Any]] | None = None
     entity_tables: dict[str, list[dict[str, Any]]] | None = None
+    # Custom cross-table column dependencies added at the deps gate (Phase
+    # 2.4) — {child_origin, child_table, child_column, parent_origin,
+    # parent_table, parent_column, rationale}, one dict per link.
+    column_dependencies: list[dict[str, Any]] | None = None
 
 
 _DECISIONS = {"approve", "edit", "retry", "reject", "abort", "skip"}
@@ -661,6 +665,8 @@ def create_api(config_path: str = "config/config.yaml") -> FastAPI:
             feedback["cluster_decisions"] = body.cluster_decisions
         if body.entity_tables is not None:
             feedback["entity_tables"] = body.entity_tables
+        if body.column_dependencies is not None:
+            feedback["column_dependencies"] = body.column_dependencies
 
         manager.resume_workflow(thread_id, feedback)
         # Return the status right after resuming so the client can react

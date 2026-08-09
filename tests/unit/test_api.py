@@ -145,8 +145,6 @@ def test_feedback_passes_mapping_edits(client: TestClient, mock_manager):
             "source_field": "nm",
             "action": "map",
             "dest_column": "name",
-            "new_column_name": "",
-            "new_column_type": "",
             "confidence": 1.0,
         }
     ]

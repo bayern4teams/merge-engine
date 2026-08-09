@@ -36,33 +36,12 @@ class TestBuildInterruptDataMappings:
                 "source_field": "org_title",
                 "action": "map",
                 "dest_column": "name",
-                "new_column_name": "",
-                "new_column_type": "",
                 "confidence": 0.9,
+                "origin_id": "",
+                "table": "",
+                "is_coalesced": False,
             }
         ]
-
-    def test_new_column_row_pulls_type_from_schema_changes(self, manager):
-        values = {
-            "field_mappings": {
-                "company": {
-                    "esg_score": {
-                        "dest_column": "esg_score",
-                        "confidence": 0.9,
-                        "requires_schema_change": True,
-                    },
-                },
-            },
-            "pending_schema_changes": [
-                {"table": "companies", "column": "esg_score", "data_type": "DOUBLE PRECISION"},
-            ],
-        }
-        data = manager._build_interrupt_data("human_review_mappings", values)["data"]
-        row = data["mapping_rows"][0]
-        assert row["action"] == "new_column"
-        assert row["new_column_name"] == "esg_score"
-        assert row["new_column_type"] == "DOUBLE PRECISION"
-        assert row["dest_column"] == ""
 
     def test_unmapped_fields_become_skip_rows(self, manager):
         values = {
@@ -75,9 +54,17 @@ class TestBuildInterruptDataMappings:
         row = data["mapping_rows"][0]
         assert row["action"] == "skip"
         assert row["source_field"] == "misc"
+        # Not a live mapping (action is skip) — shown as a preview of what
+        # the mapper considered before giving up, per Phase 2.3.
         assert row["dest_column"] == "notes"
         assert data["unmapped_fields"] == [
-            {"entity_type": "person", "source_field": "misc"},
+            {
+                "entity_type": "person",
+                "source_field": "misc",
+                "confidence": 0.4,
+                "suggested_column": "notes",
+                "reason": None,
+            },
         ]
 
 
@@ -122,7 +109,12 @@ class TestApplyMappingFeedback:
         assert update["pending_schema_changes"] == []
 
     def test_new_column_edit_rejected(self, manager):
-        """A reviewer has no more power to add a column than a node does."""
+        """A reviewer has no more power to add a column than a node does.
+
+        The UI dropdown no longer offers "new_column" at all (Phase 2.3) —
+        this exercises the defence-in-depth backstop for a direct API call
+        that sends one anyway.
+        """
         ok, err = self._run(
             manager,
             [
@@ -130,8 +122,6 @@ class TestApplyMappingFeedback:
                     "entity_type": "company",
                     "source_field": "esg",
                     "action": "new_column",
-                    "new_column_name": "esg_score",
-                    "new_column_type": "DOUBLE PRECISION",
                 }
             ],
         )

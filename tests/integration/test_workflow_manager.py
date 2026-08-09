@@ -256,6 +256,139 @@ class TestWorkflowManagerIntegration:
                 mock_graph.update_state.assert_called()
 
     @pytest.mark.asyncio
+    async def test_resume_deps_gate_merges_custom_column_dependencies(
+        self,
+        mock_config: Any,
+        test_config_path: Any,
+    ) -> None:
+        """Phase 2.4: a custom link added in the "Add Custom Dependency
+        Link" form must reach state["column_dependencies"], merged with
+        whatever analyze_dependencies already computed (not replacing it),
+        deduplicated, and with any link naming an unknown column dropped —
+        DependencyBody's colDeps used to be captured in local React state
+        and never sent anywhere at all.
+        """
+        from src.orchestrator.workflow_manager import WorkflowManager
+
+        mock_graph = MagicMock()
+        interrupt_event = {
+            "human_review_deps": {"interrupt_data": {"node": "human_review_deps", "data": {}}}
+        }
+
+        async def _fake_astream(state, config=None, **kwargs):
+            for event in [interrupt_event]:
+                yield event
+
+        mock_graph.astream = _fake_astream
+        mock_graph.update_state = MagicMock()
+
+        schemas = {
+            "origin_1": {
+                "tables": [
+                    {"name": "Company", "columns": [{"name": "companyID"}]},
+                    {
+                        "name": "Experience",
+                        "columns": [{"name": "companyID"}, {"name": "personID"}],
+                    },
+                ]
+            }
+        }
+        existing_link = {
+            "child_origin": "origin_1",
+            "child_table": "Experience",
+            "child_column": "personID",
+            "parent_origin": "origin_1",
+            "parent_table": "Company",
+            "parent_column": "companyID",
+            "rationale": "declared FK",
+        }
+        live_snapshot = MagicMock(
+            values={"schemas": schemas, "column_dependencies": [existing_link]}, next=()
+        )
+        mock_graph.get_state = MagicMock(return_value=live_snapshot)
+
+        with patch("src.utils.config_loader.load_config", return_value=mock_config):
+            with patch("src.orchestrator.workflow_manager.build_graph", return_value=mock_graph):
+                manager = WorkflowManager()
+                thread_id = manager.start_workflow(
+                    user_request="Import companies",
+                    config_path=str(test_config_path),
+                    origins=ORIGIN_CONFIGS,
+                    destination=DESTINATION_CONFIG,
+                )
+
+                import time
+
+                time.sleep(0.3)
+
+                new_valid_link = {
+                    "child_origin": "origin_1",
+                    "child_table": "Experience",
+                    "child_column": "companyID",
+                    "parent_origin": "origin_1",
+                    "parent_table": "Company",
+                    "parent_column": "companyID",
+                    "rationale": "Custom user-defined dependency link",
+                }
+                invalid_link = {
+                    "child_origin": "origin_1",
+                    "child_table": "Experience",
+                    "child_column": "no_such_column",
+                    "parent_origin": "origin_1",
+                    "parent_table": "Company",
+                    "parent_column": "companyID",
+                    "rationale": "should be dropped",
+                }
+                manager.resume_workflow(
+                    thread_id,
+                    {
+                        "decision": "approve",
+                        "node": "human_review_deps",
+                        "column_dependencies": [
+                            new_valid_link,
+                            invalid_link,
+                            existing_link,  # duplicate of what's already there
+                        ],
+                    },
+                )
+
+                assert mock_graph.update_state.call_args is not None
+                # graph.update_state(_bare_config(config), state_update, as_node=...)
+                state_update = mock_graph.update_state.call_args[0][1]
+                deps = state_update["column_dependencies"]
+
+                keys = {
+                    (
+                        d["child_origin"],
+                        d["child_table"],
+                        d["child_column"],
+                        d["parent_origin"],
+                        d["parent_table"],
+                        d["parent_column"],
+                    )
+                    for d in deps
+                }
+                assert (
+                    "origin_1",
+                    "Experience",
+                    "companyID",
+                    "origin_1",
+                    "Company",
+                    "companyID",
+                ) in keys
+                assert (
+                    "origin_1",
+                    "Experience",
+                    "personID",
+                    "origin_1",
+                    "Company",
+                    "companyID",
+                ) in keys
+                assert not any(d["child_column"] == "no_such_column" for d in deps)
+                # No duplicate of the pre-existing link.
+                assert len(deps) == 2
+
+    @pytest.mark.asyncio
     async def test_start_workflow_with_origins_destination(
         self,
         mock_config: Any,

@@ -354,5 +354,31 @@ Re-order graph execution so `discover_schemas` precedes `parse_request`, ground 
   - Add unit test in [test_analyze_dependencies_node.py](file:///d:/transfer/merging/.worktrees/fix-bugs/tests/unit/test_analyze_dependencies_node.py) covering partial LLM tree retry and fallback.
   - *Evidence:* Executed unit tests (`26 passed`) and full verification check script (`python scripts/check.py all`).
 
+---
+
+## Phase 10 — Fix-Bugs Follow-Up: Full Table Coverage, Join-Graph Scoping, Cross-Table Mapping & Merge Lineage
+
+The 4th live run (`Bugs/Logs/4th_try_05_18_local_enrichprompt.txt`) exposed that the pipeline silently discards most of the database before it ever reaches the merge, plus gaps in Phases 1-9 that were claimed done but were unreachable from production. Full plan audited and tracked separately; this section records live-verified progress.
+
+- [x] **10.0 Make the existing work durable**
+  - Committed the 31 files that were uncommitted since Phase 9 as checkpoint `1667670`; created local backup branch `fix-bugs-backup` at the same commit.
+  - *Evidence:* `git log --oneline -1 fix-bugs fix-bugs-backup` — both at `1667670`. Push to `origin` attempted and timed out (`git.n4t.com` unreachable, per `docs/decisions/0003-server-ci-unreachable.md`) — reported honestly, not treated as a blocker.
+
+- [x] **10.1 Close gaps in already-claimed work (Phases 1-9)**
+  - Fixed 8 items: missing `column_dependencies` init on the legacy Config state path; documented the undocumented `map_fields` relocation; corrected a stale TODO.md node-order line (this file, §1.1); `analyze_dependencies`' empty-entity path and `parse_request`'s exception handler now both set `state["failure"]` (via the existing error taxonomy in `utils/retry.py::classify_exception`) instead of silently continuing with zero entities; repaired `tests/prompts/harness.py` (missing `{schema_info}` placeholder, a live `ValueError: unknown stage` crash from a `"cls"`/`entity_table_selection` mismatch); added `NODE_SUCCESSOR` assertions to `tests/integration/test_graph_workflow.py` (never updated for the Phase 9 reorder) and fixed its stale "START edge to parse_request" assertion (entry point has always been `preflight`); added schema-grounding/entity_tables/malformed-entry-cleaning coverage to `tests/unit/test_parse_request_node.py`.
+  - *Evidence:* `tests/unit/test_analyze_dependencies_node.py` + `test_parse_request_node.py` + `tests/integration/test_graph_workflow.py`: 78 passed. `scripts/check.py types` clean.
+
+- [x] **10.2 Gate plumbing: one builder per gate**
+  - Root-caused why `origin_schemas`/`column_dependencies` never reached the dependency gate and `origin_id`/`table` never reached the mapping gate: `interrupt_before=HITL_NODES` means a HITL node body never runs at the pause, so `WorkflowManager._build_interrupt_data` — not the node's own body — was the only payload the live UI ever saw, and it was an independently-maintained, poorer copy. Extracted one shared builder per gate into `nodes/human_nodes.py` (`_build_deps_interrupt`, `_build_mapping_rows`, `_build_matches_interrupt` — the last one a fourth divergence found while writing the regression test, missing `auto_match_stats`/`pending_merge_candidates`/`pending_merge_note`) and made `WorkflowManager` delegate to all three instead of keeping independent copies. Added `quality_report`/`has_quality_failure` plumbing to the final-approval payload ahead of Phase 10.4.5 (validate_data).
+  - Added `tests/unit/test_interrupt_payload_parity.py`: for every HITL node, asserts the node body's own `interrupt_data` and `WorkflowManager._build_interrupt_data`'s payload have identical (or, for `human_final_approval`'s deliberately richer superset, documented) data keys — a mechanical guard against this bug class recurring a fifth time.
+  - *Evidence:* `test_interrupt_payload_parity.py` + `test_human_nodes.py` + `test_workflow_manager.py` + `test_graph_workflow.py`: 80 passed. `scripts/check.py types` clean.
+
+- [x] **10.3 Stop the 2-second poll from clobbering in-progress gate edits**
+  - Root cause: every poll parses a fresh JSON response, so `data` is a new object reference every ~2s even when content is unchanged; `Gates.tsx`'s `MappingBody` reset its local row state off `[node, data]`, wiping whatever the reviewer had just typed. Added a `payload_version` content hash (`WorkflowManager._build_interrupt_data`, threaded through all three call sites plus the `apply_mapping_feedback` rejection path that mutates a cached payload in place) and changed `MappingBody`'s sync effect to depend on `[node, payloadVersion]` instead of the whole `data` object.
+  - *Evidence:* `tests/unit/test_interrupt_payload_parity.py::TestPayloadVersion` (4 tests: stability, change-detection, cross-node non-collision, recompute-after-mutation). Frontend `npm run build` clean.
+
+- [x] **10.4 Remove `new_column` from the mapping gate dropdown**
+  - The destination schema is a fixed contract (`CLAUDE.md`'s "No new destination columns, ever") and `apply_mapping_feedback` has always hard-rejected `new_column`, so offering it in the UI was a dead end reachable only by picking it, filling in a name/type, and being told no. `ACTIONS` is now `["map", "skip"]`; the New Column/Type input columns are replaced with a Reason column (backed by a `reason` field now carried on every skip row, not just the separate `unmapped_fields` list). Removed the fully-dead `new_column_name`/`new_column_type` fields from `MappingRow` (TS), the row builder (Python), and the stale `apply_mapping_feedback` docstring. Found and fixed a real regression from 10.2's refactor along the way: `_build_mapping_rows`'s skip-row had dropped the `suggested_column`-as-preview `dest_column` hint the old (now-deleted) `_mapping_rows_from_values` used to show.
+  - *Evidence:* `tests/unit/test_mapping_gate.py` + `test_api.py` + related: 117 passed. Frontend `npm run build` clean.
 
 

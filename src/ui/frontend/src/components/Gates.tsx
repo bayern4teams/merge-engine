@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
-import { InterruptData, MappingRow } from "../api";
+import { ColumnDependency, InterruptData, MappingRow } from "../api";
 import Tooltip from "./Tooltip";
 
 interface GateProps {
   interrupt: InterruptData;
   skippedGates: Record<string, string>;
   busy: boolean;
-  onApprove: (mappingEdits?: MappingRow[]) => void;
+  onApprove: (mappingEdits?: MappingRow[], columnDependencies?: ColumnDependency[]) => void;
   onReject: () => void;
 }
 
@@ -26,17 +26,28 @@ export default function Gate(props: GateProps) {
       <h3 className="card-title">
         <span>{icon}</span> {title}
       </h3>
-      {node === "human_review_deps" && <DependencyBody data={interrupt.data} />}
+      {node === "human_review_deps" && <DependencyBody data={interrupt.data} {...props} />}
       {node === "human_review_scope" && <ScopeBody data={interrupt.data} />}
       {node === "human_review_matches" && <MatchBody data={interrupt.data} />}
       {node === "human_review_mappings" && (
-        <MappingBody data={interrupt.data} node={node} {...props} />
+        <MappingBody
+          data={interrupt.data}
+          node={node}
+          payloadVersion={interrupt.payload_version}
+          {...props}
+        />
       )}
       {node === "human_final_approval" && (
         <SummaryBody data={interrupt.data} skippedGates={props.skippedGates} />
       )}
 
-      {node !== "human_review_mappings" && <GateButtons {...props} />}
+      {/* human_review_mappings and human_review_deps render their own
+          approve/reject row — both need to hand onApprove a local edit
+          (mapping rows, custom dependency links respectively) that only
+          their own component state holds. */}
+      {node !== "human_review_mappings" && node !== "human_review_deps" && (
+        <GateButtons {...props} />
+      )}
     </div>
   );
 }
@@ -47,16 +58,18 @@ function GateButtons({
   onReject,
   approveLabel = "Approve",
   mappingEdits,
+  columnDependencies,
 }: Pick<GateProps, "busy" | "onApprove" | "onReject"> & {
   approveLabel?: string;
   mappingEdits?: MappingRow[];
+  columnDependencies?: ColumnDependency[];
 }) {
   return (
     <div className="btn-row" style={{ marginTop: 18 }}>
       <button
         className="btn btn-success"
         disabled={busy}
-        onClick={() => onApprove(mappingEdits)}
+        onClick={() => onApprove(mappingEdits, columnDependencies)}
       >
         ✓ {approveLabel}
       </button>
@@ -169,7 +182,12 @@ function SchemaCascade({
   );
 }
 
-function DependencyBody({ data }: { data: Record<string, any> }) {
+function DependencyBody({
+  data,
+  busy,
+  onApprove,
+  onReject,
+}: { data: Record<string, any> } & GateProps) {
   const order: string[] = data.extraction_order || [];
   const tree: Record<string, string[]> = data.dependency_tree || {};
   // Bug #2: {origin_id: {table_name: [column, ...]}} built by the backend
@@ -431,6 +449,11 @@ function DependencyBody({ data }: { data: Record<string, any> }) {
           </button>
         </div>
       </div>
+
+      {/* Rendered here rather than by the parent Gate, so onApprove gets
+          this component's own colDeps — a custom link added above and never
+          sent anywhere until this button carries it (Phase 2.4). */}
+      <GateButtons busy={busy} onApprove={onApprove} onReject={onReject} columnDependencies={colDeps} />
     </div>
   );
 }
@@ -655,24 +678,34 @@ function MatchBody({ data }: { data: Record<string, any> }) {
 
 // ── Mapping gate (editable) ─────────────────────────────────────────────────
 
-const ACTIONS = ["map", "new_column", "skip"];
-// Bug #4: the New Column / Type inputs are only enabled for the new_column
-// action; this placeholder tells the reviewer why they look locked.
-const NEW_COL_HINT = "Change action to 'new_column' to enable";
+// Phase 2.3: "new_column" was removed. The destination schema is a fixed
+// contract (CLAUDE.md's "No new destination columns, ever" — the backend's
+// apply_mapping_feedback has always hard-rejected this action), so offering
+// it here was a dead end: a reviewer could pick it, fill in a name and
+// type, click Approve, and be told no. An unmappable field is now always
+// "skip", explained by the Reason column below.
+const ACTIONS = ["map", "skip"];
 
 function MappingBody({
   data,
   node,
+  payloadVersion,
   busy,
   onApprove,
   onReject,
-}: { data: Record<string, any>; node: string } & GateProps) {
+}: { data: Record<string, any>; node: string; payloadVersion?: string } & GateProps) {
   const [rows, setRows] = useState<MappingRow[]>([]);
   const [selectedEntity, setSelectedEntity] = useState<string>("ALL");
 
+  // Keyed on payloadVersion, not `data` itself: every 2s poll parses a
+  // fresh JSON response, so `data` is a new object reference every tick
+  // even when nothing changed. Depending on the whole object meant this
+  // effect re-fired on every poll and wiped whatever the reviewer had just
+  // edited. payloadVersion is a string that only changes when the gate's
+  // actual content does (see WorkflowManager._build_interrupt_data).
   useEffect(() => {
     setRows((data.mapping_rows || []) as MappingRow[]);
-  }, [node, data]);
+  }, [node, payloadVersion]);
 
   function update(i: number, patch: Partial<MappingRow>) {
     setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
@@ -716,15 +749,13 @@ function MappingBody({
               <th>Source Field</th>
               <th>Action</th>
               <th>Dest Column</th>
-              <th>New Column</th>
-              <th>Type</th>
+              <th>Reason</th>
               <th>Conf.</th>
             </tr>
           </thead>
           <tbody>
             {filteredRows.map((r, i) => {
               const globalIndex = rows.indexOf(r);
-              const isNewColumn = r.action === "new_column";
               return (
                 <tr key={`${r.entity_type}.${r.origin_id || ""}.${r.table || ""}.${r.source_field}.${i}`}>
                   <td className="mono">{r.entity_type}</td>
@@ -772,26 +803,7 @@ function MappingBody({
                       onChange={(e) => update(globalIndex, { dest_column: e.target.value })}
                     />
                   </td>
-                  <td>
-                    <input
-                      className="mini-input"
-                      value={r.new_column_name || ""}
-                      disabled={!isNewColumn}
-                      placeholder={!isNewColumn ? NEW_COL_HINT : "New column name"}
-                      title={!isNewColumn ? NEW_COL_HINT : undefined}
-                      onChange={(e) => update(globalIndex, { new_column_name: e.target.value })}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      className="mini-input"
-                      value={r.new_column_type || ""}
-                      disabled={!isNewColumn}
-                      placeholder={!isNewColumn ? NEW_COL_HINT : "e.g. TEXT"}
-                      title={!isNewColumn ? NEW_COL_HINT : undefined}
-                      onChange={(e) => update(globalIndex, { new_column_type: e.target.value })}
-                    />
-                  </td>
+                  <td className="muted">{r.reason || "—"}</td>
                   <td className="muted">
                     {r.confidence != null ? `${Math.round(Number(r.confidence) * 100)}%` : "—"}
                   </td>
@@ -940,7 +952,7 @@ function SummaryBody({
         <>
           <div className="section-label">
             Field mappings ({mappings.length})
-            <Tooltip text="The final column-to-column mapping from source fields to destination columns. 'map' copies a value; 'new_column' creates a new column; 'skip' drops the field." />
+            <Tooltip text="The final column-to-column mapping from source fields to destination columns. 'map' copies a value into an existing destination column; 'skip' drops the field (the destination schema is a fixed contract, so an unmappable field is always skipped, never given a new column)." />
           </div>
           <div className="table-scroll">
             <table className="data-table">
@@ -956,9 +968,7 @@ function SummaryBody({
               <tbody>
                 {mappings.map((r, i) => {
                   let dest = r.dest_column;
-                  if (r.action === "new_column")
-                    dest = `${r.new_column_name} (new ${r.new_column_type || "TEXT"})`;
-                  else if (r.action === "skip") dest = "— skipped";
+                  if (r.action === "skip") dest = "— skipped";
                   return (
                     <tr key={i}>
                       <td className="mono">{r.entity_type}</td>

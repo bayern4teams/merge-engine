@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   abortWorkflow,
+  ColumnDependency,
   getStatus,
   MappingRow,
   OriginConfig,
@@ -177,12 +178,17 @@ export default function PipelineScreen({ origins, destination }: Props) {
     }
   }
 
-  async function onApprove(mappingEdits?: MappingRow[]) {
+  async function onApprove(mappingEdits?: MappingRow[], columnDependencies?: ColumnDependency[]) {
     if (!threadId) return;
     setBusy(true);
     try {
       const node = status?.interrupt_data?.node;
-      const s = await sendFeedback(threadId, "approve", node === "human_review_mappings" ? mappingEdits : undefined);
+      const s = await sendFeedback(
+        threadId,
+        "approve",
+        node === "human_review_mappings" ? mappingEdits : undefined,
+        node === "human_review_deps" ? columnDependencies : undefined,
+      );
       addLog("success", "Approved.");
       setStatus(s);
       lastStatusKey.current = ""; // allow the next status line through
