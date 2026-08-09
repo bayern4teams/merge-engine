@@ -151,6 +151,7 @@ class WorkflowManager:
         conflict_policy: dict[str, Any] | None = None,
         matching_rules: dict[str, Any] | None = None,
         run_config: dict[str, Any] | None = None,
+        subject: str | None = None,
     ) -> str:
         """Start a new merge workflow in a background thread.
 
@@ -179,6 +180,11 @@ class WorkflowManager:
             entity_resolution_enabled, field_mapping_enabled,
             auto_approve_gates) applied on top of config.yaml for this run
             only — no restart, config.yaml untouched.
+        subject : str, optional
+            Subject-first mode (Phase 3.3): when set, merge_scope is derived
+            directly from this name in get_initial_state, rather than left
+            for parse_request's LLM call to extract from user_request's
+            free text.
 
         Returns
         -------
@@ -212,6 +218,7 @@ class WorkflowManager:
             conflict_policy=conflict_policy,
             matching_rules=matching_rules,
             run_config=run_config,
+            subject=subject,
         )
 
         # A profile replays the decisions an earlier run made — which tables
@@ -1088,9 +1095,7 @@ class WorkflowManager:
         return out
 
     @staticmethod
-    def _sanitise_column_dependencies(
-        edited: Any, values: dict[str, Any]
-    ) -> list[dict[str, Any]]:
+    def _sanitise_column_dependencies(edited: Any, values: dict[str, Any]) -> list[dict[str, Any]]:
         """Keep only custom dependency links whose origin/table/column all
         exist in the discovered schema — same reasoning as
         _sanitise_entity_tables: a typo in the "Add Custom Dependency Link"

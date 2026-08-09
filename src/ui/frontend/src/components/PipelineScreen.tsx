@@ -51,7 +51,14 @@ export default function PipelineScreen({ origins, destination }: Props) {
   const [saveAs, setSaveAs] = useState("");
   const [fullRemerge, setFullRemerge] = useState(false);
   const [advanced, setAdvanced] = useState<AdvancedState>(ADVANCED_DEFAULT);
-  const [presetCompany, setPresetCompany] = useState("");
+  // Phase 3.3: the company-name box is the default, primary way to start a
+  // run — the pipeline discovers every related table structurally (Phase
+  // 3.1/3.2's deterministic entity grouping), so there is no need to coax
+  // the LLM with a hand-written list of dimensions any more. The free-text
+  // textarea (`request`) becomes an opt-in "Advanced" path for a request
+  // this box can't express, not the default.
+  const [companyName, setCompanyName] = useState("");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [status, setStatus] = useState<WorkflowStatus | null>(null);
   const [log, setLog] = useState<LogLine[]>([]);
@@ -136,15 +143,23 @@ export default function PipelineScreen({ origins, destination }: Props) {
 
   // ── Actions ────────────────────────────────────────────────────────────
   async function onStart() {
-    if (!destination || origins.length === 0 || !request.trim()) return;
+    if (!destination || origins.length === 0) return;
+    const subject = companyName.trim();
+    if (advancedOpen ? !request.trim() : !subject) return;
     setBusy(true);
     setLog([]);
     lastStatusKey.current = "";
     lastGateKey.current = "";
     try {
       const overrides = buildRunOverrides(advanced);
+      // Subject mode: the backend sets merge_scope directly from `subject`
+      // rather than asking the LLM to extract it from free text (Phase
+      // 3.3) — `request` still needs some text, since it's what parse_request
+      // shows the LLM for group naming/explicit-vs-inferred classification.
+      const requestText = advancedOpen ? request : `Merge all information about ${subject}.`;
       const { thread_id } = await startWorkflow({
-        request,
+        request: requestText,
+        subject: advancedOpen ? undefined : subject,
         origins,
         destination,
         profile_name: profile || undefined,
@@ -222,74 +237,54 @@ export default function PipelineScreen({ origins, destination }: Props) {
     setStatus({ status: "aborted" });
   }
 
-  // One-click "everything about a company": fill the request with a scoped
-  // prompt and force a full re-merge so a re-run after a manual delete brings
-  // the rows back. The user still reviews every gate before anything is written.
-  function applyCompanyPreset() {
-    const name = presetCompany.trim();
-    if (!name) return;
-    setRequest(
-      `Please conduct a comprehensive and indepth data extraction of ${name}, covering all of the following dimensions:\n` +
-        `NOTE: Do your best to find all of them.\n\n` +
-        `1. Basic Company Information: Legal structure, registered address and operational headquarters, establishment history, shareholding structure and stock symbol;\n\n` +
-        `2. Personnel and Organization: Board members, executive committee, and senior executives (including CEO, CEOs of various business divisions, CFO, etc.), total number of employees worldwide and the educational and professional backgrounds of all individuals;\n\n` +
-        `3. Business and Products: All business areas and delivery data;\n\n` +
-        `4. Finance and Funding: Revenue and profit data, funding history and major investors;\n\n` +
-        `5. Technology and Innovation: Core technology directions and digital transformation;\n\n` +
-        `6. Global Presence: Main operational locations and international layout;\n\n` +
-        `7. Contact Information: Official company & individuals phone number and website.`,
-    );
-    setFullRemerge(true);
-  }
 
   // ── Derived UI state ───────────────────────────────────────────────────
   const wfStatus = status?.status ?? "idle";
   const interrupt = status?.interrupt_data ?? null;
   const activeGate = wfStatus === "interrupted" ? interrupt?.node ?? null : null;
   const skipped = status?.skipped_gates || {};
-  const canStart = origins.length > 0 && !!destination && request.trim().length > 0;
+  const canStart =
+    origins.length > 0 &&
+    !!destination &&
+    (advancedOpen ? request.trim().length > 0 : companyName.trim().length > 0);
   const running = ["running", "interrupted"].includes(wfStatus);
 
   return (
     <div>
-      <div className="card preset-card">
-        <h3 className="card-title">Comprehensive company extraction</h3>
-        <p className="card-hint">
-          Type a company name to build an enriched extraction request covering company info,
-          personnel, products, financials, technology, locations, and contacts across all origins.
-        </p>
-        <div className="preset-row">
-          <input
-            type="text"
-            value={presetCompany}
-            disabled={running}
-            onChange={(e) => setPresetCompany(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && applyCompanyPreset()}
-            placeholder="e.g. Airbus"
-          />
-          <button
-            className="btn btn-ghost"
-            onClick={applyCompanyPreset}
-            disabled={running || !presetCompany.trim()}
-          >
-            Build request
-          </button>
-        </div>
-      </div>
-
       <div className="card">
         <h3 className="card-title">Merge request</h3>
         <p className="card-hint">
-          Describe what to merge in plain language. The pipeline will pause at
-          review gates and show you exactly what it found before doing anything.
+          Type a company name — the pipeline discovers every related table across all origins
+          structurally, so there's nothing else to describe. Need something this box can't
+          express? Use Advanced below instead.
         </p>
-        <textarea
-          rows={3}
-          value={request}
-          disabled={running}
-          onChange={(e) => setRequest(e.target.value)}
-          placeholder="e.g. Merge all companies and their people from both origins into the destination."
+        <input
+          type="text"
+          value={companyName}
+          disabled={running || advancedOpen}
+          onChange={(e) => setCompanyName(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && !advancedOpen && canStart && onStart()}
+          placeholder="e.g. Airbus"
         />
+
+        <details
+          className="advanced-request"
+          open={advancedOpen}
+          onToggle={(e) => setAdvancedOpen((e.target as HTMLDetailsElement).open)}
+        >
+          <summary>Advanced — custom request</summary>
+          <p className="card-hint">
+            Describe what to merge in plain language instead. The pipeline will pause at
+            review gates and show you exactly what it found before doing anything.
+          </p>
+          <textarea
+            rows={3}
+            value={request}
+            disabled={running}
+            onChange={(e) => setRequest(e.target.value)}
+            placeholder="e.g. Merge all companies and their people from both origins into the destination."
+          />
+        </details>
 
         <div className="profile-row">
           <label>

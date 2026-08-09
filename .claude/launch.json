@@ -3,7 +3,7 @@
   "configurations": [
     {
       "name": "web-app",
-      "runtimeExecutable": "python",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
       "runtimeArgs": ["-m", "src.main", "--mode", "gradio", "--port", "7860"],
       "port": 7860
     }

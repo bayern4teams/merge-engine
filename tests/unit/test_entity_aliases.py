@@ -1,52 +1,34 @@
 """
-Consistency tests between entity_types.CANONICAL_ENTITY_TYPES and
-entity_aliases.ALIAS_GROUPS, plus regression coverage for the real destination
-table names (Global Warehouse) each concept must resolve to.
+Regression coverage for entity_aliases.ALIAS_GROUPS: the invariant that no
+alias appears in two groups, plus real destination table names (Global
+Warehouse) each concept must resolve to.
 
 Added 2026-07-30 as part of remediation #1 (breadth) in
-merge-engine-remediation-1-to-6 (project memory) — these two structures used to
-drift apart silently (e.g. "technology" and "skill" were conflated into one alias
-group, and finance/industry/technology_category/company_relation had no alias
-group at all, which is why the heuristic table-selection floor could never find
-CompanyFinancials no matter what the LLM proposed).
+merge-engine-remediation-1-to-6 (project memory) — "technology" and "skill"
+were once conflated into one alias group, and finance/industry/
+technology_category/company_relation had no alias group at all, which is
+why the heuristic table-selection floor could never find CompanyFinancials
+no matter what the LLM proposed.
+
+Originally also checked consistency against entity_types.CANONICAL_ENTITY_TYPES,
+a fixed enum with zero production importers (only this test ever imported it —
+the enum it mirrored in request_parsing.system.txt was itself removed by the
+schema-grounded parse_request rewrite). Phase 3.1 of the fix-bugs follow-up
+plan deleted entity_types.py: ALIAS_GROUPS is now consulted directly by
+entity_grouping.py (see tests/unit/test_entity_grouping.py), which derives
+its vocabulary from what's actually discovered rather than a static list, so
+there is no longer a second structure for this file to check ALIAS_GROUPS
+against.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from src.orchestrator.utils.entity_aliases import ALIAS_GROUPS, _group_of, concept_matches
-from src.orchestrator.utils.entity_types import (
-    CANONICAL_ENTITY_TYPES,
-    ORIGINAL_SEVEN,
-    WIDENED_TYPES,
-)
-
-# person/company/product already had groups before the widening; order/account/
-# country are generic concepts carried forward for schema-agnostic compatibility
-# but have no table (and therefore no alias group) in this destination's schema —
-# see the docstring in entity_types.py.
-_EXPECTED_GROUPED = set(WIDENED_TYPES) | {"person", "company", "product", "contract"}
-_EXPECTED_UNGROUPED = {"country", "account", "order"}
+from src.orchestrator.utils.entity_aliases import ALIAS_GROUPS, concept_matches
 
 
 class TestAliasGroupCoverage:
-    def test_every_widened_type_has_exactly_one_alias_group(self):
-        for concept in _EXPECTED_GROUPED:
-            group = _group_of(concept)
-            assert group is not None, f"{concept!r} has no alias group at all"
-
-    def test_generic_untabled_types_have_no_group_by_design(self):
-        # Not a bug -- documents the deliberate scoping decision so a future
-        # change that silently adds/removes one of these is forced to touch
-        # this test and explain why.
-        for concept in _EXPECTED_UNGROUPED:
-            assert _group_of(concept) is None
-
-    def test_canonical_types_partition_correctly(self):
-        assert set(CANONICAL_ENTITY_TYPES) == set(ORIGINAL_SEVEN) | set(WIDENED_TYPES)
-        assert set(ORIGINAL_SEVEN) & set(WIDENED_TYPES) == set()
-
     def test_no_alias_string_appears_in_two_groups(self):
         seen: dict[str, set[str]] = {}
         for group in ALIAS_GROUPS:

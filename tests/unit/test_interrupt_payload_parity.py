@@ -132,8 +132,18 @@ class TestInterruptPayloadParity:
             },
             "extracted_data": {
                 "company": [
-                    {"_origin_id": "origin_1", "_origin_table": "Company", "_origin_id_row": "1", "name": "Airbus"},
-                    {"_origin_id": "origin_2", "_origin_table": "Company", "_origin_id_row": "1", "name": "Airbus SE"},
+                    {
+                        "_origin_id": "origin_1",
+                        "_origin_table": "Company",
+                        "_origin_id_row": "1",
+                        "name": "Airbus",
+                    },
+                    {
+                        "_origin_id": "origin_2",
+                        "_origin_table": "Company",
+                        "_origin_id_row": "1",
+                        "name": "Airbus SE",
+                    },
                 ]
             },
             "resolution_stats": {
@@ -280,8 +290,6 @@ class TestPayloadVersion:
         stale_version = base["payload_version"]
 
         base["data"]["error"] = "rejected: destination schema is a fixed contract"
-        recomputed = WorkflowManager._payload_version(
-            "human_review_mappings", base["data"], ""
-        )
+        recomputed = WorkflowManager._payload_version("human_review_mappings", base["data"], "")
 
         assert recomputed != stale_version

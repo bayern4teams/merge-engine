@@ -21,8 +21,11 @@ from __future__ import annotations
 # wrong, those are two different destination tables). Also added the
 # destination's actual (non-standard) "technologic"/"technologic_category"
 # spellings as aliases, since neither matched the natural-English "technology"
-# spelling before. See src/orchestrator/utils/entity_types.py for the canonical
-# entity-type list every group here should correspond to.
+# spelling before. This is now the single source of vocabulary the pipeline
+# consults (Phase 3.1 of the fix-bugs follow-up plan deleted the fixed-enum
+# entity_types.py this comment used to point to, since it had zero production
+# importers and entity_grouping.py derives its vocabulary from what's actually
+# discovered rather than a static list).
 ALIAS_GROUPS: list[set[str]] = [
     {
         "company",

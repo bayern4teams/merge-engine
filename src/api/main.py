@@ -163,6 +163,13 @@ class RunConfig(BaseModel):
 
 class WorkflowStart(BaseModel):
     request: str
+    # Subject-first mode (Phase 3.3 of the fix-bugs follow-up plan): when
+    # set, merge_scope is derived directly from this name instead of asking
+    # the LLM to extract a subject from `request`'s free text. `request`
+    # still carries some text — parse_request's LLM call still needs it for
+    # entity-group naming and explicit-vs-inferred classification, which are
+    # independent of scope extraction.
+    subject: str | None = None
     origins: list[dict[str, Any]]
     destination: dict[str, Any]
     # Replay a saved profile's pinned decisions instead of re-deriving them.
@@ -522,6 +529,7 @@ def create_api(config_path: str = "config/config.yaml") -> FastAPI:
                 conflict_policy=body.conflict_policy,
                 matching_rules=body.matching_rules,
                 run_config=body.run_config.model_dump() if body.run_config else None,
+                subject=body.subject,
             )
         except ValueError as exc:
             raise HTTPException(404, str(exc)) from exc

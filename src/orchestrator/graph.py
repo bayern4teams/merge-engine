@@ -709,6 +709,7 @@ def get_initial_state(
     conflict_policy: dict[str, Any] | None = None,
     matching_rules: dict[str, Any] | None = None,
     run_config: dict[str, Any] | None = None,
+    subject: str | None = None,
 ) -> dict[str, Any]:
     """Create the initial state dict for a new workflow.
 
@@ -746,6 +747,11 @@ def get_initial_state(
         ``entity_resolution_enabled``, ``field_mapping_enabled``,
         ``batch_size``, ``auto_approve_gates``. Only keys actually present
         override the file-loaded config; everything else is left alone.
+    subject : str, optional
+        Subject-first mode (Phase 3.3): when set (UI-originated workflows
+        only), ``merge_scope`` is set directly to an active company-scoped
+        merge for this name, rather than left inactive for parse_request's
+        LLM call to derive from ``user_request``'s free text.
 
     Returns
     -------
@@ -757,12 +763,18 @@ def get_initial_state(
         llm_config = _load_llm_config(config_path)
         extraction_config: dict[str, Any] = {"default_batch_size": 1000}
         _apply_run_config_overrides(llm_config, extraction_config, run_config)
+        subject_clean = (subject or "").strip()
+        merge_scope = (
+            {"active": True, "subject": subject_clean, "scope_type": "company"}
+            if subject_clean
+            else {"active": False, "subject": "", "scope_type": "none"}
+        )
         return {
             "user_request": user_request,
             "run_id": run_id,
             "target_entities": [],
             "explicit_target_entities": [],
-            "merge_scope": {"active": False, "subject": "", "scope_type": "none"},
+            "merge_scope": merge_scope,
             "origins": origins,
             "destination": destination,
             # run_id rides along so every LLM call can be attributed to this

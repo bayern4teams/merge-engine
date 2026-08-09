@@ -244,7 +244,9 @@ def _build_matches_interrupt(state: dict[str, Any]) -> dict[str, Any]:
                 for rid in record_ids:
                     rec = records_by_id.get(rid, {})
                     fields = {
-                        k: v for k, v in rec.items() if not k.startswith("_") and v not in (None, "")
+                        k: v
+                        for k, v in rec.items()
+                        if not k.startswith("_") and v not in (None, "")
                     }
                     records_preview.append({"record_id": rid, "fields": fields})
                 low_conf.append(

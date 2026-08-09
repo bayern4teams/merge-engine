@@ -199,6 +199,10 @@ export const GATE_LABELS: Record<string, string> = {
 
 export function startWorkflow(body: {
   request: string;
+  /** Subject-first mode (Phase 3.3): when set, the backend derives
+   * merge_scope directly from this name instead of asking the LLM to
+   * extract it from `request`'s free text. */
+  subject?: string;
   origins: OriginConfig[];
   destination: DestinationConfig;
   /** Replay a saved profile's pinned decisions instead of re-deriving them. */

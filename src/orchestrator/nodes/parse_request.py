@@ -1,8 +1,19 @@
 """
-parse_request node: Extracts target entity types from user's natural language prompt.
+parse_request node: Groups discovered tables into entities and extracts
+merge scope from the user's natural language request.
 
-Uses the LLM with the request_parsing prompt template to identify which
-entity types the user wants to import based on discovered database schemas.
+Entity GROUPING is deterministic (Phase 3.1's group_tables_into_entities) —
+every table discover_schemas found is assigned to exactly one group before
+the LLM is ever called, so a schema-grounded entity can no longer be
+silently dropped the way 7 of 20 tables were in the 4th live run (Bugs/Logs/
+4th_try_05_18_local_enrichprompt.txt). The LLM's remaining job is narrower
+and lower-stakes: pick a readable name for each group, say which groups the
+user's text explicitly named (vs. everything else, included by design so
+"all information about X" and "just company records" both reach the same
+completeness — see plan Context/Phase 3 for why), and extract the merge
+subject/scope for a scoped merge. It cannot add, remove, or move a table
+between groups; a mismatched or missing name falls back to the deterministic
+key, never to fewer tables.
 """
 
 from __future__ import annotations
@@ -11,54 +22,116 @@ import logging
 from typing import Any
 
 from src.llm import PROMPT_TEMPLATES, LLMClient
+from src.orchestrator.utils.entity_grouping import group_tables_into_entities
 from src.orchestrator.utils.retry import classify_exception
 
 logger = logging.getLogger("merge-engine.orchestrator.parse_request")
 
+_INACTIVE_SCOPE: dict[str, Any] = {"active": False, "subject": "", "scope_type": "none"}
 
-def _build_full_schema_summary(schemas: dict[str, Any]) -> str:
-    """Build a complete schema catalog summary across all origins."""
-    lines: list[str] = []
+
+def _discovered_table_pairs(schemas: dict[str, Any]) -> set[tuple[str, str]]:
+    """Every (origin_id, table_name) discover_schemas actually found —
+    the ground truth the post-condition below checks entity_tables against."""
+    pairs: set[tuple[str, str]] = set()
     for origin_id, schema_data in (schemas or {}).items():
-        origin_type = schema_data.get("origin_type", "?")
-        lines.append(f"\n=== Origin: {origin_id} ({origin_type}) ===")
-        for table in schema_data.get("tables", []):
-            table_name = table.get("name", "?")
+        for table in (schema_data or {}).get("tables", []) or []:
+            name = (table or {}).get("name")
+            if name:
+                pairs.add((origin_id, name))
+    return pairs
+
+
+def _build_group_catalog(groups: dict[str, list[dict[str, str]]], schemas: dict[str, Any]) -> str:
+    """Render each deterministic group with its member tables and a
+    handful of columns per table, as the LLM's naming/classification input.
+
+    Column lookup is by (origin_id, table name) against the full schema —
+    entity_grouping.py only returns origin_id/table, not columns, since
+    grouping itself never needs them.
+    """
+    columns_by_table: dict[tuple[str, str], list[str]] = {}
+    for origin_id, schema_data in (schemas or {}).items():
+        for table in (schema_data or {}).get("tables", []) or []:
+            name = (table or {}).get("name")
+            if not name:
+                continue
             cols = [c.get("name", "") for c in table.get("columns", []) if c.get("name")]
-            lines.append(f"\n  Table: {table_name}")
-            if cols:
-                lines.append(f"    Columns: {', '.join(cols)}")
-            sample = table.get("sample_row", {})
-            if sample:
-                sample_str = ", ".join(f"{k}={v!r}" for k, v in list(sample.items())[:4])
-                lines.append(f"    Sample: {{{sample_str}}}")
-    return "\n".join(lines) if lines else "(No discovered schemas available)"
+            columns_by_table[(origin_id, name)] = cols
+
+    lines: list[str] = []
+    for group_key in sorted(groups):
+        members = groups[group_key]
+        lines.append(f"\nGroup: {group_key}")
+        for m in members:
+            oid, tbl = m["origin_id"], m["table"]
+            cols = columns_by_table.get((oid, tbl), [])
+            col_str = ", ".join(cols[:8])
+            lines.append(f"  - {oid}.{tbl} ({col_str})" if col_str else f"  - {oid}.{tbl}")
+    return "\n".join(lines) if lines else "(No discovered tables)"
 
 
 async def parse_request(state: dict[str, Any]) -> dict[str, Any]:
-    """Parse user request to extract target entity types and entity table mappings.
+    """Group discovered tables into entities and extract merge scope.
 
     Parameters
     ----------
     state : dict
-        MergeState with ``user_request`` and ``schemas`` fields populated.
+        MergeState with ``user_request`` and ``schemas`` populated.
 
     Returns
     -------
     dict
         Update dict with ``target_entities``, ``explicit_target_entities``,
-        ``merge_scope``, and ``entity_tables`` keys.
+        ``merge_scope``, ``entity_tables``, and ``table_selection_notes``.
     """
     logger.debug("ENTER parse_request")
     logger.debug("State keys: %s", list(state.keys()))
     logger.debug("user_request (truncated): %.200s", state.get("user_request", ""))
-    logger.debug("llm_config keys: %s", list(state.get("llm_config", {}).keys()))
-    logger.debug("origins count: %d", len(state.get("origins", [])))
     schemas = state.get("schemas", {})
     logger.debug("schemas count: %d", len(schemas))
 
     user_request: str = state["user_request"]
     llm_config: dict[str, Any] = state["llm_config"]
+
+    # Subject-first mode (Phase 3.3): get_initial_state already set an
+    # active merge_scope directly from the UI's company-name box. That is
+    # authoritative — the LLM's own subject/scope_type guess (still asked
+    # for, since the same call also does naming/classification) must not
+    # override it, and a naming-call failure must not silently drop it back
+    # to inactive either.
+    pre_set_scope_raw = state.get("merge_scope")
+    pre_set_scope: dict[str, Any] | None = (
+        dict(pre_set_scope_raw)
+        if isinstance(pre_set_scope_raw, dict) and pre_set_scope_raw.get("active")
+        else None
+    )
+    if pre_set_scope is not None:
+        logger.debug("Pre-set merge_scope from subject-first mode: %s", pre_set_scope)
+
+    deterministic_groups, unassigned = group_tables_into_entities(schemas)
+    # group_tables_into_entities itself asserts this, but state can carry a
+    # stale/hand-built schemas dict from a legacy caller — verify again at
+    # this boundary rather than trust an invariant enforced two call frames
+    # away.
+    assert unassigned == [], f"group_tables_into_entities left tables unassigned: {unassigned}"
+    logger.debug(
+        "Deterministic groups: %d covering %d tables",
+        len(deterministic_groups),
+        sum(len(v) for v in deterministic_groups.values()),
+    )
+
+    if not deterministic_groups:
+        logger.warning("No discovered schemas to group; parse_request has nothing to work with")
+        logger.debug("EXIT parse_request (no schemas)")
+        return {
+            "target_entities": [],
+            "explicit_target_entities": [],
+            "merge_scope": pre_set_scope or dict(_INACTIVE_SCOPE),
+            "entity_tables": {},
+            "table_selection_notes": "No discovered schemas — nothing to group.",
+            "interrupt_data": None,
+        }
 
     client = LLMClient(llm_config)
     prompts = PROMPT_TEMPLATES.get("request_parsing", {})
@@ -68,22 +141,65 @@ async def parse_request(state: dict[str, Any]) -> dict[str, Any]:
     if not system_prompt or not human_template:
         logger.warning("request_parsing prompt not found, using fallback")
         system_prompt = (
-            system_prompt or "You extract entity types from user requests. Return only JSON."
+            system_prompt
+            or "You name entity groups and extract merge scope from user requests. "
+            "Return only JSON."
         )
         human_template = (
             human_template
-            or "Extract entity types from this request as JSON: {user_request}\n\nSchema:\n{schema_info}"
+            or "Request: {user_request}\n\nDiscovered table groups:\n{group_catalog}\n\nOutput:"
         )
 
-    schema_summary = _build_full_schema_summary(schemas)
+    group_catalog = _build_group_catalog(deterministic_groups, schemas)
     # CLAUDE.md hard constraint: prompt substitution is literal str.replace(), never .format()
     user_prompt = human_template.replace("{user_request}", user_request).replace(
-        "{schema_info}", schema_summary
+        "{group_catalog}", group_catalog
     )
     logger.debug(
         "Prompt loaded (%d chars, truncated to %d)", len(user_prompt), min(len(user_prompt), 500)
     )
     logger.debug("User prompt (first 500 chars): %s", user_prompt[:500])
+
+    def _finish(
+        name_map: dict[str, str],
+        explicit_keys: set[str],
+        merge_scope: dict[str, Any],
+        table_selection_notes: str,
+    ) -> dict[str, Any]:
+        target_entities = [name_map[g] for g in deterministic_groups]
+        entity_tables = {name_map[g]: deterministic_groups[g] for g in deterministic_groups}
+        explicit_target_entities = [name_map[g] for g in explicit_keys]
+
+        # The hard post-condition: every table discover_schemas found must
+        # still be reachable through entity_tables. Naming and explicit-vs-
+        # inferred classification are the LLM's only degrees of freedom
+        # here — membership itself is fixed the moment deterministic_groups
+        # was built, so this can only fail if this function has a bug, not
+        # because of anything the LLM said.
+        discovered = _discovered_table_pairs(schemas)
+        mapped = {(e["origin_id"], e["table"]) for lst in entity_tables.values() for e in lst}
+        orphaned = discovered - mapped
+        assert not orphaned, f"Orphaned source tables in parse_request: {orphaned}"
+
+        logger.debug("Extracted target_entities: %s", target_entities)
+        logger.debug("Extracted explicit_target_entities: %s", explicit_target_entities)
+        logger.info(
+            "Parsed request: %d entities (%d explicit), scope = %s, tables = %d",
+            len(target_entities),
+            len(explicit_target_entities),
+            f"{merge_scope['scope_type']}:{merge_scope['subject']!r}"
+            if merge_scope["active"]
+            else "none",
+            sum(len(v) for v in entity_tables.values()),
+        )
+        return {
+            "target_entities": target_entities,
+            "explicit_target_entities": explicit_target_entities,
+            "merge_scope": merge_scope,
+            "entity_tables": entity_tables,
+            "table_selection_notes": table_selection_notes,
+            "interrupt_data": None,
+        }
 
     try:
         logger.debug("Calling LLMClient.call_json()")
@@ -94,95 +210,70 @@ async def parse_request(state: dict[str, Any]) -> dict[str, Any]:
         logger.debug(
             "LLM response received: type=%s, repr=%.300s", type(result).__name__, repr(result)
         )
+        if not isinstance(result, dict):
+            result = {}
 
-        target_entities = result.get("entity_types", []) if isinstance(result, dict) else []
-        raw_entity_tables = result.get("entity_tables", {}) if isinstance(result, dict) else {}
+        raw_names = result.get("group_names", {})
+        name_map: dict[str, str] = {}
+        for group_key in deterministic_groups:
+            candidate = raw_names.get(group_key) if isinstance(raw_names, dict) else None
+            name_map[group_key] = (
+                candidate.strip() if isinstance(candidate, str) and candidate.strip() else group_key
+            )
 
-        # Validate/clean entity_tables
-        entity_tables: dict[str, list[dict[str, str]]] = {}
-        if isinstance(raw_entity_tables, dict):
-            for ent, tbls in raw_entity_tables.items():
-                if isinstance(tbls, list):
-                    cleaned_tbls = []
-                    for t in tbls:
-                        if isinstance(t, dict) and "origin_id" in t and "table" in t:
-                            cleaned_tbls.append(
-                                {"origin_id": str(t["origin_id"]), "table": str(t["table"])}
-                            )
-                    entity_tables[ent] = cleaned_tbls
-
-        # Fallback: if entity_types is empty but entity_tables has keys
-        if not target_entities and entity_tables:
-            target_entities = list(entity_tables.keys())
-
-        explicit_target_entities = (
-            result.get("explicit_entity_types", target_entities) if isinstance(result, dict) else []
-        )
-        if not isinstance(explicit_target_entities, list):
-            explicit_target_entities = target_entities
-        explicit_target_entities = [e for e in explicit_target_entities if e in target_entities]
-
-        subject = str(result.get("subject", "")).strip() if isinstance(result, dict) else ""
-        scope_type = (
-            str(result.get("scope_type", "none")).strip().lower()
-            if isinstance(result, dict)
-            else "none"
-        )
-        merge_scope = {
-            "active": bool(subject) and scope_type not in ("", "none"),
-            "subject": subject,
-            "scope_type": scope_type or "none",
-        }
-
-        table_selection_notes = (
-            str(result.get("notes", "")).strip() if isinstance(result, dict) else ""
+        raw_explicit = result.get("explicit_groups", [])
+        explicit_keys = (
+            {g for g in raw_explicit if g in deterministic_groups}
+            if isinstance(raw_explicit, list)
+            else set()
         )
 
-        logger.debug("Extracted target_entities: %s", target_entities)
-        logger.debug("Extracted explicit_target_entities: %s", explicit_target_entities)
-        logger.debug("Extracted entity_tables: %s", entity_tables)
-        logger.info(
-            "Parsed request: entities = %s, explicit = %s, scope = %s, tables = %d entities mapped",
-            target_entities,
-            explicit_target_entities,
-            f"{scope_type}:{subject!r}" if merge_scope["active"] else "none",
-            len(entity_tables),
-        )
+        if pre_set_scope is not None:
+            merge_scope = pre_set_scope
+        else:
+            subject = str(result.get("subject", "")).strip()
+            scope_type = str(result.get("scope_type", "none")).strip().lower()
+            merge_scope = {
+                "active": bool(subject) and scope_type not in ("", "none"),
+                "subject": subject,
+                "scope_type": scope_type or "none",
+            }
+        table_selection_notes = str(result.get("notes", "")).strip()
 
-        return {
-            "target_entities": target_entities,
-            "explicit_target_entities": explicit_target_entities,
-            "merge_scope": merge_scope,
-            "entity_tables": entity_tables,
-            "table_selection_notes": table_selection_notes,
-            "interrupt_data": None,
-        }
+        response = _finish(name_map, explicit_keys, merge_scope, table_selection_notes)
+        logger.debug("EXIT parse_request")
+        return response
 
     except Exception as exc:
-        logger.error("Failed to parse request: %s", exc, exc_info=True)
-        logger.error("Exception type: %s, exception class: %s", type(exc).__name__, exc.__class__)
+        # Grouping never depended on the LLM (Phase 3.1) — only naming,
+        # explicit/inferred classification, and subject extraction did. A
+        # failure here degrades to the deterministic keys as their own
+        # names and an inactive scope, rather than the empty-entities
+        # silent-continue this project has already been burned by twice
+        # (Phase 1.4, Phase 1.5): the run can meaningfully proceed with
+        # ugly-but-complete entity names, so it does, and says so loudly
+        # via table_selection_notes rather than either hiding the failure
+        # or stopping a run that doesn't need to stop.
+        logger.error(
+            "Naming/scope LLM call failed, falling back to deterministic keys: %s",
+            exc,
+            exc_info=True,
+        )
         classified = classify_exception(exc)
-        error_msg = f"Request parsing failed: {exc}"
-        # Silently continuing here means a parse failure produces zero target
-        # entities and the run sails on to analyze_dependencies, which then
-        # reports "No target entities parsed" and an empty tree with no error
-        # gate ever firing (Phase 1.5) — set failure so _fallible_router
-        # actually stops the run and asks a human instead.
-        return {
-            "target_entities": [],
-            "explicit_target_entities": [],
-            "merge_scope": {"active": False, "subject": "", "scope_type": "none"},
-            "entity_tables": {},
-            "table_selection_notes": "",
-            "errors": [error_msg],
-            "failure": {
-                "node": "parse_request",
-                "error": error_msg,
-                "error_class": type(classified).__name__,
-                "disposition": classified.disposition,
-                "context": {},
-            },
-            "interrupt_data": None,
-        }
-    finally:
-        logger.debug("EXIT parse_request")
+        name_map = {g: g for g in deterministic_groups}
+        notes = (
+            f"LLM naming/scope extraction failed ({classify_exception(exc).__class__.__name__}: "
+            f"{exc}); entity groups use their deterministic keys as-is and no merge scope was "
+            f"extracted from the request text."
+        )
+        response = _finish(name_map, set(), pre_set_scope or dict(_INACTIVE_SCOPE), notes)
+        response["errors"] = [f"Request parsing degraded: {exc}"]
+        # Not a hard failure (state["failure"]) — the run has usable,
+        # complete entity_tables and can continue. classified.disposition
+        # is still logged so the pattern (transient vs permanent) is
+        # visible without escalating a recoverable degradation to a stop.
+        logger.debug(
+            "Classified as %s (disposition=%s)", type(classified).__name__, classified.disposition
+        )
+        logger.debug("EXIT parse_request (degraded)")
+        return response

@@ -1,5 +1,5 @@
-## Discovered Database Schemas
-{schema_info}
+## Discovered Entity Groups
+{group_catalog}
 
 ---
 User request: {user_request}

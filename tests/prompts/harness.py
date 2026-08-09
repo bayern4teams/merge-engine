@@ -45,7 +45,10 @@ _STAGES = (
 # Placeholders the production call sites substitute into each stage's
 # human template (system templates carry no placeholders).
 _REQUIRED_PLACEHOLDERS = {
-    "request_parsing": ["{user_request}", "{schema_info}"],
+    # Phase 3.2 of the fix-bugs follow-up plan: parse_request no longer
+    # selects entity types from a schema dump — it names deterministic
+    # groups (group_tables_into_entities) from a pre-built catalog.
+    "request_parsing": ["{user_request}", "{group_catalog}"],
     "dependency_analysis": ["{target_entities}", "{schema_info}"],
     "entity_table_selection": ["{target_entities}", "{table_catalog}"],
     "scope_planning": ["{subject}", "{subject_entity}", "{target_entities}", "{table_catalog}"],
@@ -111,14 +114,19 @@ def _build_prompt(stage: str, case: dict[str, Any]) -> tuple[str, str]:
     inp = case["input"]
 
     if stage == "request_parsing":
-        # Falls back to the same "(No discovered schemas available)" string
-        # production emits when schemas is empty (parse_request.py's
-        # _build_full_schema_summary), so a golden case that omits
-        # schema_info still substitutes real text rather than leaving the
-        # literal {schema_info} token in the prompt sent to the model.
-        schema_info = inp.get("schema_info", "(No discovered schemas available)")
+        # Falls back to the same "(No discovered tables)" string production
+        # emits for an empty catalog (parse_request.py's
+        # _build_group_catalog), so a golden case that omits group_catalog
+        # still substitutes real text rather than leaving the literal
+        # {group_catalog} token in the prompt sent to the model. The golden
+        # cases themselves still encode the pre-Phase-3.2 contract
+        # (entity_types/entity_tables) — regenerating them against the new
+        # group_names/explicit_groups contract is tracked separately
+        # (Phase 8.2 of the fix-bugs follow-up plan) since it depends on
+        # real discovered-schema fixtures, not just a prompt-shape fix.
+        group_catalog = inp.get("group_catalog", "(No discovered tables)")
         return system, human.replace("{user_request}", inp["user_request"]).replace(
-            "{schema_info}", schema_info
+            "{group_catalog}", group_catalog
         )
 
     if stage == "dependency_analysis":
