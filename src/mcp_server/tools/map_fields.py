@@ -212,6 +212,34 @@ async def map_fields_impl(
             dest_columns,
         )
 
+    # Enrich mapping results with origin metadata and coalesced flag
+    dest_counts: dict[str, int] = {}
+    for entry in field_mapping.values():
+        dcol = entry.get("dest_column")
+        if dcol:
+            dest_counts[dcol] = dest_counts.get(dcol, 0) + 1
+
+    for field, entry in field_mapping.items():
+        meta = unified_schema.get(field, {})
+        if meta.get("origin_id"):
+            entry["origin_id"] = meta.get("origin_id")
+        if meta.get("table"):
+            entry["table"] = meta.get("table")
+        if meta.get("source_field"):
+            entry["source_field"] = meta.get("source_field")
+        dcol = entry.get("dest_column")
+        entry["is_coalesced"] = bool(dcol and dest_counts.get(dcol, 0) > 1)
+
+    for item in unmapped_fields:
+        field = item.get("field", "")
+        meta = unified_schema.get(field, {})
+        if meta.get("origin_id"):
+            item["origin_id"] = meta.get("origin_id")
+        if meta.get("table"):
+            item["table"] = meta.get("table")
+        if meta.get("source_field"):
+            item["source_field"] = meta.get("source_field")
+
     logger.debug(
         "Phase 3 complete: llm_decided=%d, unmapped=%d, schema_changes=%d",
         llm_mapped,
@@ -497,10 +525,11 @@ async def _decide_fields_with_llm(
         # Set when a reviewer sent the mappings gate back for rework.
         hint = str((llm_config or {}).get("retry_hint") or "").strip()
         if hint:
-            from src.orchestrator.utils.retry_hints import apply_retry_hint
-
-            user_prompt = apply_retry_hint(
-                user_prompt, {"retry_hints": {"map_fields": hint}}, "map_fields"
+            user_prompt = (
+                f"{user_prompt}\n\n--- REVIEWER FEEDBACK ON YOUR PREVIOUS ANSWER ---\n"
+                f"A human reviewed your previous output for this exact task and rejected "
+                f"it for the reason below. Produce a different answer that addresses it "
+                f"directly. Do not repeat the previous answer.\n\nReason: {hint}\n"
             )
 
         client = LLMClient(llm_config)

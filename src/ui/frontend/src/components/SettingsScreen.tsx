@@ -1,11 +1,10 @@
 import { useEffect, useState } from "react";
-import { EffectiveConfig, getConfig, updatePlatformConfig } from "../api";
+import { EffectiveConfig, getConfig, resetEnvOverrides, updateEnvOverrides, updatePlatformConfig } from "../api";
 
 // Part 1.6.A: platform/system settings -- ports, base_url, retry/extraction
 // defaults. Distinct from the Pipeline screen's Advanced panel: everything
 // here is the DEFAULT a run starts from on this machine, persisted to a
 // gitignored overlay file (never config.yaml, never a run-by-run value).
-// Credentials are never editable here -- they stay in .env.
 
 interface FormState {
   destination: { type: string; host: string; port: string; schema: string };
@@ -50,14 +49,16 @@ function Provenance({ source }: { source?: string }) {
 export default function SettingsScreen() {
   const [cfg, setCfg] = useState<EffectiveConfig | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
-  // What the form looked like right after the last load/save -- save() only
-  // sends fields that differ from this, so editing one field doesn't pin
-  // every other field's already-resolved value into the override file too.
   const [baseline, setBaseline] = useState<FormState | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+
+  // Session environment override state
+  const [envInputs, setEnvInputs] = useState<Record<string, string>>({});
+  const [envSaving, setEnvSaving] = useState(false);
+  const [envMsg, setEnvMsg] = useState<string | null>(null);
 
   function load() {
     setLoading(true);
@@ -129,11 +130,59 @@ export default function SettingsScreen() {
     }
   }
 
+  async function handleApplyEnv() {
+    setEnvSaving(true);
+    setEnvMsg(null);
+    try {
+      const res = await updateEnvOverrides(envInputs);
+      if (cfg) {
+        setCfg({
+          ...cfg,
+          env_present: res.env_present,
+          env_details: res.env_details,
+        });
+      }
+      setEnvInputs({});
+      setEnvMsg("✓ Session environment overrides applied to runtime memory.");
+    } catch (e) {
+      setEnvMsg(`Error: ${String(e)}`);
+    } finally {
+      setEnvSaving(false);
+    }
+  }
+
+  async function handleResetEnv() {
+    setEnvSaving(true);
+    setEnvMsg(null);
+    try {
+      const res = await resetEnvOverrides();
+      if (cfg) {
+        setCfg({
+          ...cfg,
+          env_present: res.env_present,
+          env_details: res.env_details,
+        });
+      }
+      setEnvInputs({});
+      setEnvMsg("✓ Reset all session overrides back to .env defaults.");
+    } catch (e) {
+      setEnvMsg(`Error: ${String(e)}`);
+    } finally {
+      setEnvSaving(false);
+    }
+  }
+
   if (loading) return <div className="card">Loading settings…</div>;
   if (error && !cfg) return <div className="card"><div className="banner banner-error">{error}</div></div>;
   if (!cfg || !form) return null;
 
   const src = cfg.sources;
+  const envEntries: Array<[string, { status: string; is_set: boolean; masked_value?: string }]> = cfg.env_details
+    ? Object.entries(cfg.env_details)
+    : Object.entries(cfg.env_present || {}).map(([name, present]) => [
+        name,
+        { status: present ? "set" : "not_set", is_set: present, masked_value: present ? "****" : "" },
+      ]);
 
   return (
     <div>
@@ -268,20 +317,58 @@ export default function SettingsScreen() {
         </div>
       </div>
 
-      <div className="card">
-        <h3 className="card-title">Environment (.env)</h3>
+      <div className="card" style={{ marginTop: 20 }}>
+        <h3 className="card-title">Environment (.env & Session Overrides)</h3>
         <p className="card-hint">
-          Presence only — values are never shown here or sent to this page.
+          Values loaded from <code>.env</code> on launch act as default settings. You can enter session overrides below
+          which immediately update active runtime environment variables in memory.
+          <br />
+          <strong style={{ color: "#94a3b8" }}>
+            ⚡ Note: Session overrides remain active until process restart (Ctrl+C in terminal), which automatically restores .env defaults.
+          </strong>
         </p>
-        <div className="table-list">
-          {Object.entries(cfg.env_present).map(([name, present]) => (
-            <div key={name} className="table-list-row">
-              <span className="mono">{name}</span>
-              <span className={present ? "banner-success provenance-badge" : "banner-error provenance-badge"}>
-                {present ? "set" : "not set"}
-              </span>
-            </div>
-          ))}
+
+        {envMsg && <div className="banner banner-info" style={{ marginBottom: 12 }}>{envMsg}</div>}
+
+        <div className="form-grid" style={{ gap: 14 }}>
+          {envEntries.map(([name, detail]) => {
+            const isOverridden = detail.status === "overridden";
+            const isSet = detail.is_set;
+            const badgeClass = isOverridden
+              ? "banner-info provenance-badge"
+              : isSet
+              ? "banner-success provenance-badge"
+              : "banner-error provenance-badge";
+            const badgeText = isOverridden
+              ? "⚡ overridden (session)"
+              : isSet
+              ? "✓ set (.env default)"
+              : "not set";
+
+            return (
+              <div key={name} className="field wide" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <label className="mono" style={{ fontWeight: 600 }}>{name}</label>
+                  <span className={badgeClass}>{badgeText}</span>
+                </div>
+                <input
+                  type="text"
+                  placeholder={detail.masked_value ? `Active: ${detail.masked_value} — type new value to override` : "Enter new value to override..."}
+                  value={envInputs[name] ?? ""}
+                  onChange={(e) => setEnvInputs({ ...envInputs, [name]: e.target.value })}
+                />
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="btn-row" style={{ marginTop: 16 }}>
+          <button className="btn btn-primary" onClick={handleApplyEnv} disabled={envSaving}>
+            {envSaving ? "Applying..." : "Apply Session Overrides"}
+          </button>
+          <button className="btn btn-ghost" onClick={handleResetEnv} disabled={envSaving}>
+            Reset to .env Defaults
+          </button>
         </div>
       </div>
     </div>

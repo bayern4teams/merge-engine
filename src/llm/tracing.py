@@ -57,7 +57,7 @@ logger = logging.getLogger("merge-engine.llm.tracing")
 
 # Load .env before Langfuse reads its credentials from the environment.
 try:
-    from dotenv import load_dotenv
+    from dotenv import load_dotenv  # type: ignore[import-not-found]
 
     load_dotenv()
 except ImportError:

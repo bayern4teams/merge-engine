@@ -19,6 +19,27 @@ from src.orchestrator.utils.cluster_edits import apply_cluster_decisions
 logger = logging.getLogger("merge-engine.orchestrator.human_nodes")
 
 
+def _build_origin_schemas(schemas: dict[str, Any]) -> dict[str, Any]:
+    """Restructure per-origin discovery results into {origin: {table: [cols]}}.
+
+    The ``schemas`` state key holds ``{origin_id: {"tables": [{"name", "columns":
+    [{"name", ...}]}]}}`` from the ``discover_schemas`` node. The dependency-gate
+    UI needs a table->columns map per origin to power cascading dropdowns for the
+    Add-Custom-Dependency-Link form, so we flatten it here.
+    """
+    out: dict[str, Any] = {}
+    for origin_id, schema_data in (schemas or {}).items():
+        tables: dict[str, Any] = {}
+        for table in (schema_data or {}).get("tables", []) or []:
+            tname = (table or {}).get("name", "")
+            if not tname:
+                continue
+            tables[tname] = [c.get("name") for c in (table.get("columns") or []) if c.get("name")]
+        if tables:
+            out[origin_id] = tables
+    return out
+
+
 async def human_review_deps(state: dict[str, Any]) -> dict[str, Any]:
     """Interrupt: Show dependency tree for human review.
 
@@ -34,16 +55,17 @@ async def human_review_deps(state: dict[str, Any]) -> dict[str, Any]:
     logger.debug("dependency_tree: %s", dependency_tree)
     logger.debug("extraction_order: %s", extraction_order)
 
+    column_dependencies = state.get("column_dependencies", [])
+
     interrupt_data = {
         "node": "human_review_deps",
         "title": "Review Dependency Tree",
         "data": {
             "dependency_tree": dependency_tree,
             "extraction_order": extraction_order,
-            # Which source tables will actually be read. A table missing here
-            # contributes nothing to the merge, so this is reviewed before any
-            # extraction happens rather than discovered afterwards.
+            "column_dependencies": column_dependencies,
             "entity_tables": state.get("entity_tables", {}),
+            "origin_schemas": _build_origin_schemas(state.get("schemas", {})),
             "table_selection_notes": state.get("table_selection_notes", ""),
         },
     }
@@ -56,14 +78,12 @@ async def human_review_deps(state: dict[str, Any]) -> dict[str, Any]:
     if human_feedback and "dependency_tree" in human_feedback:
         logger.info("Human approved/modified dependency tree")
         logger.debug("Feedback keys: %s", list(human_feedback.keys()))
-        # No new errors from this gate - previously returned
-        # state.get("errors", []) here, which operator.add's reducer then
-        # re-appended onto the existing list on every single resume,
-        # duplicating the whole error history each time (Phase 0 Sec 0.8;
-        # same fix applied to every HITL gate in this file).
-        return {
+        res: dict[str, Any] = {
             "dependency_tree": human_feedback["dependency_tree"],
         }
+        if "column_dependencies" in human_feedback:
+            res["column_dependencies"] = human_feedback["column_dependencies"]
+        return res
 
     # Interrupt the graph
     logger.debug("Interrupting at human_review_deps checkpoint")
@@ -101,8 +121,19 @@ def _build_scope_interrupt(scope_plan: dict[str, Any]) -> dict[str, Any]:
     """The payload the scope gate shows. Shared with the workflow manager,
     since interrupt_before means this node's body has not run at the pause."""
     entities = scope_plan.get("entities", {}) or {}
+    all_origins = sorted(
+        list(
+            {
+                e.get("origin_id")
+                for entries in entities.values()
+                for e in entries
+                if e.get("origin_id")
+            }
+        )
+    )
     plan_rows: list[dict[str, Any]] = []
     for entity, entries in entities.items():
+        covered = {e.get("origin_id") for e in entries if e.get("origin_id")}
         for e in entries:
             plan_rows.append(
                 {
@@ -111,9 +142,24 @@ def _build_scope_interrupt(scope_plan: dict[str, Any]) -> dict[str, Any]:
                     "table": e.get("table"),
                     "mode": e.get("mode"),
                     "columns": e.get("columns", []),
+                    "via_table": e.get("via_table"),
+                    "via_from_column": e.get("via_from_column"),
+                    "via_to_column": e.get("via_to_column"),
                     "reason": e.get("reason", ""),
                 }
             )
+        for oid in all_origins:
+            if oid not in covered:
+                plan_rows.append(
+                    {
+                        "entity_type": entity,
+                        "origin_id": oid,
+                        "table": "—",
+                        "mode": "not_found",
+                        "columns": [],
+                        "reason": f"No matching or linked {entity} table found in {oid}",
+                    }
+                )
     return {
         "node": "human_review_scope",
         "title": "Confirm merge scope",
@@ -190,50 +236,154 @@ async def human_review_matches(state: dict[str, Any]) -> dict[str, Any]:
     return {"interrupt_data": interrupt_data}
 
 
-async def human_review_mappings(state: dict[str, Any]) -> dict[str, Any]:
-    """Interrupt: Show unmapped fields and schema changes for review.
+def _build_field_provenance(state: dict[str, Any]) -> dict[str, dict[str, dict[str, str]]]:
+    """Map each source field to its (origin_id, table) for mapping-row display.
 
-    The UI displays fields that couldn't be automatically mapped,
-    along with proposed schema changes.
+    ``map_fields_impl`` attaches ``origin_id``/``table``/``source_field`` to a
+    mapping row only when the field reached mapping via the discovered-schema
+    path. When fields come straight off unified records (no per-field source
+    tag), those keys are empty, so the UI's Origin / Source Table columns render
+    "—". Backfill here from the discovered schemas restricted to the entity's
+    chosen tables, keyed by column name. Returns
+    ``{entity_type: {column_name: {"origin_id", "table"}}}``.
     """
+    schemas: dict[str, Any] = state.get("schemas", {}) or {}
+    entity_tables: dict[str, Any] = state.get("entity_tables", {}) or {}
+    entity_names = set(entity_tables) | set(state.get("field_mappings", {}) or {})
+    provenance: dict[str, dict[str, dict[str, str]]] = {}
+    for entity in sorted(entity_names):
+        chosen = entity_tables.get(entity, [])
+        chosen_by_origin: dict[str, set[str]] = {}
+        for et in chosen or []:
+            oid = str(et.get("origin_id", "")).strip()
+            tbl = str(et.get("table", "")).strip()
+            if oid and tbl:
+                chosen_by_origin.setdefault(oid, set()).add(tbl.lower())
+        field_map: dict[str, dict[str, str]] = {}
+        for origin_id, schema_data in schemas.items():
+            for table in (schema_data or {}).get("tables", []) or []:
+                tname = (table or {}).get("name", "")
+                full = (table or {}).get("full_name") or tname
+                allowed = chosen_by_origin.get(origin_id)
+                if (
+                    allowed is not None
+                    and tname.lower() not in allowed
+                    and str(full).lower() not in allowed
+                ):
+                    continue
+                for col in (table.get("columns") or []) or []:
+                    cname = (col or {}).get("name", "")
+                    if not cname or cname.startswith("_"):
+                        continue
+                    field_map.setdefault(cname, {"origin_id": origin_id, "table": full or tname})
+        provenance[entity] = field_map
+    return provenance
+
+
+def _backfill_mapping_provenance(
+    mapping_rows: list[dict[str, Any]],
+    provenance: dict[str, dict[str, dict[str, str]]],
+) -> None:
+    """Fill empty origin_id/table on mapping rows from discovered provenance."""
+    for row in mapping_rows:
+        if row.get("origin_id") and row.get("table"):
+            continue
+        src = (provenance.get(row.get("entity_type", "")) or {}).get(row.get("source_field", ""))
+        if src:
+            if not row.get("origin_id"):
+                row["origin_id"] = src["origin_id"]
+            if not row.get("table"):
+                row["table"] = src["table"]
+
+
+async def human_review_mappings(state: dict[str, Any]) -> dict[str, Any]:
+    """Interrupt: Show field mappings and schema changes for review."""
     logger.debug("ENTER human_review_mappings")
     logger.debug("State keys: %s", list(state.keys()))
     field_mappings = state.get("field_mappings", {})
     pending_schema_changes = state.get("pending_schema_changes", [])
     unmapped_fields_by_entity: dict[str, list[dict[str, Any]]] = state.get("unmapped_fields", {})
 
-    logger.debug("field_mappings keys: %s", list(field_mappings.keys()))
-    logger.debug("pending_schema_changes: %d", len(pending_schema_changes))
+    mapping_rows: list[dict[str, Any]] = []
+    for entity_type, mappings in field_mappings.items():
+        for source_field, info in mappings.items():
+            dest_col = (
+                info.get("dest_column", source_field) if isinstance(info, dict) else str(info)
+            )
+            conf = info.get("confidence", 1.0) if isinstance(info, dict) else 1.0
+            oid = info.get("origin_id", "") if isinstance(info, dict) else ""
+            tbl = info.get("table", "") if isinstance(info, dict) else ""
+            sfield = (
+                info.get("source_field", source_field) if isinstance(info, dict) else source_field
+            )
+            coalesced = info.get("is_coalesced", False) if isinstance(info, dict) else False
 
-    # Collect unmapped (low-confidence) fields flagged by map_fields_impl
+            mapping_rows.append(
+                {
+                    "entity_type": entity_type,
+                    "source_field": sfield,
+                    "action": "map",
+                    "dest_column": dest_col,
+                    "new_column_name": "",
+                    "new_column_type": "",
+                    "confidence": conf,
+                    "origin_id": oid,
+                    "table": tbl,
+                    "is_coalesced": coalesced,
+                }
+            )
+
     unmapped: list[dict[str, Any]] = []
     for entity_type, fields in unmapped_fields_by_entity.items():
         for field_info in fields:
+            sfield = field_info.get("source_field") or field_info.get("field", "")
+            oid = field_info.get("origin_id", "")
+            tbl = field_info.get("table", "")
             unmapped.append(
                 {
                     "entity_type": entity_type,
-                    "source_field": field_info.get("field"),
+                    "source_field": sfield,
                     "confidence": field_info.get("confidence"),
                     "suggested_column": field_info.get("suggested_column"),
                     "reason": field_info.get("reason"),
                 }
             )
+            mapping_rows.append(
+                {
+                    "entity_type": entity_type,
+                    "source_field": sfield,
+                    "action": "skip",
+                    "dest_column": "",
+                    "new_column_name": "",
+                    "new_column_type": "",
+                    "confidence": field_info.get("confidence", 0.0),
+                    "origin_id": oid,
+                    "table": tbl,
+                    "is_coalesced": False,
+                }
+            )
 
-    logger.debug("Unmapped fields: %d", len(unmapped))
+    # Bug #4: mapping rows built from unified records carry no origin_id/table
+    # (only the discovered-schema upfront path tags them) — backfill both the
+    # mapped rows and the skip rows from the origin schemas so the UI's Origin
+    # / Source Table columns stop showing "—".
+    _backfill_mapping_provenance(mapping_rows, _build_field_provenance(state))
+
+    logger.debug("Mapping rows: %d, Unmapped fields: %d", len(mapping_rows), len(unmapped))
 
     interrupt_data = {
         "node": "human_review_mappings",
         "title": "Review Field Mappings",
         "data": {
+            "mapping_rows": mapping_rows,
             "unmapped_fields": unmapped,
             "pending_schema_changes": pending_schema_changes,
         },
     }
 
     human_feedback = state.get("human_feedback")
-    if human_feedback and "mapping_decisions" in human_feedback:
+    if human_feedback and ("mapping_decisions" in human_feedback or "approved" in human_feedback):
         logger.info("Human reviewed field mappings")
-        logger.debug("Feedback keys: %s", list(human_feedback.keys()))
         return {
             "pending_schema_changes": human_feedback.get("schema_changes", pending_schema_changes),
         }

@@ -1,40 +1,5 @@
-## Examples
-
-User: "Merging boeing company"
-Output: {"entity_types": ["company"], "explicit_entity_types": ["company"], "subject": "Boeing", "scope_type": "company"}
-
-User: "Import all companies and their contacts"
-Output: {"entity_types": ["company", "contact"], "explicit_entity_types": ["company", "contact"], "subject": "", "scope_type": "none"}
-
-User: "Migrate products from CRM, active only"
-Output: {"entity_types": ["product"], "explicit_entity_types": ["product"], "subject": "", "scope_type": "none"}
-
-User: "Bring over all customers and their addresses from Europe"
-Output: {"entity_types": ["person", "address"], "explicit_entity_types": ["person", "address"], "subject": "", "scope_type": "none"}
-
-User: "Sync everything"
-Output: {"entity_types": ["person", "company", "product", "country", "address", "account", "order", "finance", "industry", "location", "experience", "education", "skill", "technology", "technology_category", "contact", "company_relation", "contract"], "explicit_entity_types": [], "subject": "", "scope_type": "none"}
-
-User: "Sync everything except orders"
-Output: {"entity_types": ["person", "company", "product", "country", "address", "account", "finance", "industry", "location", "experience", "education", "skill", "technology", "technology_category", "contact", "company_relation", "contract"], "explicit_entity_types": [], "subject": "", "scope_type": "none"}
-
-User: "Import the sales data"
-Output: {"entity_types": [], "explicit_entity_types": [], "subject": "", "scope_type": "none"}
-
-User: "Merge all information about Nova: every person, product, and the company's own record"
-Output: {"entity_types": ["company", "person", "product"], "explicit_entity_types": ["company", "person", "product"], "subject": "Nova", "scope_type": "company"}
-
-User: "Merge all Boeing company records, including employees and products, deduplicate by company name and tax ID"
-Output: {"entity_types": ["company", "person", "product"], "explicit_entity_types": ["company", "person", "product"], "subject": "Boeing", "scope_type": "company"}
-
-User: "همه اطلاعات شرکت نوا رو یکی کن" (Persian: "unify all information about Nova company")
-Output: {"entity_types": ["company", "person", "product", "address", "finance", "industry", "location", "experience", "education", "skill", "technology", "technology_category", "contact", "company_relation", "contract"], "explicit_entity_types": [], "subject": "نوا", "scope_type": "company"}
-
-User: "Combine every customer's account and order history"
-Output: {"entity_types": ["person", "account", "order"], "explicit_entity_types": ["person", "account", "order"], "subject": "", "scope_type": "none"}
-
-User: "Merge everything about Airbus, including its financials and technology stack"
-Output: {"entity_types": ["company", "person", "product", "address", "finance", "industry", "location", "experience", "education", "skill", "technology", "technology_category", "contact", "company_relation", "contract"], "explicit_entity_types": ["finance", "technology"], "subject": "Airbus", "scope_type": "company"}
+## Discovered Database Schemas
+{schema_info}
 
 ---
 User request: {user_request}

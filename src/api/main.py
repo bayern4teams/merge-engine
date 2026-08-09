@@ -50,6 +50,24 @@ from src.utils.config_loader import (
 
 logger = logging.getLogger("merge-engine.api")
 
+_ROOT_DIR = Path(__file__).resolve().parents[2]
+_ENV_FILE = _ROOT_DIR / ".env"
+
+
+def _init_env() -> None:
+    try:
+        from dotenv import load_dotenv  # type: ignore[import-not-found]
+
+        if _ENV_FILE.exists():
+            load_dotenv(dotenv_path=_ENV_FILE, override=True)
+        else:
+            load_dotenv(override=True)
+    except ImportError:
+        pass
+
+
+_init_env()
+
 # Single long-lived manager shared across requests (mirrors the one the
 # Gradio app held). Built lazily so importing this module is cheap.
 _manager: WorkflowManager | None = None
@@ -229,6 +247,15 @@ class PlatformExtractionOverride(BaseModel):
     max_batch_size: int | None = None
 
 
+class EnvOverridesUpdate(BaseModel):
+    """Session-only environment variable overrides (not saved to .env)."""
+
+    overrides: dict[str, str]
+
+
+_SESSION_ENV_OVERRIDES: dict[str, str] = {}
+
+
 class PlatformConfigUpdate(BaseModel):
     """Platform/system settings (Part 1.6.A Settings page).
 
@@ -326,7 +353,49 @@ def create_api(config_path: str = "config/config.yaml") -> FastAPI:
     # touch a file, so a value here always describes the platform default a
     # run starts from, not what any particular run used.
 
-    _ENV_EXPECTED = ("LLM_API_KEY", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST")
+    _ENV_EXPECTED = (
+        "LLM_API_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "LANGFUSE_HOST",
+        "CLICKHOUSE_HOST",
+        "CLICKHOUSE_PORT",
+        "POSTGRES_HOST",
+        "POSTGRES_PORT",
+        "POSTGRES_PASSWORD",
+    )
+
+    def _mask_env_val(val: str) -> str:
+        if not val:
+            return ""
+        if len(val) <= 8:
+            return "****"
+        return val[:3] + "..." + val[-4:]
+
+    def _build_env_details() -> dict[str, dict[str, Any]]:
+        details: dict[str, dict[str, Any]] = {}
+        for name in _ENV_EXPECTED:
+            val = os.environ.get(name, "")
+            is_override = name in _SESSION_ENV_OVERRIDES
+            is_present = bool(val)
+            if is_override:
+                status = "overridden"
+                source = "session_override"
+            elif is_present:
+                status = "set"
+                source = "env"
+            else:
+                status = "not_set"
+                source = "not_set"
+            details[name] = {
+                "status": status,
+                "source": source,
+                "masked_value": _mask_env_val(val),
+                "is_set": is_present,
+            }
+        return details
 
     @app.get("/api/config")
     def get_config() -> dict[str, Any]:
@@ -356,9 +425,8 @@ def create_api(config_path: str = "config/config.yaml") -> FastAPI:
             "effective": strip_secrets(effective),
             "platform_overrides": strip_secrets(overlay),
             "sources": sources,
-            # Presence only — never the value — so the Settings page can say
-            # "LLM_API_KEY is set" without ever seeing or leaking it.
             "env_present": {name: bool(os.environ.get(name)) for name in _ENV_EXPECTED},
+            "env_details": _build_env_details(),
         }
 
     @app.put("/api/config/platform")
@@ -374,6 +442,36 @@ def create_api(config_path: str = "config/config.yaml") -> FastAPI:
             overlay[section] = {**overlay.get(section, {}), **values}
         save_platform_overrides(overlay)
         return {"platform_overrides": strip_secrets(overlay)}
+
+    @app.post("/api/config/env")
+    def update_env_overrides(body: EnvOverridesUpdate) -> dict[str, Any]:
+        """Apply session-only environment overrides.
+
+        Takes effect immediately in runtime memory for all LLM and connection calls.
+        Does NOT alter the .env file on disk. When the process restarts (Ctrl+C),
+        overrides naturally reset back to .env defaults.
+        """
+        for k, v in body.overrides.items():
+            if v and v.strip():
+                clean_v = v.strip()
+                _SESSION_ENV_OVERRIDES[k] = clean_v
+                os.environ[k] = clean_v
+            elif k in _SESSION_ENV_OVERRIDES:
+                del _SESSION_ENV_OVERRIDES[k]
+        return {
+            "env_details": _build_env_details(),
+            "env_present": {name: bool(os.environ.get(name)) for name in _ENV_EXPECTED},
+        }
+
+    @app.post("/api/config/env/reset")
+    def reset_env_overrides() -> dict[str, Any]:
+        """Clear all session overrides and reload .env from disk."""
+        _SESSION_ENV_OVERRIDES.clear()
+        _init_env()
+        return {
+            "env_details": _build_env_details(),
+            "env_present": {name: bool(os.environ.get(name)) for name in _ENV_EXPECTED},
+        }
 
     # ── Workflow ─────────────────────────────────────────────────────────────
 

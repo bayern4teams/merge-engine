@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { InterruptData, MappingRow } from "../api";
+import Tooltip from "./Tooltip";
 
 interface GateProps {
   interrupt: InterruptData;
@@ -68,35 +69,443 @@ function GateButtons({
 
 // ── Dependency gate ─────────────────────────────────────────────────────────
 
+// Bug #3: group the extraction order into tiers — tables with no dependencies
+// are Tier 1, tables depending only on Tier 1 are Tier 2, and so on.
+function computeTiers(
+  order: string[],
+  tree: Record<string, string[]>,
+): Array<{ tier: number; items: Array<{ entity: string; deps: string[] }> }> {
+  const memo: Record<string, number> = {};
+  function tierOf(entity: string, seen: Set<string>): number {
+    if (memo[entity] != null) return memo[entity];
+    if (seen.has(entity)) return 1; // cycle guard — treat as a root
+    seen.add(entity);
+    const deps = tree[entity] || [];
+    const t =
+      deps.length === 0 ? 1 : 1 + Math.max(...deps.map((d) => tierOf(d, seen)));
+    seen.delete(entity);
+    memo[entity] = t;
+    return t;
+  }
+  const byTier: Record<number, Array<{ entity: string; deps: string[] }>> = {};
+  for (const entity of order) {
+    const t = tierOf(entity, new Set());
+    (byTier[t] = byTier[t] || []).push({ entity, deps: tree[entity] || [] });
+  }
+  return Object.keys(byTier)
+    .map(Number)
+    .sort((a, b) => a - b)
+    .map((t) => ({ tier: t, items: byTier[t] }));
+}
+
+// Bug #2: one side (child or parent) of the "Add Custom Dependency Link"
+// form — three cascading selects driven by the discovered origin schemas.
+function SchemaCascade({
+  label,
+  originSchemas,
+  origin,
+  table,
+  column,
+  onOrigin,
+  onTable,
+  onColumn,
+}: {
+  label: string;
+  originSchemas: Record<string, Record<string, string[]>>;
+  origin: string;
+  table: string;
+  column: string;
+  onOrigin: (v: string) => void;
+  onTable: (v: string) => void;
+  onColumn: (v: string) => void;
+}) {
+  const originIds = Object.keys(originSchemas);
+  const tables = origin ? Object.keys(originSchemas[origin] || {}) : [];
+  const columns = origin && table ? originSchemas[origin]?.[table] || [] : [];
+  return (
+    <div>
+      <label style={{ fontSize: 11, fontWeight: 600, display: "block" }}>{label}</label>
+      <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+        <select
+          className="mini-input"
+          value={origin}
+          onChange={(e) => onOrigin(e.target.value)}
+        >
+          <option value="">Origin…</option>
+          {originIds.map((o) => (
+            <option key={o} value={o}>
+              {o}
+            </option>
+          ))}
+        </select>
+        <select
+          className="mini-input"
+          value={table}
+          disabled={!origin}
+          onChange={(e) => onTable(e.target.value)}
+        >
+          <option value="">Table…</option>
+          {tables.map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
+        </select>
+        <select
+          className="mini-input"
+          value={column}
+          disabled={!origin || !table}
+          onChange={(e) => onColumn(e.target.value)}
+        >
+          <option value="">Column…</option>
+          {columns.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+      </div>
+    </div>
+  );
+}
+
 function DependencyBody({ data }: { data: Record<string, any> }) {
   const order: string[] = data.extraction_order || [];
   const tree: Record<string, string[]> = data.dependency_tree || {};
+  // Bug #2: {origin_id: {table_name: [column, ...]}} built by the backend
+  // from the schema discovery step. Empty on runs resumed from a checkpoint
+  // created before this field existed.
+  const originSchemas: Record<string, Record<string, string[]>> =
+    data.origin_schemas || {};
+  const hasSchemas = Object.keys(originSchemas).length > 0;
+  const [colDeps, setColDeps] = useState<any[]>(data.column_dependencies || []);
+
+  const [newChildOrigin, setNewChildOrigin] = useState("");
+  const [newChildTable, setNewChildTable] = useState("");
+  const [newChildCol, setNewChildCol] = useState("");
+  const [newParentOrigin, setNewParentOrigin] = useState("");
+  const [newParentTable, setNewParentTable] = useState("");
+  const [newParentCol, setNewParentCol] = useState("");
+  const [newRationale, setNewRationale] = useState("");
+
+  function addDependency() {
+    if (!newChildOrigin || !newChildTable || !newChildCol) return;
+    if (!newParentOrigin || !newParentTable || !newParentCol) return;
+    const entry = {
+      child_origin: newChildOrigin,
+      child_table: newChildTable,
+      child_column: newChildCol,
+      parent_origin: newParentOrigin,
+      parent_table: newParentTable,
+      parent_column: newParentCol,
+      rationale: newRationale || "Custom user-defined dependency link",
+    };
+    setColDeps((prev) => [...prev, entry]);
+    setNewChildOrigin("");
+    setNewChildTable("");
+    setNewChildCol("");
+    setNewParentOrigin("");
+    setNewParentTable("");
+    setNewParentCol("");
+    setNewRationale("");
+  }
+
+  function removeDependency(index: number) {
+    setColDeps((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  // Bug #3: structured table grouped by extraction tier.
+  const tiers = computeTiers(order, tree);
+  let rowNumber = 0;
+
   return (
     <div>
       <div className="gate-explain">
-        Confirm the order in which entities are extracted. Each entity's
-        prerequisites must be extracted before it.
+        Confirm entity extraction order and cross-table column dependencies below. Prerequisites must be extracted before dependent tables.
       </div>
       {data.warning && <div className="banner banner-warn">⚠️ {data.warning}</div>}
-      <div className="section-label">Extraction order</div>
-      <ol className="ordered-list">
-        {order.map((entity) => {
-          const deps = tree[entity] || [];
-          return (
-            <li key={entity}>
-              <strong>{entity}</strong>{" "}
-              <span className="muted">
-                {deps.length ? `→ depends on: ${deps.join(", ")}` : "→ no dependencies (extract first)"}
-              </span>
-            </li>
-          );
-        })}
-      </ol>
+
+      <div className="section-label">
+        Extraction Order
+        <Tooltip text="The topological sequence in which tables must be extracted so prerequisite entities exist first." />
+      </div>
+      <div className="table-scroll" style={{ marginBottom: 16 }}>
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Table Name</th>
+              <th>Dependencies</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          {tiers.map(({ tier, items }) => (
+            <tbody key={tier}>
+              <tr>
+                <td
+                  colSpan={4}
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    letterSpacing: "0.04em",
+                    textTransform: "uppercase",
+                    background: "var(--card-bg, #f8f9fa)",
+                    color: "var(--muted-color, #6c757d)",
+                    borderBottom: "1px solid var(--border-color, #e0e0e0)",
+                    padding: "4px 8px",
+                  }}
+                >
+                  Tier {tier} —{" "}
+                  {tier === 1
+                    ? "no prerequisites (extract first)"
+                    : `depends on Tier ${tier - 1}`}
+                </td>
+              </tr>
+              {items.map(({ entity, deps }) => {
+                rowNumber += 1;
+                return (
+                  <tr key={entity}>
+                    <td className="mono muted">{rowNumber}</td>
+                    <td className="mono">
+                      <strong>{entity}</strong>
+                    </td>
+                    <td className="mono muted" style={{ fontSize: 12 }}>
+                      {deps.length ? deps.join(", ") : "—"}
+                    </td>
+                    <td>
+                      {deps.length === 0 ? (
+                        <span
+                          style={{
+                            fontSize: 11,
+                            padding: "2px 6px",
+                            borderRadius: 4,
+                            background: "#d4edda",
+                            color: "#155724",
+                            border: "1px solid #c3e6cb",
+                            fontWeight: 600,
+                          }}
+                        >
+                          root
+                        </span>
+                      ) : (
+                        <span
+                          style={{
+                            fontSize: 11,
+                            padding: "2px 6px",
+                            borderRadius: 4,
+                            background: "#e3f2fd",
+                            color: "#1565c0",
+                            border: "1px solid #bbdefb",
+                            fontWeight: 600,
+                          }}
+                        >
+                          has deps
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          ))}
+        </table>
+      </div>
+
+      <div className="section-label">Column-Level Prerequisites ({colDeps.length})</div>
+      {colDeps.length === 0 ? (
+        <p className="muted" style={{ fontSize: 13 }}>
+          No explicit column-level dependencies declared.
+        </p>
+      ) : (
+        <div className="table-scroll" style={{ marginBottom: 16 }}>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Child (Dependent)</th>
+                <th>Parent (Prerequisite)</th>
+                <th>Rationale / Link</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {colDeps.map((d, i) => (
+                <tr key={i}>
+                  <td className="mono">
+                    <strong>{d.child_origin || "origin"}</strong>.{d.child_table}.{d.child_column || "*"}
+                  </td>
+                  <td className="mono">
+                    <strong>{d.parent_origin || "origin"}</strong>.{d.parent_table}.{d.parent_column || "*"}
+                  </td>
+                  <td className="mono muted" style={{ fontSize: 12 }}>
+                    {d.rationale || "Required relationship"}
+                  </td>
+                  <td>
+                    <button
+                      className="btn btn-danger"
+                      style={{ padding: "2px 6px", fontSize: 11 }}
+                      onClick={() => removeDependency(i)}
+                    >
+                      Remove
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="section-label">Add Custom Dependency Link</div>
+      {!hasSchemas && (
+        <div className="banner banner-info" style={{ marginBottom: 8 }}>
+          Origin schemas are unavailable for this run, so the dropdowns cannot
+          be populated. Approve the tree as-is, or reject and restart the
+          workflow to re-discover schemas.
+        </div>
+      )}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: 12,
+          background: "var(--card-bg, #f8f9fa)",
+          padding: 12,
+          borderRadius: 6,
+          border: "1px solid var(--border-color, #e0e0e0)",
+        }}
+      >
+        <SchemaCascade
+          label="Child (Dependent) Origin, Table & Column"
+          originSchemas={originSchemas}
+          origin={newChildOrigin}
+          table={newChildTable}
+          column={newChildCol}
+          onOrigin={(v) => {
+            setNewChildOrigin(v);
+            setNewChildTable("");
+            setNewChildCol("");
+          }}
+          onTable={(v) => {
+            setNewChildTable(v);
+            setNewChildCol("");
+          }}
+          onColumn={setNewChildCol}
+        />
+
+        <SchemaCascade
+          label="Parent (Prerequisite) Origin, Table & Column"
+          originSchemas={originSchemas}
+          origin={newParentOrigin}
+          table={newParentTable}
+          column={newParentCol}
+          onOrigin={(v) => {
+            setNewParentOrigin(v);
+            setNewParentTable("");
+            setNewParentCol("");
+          }}
+          onTable={(v) => {
+            setNewParentTable(v);
+            setNewParentCol("");
+          }}
+          onColumn={setNewParentCol}
+        />
+
+        <div style={{ gridColumn: "1 / -1" }}>
+          <input
+            className="mini-input"
+            placeholder="Rationale / Explanation (e.g. Requires Person record first)"
+            value={newRationale}
+            onChange={(e) => setNewRationale(e.target.value)}
+            style={{ width: "100%" }}
+          />
+        </div>
+
+        <div style={{ gridColumn: "1 / -1", textAlign: "right" }}>
+          <button
+            className="btn btn-secondary"
+            style={{ fontSize: 12 }}
+            onClick={addDependency}
+            disabled={!hasSchemas}
+          >
+            + Add Dependency Link
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
 
 // ── Scope gate ──────────────────────────────────────────────────────────────
+
+// Bug #5: one collapsible card per matching record. Collapsed shows the first
+// 3 fields inline; expanded shows the full field/value table.
+function CandidateCard({ candidate, index }: { candidate: any; index: number }) {
+  const [open, setOpen] = useState(false);
+  const fields: Array<[string, any]> = Object.entries(candidate.fields || {});
+  const preview = fields.slice(0, 3);
+  const hasMore = fields.length > preview.length;
+
+  return (
+    <div
+      style={{
+        border: "1px solid var(--border-color, #e0e0e0)",
+        borderRadius: 6,
+        marginBottom: 8,
+        overflow: "hidden",
+        background: "var(--card-bg, #fff)",
+      }}
+    >
+      <div
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          padding: "8px 12px",
+          cursor: "pointer",
+          userSelect: "none",
+          flexWrap: "wrap",
+        }}
+      >
+        <span style={{ fontSize: 12, color: "var(--muted-color, #6c757d)" }}>
+          {open ? "▾" : "▸"} Record {index + 1}
+        </span>
+        <span className="mono" style={{ fontSize: 12, fontWeight: 600 }}>
+          {candidate.origin_id}
+        </span>
+        <span className="mono muted" style={{ fontSize: 12 }}>
+          {candidate.table || "Company"}
+        </span>
+        <span className="mono" style={{ fontSize: 12, color: "var(--muted-color, #6c757d)" }}>
+          {preview.map(([k, v]) => `${k}=${String(v)}`).join(",  ")}
+          {hasMore ? `,  +${fields.length - preview.length} more` : ""}
+        </span>
+      </div>
+      {open && (
+        <div style={{ padding: "4px 12px 10px" }}>
+          <table className="data-table" style={{ width: "100%" }}>
+            <thead>
+              <tr>
+                <th style={{ width: "40%" }}>Field Name</th>
+                <th>Value</th>
+              </tr>
+            </thead>
+            <tbody>
+              {fields.map(([k, v]) => (
+                <tr key={k}>
+                  <td className="mono">{k}</td>
+                  <td className="mono" style={{ fontSize: 12 }}>
+                    {v == null ? <em className="muted">null</em> : String(v)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ScopeBody({ data }: { data: Record<string, any> }) {
   const subject: string = data.subject || "";
@@ -105,9 +514,7 @@ function ScopeBody({ data }: { data: Record<string, any> }) {
   return (
     <div>
       <div className="gate-explain">
-        This merge is scoped to <strong>{subject}</strong>. Only its records —
-        and the people and products linked to it — will be extracted. Confirm
-        the match and the plan below before anything is read.
+        This merge is scoped to <strong>{subject}</strong>. Only its records — and the people, products, and associated entities linked to it — will be extracted. Confirm the match and the scope plan below before proceeding.
       </div>
 
       <div className="section-label">
@@ -115,43 +522,86 @@ function ScopeBody({ data }: { data: Record<string, any> }) {
       </div>
       {candidates.length === 0 ? (
         <div className="muted">
-          No preview rows (the origins may be unreachable for a probe) — the
-          plan below still applies.
+          No preview rows (the origins may be unreachable for a probe) — the plan below still applies.
         </div>
       ) : (
-        <ul className="ordered-list" style={{ listStyle: "none", paddingLeft: 0 }}>
+        <div style={{ marginBottom: 16 }}>
           {candidates.slice(0, 20).map((c, i) => (
-            <li key={i}>
-              <span className="muted">{c.origin_id}:</span>{" "}
-              {Object.entries(c.fields || {})
-                .slice(0, 4)
-                .map(([k, v]) => `${k}=${v}`)
-                .join(", ")}
-            </li>
+            <CandidateCard key={i} candidate={c} index={i} />
           ))}
-        </ul>
+        </div>
       )}
 
       <div className="section-label">How each entity is scoped</div>
-      <table className="data-table">
-        <thead>
-          <tr><th>Entity</th><th>Origin</th><th>Table</th><th>How</th></tr>
-        </thead>
-        <tbody>
-          {plan.map((p, i) => (
-            <tr key={i}>
-              <td>{p.entity_type}</td>
-              <td>{p.origin_id}</td>
-              <td>{p.table}</td>
-              <td>
-                {p.mode === "match"
-                  ? `name matches "${subject}"`
-                  : `linked via ${(p.columns || []).join(", ")}`}
-              </td>
+      <div className="table-scroll">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Entity</th>
+              <th>Origin</th>
+              <th>Table</th>
+              <th>Scoping Mode / Link Path</th>
+              <th>Status</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {plan.map((p, i) => {
+              let how = "";
+              if (p.mode === "match") {
+                how = `name matches "${subject}"`;
+              } else if (p.mode === "link") {
+                how = `linked via ${(p.columns || []).join(", ")}`;
+              } else if (p.mode === "link_via") {
+                how = `linked via ${p.via_from_column || ""} -> ${p.via_table || ""} -> ${p.via_to_column || ""}`;
+              } else if (p.mode === "not_found") {
+                how = p.reason || `No matching or linked table found in ${p.origin_id}`;
+              }
+
+              const isNotFound = p.mode === "not_found";
+
+              return (
+                <tr key={i} style={isNotFound ? { background: "rgba(255, 0, 0, 0.03)" } : {}}>
+                  <td className="mono">{p.entity_type}</td>
+                  <td className="mono muted">{p.origin_id}</td>
+                  <td className="mono">{p.table}</td>
+                  <td className="mono">{how}</td>
+                  <td>
+                    {isNotFound ? (
+                      <span
+                        style={{
+                          fontSize: 11,
+                          padding: "2px 6px",
+                          borderRadius: 4,
+                          background: "#fff3cd",
+                          color: "#856404",
+                          border: "1px solid #ffeeba",
+                          fontWeight: 600,
+                        }}
+                      >
+                        ⚠️ Not Found in {p.origin_id}
+                      </span>
+                    ) : (
+                      <span
+                        style={{
+                          fontSize: 11,
+                          padding: "2px 6px",
+                          borderRadius: 4,
+                          background: "#d4edda",
+                          color: "#155724",
+                          border: "1px solid #c3e6cb",
+                          fontWeight: 600,
+                        }}
+                      >
+                        ✓ Active
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -206,6 +656,9 @@ function MatchBody({ data }: { data: Record<string, any> }) {
 // ── Mapping gate (editable) ─────────────────────────────────────────────────
 
 const ACTIONS = ["map", "new_column", "skip"];
+// Bug #4: the New Column / Type inputs are only enabled for the new_column
+// action; this placeholder tells the reviewer why they look locked.
+const NEW_COL_HINT = "Change action to 'new_column' to enable";
 
 function MappingBody({
   data,
@@ -215,85 +668,136 @@ function MappingBody({
   onReject,
 }: { data: Record<string, any>; node: string } & GateProps) {
   const [rows, setRows] = useState<MappingRow[]>([]);
+  const [selectedEntity, setSelectedEntity] = useState<string>("ALL");
 
-  // Reset editable rows only when we (re)enter this gate, so a background
-  // status refresh never clobbers in-flight edits (mirrors the old
-  // mapping_gate_key first-render guard).
   useEffect(() => {
     setRows((data.mapping_rows || []) as MappingRow[]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [node]);
+  }, [node, data]);
 
   function update(i: number, patch: Partial<MappingRow>) {
     setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
   }
 
+  const entities = Array.from(new Set(rows.map((r) => r.entity_type))).filter(Boolean);
+  const filteredRows =
+    selectedEntity === "ALL" ? rows : rows.filter((r) => r.entity_type === selectedEntity);
+
   return (
     <div>
       <div className="gate-explain">
-        Review every source-field mapping below. Auto-mapped fields are shown
-        too — edit any row before approving. "new_column" adds a column to the
-        destination; "skip" drops the field.
+        Review every origin field mapping below. Auto-mapped fields are shown upfront. You can filter by Destination Table using the dropdown below.
       </div>
       {data.error && <div className="banner banner-error">✗ {data.error}</div>}
+
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+        <label style={{ fontWeight: 600, fontSize: 13 }}>Filter by Destination Table / Entity:</label>
+        <select
+          className="mini-input"
+          style={{ width: "auto", padding: "4px 8px" }}
+          value={selectedEntity}
+          onChange={(e) => setSelectedEntity(e.target.value)}
+        >
+          <option value="ALL">All Destination Tables ({rows.length} fields)</option>
+          {entities.map((e) => (
+            <option key={e} value={e}>
+              {e} ({rows.filter((r) => r.entity_type === e).length} fields)
+            </option>
+          ))}
+        </select>
+      </div>
+
       <div className="table-scroll">
         <table className="data-table">
           <thead>
             <tr>
-              <th>Entity</th>
-              <th>Source field</th>
+              <th>Dest Table</th>
+              <th>Origin</th>
+              <th>Source Table</th>
+              <th>Source Field</th>
               <th>Action</th>
-              <th>Dest column</th>
-              <th>New column</th>
+              <th>Dest Column</th>
+              <th>New Column</th>
               <th>Type</th>
               <th>Conf.</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((r, i) => (
-              <tr key={`${r.entity_type}.${r.source_field}.${i}`}>
-                <td className="mono">{r.entity_type}</td>
-                <td className="mono">{r.source_field}</td>
-                <td>
-                  <select
-                    className="mini-input"
-                    value={r.action}
-                    onChange={(e) => update(i, { action: e.target.value })}
-                  >
-                    {ACTIONS.map((a) => (
-                      <option key={a} value={a}>{a}</option>
-                    ))}
-                  </select>
-                </td>
-                <td>
-                  <input
-                    className="mini-input"
-                    value={r.dest_column}
-                    disabled={r.action !== "map"}
-                    onChange={(e) => update(i, { dest_column: e.target.value })}
-                  />
-                </td>
-                <td>
-                  <input
-                    className="mini-input"
-                    value={r.new_column_name}
-                    disabled={r.action !== "new_column"}
-                    onChange={(e) => update(i, { new_column_name: e.target.value })}
-                  />
-                </td>
-                <td>
-                  <input
-                    className="mini-input"
-                    value={r.new_column_type}
-                    disabled={r.action !== "new_column"}
-                    onChange={(e) => update(i, { new_column_type: e.target.value })}
-                  />
-                </td>
-                <td className="muted">
-                  {r.confidence != null ? `${Math.round(Number(r.confidence) * 100)}%` : "—"}
-                </td>
-              </tr>
-            ))}
+            {filteredRows.map((r, i) => {
+              const globalIndex = rows.indexOf(r);
+              const isNewColumn = r.action === "new_column";
+              return (
+                <tr key={`${r.entity_type}.${r.origin_id || ""}.${r.table || ""}.${r.source_field}.${i}`}>
+                  <td className="mono">{r.entity_type}</td>
+                  <td className="mono muted">{r.origin_id || "—"}</td>
+                  <td className="mono muted">{r.table || "—"}</td>
+                  <td className="mono">
+                    {r.source_field}
+                    {r.is_coalesced && (
+                      <span
+                        style={{
+                          marginLeft: 6,
+                          fontSize: 10,
+                          padding: "2px 5px",
+                          borderRadius: 4,
+                          background: "#fff3cd",
+                          color: "#856404",
+                          border: "1px solid #ffeeba",
+                          fontWeight: 600,
+                        }}
+                        title="Multiple origin columns map to this same destination column"
+                      >
+                        ⚡ Coalesced
+                      </span>
+                    )}
+                  </td>
+                  <td>
+                    <select
+                      className="mini-input"
+                      value={r.action}
+                      onChange={(e) => update(globalIndex, { action: e.target.value })}
+                    >
+                      {ACTIONS.map((a) => (
+                        <option key={a} value={a}>
+                          {a}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
+                    <input
+                      className="mini-input"
+                      value={r.dest_column}
+                      disabled={r.action !== "map"}
+                      title={r.action !== "map" ? "Only used when Action is 'map'" : undefined}
+                      onChange={(e) => update(globalIndex, { dest_column: e.target.value })}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      className="mini-input"
+                      value={r.new_column_name || ""}
+                      disabled={!isNewColumn}
+                      placeholder={!isNewColumn ? NEW_COL_HINT : "New column name"}
+                      title={!isNewColumn ? NEW_COL_HINT : undefined}
+                      onChange={(e) => update(globalIndex, { new_column_name: e.target.value })}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      className="mini-input"
+                      value={r.new_column_type || ""}
+                      disabled={!isNewColumn}
+                      placeholder={!isNewColumn ? NEW_COL_HINT : "e.g. TEXT"}
+                      title={!isNewColumn ? NEW_COL_HINT : undefined}
+                      onChange={(e) => update(globalIndex, { new_column_type: e.target.value })}
+                    />
+                  </td>
+                  <td className="muted">
+                    {r.confidence != null ? `${Math.round(Number(r.confidence) * 100)}%` : "—"}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -372,7 +876,10 @@ function SummaryBody({
 
       {Object.keys(recon).length > 0 && (
         <>
-          <div className="section-label">Reconciliation (pre-load)</div>
+          <div className="section-label">
+            Reconciliation (pre-load)
+            <Tooltip text="Shows per-entity counts: how many records were extracted from origins, grouped into clusters, reviewed by a human, unified into canonical records, and how many field-level conflicts arose during unification." />
+          </div>
           <div className="table-scroll" style={{ marginBottom: 16 }}>
             <table className="data-table">
               <thead>
@@ -404,7 +911,10 @@ function SummaryBody({
 
       {winningRuleEntries.length > 0 && (
         <>
-          <div className="section-label">Conflicts resolved by</div>
+          <div className="section-label">
+            Conflicts resolved by
+            <Tooltip text="Shows which survivorship rules (priority, recency, completeness, first_seen, etc.) decided each field-level conflict when merging duplicate records." />
+          </div>
           <div className="table-scroll" style={{ marginBottom: 16 }}>
             <table className="data-table">
               <thead>
@@ -428,7 +938,10 @@ function SummaryBody({
 
       {mappings.length > 0 && (
         <>
-          <div className="section-label">Field mappings ({mappings.length})</div>
+          <div className="section-label">
+            Field mappings ({mappings.length})
+            <Tooltip text="The final column-to-column mapping from source fields to destination columns. 'map' copies a value; 'new_column' creates a new column; 'skip' drops the field." />
+          </div>
           <div className="table-scroll">
             <table className="data-table">
               <thead>

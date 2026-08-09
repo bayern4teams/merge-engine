@@ -196,7 +196,7 @@ class TestAnalyzeDependencies:
         client = MagicMock()
         client.call_json = AsyncMock(
             return_value={
-                "dependency_tree": {"person": ["company"]},
+                "dependency_tree": {"person": ["company"], "company": []},
                 "notes": "People reference companies",
             }
         )
@@ -224,16 +224,12 @@ class TestAnalyzeDependencies:
         ):
             result = await analyze_dependencies(base_state)
 
-        assert result["dependency_tree"] == {"person": ["company"]}
+        assert result["dependency_tree"] == {"person": ["company"], "company": []}
         assert "company" in result["extraction_order"]
         assert "person" in result["extraction_order"]
         assert result["extraction_order"].index("company") < result["extraction_order"].index(
             "person"
         )
-        # A successful call reports no new errors - it may either omit the
-        # key entirely or return an empty list (both are no-ops through
-        # MergeState.errors' operator.add reducer); it must never re-return
-        # the existing state's error history (Phase 0 Sec 0.8).
         assert not result.get("errors")
         assert result["dependency_analysis_warning"] == ""
 
@@ -271,12 +267,12 @@ class TestAnalyzeDependencies:
         ):
             result = await analyze_dependencies(base_state)
 
-        # Fallback: each entity has no dependencies, linear order
+        # Fallback: each entity has no dependencies when entity_tables is empty, linear order
         assert result["dependency_tree"] == {
             "person": [],
             "company": [],
         }
-        assert result["extraction_order"] == ["person", "company"]
+        assert result["extraction_order"] == ["company", "person"]
         assert len(result["errors"]) == 1
         assert "Dependency analysis failed" in result["errors"][0]
         assert "UNVERIFIED" in result["dependency_analysis_warning"]
@@ -298,7 +294,7 @@ class TestAnalyzeDependencies:
         ):
             result = await analyze_dependencies(base_state)
 
-        assert result["dependency_tree"] == {"person": ["company"]}
+        assert result["dependency_tree"] == {"person": ["company"], "company": []}
 
     @pytest.mark.asyncio
     async def test_analyze_dependencies_preserves_existing_errors(
@@ -482,3 +478,88 @@ class TestAnalyzeDependencies:
         # "leads" is unrelated to the "customer" entity, so the relatedness
         # filter excludes it from the LLM prompt.
         assert "leads" not in result
+
+    def test_build_coverage_matrix(self) -> None:
+        """Test _build_coverage_matrix identifies FK matches."""
+        from src.orchestrator.nodes.analyze_dependencies import _build_coverage_matrix
+
+        schemas = {
+            "origin_1": {
+                "origin_type": "clickhouse",
+                "tables": [
+                    {
+                        "name": "Company",
+                        "columns": [{"name": "companyID", "type": "String"}],
+                    },
+                    {
+                        "name": "CompanyFinancials",
+                        "columns": [
+                            {"name": "financialID", "type": "String"},
+                            {"name": "companyID", "type": "String"},
+                        ],
+                    },
+                ],
+            }
+        }
+        entity_tables = {
+            "company": [{"origin_id": "origin_1", "table": "Company"}],
+            "finance": [{"origin_id": "origin_1", "table": "CompanyFinancials"}],
+        }
+        matrix = _build_coverage_matrix(schemas, entity_tables, ["company", "finance"])
+        finance_entry = next(m for m in matrix if m["child_table"] == "CompanyFinancials")
+        assert finance_entry["child_entity"] == "finance"
+        assert finance_entry["parent_entity"] == "company"
+
+    @pytest.mark.asyncio
+    async def test_empty_dependency_tree_retries_and_falls_back(
+        self, base_state: dict[str, Any]
+    ) -> None:
+        """Test that returning {} triggers a retry and then falls back to coverage matrix."""
+        mock_client = MagicMock()
+        # Returns empty dict both times
+        mock_client.call_json = AsyncMock(return_value={})
+
+        with (
+            patch(
+                "src.orchestrator.nodes.analyze_dependencies.LLMClient",
+                return_value=mock_client,
+            ),
+            patch(
+                "src.orchestrator.nodes.analyze_dependencies.PROMPT_TEMPLATES",
+                {},
+            ),
+        ):
+            result = await analyze_dependencies(base_state)
+
+        # Should call twice (initial + retry)
+        assert mock_client.call_json.call_count == 2
+        # Dependency tree should be populated from coverage matrix fallback
+        assert "person" in result["dependency_tree"]
+        assert "company" in result["dependency_tree"]
+        assert "fallback" in result["dependency_analysis_warning"].lower()
+
+    @pytest.mark.asyncio
+    async def test_partial_dependency_tree_omitting_entities_retries_and_falls_back(
+        self, base_state: dict[str, Any]
+    ) -> None:
+        """Test that omitting target entities in dependency_tree triggers retry and fallback."""
+        base_state["target_entities"] = ["person", "company"]
+        mock_client = MagicMock()
+        mock_client.call_json = AsyncMock(return_value={"dependency_tree": {"company": []}})
+
+        with (
+            patch(
+                "src.orchestrator.nodes.analyze_dependencies.LLMClient",
+                return_value=mock_client,
+            ),
+            patch(
+                "src.orchestrator.nodes.analyze_dependencies.PROMPT_TEMPLATES",
+                {},
+            ),
+        ):
+            result = await analyze_dependencies(base_state)
+
+        assert mock_client.call_json.call_count == 2
+        assert "person" in result["dependency_tree"]
+        assert "company" in result["dependency_tree"]
+        assert "fallback" in result["dependency_analysis_warning"].lower()

@@ -51,9 +51,9 @@ logger = logging.getLogger("merge-engine.orchestrator.graph")
 # not a step in the normal review sequence.
 HITL_NODES = [
     "human_review_deps",
+    "human_review_mappings",
     "human_review_scope",
     "human_review_matches",
-    "human_review_mappings",
     "human_final_approval",
     "handle_error",
 ]
@@ -90,14 +90,14 @@ NETWORK_RETRY = RetryPolicy(
 # to offer "skip": continue from the failure as if that node had produced
 # nothing, rather than forcing the whole run to be abandoned.
 NODE_SUCCESSOR = {
-    "preflight": "parse_request",
-    "parse_request": "discover_schemas",
-    "discover_schemas": "analyze_dependencies",
+    "preflight": "discover_schemas",
+    "discover_schemas": "parse_request",
+    "parse_request": "analyze_dependencies",
     "analyze_dependencies": "human_review_deps",
+    "map_fields": "plan_scope",
     "extract_data": "resolve_entities",
     "resolve_entities": "unify_entities",
-    "unify_entities": "map_fields",
-    "map_fields": "human_final_approval",
+    "unify_entities": "human_final_approval",
     "load_data": "update_extraction_state",
 }
 
@@ -105,9 +105,9 @@ NODE_SUCCESSOR = {
 # node with the user's written reason injected into its prompt.
 GATE_PRODUCER = {
     "human_review_deps": "analyze_dependencies",
+    "human_review_mappings": "map_fields",
     "human_review_scope": "plan_scope",
     "human_review_matches": "resolve_entities",
-    "human_review_mappings": "map_fields",
 }
 
 # A user can send the same gate back this many times before the graph moves on
@@ -424,7 +424,7 @@ def _build_builder() -> StateGraph:
             "error": "handle_error",
             "abort": END,
             "review": "human_review_mappings",
-            "continue": "human_final_approval",
+            "continue": "plan_scope",
         },
     )
 
@@ -432,13 +432,17 @@ def _build_builder() -> StateGraph:
     # Every HITL gate is a real decision point: approve/edit continues,
     # retry sends the work back to the node that produced it, and
     # reject ends the run without writing anything.
-    # Dependency review forwards into scope planning rather than straight to
-    # extraction. For an unscoped merge, plan_scope is a no-op and its router
-    # sends the run on to extraction, so the added hop costs nothing.
+    # Dependency review forwards into field mapping rather than scope planning.
     builder.add_conditional_edges(
         "human_review_deps",
-        _gate_router("human_review_deps", "plan_scope"),
-        {"forward": "plan_scope", "retry": "analyze_dependencies", "abort": END},
+        _gate_router("human_review_deps", "map_fields"),
+        {"forward": "map_fields", "retry": "analyze_dependencies", "abort": END},
+    )
+    # Field mapping review forwards into scope planning.
+    builder.add_conditional_edges(
+        "human_review_mappings",
+        _gate_router("human_review_mappings", "plan_scope"),
+        {"forward": "plan_scope", "retry": "map_fields", "abort": END},
     )
     # After planning, a scoped merge stops at the scope-confirmation gate; an
     # unscoped one skips straight to extraction (the gate is never entered, so
@@ -457,11 +461,6 @@ def _build_builder() -> StateGraph:
         "human_review_matches",
         _gate_router("human_review_matches", "unify_entities"),
         {"forward": "unify_entities", "retry": "resolve_entities", "abort": END},
-    )
-    builder.add_conditional_edges(
-        "human_review_mappings",
-        _gate_router("human_review_mappings", "human_final_approval"),
-        {"forward": "human_final_approval", "retry": "map_fields", "abort": END},
     )
     # Final approval has no producer to retry — it either loads or it doesn't.
     # load_data_node independently refuses to write unless load_approval is
@@ -514,6 +513,7 @@ class MergeState(TypedDict):
 
     schemas: dict[str, Any]
     dependency_tree: dict[str, Any]
+    column_dependencies: list[Any]
     # Set by analyze_dependencies when the LLM call fails and it falls back
     # to a flat (unordered) dependency tree, so a human sees the tree is
     # unverified rather than mistaking it for a real analysis.
@@ -771,6 +771,7 @@ def get_initial_state(
             "extraction_config": extraction_config,
             "schemas": {},
             "dependency_tree": {},
+            "column_dependencies": [],
             "dependency_analysis_warning": "",
             "extraction_order": [],
             "entity_tables": {},

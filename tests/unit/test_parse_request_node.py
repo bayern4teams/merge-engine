@@ -19,6 +19,7 @@ class TestParseRequest:
         return {
             "user_request": "Import all people and companies from our CRM",
             "target_entities": [],
+            "schemas": {},
             "llm_config": {
                 "provider": "openai",
                 "model": "gpt-4o",
@@ -31,7 +32,15 @@ class TestParseRequest:
     def mock_llm_client(self) -> MagicMock:
         """Mock LLMClient for testing."""
         client = MagicMock()
-        client.call_json = AsyncMock(return_value={"entity_types": ["person", "company"]})
+        client.call_json = AsyncMock(
+            return_value={
+                "entity_types": ["person", "company"],
+                "entity_tables": {
+                    "person": [{"origin_id": "origin_1", "table": "Person"}],
+                    "company": [{"origin_id": "origin_1", "table": "Company"}],
+                },
+            }
+        )
         return client
 
     @staticmethod

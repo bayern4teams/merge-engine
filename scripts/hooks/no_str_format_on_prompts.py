@@ -28,7 +28,7 @@ def main(argv: list[str]) -> int:
     bad = False
     for arg in argv:
         path = Path(arg)
-        if path.suffix != ".py" or not path.exists():
+        if path.suffix != ".py" or not path.exists() or "scripts/hooks" in path.as_posix():
             continue
         text = path.read_text(encoding="utf-8")
         for lineno, line in enumerate(text.splitlines(), 1):

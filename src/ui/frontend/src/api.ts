@@ -50,6 +50,9 @@ export interface MappingRow {
   new_column_name: string;
   new_column_type: string;
   confidence: number;
+  origin_id?: string;
+  table?: string;
+  is_coalesced?: boolean;
 }
 
 export interface InterruptData {
@@ -203,11 +206,19 @@ export function startWorkflow(body: {
 
 // ── Config (Part 1.6.A Settings page) ──────────────────────────────────────
 
+export interface EnvDetail {
+  status: "set" | "overridden" | "not_set";
+  source: "env" | "session_override" | "not_set";
+  masked_value: string;
+  is_set: boolean;
+}
+
 export interface EffectiveConfig {
   effective: Record<string, any>;
   platform_overrides: Record<string, any>;
   sources: Record<string, Record<string, "override" | "env" | "file">>;
   env_present: Record<string, boolean>;
+  env_details?: Record<string, EnvDetail>;
 }
 
 export function getConfig(): Promise<EffectiveConfig> {
@@ -218,6 +229,19 @@ export function updatePlatformConfig(
   body: Record<string, any>
 ): Promise<{ platform_overrides: Record<string, any> }> {
   return put("/api/config/platform", body);
+}
+
+export function updateEnvOverrides(
+  overrides: Record<string, string>
+): Promise<{ env_details: Record<string, EnvDetail>; env_present: Record<string, boolean> }> {
+  return post("/api/config/env", { overrides });
+}
+
+export function resetEnvOverrides(): Promise<{
+  env_details: Record<string, EnvDetail>;
+  env_present: Record<string, boolean>;
+}> {
+  return post("/api/config/env/reset", {});
 }
 
 // ── Investigation tools (Part 1.6.B) ────────────────────────────────────────

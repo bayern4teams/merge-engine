@@ -311,8 +311,25 @@ async def plan_scope_impl(
             "llm_used": llm_used,
         }
 
+    def _ensure_complete_origin_coverage(entities: dict[str, list[dict[str, Any]]]):
+        all_origins = list((schemas or {}).keys())
+        for entity in target_entities:
+            existing_entries = entities.setdefault(entity, [])
+            if not existing_entries:
+                for oid in all_origins:
+                    existing_entries.append(
+                        {
+                            "origin_id": oid,
+                            "table": "—",
+                            "mode": "not_found",
+                            "columns": [],
+                            "reason": f"No matching or linked {entity} table found in {oid}",
+                        }
+                    )
+
     llm_enabled = bool(llm_config) and llm_config.get("scope_planning_enabled", True)
     if not subject or not target_entities or not schemas or not llm_enabled:
+        _ensure_complete_origin_coverage(floor)
         return _wrap(floor, "", False)
 
     from src.llm import PROMPT_TEMPLATES, LLMClient
@@ -322,6 +339,7 @@ async def plan_scope_impl(
     human_template = prompts.get("human", "")
     if not system_prompt or not human_template:
         logger.warning("scope_planning prompts missing; using heuristic scope plan")
+        _ensure_complete_origin_coverage(floor)
         return _wrap(floor, "", False)
 
     catalog = build_table_catalog(schemas, include_foreign_keys=True)
@@ -343,6 +361,7 @@ async def plan_scope_impl(
         # floor is a better answer than an empty plan that extracts nothing.
         if not any(clean.values()):
             logger.warning("LLM scope plan had no usable entries; falling back to heuristic.")
+            _ensure_complete_origin_coverage(floor)
             return _wrap(floor, notes or "LLM plan empty; used heuristic.", False)
 
         # Fill in entities the model skipped from the floor, so a partial answer
@@ -351,6 +370,7 @@ async def plan_scope_impl(
             if not clean.get(entity) and entries:
                 clean[entity] = entries
 
+        _ensure_complete_origin_coverage(clean)
         logger.info(
             "Scope plan for %r: %s",
             subject,
@@ -363,6 +383,7 @@ async def plan_scope_impl(
             "LLM scope planning failed (%s); using the heuristic scope plan.",
             exc,
         )
+        _ensure_complete_origin_coverage(floor)
         return _wrap(floor, f"LLM scope planning unavailable: {exc}", False)
 
 

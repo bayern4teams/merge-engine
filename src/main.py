@@ -20,10 +20,21 @@ import argparse
 import asyncio
 import logging
 import sys
+from pathlib import Path
 from typing import Any
 
 from src.utils.config_loader import load_config
 from src.utils.logging_config import setup_logging
+
+try:
+    from dotenv import load_dotenv  # type: ignore[import-not-found]
+
+    # Resolve .env relative to the project root (src/main.py is one level inside src/),
+    # so defaults load regardless of the CWD the app was launched from.
+    _ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+    load_dotenv(_ENV_FILE, override=True)
+except ImportError:
+    pass
 
 
 def parse_args() -> argparse.Namespace:
@@ -80,7 +91,7 @@ async def run_mcp_server(config: Any, port: int = 8000) -> None:
     """
 
     try:
-        from mcp.server.fastmcp import FastMCP
+        from mcp.server.fastmcp import FastMCP  # type: ignore[import-not-found]
 
         mcp = FastMCP(
             "merge-engine",
@@ -91,14 +102,14 @@ async def run_mcp_server(config: Any, port: int = 8000) -> None:
         from src.mcp_server.server import _TOOL_HANDLERS
 
         # Register tool list
-        @mcp.tool()
+        @mcp.tool()  # type: ignore[untyped-decorator]
         async def discover_schema(origin_id: str) -> str:
             result = await _TOOL_HANDLERS["discover_schema"]({"origin_id": origin_id})
             import json
 
             return json.dumps(result, default=str)
 
-        @mcp.tool()
+        @mcp.tool()  # type: ignore[untyped-decorator]
         async def extract_data(
             origin_id: str,
             table_name: str,

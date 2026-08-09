@@ -22,9 +22,12 @@ from pydantic import BaseModel, Field, field_validator
 # which module is imported first (client.py also loads it; this just makes
 # config_loader independently correct).
 try:
-    from dotenv import load_dotenv
+    from dotenv import load_dotenv  # type: ignore[import-not-found]
 
-    load_dotenv()
+    # Resolve .env relative to the project root (config_loader.py is at
+    # src/utils/config_loader.py), so placeholders resolve regardless of CWD.
+    _ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
+    load_dotenv(_ENV_FILE, override=True)
 except ImportError:
     pass
 

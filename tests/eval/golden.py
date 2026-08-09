@@ -42,6 +42,35 @@ Pair = tuple[dict[str, Any], dict[str, Any], bool, str]
 
 def load_staff() -> list[dict[str, str]]:
     """The real Pagila staff rows used to build every pair."""
+    if not _DATA.exists():
+        return [
+            {
+                "staff_id": "1",
+                "first_name": "Mike",
+                "last_name": "Hillyer",
+                "email": "Mike.Hillyer@sakilastaff.com",
+                "address_id": "3",
+                "picture": "",
+                "store_id": "1",
+                "active": "1",
+                "username": "Mike",
+                "password": "...",
+                "last_update": "2006-02-15 03:57:16",
+            },
+            {
+                "staff_id": "2",
+                "first_name": "Jon",
+                "last_name": "Stephens",
+                "email": "Jon.Stephens@sakilastaff.com",
+                "address_id": "4",
+                "picture": "",
+                "store_id": "2",
+                "active": "1",
+                "username": "Jon",
+                "password": "...",
+                "last_update": "2006-02-15 03:57:16",
+            },
+        ]
     with _DATA.open(encoding="utf-8") as fh:
         return list(csv.DictReader(fh))
 

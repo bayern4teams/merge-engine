@@ -275,6 +275,42 @@ Add a new Phase section documenting these changes with checkbox tracking.
 
 ---
 
+### Component 8: Remediation — Complete Dependency Tree Key Validation
+
+---
+
+#### [MODIFY] [analyze_dependencies.py](../../src/orchestrator/nodes/analyze_dependencies.py)
+
+Update `_parse_llm_tree` helper to validate that EVERY target entity is present as a key in `raw_tree`:
+
+```python
+def _parse_llm_tree(res: Any) -> dict[str, list[str]] | None:
+    if not isinstance(res, dict) or not res:
+        return None
+    raw_tree = res.get("dependency_tree")
+    if not isinstance(raw_tree, dict) or not raw_tree:
+        return None
+    # Ensure every target entity was explicitly returned as a key by the LLM.
+    # If the LLM returns a partial tree omitting any entity, reject it so
+    # the retry and programmatic coverage matrix fallback trigger.
+    if any(e not in raw_tree for e in target_entities):
+        return None
+    tree = {}
+    for e in target_entities:
+        deps = raw_tree.get(e, [])
+        tree[e] = list(deps) if isinstance(deps, list) else []
+    return tree
+```
+
+---
+
+#### [MODIFY] [test_analyze_dependencies_node.py](../../tests/unit/test_analyze_dependencies_node.py)
+
+Add unit test `test_partial_dependency_tree_omitting_entities_retries_and_falls_back()` to verify that an LLM output omitting one or more `target_entities` triggers the retry mechanism and falls back to the coverage matrix.
+
+
+---
+
 ## Verification Plan
 
 ### Automated Tests

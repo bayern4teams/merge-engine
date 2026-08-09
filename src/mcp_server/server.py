@@ -13,8 +13,47 @@ import json
 import logging
 from typing import Any
 
+import mcp.types as types
 from mcp.server import Server
 from mcp.types import TextContent, Tool
+
+if not hasattr(Server, "list_tools"):
+
+    def _list_tools_decorator(self: Any) -> Any:
+        def decorator(fn: Any) -> Any:
+            async def _handler(req: types.ListToolsRequest) -> types.ListToolsResult:
+                tools = await fn()
+                return types.ListToolsResult(tools=tools)
+
+            self.add_request_handler("tools/list", types.ListToolsRequest, _handler)
+            return fn
+
+        return decorator
+
+    Server.list_tools = _list_tools_decorator  # type: ignore[attr-defined]
+
+if not hasattr(Server, "call_tool"):
+
+    def _call_tool_decorator(self: Any) -> Any:
+        def decorator(fn: Any) -> Any:
+            async def _handler(req: types.CallToolRequest) -> types.CallToolResult:
+                result = await fn(req.params.name, req.params.arguments or {})
+                return types.CallToolResult(content=result)
+
+            self.add_request_handler("tools/call", types.CallToolRequest, _handler)
+            return fn
+
+        return decorator
+
+    Server.call_tool = _call_tool_decorator  # type: ignore[attr-defined]
+
+# Pydantic v2 models expose fields via model_fields, not as class attributes,
+# so a plain `hasattr(Tool, "inputSchema")` on the class is False even when
+# the field exists — checking that way installed the fallback property below
+# unconditionally and shadowed the real field with one reading a nonexistent
+# `input_schema` attribute (every tool then reported an empty inputSchema).
+if "inputSchema" not in getattr(Tool, "model_fields", {}):
+    Tool.inputSchema = property(lambda self: getattr(self, "input_schema", {}))  # type: ignore[attr-defined]
 
 from src.mcp_server.connectors import create_connector
 
@@ -49,11 +88,11 @@ def _get_config() -> Any:
 # ── Tool Definitions ─────────────────────────────────────────────────
 
 
-@app.list_tools()
+@app.list_tools()  # type: ignore[attr-defined]
 async def list_tools() -> list[Tool]:
     """Return the list of tools exposed by this MCP server."""
     return [
-        Tool(
+        Tool(  # type: ignore[call-arg]
             name="discover_schema",
             description=(
                 "Connect to an origin database and return all tables/collections "
@@ -70,7 +109,7 @@ async def list_tools() -> list[Tool]:
                 "required": ["origin_id"],
             },
         ),
-        Tool(
+        Tool(  # type: ignore[call-arg]
             name="extract_data",
             description=(
                 "Extract rows from a specific origin table/entity, filtered by "
@@ -112,7 +151,7 @@ async def list_tools() -> list[Tool]:
                 "required": ["origin_id", "table_name", "columns"],
             },
         ),
-        Tool(
+        Tool(  # type: ignore[call-arg]
             name="resolve_entities",
             description=(
                 "Given records from multiple sources for a given entity type, "
@@ -135,7 +174,7 @@ async def list_tools() -> list[Tool]:
                 "required": ["entity_type", "records"],
             },
         ),
-        Tool(
+        Tool(  # type: ignore[call-arg]
             name="unify_entity_group",
             description=(
                 "Merge attributes within a cluster: complement nulls, flag "
@@ -157,7 +196,7 @@ async def list_tools() -> list[Tool]:
                 "required": ["cluster_id", "records"],
             },
         ),
-        Tool(
+        Tool(  # type: ignore[call-arg]
             name="map_fields",
             description=(
                 "Map unified fields to destination columns using LLM. "
@@ -182,7 +221,7 @@ async def list_tools() -> list[Tool]:
                 "required": ["entity_type", "unified_schema", "destination_schema"],
             },
         ),
-        Tool(
+        Tool(  # type: ignore[call-arg]
             name="load_data",
             description=(
                 "Upsert unified records into destination Databricks table "
@@ -209,7 +248,7 @@ async def list_tools() -> list[Tool]:
                 "required": ["entity_type", "records"],
             },
         ),
-        Tool(
+        Tool(  # type: ignore[call-arg]
             name="extend_schema",
             description=(
                 "Add new columns to one or more Databricks destination tables. "
@@ -241,7 +280,7 @@ async def list_tools() -> list[Tool]:
 # ── Tool Dispatch ─────────────────────────────────────────────────────
 
 
-@app.call_tool()
+@app.call_tool()  # type: ignore[attr-defined]
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     """Dispatch a tool call to the appropriate implementation.
 

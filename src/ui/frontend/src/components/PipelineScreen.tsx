@@ -223,8 +223,15 @@ export default function PipelineScreen({ origins, destination }: Props) {
     const name = presetCompany.trim();
     if (!name) return;
     setRequest(
-      `Merge all information about ${name}: every person, every product, ` +
-        `and the company's own record.`,
+      `Please conduct a comprehensive and indepth data extraction of ${name}, covering all of the following dimensions:\n` +
+        `NOTE: Do your best to find all of them.\n\n` +
+        `1. Basic Company Information: Legal structure, registered address and operational headquarters, establishment history, shareholding structure and stock symbol;\n\n` +
+        `2. Personnel and Organization: Board members, executive committee, and senior executives (including CEO, CEOs of various business divisions, CFO, etc.), total number of employees worldwide and the educational and professional backgrounds of all individuals;\n\n` +
+        `3. Business and Products: All business areas and delivery data;\n\n` +
+        `4. Finance and Funding: Revenue and profit data, funding history and major investors;\n\n` +
+        `5. Technology and Innovation: Core technology directions and digital transformation;\n\n` +
+        `6. Global Presence: Main operational locations and international layout;\n\n` +
+        `7. Contact Information: Official company & individuals phone number and website.`,
     );
     setFullRemerge(true);
   }
@@ -240,11 +247,10 @@ export default function PipelineScreen({ origins, destination }: Props) {
   return (
     <div>
       <div className="card preset-card">
-        <h3 className="card-title">Everything about one company</h3>
+        <h3 className="card-title">Comprehensive company extraction</h3>
         <p className="card-hint">
-          Type a company name and the pipeline finds every person, product, and
-          record tied to it across all origins, deduplicates against what the
-          destination already has, and merges only that — reviewed at every gate.
+          Type a company name to build an enriched extraction request covering company info,
+          personnel, products, financials, technology, locations, and contacts across all origins.
         </p>
         <div className="preset-row">
           <input
@@ -253,7 +259,7 @@ export default function PipelineScreen({ origins, destination }: Props) {
             disabled={running}
             onChange={(e) => setPresetCompany(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && applyCompanyPreset()}
-            placeholder="e.g. Nova"
+            placeholder="e.g. Airbus"
           />
           <button
             className="btn btn-ghost"
@@ -414,11 +420,33 @@ function StatusLine({
 // actually landed. Renders once the run has stopped (completed or failed);
 // there is nothing to show mid-run since the report is only built at the
 // load step.
+//
+// Bug #8 / Bug #1: the scorecard also flags entity families that loaded
+// ZERO rows and inferred entity types that were dropped for having no
+// source table — a run that "succeeded" while silently writing nothing
+// for half the requested entities must not look like a clean success.
 function RunScorecard({ report }: { report?: Record<string, any> }) {
+  const [showExplanation, setShowExplanation] = useState(false);
   if (!report) return null;
   const dq = report.data_quality || {};
   const grade: string = dq.grade || "A";
   const redFlags: string[] = dq.red_flags || [];
+
+  // Bug #8: requested families that ended with no rows at all.
+  const entities: Record<string, any> = report.entities || {};
+  const loadedEntities = Object.entries(entities).filter(([, e]) => {
+    const inserted = Number(e.rows_inserted ?? 0);
+    const updated = Number(e.rows_updated ?? 0);
+    return inserted + updated > 0;
+  });
+  const loadedNames = new Set(loadedEntities.map(([name]) => name));
+  const zeroRowEntities = Object.keys(entities).filter(
+    (name) => !loadedNames.has(name),
+  );
+
+  // Bug #1: inferred entity types that had no source table anywhere and
+  // were dropped before extraction.
+  const droppedInferred: string[] = report.dropped_inferred_entities || [];
 
   return (
     <div style={{ marginTop: 14 }}>
@@ -431,10 +459,106 @@ function RunScorecard({ report }: { report?: Record<string, any> }) {
         <Stat label="Families requested" value={report.families_requested ?? 0} />
         <Stat label="Families loaded" value={report.families_loaded ?? 0} />
         <Stat label="Completeness" value={`${report.completeness_pct ?? 0}%`} />
+        <Stat label="Zero-row entities" value={zeroRowEntities.length} />
+        <Stat label="Dropped inferred" value={droppedInferred.length} />
       </div>
-      {redFlags.length > 0 && redFlags.map((flag, i) => (
-        <div key={i} className="banner banner-warn">⚠ {flag}</div>
-      ))}
+
+      <div style={{ marginTop: 10, marginBottom: 10 }}>
+        <button
+          className="btn btn-ghost"
+          style={{ fontSize: 12, padding: "4px 10px" }}
+          onClick={() => setShowExplanation((prev) => !prev)}
+        >
+          {showExplanation ? "▾ Hide score breakdown" : "📊 Why this score?"}
+        </button>
+      </div>
+
+      {showExplanation && (
+        <div
+          style={{
+            background: "var(--card-bg, #f8f9fa)",
+            border: "1px solid var(--border-color, #e0e0e0)",
+            borderRadius: 6,
+            padding: 14,
+            marginBottom: 14,
+            fontSize: 13,
+            lineHeight: 1.5,
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 14 }}>
+            Data Quality Score Breakdown
+          </div>
+          
+          <div style={{ marginBottom: 10 }}>
+            <strong>Grade Assessment (Grade {grade}):</strong>
+            <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
+              <li><strong>Grade A</strong>: No red flags. All target entity families extracted and loaded cleanly.</li>
+              <li><strong>Grade B</strong>: Minor issues (e.g. inferred entity types with no matching source table).</li>
+              <li><strong>Grade C</strong>: Type coercion errors or skipped field mappings.</li>
+              <li><strong>Grade F</strong>: Transaction rollback or zero auto-merges across all entities.</li>
+            </ul>
+            {redFlags.length > 0 && (
+              <div style={{ marginTop: 6, color: "#c62828" }}>
+                <strong>Active Red Flags:</strong>
+                <ul style={{ margin: "2px 0 0 18px", padding: 0 }}>
+                  {redFlags.map((flag, idx) => (
+                    <li key={idx}>{flag}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+
+          <div style={{ marginBottom: 10 }}>
+            <strong>Completeness Calculation:</strong>
+            <p style={{ margin: "4px 0 0 0" }}>
+              <code>Completeness = Families Loaded ({report.families_loaded ?? 0}) / Families Requested ({report.families_requested ?? 0}) × 100 = {report.completeness_pct ?? 0}%</code>
+            </p>
+            <p style={{ margin: "4px 0 0 0", color: "var(--muted-color, #6c757d)", fontSize: 12 }}>
+              <em>Families Requested</em> represents target entities identified from schemas. <em>Families Loaded</em> represents entities with ≥1 row inserted/updated into destination.
+            </p>
+            <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
+              <li>Loaded entities: {Array.from(loadedNames).join(", ") || "None"}</li>
+              {zeroRowEntities.length > 0 && (
+                <li>Zero-row entities: {zeroRowEntities.join(", ")}</li>
+              )}
+            </ul>
+          </div>
+
+          {droppedInferred.length > 0 && (
+            <div>
+              <strong>Dropped Inferred Entities ({droppedInferred.length}):</strong>
+              <p style={{ margin: "4px 0 0 0" }}>
+                The following inferred entity types had no matching source table in any connected origin database and were dropped prior to extraction:
+              </p>
+              <code style={{ display: "block", marginTop: 4, background: "rgba(0,0,0,0.04)", padding: 6, borderRadius: 4 }}>
+                {droppedInferred.join(", ")}
+              </code>
+            </div>
+          )}
+        </div>
+      )}
+
+      {zeroRowEntities.length > 0 && (
+        <div className="banner banner-warn">
+          ⚠ {zeroRowEntities.length} entity family(ies) loaded zero rows:{" "}
+          {zeroRowEntities.join(", ")}
+        </div>
+      )}
+
+      {droppedInferred.length > 0 && (
+        <div className="banner banner-warn">
+          ⚠ {droppedInferred.length} inferred entity type(s) had no source
+          table and were dropped: {droppedInferred.join(", ")}
+        </div>
+      )}
+
+      {redFlags.length > 0 &&
+        redFlags.map((flag, i) => (
+          <div key={i} className="banner banner-warn">
+            ⚠ {flag}
+          </div>
+        ))}
     </div>
   );
 }

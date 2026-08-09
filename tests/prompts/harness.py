@@ -213,7 +213,7 @@ def _score(stage: str, case: dict[str, Any], result: Any) -> tuple[bool, str]:
         ok = not missing and not wrong
         return ok, f"missing={missing} unexpected={wrong}" if not ok else "all edges correct"
 
-    if stage == "entity_table_selection":
+    if stage == "cls":
         tables = result.get("entity_tables", {}) or {}
 
         def _pairs(entity: str) -> set[tuple[str, str]]:
