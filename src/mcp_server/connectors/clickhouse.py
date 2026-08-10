@@ -465,4 +465,31 @@ class ClickHouseConnector(BaseConnector):
             "origin_ids": origin_ids,
         }
 
+    # ── Join-graph support (Phase 4.1) ──────────────────────────────────
+
+    async def sample_distinct_values(
+        self, table_name: str, column: str, limit: int = 500
+    ) -> list[Any]:
+        """Bounded DISTINCT sample, pushed down — never a full-table read.
+
+        ClickHouse origins never carry declared foreign keys (system.tables
+        exposes none), so the join graph's inclusion-dependency tier is the
+        only edge source that actually works here; this is what it queries.
+        """
+        logger.debug(
+            "ENTER sample_distinct_values: table=%s, column=%s, limit=%d",
+            table_name,
+            column,
+            limit,
+        )
+        client = await self._ensure_client()
+        sql = (
+            f"SELECT DISTINCT `{column}` FROM `{self._database}`.`{table_name}` "
+            f"WHERE `{column}` IS NOT NULL LIMIT {{limit:UInt64}}"
+        )
+        result = client.query(sql, parameters={"limit": limit})
+        values = [row[0] for row in result.result_rows]
+        logger.debug("EXIT sample_distinct_values: %d value(s)", len(values))
+        return values
+
     # ── Helpers ───────────────────────────────────────────────────────

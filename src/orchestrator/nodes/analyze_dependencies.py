@@ -301,12 +301,24 @@ def _build_coverage_matrix(
                     if other_table == table_name:
                         continue
                     ot_low = other_table.lower()
+                    # Phase 4.1 of the fix-bugs follow-up plan: the
+                    # `or col_low.startswith(ot_low)` clause this used to
+                    # have fabricated an edge for any column merely
+                    # starting with another table's name -- e.g.
+                    # "Person.company_name" -> "Company.id", a real column,
+                    # a real table, and nothing to do with each other.
+                    # src/mcp_server/tools/join_graph.py is the module that
+                    # now does this matching for real (with an
+                    # inclusion-dependency check against sampled data, not
+                    # just a name guess) — this coverage matrix stays a
+                    # lighter-weight, unverified heuristic feeding only the
+                    # LLM's prompt context in this node.
                     if col_low in (
                         f"{ot_low}id",
                         f"{ot_low}_id",
                         f"{ot_low}key",
                         f"{ot_low}_key",
-                    ) or col_low.startswith(ot_low):
+                    ):
                         parent_entity = find_entity_for_table(other_table)
                         entries.append(
                             {

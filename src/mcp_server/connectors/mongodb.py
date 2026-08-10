@@ -301,6 +301,35 @@ class MongoDBConnector(BaseConnector):
             "origin_ids": origin_ids,
         }
 
+    # ── Join-graph support (Phase 4.1) ──────────────────────────────────
+
+    async def sample_distinct_values(
+        self, table_name: str, column: str, limit: int = 500
+    ) -> list[Any]:
+        """Bounded distinct sample via aggregation — never a full-collection
+        read. MongoDB never carries declared foreign keys, so this is the
+        only edge source that works here, same as ClickHouse."""
+        logger.debug(
+            "ENTER sample_distinct_values: table=%s, column=%s, limit=%d",
+            table_name,
+            column,
+            limit,
+        )
+        client = await self._ensure_client()
+        db = client[self._db_name]
+        collection = db[table_name]
+        pipeline: list[dict[str, Any]] = [
+            {"$match": {column: {"$ne": None}}},
+            {"$group": {"_id": f"${column}"}},
+            {"$limit": limit},
+        ]
+        values = []
+        cursor = await collection.aggregate(pipeline)
+        async for doc in cursor:
+            values.append(doc["_id"])
+        logger.debug("EXIT sample_distinct_values: %d value(s)", len(values))
+        return values
+
     @staticmethod
     def _as_id(value: str) -> Any:
         """Turn a cursor string back into whatever `_id` type the collection uses."""

@@ -818,3 +818,67 @@ class TestMapSqlType:
         assert PostgresConnector._map_sql_type("character") == "CHAR"
         # Source maps 'character' with char_max to VARCHAR(length) same as 'character varying'
         assert PostgresConnector._map_sql_type("character", 10) == "VARCHAR(10)"
+
+
+class TestSampleDistinctValues:
+    """Phase 4.1: bounded DISTINCT sample used by join_graph.py's
+    inclusion-dependency check -- must never read a full table."""
+
+    async def test_pushes_a_bounded_distinct_query(self) -> None:
+        from src.mcp_server.connectors.postgres import PostgresConnector
+
+        connector = PostgresConnector({"connection": {"database": "d"}})
+        engine = MagicMock()
+        conn = AsyncMock()
+        result = MagicMock()
+        result.fetchall.return_value = [("a",), ("b",), ("c",)]
+        conn.execute = AsyncMock(return_value=result)
+        conn.commit = AsyncMock()
+        engine.connect = MagicMock(return_value=make_async_cm(conn))
+        connector._engine = engine
+
+        values = await connector.sample_distinct_values("companies", "website", limit=500)
+
+        assert values == ["a", "b", "c"]
+        sql_text = conn.execute.call_args.args[0]
+        params = conn.execute.call_args.args[1]
+        assert "DISTINCT" in str(sql_text)
+        assert "website" in str(sql_text)
+        assert params == {"limit": 500}
+
+    async def test_bare_table_name_defaults_to_public_schema(self) -> None:
+        from src.mcp_server.connectors.postgres import PostgresConnector
+
+        connector = PostgresConnector({"connection": {"database": "d"}})
+        engine = MagicMock()
+        conn = AsyncMock()
+        result = MagicMock()
+        result.fetchall.return_value = []
+        conn.execute = AsyncMock(return_value=result)
+        conn.commit = AsyncMock()
+        engine.connect = MagicMock(return_value=make_async_cm(conn))
+        connector._engine = engine
+
+        await connector.sample_distinct_values("companies", "id")
+
+        sql_text = str(conn.execute.call_args.args[0])
+        assert "public.companies" in sql_text
+
+    async def test_qualified_table_name_used_as_is(self) -> None:
+        from src.mcp_server.connectors.postgres import PostgresConnector
+
+        connector = PostgresConnector({"connection": {"database": "d"}})
+        engine = MagicMock()
+        conn = AsyncMock()
+        result = MagicMock()
+        result.fetchall.return_value = []
+        conn.execute = AsyncMock(return_value=result)
+        conn.commit = AsyncMock()
+        engine.connect = MagicMock(return_value=make_async_cm(conn))
+        connector._engine = engine
+
+        await connector.sample_distinct_values("crm.companies", "id")
+
+        sql_text = str(conn.execute.call_args.args[0])
+        assert "crm.companies" in sql_text
+        assert "public.crm.companies" not in sql_text

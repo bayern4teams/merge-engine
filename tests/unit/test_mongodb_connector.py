@@ -740,3 +740,34 @@ class TestFlattenDoc:
         result = MongoDBConnector._flatten_doc(doc)
         assert result["name"] == "Alice"
         assert result["meta.source"] == "api"
+
+
+class TestSampleDistinctValues:
+    """Phase 4.1: bounded distinct sample via aggregation, used by
+    join_graph.py's inclusion-dependency check -- MongoDB never carries
+    declared foreign keys, so this is the tier that actually finds join
+    edges here."""
+
+    @pytest.mark.asyncio
+    async def test_pushes_a_bounded_group_aggregation(self, mongodb_config):
+        from src.mcp_server.connectors.mongodb import MongoDBConnector
+
+        connector = MongoDBConnector(mongodb_config)
+        connector._db_name = "testdb"
+
+        mock_client = AsyncMock()
+        mock_db = MagicMock()
+        mock_client.__getitem__ = MagicMock(return_value=mock_db)
+
+        coll = AsyncMock()
+        coll.aggregate = AsyncMock(return_value=_make_async_iter([{"_id": "a"}, {"_id": "b"}]))
+        mock_db.__getitem__ = MagicMock(return_value=coll)
+        connector._client = mock_client
+
+        values = await connector.sample_distinct_values("companies", "website", limit=500)
+
+        assert values == ["a", "b"]
+        pipeline = coll.aggregate.call_args.args[0]
+        assert pipeline[0] == {"$match": {"website": {"$ne": None}}}
+        assert pipeline[1] == {"$group": {"_id": "$website"}}
+        assert pipeline[2] == {"$limit": 500}

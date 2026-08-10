@@ -106,3 +106,24 @@ class TestExtractInScratchFilter:
                 columns=["id"],
                 filter={"company_id": {"op": "in_scratch", "value": "'; DROP TABLE users; --"}},
             )
+
+
+class TestSampleDistinctValues:
+    """Phase 4.1: bounded DISTINCT sample used by join_graph.py's
+    inclusion-dependency check -- ClickHouse origins never carry declared
+    foreign keys, so this is the tier that actually finds join edges here."""
+
+    async def test_pushes_a_bounded_distinct_query(self) -> None:
+        connector, mock_client = _connector_with_mock_client()
+        mock_result = MagicMock()
+        mock_result.result_rows = [("a",), ("b",)]
+        mock_client.query.return_value = mock_result
+
+        values = await connector.sample_distinct_values("Company", "website", limit=500)
+
+        assert values == ["a", "b"]
+        query_sql = mock_client.query.call_args.args[0]
+        assert "DISTINCT `website`" in query_sql
+        assert "`test_db`.`Company`" in query_sql
+        params = mock_client.query.call_args.kwargs.get("parameters", {})
+        assert params == {"limit": 500}

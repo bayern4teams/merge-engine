@@ -100,6 +100,26 @@ class BaseConnector(ABC):
             }
         """
 
+    # ── Join-graph support (Phase 4.1) ──────────────────────────────────
+
+    async def sample_distinct_values(
+        self, table_name: str, column: str, limit: int = 500
+    ) -> list[Any]:
+        """Sample up to `limit` distinct non-null values of one column.
+
+        Used by join_graph.py to test inclusion dependencies between a
+        candidate child column and a candidate parent key — the whole point
+        is to never pull a full table (some origin tables here run to tens
+        of millions of rows) just to check whether one column's values are
+        contained in another's. Every subclass that has a real origin
+        (ClickHouse, PostgreSQL, MongoDB) overrides this with a query-side
+        DISTINCT/aggregation bounded by `limit`; the default here exists so
+        a connector that hasn't been given one yet (or can't reasonably
+        support it) degrades to "no inclusion-dependency evidence available"
+        rather than crashing the whole join-graph build.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support sample_distinct_values")
+
     # ── Lifecycle ─────────────────────────────────────────────────────
 
     async def close(self) -> None:

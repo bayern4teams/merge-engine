@@ -481,6 +481,34 @@ class PostgresConnector(BaseConnector):
             "origin_ids": origin_ids,
         }
 
+    # ── Join-graph support (Phase 4.1) ──────────────────────────────────
+
+    async def sample_distinct_values(
+        self, table_name: str, column: str, limit: int = 500
+    ) -> list[Any]:
+        """Bounded DISTINCT sample, pushed down — never a full-table read.
+
+        Same table-name resolution as extract() (bare name defaults to the
+        public schema; a "schema.table" string is used as-is).
+        """
+        logger.debug(
+            "ENTER sample_distinct_values: table=%s, column=%s, limit=%d",
+            table_name,
+            column,
+            limit,
+        )
+        engine = await self._ensure_engine()
+        resolved = table_name if "." in table_name else f"public.{table_name}"
+        sql = text(
+            f'SELECT DISTINCT "{column}" FROM {resolved} WHERE "{column}" IS NOT NULL LIMIT :limit'
+        )
+        async with engine.connect() as conn:
+            result = await conn.execute(sql, {"limit": limit})
+            values = [row[0] for row in result.fetchall()]
+            await conn.commit()
+        logger.debug("EXIT sample_distinct_values: %d value(s)", len(values))
+        return values
+
     # ── Helpers ───────────────────────────────────────────────────────
 
     @staticmethod
