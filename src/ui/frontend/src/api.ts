@@ -317,6 +317,40 @@ export function sampleRows(body: {
   return post("/api/explore/sample", body);
 }
 
+export interface LineageRow {
+  run_id: string;
+  entity_type: string;
+  cluster_id: string;
+  record_a: string;
+  record_b: string;
+  confidence: number | null;
+  method: string | null;
+  evidence: Record<string, any> | null;
+  decided_by: string | null;
+  human_override: string | null;
+  created_at: string;
+}
+
+export interface LineageResult {
+  connected: boolean;
+  error: string | null;
+  rows: LineageRow[];
+}
+
+export function getLineage(body: {
+  host: string;
+  port: number;
+  user?: string;
+  password?: string;
+  database?: string;
+  schema_name?: string;
+  search: string;
+  entity_type?: string;
+  limit?: number;
+}): Promise<LineageResult> {
+  return post("/api/investigate/lineage", body);
+}
+
 export interface GoldenDiff {
   subject: string;
   totals: { golden_rows: number; app_rows: number; matched_rows: number; overall_parity_pct: number };

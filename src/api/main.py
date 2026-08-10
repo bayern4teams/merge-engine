@@ -41,7 +41,11 @@ from src.orchestrator.profiles import (
 )
 from src.orchestrator.workflow_manager import WorkflowManager
 from src.ui import connections
-from src.ui.components.db_discovery import sample_table_rows, test_and_discover_schemas
+from src.ui.components.db_discovery import (
+    query_merge_lineage,
+    sample_table_rows,
+    test_and_discover_schemas,
+)
 from src.utils.config_loader import (
     load_platform_overrides,
     load_raw_config_dict,
@@ -147,6 +151,20 @@ class ExploreSampleRequest(BaseModel):
     table: str
     schema_name: str = ""
     limit: int = 20
+
+
+class LineageLookupRequest(BaseModel):
+    """Phase 7.3: merge-audit lookup by record id or cluster id."""
+
+    host: str
+    port: int
+    user: str = ""
+    password: str = ""
+    database: str = ""
+    schema_name: str = ""
+    search: str
+    entity_type: str = ""
+    limit: int = 50
 
 
 class RunConfig(BaseModel):
@@ -720,6 +738,25 @@ def create_api(config_path: str = "config/config.yaml") -> FastAPI:
             database=body.database,
             table=body.table,
             schema=body.schema_name,
+            limit=body.limit,
+        )
+
+    @app.post("/api/investigate/lineage")
+    def investigate_lineage(body: LineageLookupRequest) -> dict[str, Any]:
+        """Phase 7.3: merge lineage lookup over merge_engine_merge_audit —
+        every pair a canonical id or source record id ever appeared in,
+        with the field-level evidence that justified the merge. Survives
+        the run's own spool being cleaned up, unlike the checkpoint-backed
+        match inspector above."""
+        return query_merge_lineage(
+            host=body.host,
+            port=body.port,
+            user=body.user,
+            password=body.password,
+            database=body.database,
+            schema=body.schema_name,
+            search=body.search,
+            entity_type=body.entity_type,
             limit=body.limit,
         )
 

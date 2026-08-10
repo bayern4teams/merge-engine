@@ -982,6 +982,10 @@ function SummaryBody({
   // hard `fail` (most commonly row_count_ge_1, e.g. a scoped join path
   // that silently resolved to nothing) is exactly the class of failure
   // that otherwise reaches this gate as an unremarked yellow badge.
+  // Phase 7.3: every multi-member cluster's Phase 7.1 match_evidence, per
+  // entity. The matches gate only ever showed the sub-0.85 ambiguous ones;
+  // the reviewer approving THIS gate is signing off on every merge.
+  const clustersByEntity: Record<string, any[]> = data.clusters_by_entity || {};
   const quality = data.quality_report || {};
   const qualityEntities: Record<string, any> = quality.entities || {};
   const hasQualityFailure = !!data.has_quality_failure;
@@ -1130,6 +1134,76 @@ function SummaryBody({
               </tbody>
             </table>
           </div>
+        </>
+      )}
+
+      {Object.keys(clustersByEntity).length > 0 && (
+        <>
+          <div className="section-label">
+            Merge lineage
+            <Tooltip text="Every cluster with more than one source record, and the per-pair evidence that justified merging them — which fields agreed or disagreed and by how much, or the LLM's own rationale for a borderline pair. Persisted to merge_engine_merge_audit for later lookup." />
+          </div>
+          {Object.entries(clustersByEntity).map(([entity, clusters]) => (
+            <details key={entity} style={{ marginBottom: 10 }}>
+              <summary style={{ cursor: "pointer", fontWeight: 600 }}>
+                {entity} ({clusters.length} merged cluster{clusters.length === 1 ? "" : "s"})
+              </summary>
+              <div style={{ paddingLeft: 12, marginTop: 8 }}>
+                {clusters.map((c: any) => (
+                  <div key={c.cluster_id} className="cluster">
+                    <div className="cluster-head">
+                      {(c.record_ids || []).length} records, confidence{" "}
+                      {Number(c.match_confidence || 0).toFixed(2)}
+                      {c.required_human_review && (
+                        <span className="muted"> · reviewed by human</span>
+                      )}
+                    </div>
+                    {c.match_evidence ? (
+                      (c.match_evidence.pairs || []).map((p: any, i: number) => (
+                        <div key={i} style={{ fontSize: 12, marginTop: 6 }}>
+                          <div className="mono muted">
+                            {p.a} ↔ {p.b} — {p.method} ({Number(p.confidence || 0).toFixed(2)})
+                          </div>
+                          {p.method === "llm" ? (
+                            <div className="muted" style={{ marginTop: 2 }}>
+                              {p.reason || "no rationale recorded"}
+                            </div>
+                          ) : (
+                            <table className="data-table" style={{ marginTop: 4 }}>
+                              <tbody>
+                                {[...(p.matched_fields || []), ...(p.mismatched_fields || [])].map(
+                                  (f: any, j: number) => (
+                                    <tr key={j}>
+                                      <td className="mono">{f.field}</td>
+                                      <td className="mono muted">{String(f.a)}</td>
+                                      <td className="mono muted">{String(f.b)}</td>
+                                      <td
+                                        style={{
+                                          color: f.weight > 0 ? "#0a7d3c" : "#c0392b",
+                                          fontWeight: 600,
+                                        }}
+                                      >
+                                        {f.weight > 0 ? "+" : ""}
+                                        {f.weight}
+                                      </td>
+                                    </tr>
+                                  )
+                                )}
+                              </tbody>
+                            </table>
+                          )}
+                        </div>
+                      ))
+                    ) : (
+                      <span className="muted" style={{ fontSize: 12 }}>
+                        no per-field evidence recorded for this merge
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </details>
+          ))}
         </>
       )}
 

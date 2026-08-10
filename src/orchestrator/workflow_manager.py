@@ -544,6 +544,34 @@ class WorkflowManager:
         return _auto_match_stats(values)
 
     @staticmethod
+    def _clusters_by_entity(values: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+        """Every multi-member cluster's Phase 7.1 match_evidence, per entity.
+
+        Singletons are excluded — there is no pair to explain, and they would
+        just be noise in a lineage view. Only the fields the gate actually
+        renders are forwarded (not the whole cluster dict), so this payload
+        doesn't grow with whatever internal bookkeeping a cluster happens to
+        carry.
+        """
+        entity_clusters = values.get("entity_clusters") or {}
+        result: dict[str, list[dict[str, Any]]] = {}
+        for entity_type in entity_clusters:
+            multi = [
+                {
+                    "cluster_id": c.get("cluster_id", ""),
+                    "record_ids": c.get("record_ids", []),
+                    "match_confidence": c.get("match_confidence"),
+                    "required_human_review": bool(c.get("required_human_review")),
+                    "match_evidence": c.get("match_evidence"),
+                }
+                for c in clusters_for(values, entity_type)
+                if len(c.get("record_ids", [])) > 1
+            ]
+            if multi:
+                result[entity_type] = multi
+        return result
+
+    @staticmethod
     def _derive_skipped_gates(
         current_node: str,
         values: dict[str, Any],
@@ -733,6 +761,12 @@ class WorkflowManager:
                     # unremarked.
                     "quality_report": values.get("quality_report") or {},
                     "has_quality_failure": bool(values.get("has_quality_failure", False)),
+                    # Phase 7.3: every multi-member cluster's Phase 7.1
+                    # match_evidence, surfaced here rather than only at the
+                    # matches gate (which shows just the sub-0.85 ones) —
+                    # the reviewer approving THIS gate is the one signing off
+                    # on every merge, not only the ambiguous ones.
+                    "clusters_by_entity": WorkflowManager._clusters_by_entity(values),
                 },
             }
         return {"node": node, "title": node, "data": {}}

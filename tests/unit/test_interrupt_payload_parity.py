@@ -241,6 +241,7 @@ class TestInterruptPayloadParity:
             "auto_match_stats",
             "quality_report",
             "has_quality_failure",
+            "clusters_by_entity",
         }
         assert manager_keys - node_keys == expected_extra, (
             "human_final_approval's extra manager-only keys changed — update "
