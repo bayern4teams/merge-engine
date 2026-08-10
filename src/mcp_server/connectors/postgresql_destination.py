@@ -895,6 +895,98 @@ class PostgreSQLDestinationConnector:
         finally:
             cursor.close()
 
+    def ensure_merge_audit(self) -> None:
+        """Create the merge-lineage audit table if it doesn't exist.
+
+        Issue 7: per-pair match evidence (Phase 7.1) was computed and then
+        thrown away the moment clustering finished — a reviewer, or anyone
+        auditing a merge after the fact, had no way to see *why* two records
+        were judged the same entity. This is the durable half of that fix:
+        one row per matched pair, queryable long after the run's own spool
+        (and DuckDB working data) is cleaned up.
+        """
+        conn = self._ensure_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS "{self._schema}"."merge_engine_merge_audit" (
+                    run_id TEXT NOT NULL,
+                    entity_type TEXT NOT NULL,
+                    cluster_id TEXT NOT NULL,
+                    record_a TEXT NOT NULL,
+                    record_b TEXT NOT NULL,
+                    confidence DOUBLE PRECISION,
+                    method TEXT,
+                    evidence JSONB,
+                    decided_by TEXT,
+                    human_override TEXT,
+                    created_at TIMESTAMPTZ DEFAULT now(),
+                    PRIMARY KEY (run_id, entity_type, record_a, record_b)
+                )
+            """)
+            self._commit(conn)
+        finally:
+            cursor.close()
+
+    def save_merge_audit(
+        self,
+        entity_type: str,
+        run_id: str,
+        rows: list[dict[str, Any]],
+    ) -> int:
+        """Persist per-pair merge evidence rows.
+
+        ``rows``: ``{cluster_id, record_a, record_b, confidence, method,
+        evidence, decided_by, human_override}`` — ``record_a``/``record_b``
+        are ordered the same way ``resolve_entities.py`` orders every other
+        pair key (``a < b``) so a later query for one pair only ever needs
+        to check one row, not two.  ``ON CONFLICT DO UPDATE`` so a human
+        override recorded after the original auto/LLM decision updates the
+        SAME row (visible history of the original decision plus the
+        override) rather than duplicating it.
+        """
+        if not rows:
+            return 0
+        self.ensure_merge_audit()
+        conn = self._ensure_connection()
+        cursor = conn.cursor()
+        try:
+            psycopg2.extras.execute_batch(
+                cursor,
+                f"""
+                INSERT INTO "{self._schema}"."merge_engine_merge_audit"
+                    (run_id, entity_type, cluster_id, record_a, record_b,
+                     confidence, method, evidence, decided_by, human_override, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+                ON CONFLICT (run_id, entity_type, record_a, record_b) DO UPDATE
+                    SET confidence = EXCLUDED.confidence,
+                        method = EXCLUDED.method,
+                        evidence = EXCLUDED.evidence,
+                        decided_by = EXCLUDED.decided_by,
+                        human_override = COALESCE(EXCLUDED.human_override,
+                            "{self._schema}"."merge_engine_merge_audit".human_override)
+            """,
+                [
+                    (
+                        run_id,
+                        entity_type,
+                        row.get("cluster_id", ""),
+                        row["record_a"],
+                        row["record_b"],
+                        row.get("confidence"),
+                        row.get("method"),
+                        json.dumps(row.get("evidence") or {}, default=str),
+                        row.get("decided_by"),
+                        row.get("human_override"),
+                    )
+                    for row in rows
+                ],
+            )
+            self._commit(conn)
+            return len(rows)
+        finally:
+            cursor.close()
+
     def get_extraction_state(self, origin_id: str, table_name: str) -> dict[str, Any] | None:
         """Fetch the tracked extraction state for one (origin, table), or None."""
         self.ensure_extraction_state()

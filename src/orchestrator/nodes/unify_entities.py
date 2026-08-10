@@ -7,6 +7,7 @@ record per cluster with conflict details.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -118,6 +119,14 @@ async def unify_entity_groups(state: dict[str, Any]) -> dict[str, Any]:
                 # Assign universal UUID to unified record
                 unified_record["id"] = cluster_id
                 unified_record["_entity_type"] = entity_type
+                # Phase 7.2: the cluster's REAL member record ids, not a
+                # self-reference. load_data.py's _transform_records already
+                # reads this (when present) into the destination's
+                # _source_ids column; before this it was never set here, so
+                # every load fell through to that function's own
+                # {"cluster_id": ...} placeholder fallback regardless of how
+                # many source records actually fed the merge.
+                unified_record["_source_ids"] = json.dumps(record_ids)
 
                 # Add metadata
                 if conflicts:

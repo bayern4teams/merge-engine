@@ -104,6 +104,27 @@ class TestUnifyEntityGroups:
         assert not result["errors"]
 
     @pytest.mark.asyncio
+    async def test_unify_entity_groups_sets_real_source_ids(
+        self, base_state: dict[str, Any], mock_unify_impl: AsyncMock
+    ) -> None:
+        """Phase 7.2: _source_ids must be the cluster's real member record
+        ids, not load_data.py's self-referencing {"cluster_id": ...}
+        fallback -- that fallback only ever fires when this key is absent."""
+        import json
+
+        with patch(
+            "src.orchestrator.nodes.unify_entities.unify_entity_group_impl",
+            mock_unify_impl,
+        ):
+            result = await unify_entity_groups(base_state)
+
+        unified = unified_for(result, "company")[0]
+        assert json.loads(unified["_source_ids"]) == [
+            "postgres_main:companies:1",
+            "mongo_analytics:companies:2",
+        ]
+
+    @pytest.mark.asyncio
     async def test_unify_entity_groups_assigns_uuid(
         self, base_state: dict[str, Any], mock_unify_impl: AsyncMock
     ) -> None:
