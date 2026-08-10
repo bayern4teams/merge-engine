@@ -724,12 +724,13 @@ class WorkflowManager:
                     # field mapping and the auto-decision counts.
                     "field_mappings_rows": field_mappings_rows,
                     "auto_match_stats": WorkflowManager._auto_match_stats(values),
-                    # Plumbed ahead of validate_data (Phase 4.5), which is
-                    # what will actually write these onto state; {} / False
-                    # until then. Gates.tsx does not read these keys yet
-                    # either — that panel lands with Phase 4.5 too — so this
-                    # is a no-op today and only starts doing anything once
-                    # both sides exist.
+                    # Written by validate_data_node (Phase 4.5), a new gate
+                    # between extract_data and resolve_entities; rendered at
+                    # this same gate by Gates.tsx's SummaryBody. This is the
+                    # standing guard against issue 6 regressing: an entity
+                    # whose scope-plan join silently resolved to 0 rows now
+                    # surfaces here instead of reaching a yellow badge
+                    # unremarked.
                     "quality_report": values.get("quality_report") or {},
                     "has_quality_failure": bool(values.get("has_quality_failure", False)),
                 },

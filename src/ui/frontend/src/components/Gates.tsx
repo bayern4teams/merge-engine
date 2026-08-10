@@ -843,6 +843,21 @@ function SummaryBody({
   const recon = (data.reconciliation || {}).entities || {};
   const stats = data.auto_match_stats || {};
   const mappings: MappingRow[] = data.field_mappings_rows || [];
+  // Phase 4.5: data quality gate results. Never auto-aborts the run itself
+  // (validate_data_node computes this, human_final_approval is where a
+  // human actually sees and decides on it) -- shown prominently since a
+  // hard `fail` (most commonly row_count_ge_1, e.g. a scoped join path
+  // that silently resolved to nothing) is exactly the class of failure
+  // that otherwise reaches this gate as an unremarked yellow badge.
+  const quality = data.quality_report || {};
+  const qualityEntities: Record<string, any> = quality.entities || {};
+  const hasQualityFailure = !!data.has_quality_failure;
+  const qualityFailedEntities = Object.entries(qualityEntities)
+    .filter(([, e]: [string, any]) => e.severity === "fail")
+    .map(([name]) => name);
+  const qualityWarnEntities = Object.entries(qualityEntities)
+    .filter(([, e]: [string, any]) => e.severity === "warn")
+    .map(([name]) => name);
 
   // Phase 5.4 (O.3): which survivorship rule actually decided each conflict,
   // read-only — summed across every entity so the reviewer can see at a
@@ -874,6 +889,18 @@ function SummaryBody({
         <Stat label="Schema changes" value={summary.schema_changes ?? 0} />
         <Stat label="Errors" value={summary.errors ?? 0} />
       </div>
+
+      {hasQualityFailure && (
+        <div className="banner banner-error">
+          ✗ Data quality check failed for: <strong>{qualityFailedEntities.join(", ")}</strong> —
+          review the Data quality section below before approving.
+        </div>
+      )}
+      {!hasQualityFailure && qualityWarnEntities.length > 0 && (
+        <div className="banner banner-warn">
+          ⚠️ Data quality warnings on: <strong>{qualityWarnEntities.join(", ")}</strong>.
+        </div>
+      )}
 
       {Object.keys(skippedGates).length > 0 && (
         <>
@@ -923,6 +950,50 @@ function SummaryBody({
                     <td>{e.conflicts ?? 0}</td>
                   </tr>
                 ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {Object.keys(qualityEntities).length > 0 && (
+        <>
+          <div className="section-label">
+            Data quality
+            <Tooltip text="Row-count, uniqueness, not-null and sane-date-bounds checks against each entity's extracted rows. Row count is always exact; the other checks run against a bounded sample for a large entity (shown as 'sampled'). This never blocks the run automatically — review any fail/warn below before approving." />
+          </div>
+          <div className="table-scroll" style={{ marginBottom: 16 }}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Entity</th>
+                  <th>Severity</th>
+                  <th>Rows</th>
+                  <th>Issues</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(qualityEntities).map(([name, e]: [string, any]) => {
+                  const issues = (e.checks || []).filter((c: any) => !c.success);
+                  return (
+                    <tr
+                      key={name}
+                      style={e.severity === "fail" ? { background: "rgba(255, 0, 0, 0.03)" } : {}}
+                    >
+                      <td className="mono">{name}</td>
+                      <td>{e.severity}</td>
+                      <td className="mono muted">
+                        {e.row_count}
+                        {e.sampled ? ` (sampled ${e.sample_size})` : ""}
+                      </td>
+                      <td className="muted" style={{ fontSize: 12 }}>
+                        {issues.length > 0
+                          ? issues.map((c: any) => c.details).join("; ")
+                          : "all checks passed"}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

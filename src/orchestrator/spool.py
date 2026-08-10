@@ -27,7 +27,7 @@ import logging
 import time
 from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 from src.orchestrator.utils.retry import DataQualityError
 
@@ -506,7 +506,7 @@ def collection_count(container: Any, entity_type: str) -> int:
     return len(value or [])
 
 
-def is_handle(value: Any) -> bool:
+def is_handle(value: Any) -> TypeGuard[dict[str, Any]]:
     return isinstance(value, dict) and value.get(_HANDLE_KEY) is True
 
 

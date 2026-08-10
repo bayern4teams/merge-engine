@@ -481,8 +481,8 @@ class TestBuildErrorInterrupt:
         options = build_error_interrupt(state)["data"]["options"]
         skip = next(o for o in options if o["decision"] == "skip")
 
-        # extract_data's successor per NODE_SUCCESSOR.
-        assert "resolve_entities" in skip["detail"]
+        # extract_data's successor per NODE_SUCCESSOR (Phase 4.5: validate_data).
+        assert "validate_data" in skip["detail"]
         assert "incomplete" in skip["detail"].lower()
 
     def test_recent_errors_are_capped(self, state: dict[str, Any]) -> None:

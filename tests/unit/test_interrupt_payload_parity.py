@@ -248,6 +248,49 @@ class TestInterruptPayloadParity:
             "than silently widening what this test tolerates."
         )
 
+    def test_a_fail_severity_quality_report_actually_reaches_the_payload(self) -> None:
+        """Phase 4.5's single highest-value fix: on B3 (the branch this gate
+        was salvaged from), has_quality_failure was computed by validate_data
+        and then silently dropped before ever reaching a human. Key
+        PRESENCE alone (the superset test above) doesn't prove that — this
+        proves the VALUE genuinely flows through _build_interrupt_data
+        unmodified, exactly as a live pause at human_final_approval would
+        show it."""
+        fail_report = {
+            "status": "completed",
+            "severity": "fail",
+            "entities": {
+                "person": {
+                    "severity": "fail",
+                    "row_count": 0,
+                    "sample_size": 0,
+                    "sampled": False,
+                    "checks": [
+                        {
+                            "check": "row_count_ge_1",
+                            "severity": "fail",
+                            "success": False,
+                            "details": "Entity 'person' has 0 extracted rows (expected >= 1).",
+                        }
+                    ],
+                }
+            },
+        }
+        state: dict[str, Any] = {
+            "unified_entities": {},
+            "pending_schema_changes": [],
+            "errors": [],
+            "field_mappings": {},
+            "unmapped_fields": {},
+            "resolution_stats": {},
+            "human_feedback": None,
+            "quality_report": fail_report,
+            "has_quality_failure": True,
+        }
+        payload = WorkflowManager._build_interrupt_data("human_final_approval", state)
+        assert payload["data"]["has_quality_failure"] is True
+        assert payload["data"]["quality_report"] == fail_report
+
 
 class TestPayloadVersion:
     """Phase 2.2: a stable content hash Gates.tsx can key a React effect on

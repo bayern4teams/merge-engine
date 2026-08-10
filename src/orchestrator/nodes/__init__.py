@@ -23,6 +23,7 @@ from src.orchestrator.nodes.parse_request import parse_request
 from src.orchestrator.nodes.plan_scope import plan_scope
 from src.orchestrator.nodes.resolve_entities import has_low_confidence_clusters, resolve_entities
 from src.orchestrator.nodes.unify_entities import unify_entity_groups
+from src.orchestrator.nodes.validate_data import validate_data_node
 
 __all__ = [
     "analyze_dependencies",
@@ -43,4 +44,5 @@ __all__ = [
     "resolve_entities",
     "unify_entity_groups",
     "update_extraction_state_node",
+    "validate_data_node",
 ]

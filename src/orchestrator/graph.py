@@ -40,6 +40,7 @@ from src.orchestrator.nodes import (
     resolve_entities,
     unify_entity_groups,
     update_extraction_state_node,
+    validate_data_node,
 )
 from src.orchestrator.nodes.preflight import preflight
 from src.orchestrator.utils.retry import TransientError, classify_exception
@@ -95,7 +96,8 @@ NODE_SUCCESSOR = {
     "parse_request": "analyze_dependencies",
     "analyze_dependencies": "human_review_deps",
     "map_fields": "plan_scope",
-    "extract_data": "resolve_entities",
+    "extract_data": "validate_data",
+    "validate_data": "resolve_entities",
     "resolve_entities": "unify_entities",
     "unify_entities": "human_final_approval",
     "load_data": "update_extraction_state",
@@ -362,6 +364,11 @@ def _build_builder() -> StateGraph:
     builder.add_node(
         "extract_data", _timed("extract_data", extract_data), retry_policy=NETWORK_RETRY
     )
+    # Data quality gate (Phase 4.5): never sets state["failure"] itself --
+    # a hard `fail` severity is surfaced at human_final_approval for a human
+    # to decide, not auto-aborted here -- so it needs no retry policy or
+    # error-gate routing of its own, just a plain edge to resolve_entities.
+    builder.add_node("validate_data", _timed("validate_data", validate_data_node))
     builder.add_node(
         "resolve_entities", _timed("resolve_entities", resolve_entities), retry_policy=NETWORK_RETRY
     )
@@ -403,6 +410,13 @@ def _build_builder() -> StateGraph:
             _fallible_router(node, forward),
             {"continue": forward, "error": "handle_error", "abort": END},
         )
+
+    # validate_data never sets state["failure"] itself (a hard `fail`
+    # severity is surfaced at human_final_approval for a human to decide,
+    # never auto-aborted), so it needs no _fallible_router error routing --
+    # a plain edge is the honest representation of "this step cannot fail
+    # the run by itself".
+    builder.add_edge("validate_data", "resolve_entities")
 
     # Conditional: low-confidence entity matches -> human review
     builder.add_conditional_edges(
@@ -571,6 +585,14 @@ class MergeState(TypedDict):
     # last_value, rows_extracted}. Written to merge_engine_extraction_state
     # by update_extraction_state_node after a successful load.
     extraction_watermarks: Annotated[dict[str, Any], operator.or_]
+    # Set by validate_data_node (Phase 4.5 of the fix-bugs follow-up plan):
+    # {status, severity, entities: {entity: {severity, row_count,
+    # sample_size, sampled, checks}}}. Never used to auto-abort the run --
+    # surfaced at human_final_approval so a human decides. workflow_manager.py
+    # plumbed the read side of these two keys ahead of this node existing
+    # (Phase 2.1); this is what actually populates them.
+    quality_report: dict[str, Any]
+    has_quality_failure: bool
 
     # ⚠️ IMPORTANT: these must be merge-safe
     entity_clusters: Annotated[dict[str, Any], operator.or_]
