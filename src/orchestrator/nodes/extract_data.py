@@ -183,9 +183,46 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
     # subject entity is extracted before anything that links to it.
     scope_plan = state.get("scope_plan") or {}
     scope_entities: dict[str, Any] = scope_plan.get("entities") or {}
-    scope_active = bool((state.get("merge_scope") or {}).get("active")) and bool(scope_entities)
+    merge_scope_active = bool((state.get("merge_scope") or {}).get("active"))
     subject = scope_plan.get("subject", "")
     subject_entity_name = scope_plan.get("subject_entity", "")
+
+    # A scoped merge was requested but the plan produced nothing to restrict
+    # extraction to. Silently falling through to an unscoped extraction would
+    # read every table in full while reporting the run as the scoped merge
+    # the user asked for — the exact "everything about Nova pulls in every
+    # company" outcome scoping exists to prevent. Fail loudly instead.
+    if merge_scope_active and not scope_entities:
+        msg = (
+            f"Scoped merge for subject {subject!r} was requested but the scope "
+            "plan produced no entities to restrict extraction to. Extracting "
+            "every table in full would silently defeat the requested scope, "
+            "so the run stops here instead of reading unscoped data."
+        )
+        logger.error("extract_data failing loudly: %s", msg)
+        return {
+            "extracted_data": extracted_data,
+            "extraction_watermarks": extraction_watermarks,
+            "errors": [msg],
+            "failure": {
+                "node": "extract_data",
+                "error": msg,
+                "error_class": "DataQualityError",
+                "disposition": "escalate",
+                "context": {"subject": subject, "subject_entity": subject_entity_name},
+            },
+            "dropped_inferred_entities": [],
+            "interrupt_data": None,
+        }
+
+    scope_active = merge_scope_active and bool(scope_entities)
+    # Entities the scope plan named but that ended up contributing zero rows
+    # purely because every candidate table was scoped out (no subject ids,
+    # an empty join-path result, or no plan entry for that table) — distinct
+    # from missing_entities (no source table existed anywhere) and from a
+    # real extraction failure (tracked in failed_tables). Invisible before
+    # this beyond an unexplained "extracted_total: 0".
+    scoped_out_entities: list[str] = []
     # PK values of the matched subject rows, per origin — the set each dependent
     # table's link column is filtered against.
     subject_ids: dict[str, list[Any]] = {}
@@ -241,6 +278,20 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
             # append to the rows the failed attempt already wrote.
             spool.reset_entity(entity_type)
             rows_written = 0
+            # Tracked separately from missing_entities (no table existed at
+            # all) and failed_tables (a real extraction error): this entity
+            # had real candidate tables, none of them errored, but every one
+            # was scoped out (no plan entry, no subject ids, or an empty
+            # join-path result) -- an entity that quietly contributed zero
+            # rows for a reason worth surfacing, not a table that never
+            # existed or a batch that genuinely failed.
+            is_scoped_dependent = (
+                scope_active
+                and entity_type in scope_entities
+                and entity_type != subject_entity_name
+            )
+            entity_had_failure = False
+            entity_had_scope_skip = False
 
             for candidate in table_candidates:
                 origin_id = candidate["origin_id"]
@@ -272,30 +323,47 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                             table_name,
                             entity_type,
                         )
+                        entity_had_scope_skip = True
                         continue
                     ids_here = subject_ids.get(origin_id, [])
-                    if entry.get("mode") == "link_via":
-                        # Two-hop: "people who work at Nova" — resolve the
-                        # junction (jobs.company_id IN nova ids -> person_ids)
-                        # first, then restrict this table to those keys.
+                    if entry.get("mode") == "link_path":
+                        # N-hop: "people who work at Nova", or deeper chains
+                        # like "Nova's people's contact records" -- walk every
+                        # hop but the last (the fixpoint approach: each hop's
+                        # result becomes the next hop's filter), then restrict
+                        # this table to the final key set. A 1-hop path (what
+                        # "link" used to be) and a 2-hop path (what "link_via"
+                        # used to be) are just short cases of the same walk,
+                        # not separate code.
+                        path = entry.get("path") or []
+                        if not path:
+                            logger.warning(
+                                "Scoped merge: link_path entry for %s:%s has no path — skipping.",
+                                origin_id,
+                                table_name,
+                            )
+                            entity_had_scope_skip = True
+                            continue
                         if not ids_here:
                             logger.info(
                                 "Scoped merge: no subject ids in %s — %s skipped.",
                                 origin_id,
                                 table_name,
                             )
+                            entity_had_scope_skip = True
                             continue
-                        via_keys = await _resolve_link_via(origin_config, entry, ids_here)
-                        if not via_keys:
+                        final_keys = await _resolve_link_path(origin_config, path, ids_here)
+                        if not final_keys:
                             logger.info(
-                                "Scoped merge: junction %s linked no %s to the "
-                                "subject — %s skipped.",
-                                entry.get("via_table"),
+                                "Scoped merge: %d-hop join for %s found no linked %s — %s skipped.",
+                                len(path),
+                                origin_id,
                                 entity_type,
                                 table_name,
                             )
+                            entity_had_scope_skip = True
                             continue
-                        scope_filter = {entry["columns"][0]: {"op": "in", "value": via_keys}}
+                        scope_filter = {path[-1]["to_column"]: {"op": "in", "value": final_keys}}
                     else:
                         scope_filter, skip = _scope_filter_for(entry, subject, ids_here)
                         if skip:
@@ -306,6 +374,7 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                                 origin_id,
                                 table_name,
                             )
+                            entity_had_scope_skip = True
                             continue
 
                 # Origins are read-only: incremental extraction is driven by
@@ -516,6 +585,7 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                     # either, so a later re-run re-reads this table from its
                     # last known-good position rather than skipping the rows
                     # this attempt never managed to read.
+                    entity_had_failure = True
                     discarded = spool.truncate_after(entity_type, rows_before_table)
                     rows_written = rows_before_table
                     failed_tables.append(
@@ -554,6 +624,21 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                     entity_type,
                 )
 
+            if (
+                is_scoped_dependent
+                and rows_written == 0
+                and entity_had_scope_skip
+                and not entity_had_failure
+            ):
+                logger.warning(
+                    "Scoped merge: entity '%s' had %d candidate table(s) but the scope "
+                    "plan reached none of them — 0 rows is a scoping outcome, not a "
+                    "missing table or a failed extraction.",
+                    entity_type,
+                    len(table_candidates),
+                )
+                scoped_out_entities.append(entity_type)
+
             # State gets a handle, not the rows.
             extracted_data[entity_type] = make_handle(run_id, entity_type, rows_written)
             logger.debug("Entity '%s' total rows: %d", entity_type, rows_written)
@@ -591,6 +676,7 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                 "failed_tables": failed_tables,
                 "missing_entities": missing_explicit,
                 "dropped_inferred_entities": missing_inferred,
+                "scoped_out_entities": scoped_out_entities,
                 "rows_kept": {e: _handle_count(h) for e, h in extracted_data.items()},
             },
         }
@@ -614,6 +700,7 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
         "errors": errors,
         "failure": failure,
         "dropped_inferred_entities": missing_inferred,
+        "scoped_out_entities": scoped_out_entities,
         "interrupt_data": None,
     }
 
@@ -636,79 +723,94 @@ def _scope_entry_for(
     return None
 
 
-async def _resolve_link_via(
+async def _resolve_link_path(
     origin_config: dict[str, Any],
-    entry: dict[str, Any],
+    path: list[dict[str, Any]],
     subject_ids: list[Any],
 ) -> list[Any]:
-    """Resolve a two-hop link through a junction table.
+    """Walk an N-hop join path, returning the final entity-side key set.
 
-    "People who work at Nova" is not a column on the people table — it is a row
-    in ``jobs`` (or ``employment_history``). This reads that junction, keeping
-    the rows whose subject-side column is one of the subject ids, and returns
-    the entity-side keys they point at (the person ids), de-duplicated.
+    The fixpoint approach the plan's Phase 4.4 spec describes (from the
+    USPTO subsetting patents): at each hop but the last, the known key set
+    filters `hop["to_table"]` on `hop["to_column"]`, and the column the
+    FOLLOWING hop will filter on (`path[i+1]["from_column"]`) is projected
+    out to become the next known key set. A 1-hop path (what "link" used to
+    be) never enters the loop at all — `subject_ids` already IS the value
+    set for the single hop's `from_column`, so nothing is queried here and
+    the caller filters the entity table directly. A 2-hop path (what
+    "link_via" used to be) makes exactly one junction query. Longer chains
+    ("people who work at Nova, then their contact records" — 3 hops) are
+    simply more iterations of the same loop, not a separate code path.
+
+    The LAST hop is deliberately never queried here: its `to_table` is the
+    entity table itself, which the caller extracts separately with its full
+    column list, filtered on `path[-1]["to_column"]` against whatever this
+    function returns.
     """
-    via_table = entry.get("via_table")
-    from_col = entry.get("via_from_column")
-    to_col = entry.get("via_to_column")
-    if not (via_table and from_col and to_col):
-        return []
-    keys: list[Any] = []
-    # A broad scope match can produce many subject ids (e.g. every company
-    # matching a common name); chunk here too rather than assume the subject
-    # side is always small. Part 1.5 D.6: for ClickHouse, a large id list
-    # gets one scratch-table subquery instead of many chunked round-trips.
-    scratch_chunk, scratch_cleanup = await _scratch_filter(
-        origin_config, from_col, list(subject_ids)
-    )
-    filter_chunks = (
-        [scratch_chunk]
-        if scratch_chunk is not None
-        else _chunked_filters({from_col: {"op": "in", "value": list(subject_ids)}})
-    )
-    try:
-        for filter_chunk in filter_chunks:
-            cursor = None
-            while True:
-                result = await extract_data_impl(
-                    origin_config=origin_config,
-                    table_name=via_table,
-                    columns=[to_col],
-                    batch_size=2000,
-                    cursor=cursor,
-                    filter=filter_chunk,
-                )
-                for row in result.get("rows", []):
-                    val = row.get(to_col)
-                    if val is not None:
-                        keys.append(val)
-                cursor = result.get("next_cursor")
-                if cursor is None:
-                    break
-    finally:
-        if scratch_cleanup is not None:
-            await scratch_cleanup()
-    return list(dict.fromkeys(keys))
+    known_values: list[Any] = list(subject_ids)
+    for i in range(len(path) - 1):
+        hop = path[i]
+        filter_col = hop.get("to_column")
+        to_table = hop.get("to_table")
+        project_col = (path[i + 1] or {}).get("from_column")
+        if not (filter_col and to_table and project_col) or not known_values:
+            return []
+        # A broad scope match can produce many subject ids (e.g. every
+        # company matching a common name); chunk here too rather than
+        # assume the known-value set is always small. Part 1.5 D.6: for
+        # ClickHouse, a large id list gets one scratch-table subquery
+        # instead of many chunked round-trips.
+        scratch_chunk, scratch_cleanup = await _scratch_filter(
+            origin_config, filter_col, list(known_values)
+        )
+        filter_chunks = (
+            [scratch_chunk]
+            if scratch_chunk is not None
+            else _chunked_filters({filter_col: {"op": "in", "value": list(known_values)}})
+        )
+        next_values: list[Any] = []
+        try:
+            for filter_chunk in filter_chunks:
+                cursor = None
+                while True:
+                    result = await extract_data_impl(
+                        origin_config=origin_config,
+                        table_name=to_table,
+                        columns=[project_col],
+                        batch_size=2000,
+                        cursor=cursor,
+                        filter=filter_chunk,
+                    )
+                    for row in result.get("rows", []):
+                        val = row.get(project_col)
+                        if val is not None:
+                            next_values.append(val)
+                    cursor = result.get("next_cursor")
+                    if cursor is None:
+                        break
+        finally:
+            if scratch_cleanup is not None:
+                await scratch_cleanup()
+        known_values = list(dict.fromkeys(next_values))
+        if not known_values:
+            return []
+    return known_values
 
 
 def _scope_filter_for(
     entry: dict[str, Any], subject: str, subject_ids: list[Any]
 ) -> tuple[dict[str, Any] | None, bool]:
-    """Turn one scope-plan entry into an extraction filter.
+    """Turn a `match`-mode scope-plan entry into an extraction filter.
 
-    Returns ``(filter, skip)``. ``skip`` is True when the table must contribute
-    nothing — a ``link`` table whose origin produced no subject ids. Passing an
-    empty ``IN`` would be dropped and silently extract the whole table, which is
-    the one outcome a scoped merge must never produce.
+    `link_path` entries (every dependent-entity case, including what used to
+    be `link`/`link_via`) are resolved separately via `_resolve_link_path` —
+    this only ever handles the subject entity's own `match` filter now.
+    Returns ``(filter, skip)``; ``skip`` is always False here since a
+    `match` entry always has a subject value to filter on.
     """
     columns = entry.get("columns") or []
     if not columns:
         return None, True
-    if entry.get("mode") == "link":
-        if not subject_ids:
-            return None, True
-        return {columns[0]: {"op": "in", "value": list(subject_ids)}}, False
-    # match: case-insensitive substring on the first named column.
     return {columns[0]: {"op": "ilike", "value": subject}}, False
 
 

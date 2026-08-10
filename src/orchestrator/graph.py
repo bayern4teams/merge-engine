@@ -501,6 +501,14 @@ class MergeState(TypedDict):
     # were dropped without escalating -- set by extract_data.py, surfaced in the
     # reconciliation report / data-quality scorecard (remediation #6).
     dropped_inferred_entities: list[Any]
+    # Entities the scope plan named (real candidate tables existed) that ended
+    # up with 0 rows purely because every candidate was scoped out (no plan
+    # entry, no subject ids, or an empty join-path result) -- distinct from
+    # dropped_inferred_entities (no table existed at all) and from a real
+    # extraction failure (failed_tables, in the failure context). Set by
+    # extract_data.py (Phase 4.4 of the fix-bugs follow-up plan); before this
+    # such an entity was invisible beyond an unexplained "extracted_total: 0".
+    scoped_out_entities: list[Any]
     # Set by parse_request when the request targets one named organisation
     # ("all information about Nova"): {active, subject, scope_type}. When
     # active, scope planning, extraction and dedup all restrict to the subject.
