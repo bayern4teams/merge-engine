@@ -241,9 +241,17 @@ def _find_candidate_edges(
             if not col_name:
                 continue
             col_low = col_name.lower()
-            # Skip this table's own primary key -- it identifies this
-            # table's own rows, it does not point elsewhere.
-            if col_low == "id" or col_low in own_pk:
+            # Skip this table's own primary key -- but only when that
+            # column, alone, IS the primary key. A composite primary key
+            # member is not excluded: (experienceID, companyID) as a
+            # composite PK on a fact/junction-shaped table is a real,
+            # common pattern, and companyID there is still a real FK to
+            # Company -- found live: a ClickHouse Experience table with
+            # exactly this composite PK meant every candidate on
+            # companyID was silently skipped, so the whole structural
+            # tier found nothing and the entire chain fell through to
+            # the much weaker single-hop concept fallback.
+            if col_low == "id" or own_pk == {col_low}:
                 continue
             if any(col_low in (f"{n}id", f"{n}_id") for n in self_names):
                 continue
@@ -272,7 +280,21 @@ async def _verify_inclusion(
     candidate: _EdgeCandidate,
     sample_size: int,
 ) -> float | None:
-    """Sample both sides and compute |child ∩ parent| / |child|.
+    """Sample the child, then check those SPECIFIC values against the
+    parent, and compute |child ∩ parent| / |child|.
+
+    Deliberately NOT two independent samples. A parent table with (say)
+    50,000 rows and a child table with 30 rows: an independent `LIMIT 500`
+    sample of the parent has essentially no chance of coincidentally
+    containing the exact 30 rows the child references, even when every
+    single child row genuinely points at a real parent row — verified
+    live 2026-08-10 against a real ClickHouse Company/CompanyFinancials
+    pair (thousands of companies, 29 financial records): independent
+    sampling scored 0.069 overlap for a relationship that is, by
+    construction, 100% referentially intact. Querying the parent FILTERED
+    to the child's own sampled values (`sample_distinct_values`'s
+    `filter_values` parameter) answers the real question directly instead
+    of hoping two arbitrary samples happen to intersect.
 
     Returns None if either side failed to sample or the child column has no
     usable values to test — never raises, since one bad candidate must not
@@ -282,12 +304,30 @@ async def _verify_inclusion(
         child_vals = await connector.sample_distinct_values(
             candidate.child_table, candidate.child_column, limit=sample_size
         )
-        parent_vals = await connector.sample_distinct_values(
-            candidate.parent_table, candidate.parent_column, limit=sample_size
+    except Exception as exc:
+        logger.debug(
+            "Inclusion-dependency child sampling failed for %s.%s: %s",
+            candidate.child_table,
+            candidate.child_column,
+            exc,
+        )
+        return None
+
+    child_norm = {normalize_val(v) for v in child_vals if normalize_val(v)}
+    if not child_norm:
+        return None
+    raw_child_vals = [v for v in child_vals if normalize_val(v)]
+
+    try:
+        parent_matches = await connector.sample_distinct_values(
+            candidate.parent_table,
+            candidate.parent_column,
+            limit=sample_size,
+            filter_values=raw_child_vals,
         )
     except Exception as exc:
         logger.debug(
-            "Inclusion-dependency sampling failed for %s.%s -> %s.%s: %s",
+            "Inclusion-dependency parent lookup failed for %s.%s -> %s.%s: %s",
             candidate.child_table,
             candidate.child_column,
             candidate.parent_table,
@@ -296,10 +336,7 @@ async def _verify_inclusion(
         )
         return None
 
-    child_norm = {normalize_val(v) for v in child_vals if normalize_val(v)}
-    parent_norm = {normalize_val(v) for v in parent_vals if normalize_val(v)}
-    if not child_norm:
-        return None
+    parent_norm = {normalize_val(v) for v in parent_matches}
     return len(child_norm & parent_norm) / len(child_norm)
 
 

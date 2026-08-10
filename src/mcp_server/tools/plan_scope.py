@@ -205,6 +205,7 @@ def _heuristic_plan(
                             "table": full,
                             "mode": "match",
                             "columns": match_cols[:2],
+                            "enabled": True,
                             "reason": "subject entity's own record (heuristic)",
                         }
                     )
@@ -463,6 +464,7 @@ def _sanitize_plan(
                         "table": resolved_table,
                         "mode": "match",
                         "columns": columns[:3],
+                        "enabled": True,
                         "reason": reason or "",
                     }
                 )

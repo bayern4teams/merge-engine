@@ -617,6 +617,104 @@ class TestScopeGate:
         assert len(out["data"]["candidates"]) == 1
         assert len(out["data"]["plan"]) == 2
 
+    def test_forwards_every_field_including_link_path_hops(self) -> None:
+        """Phase 5.1/5.2: the checkbox gate round-trips whatever it's shown
+        back on approve, so every field an entry has (path/hops/confidence,
+        not just the hand-picked subset the old builder forwarded) must
+        survive into the payload -- dropping one here would silently lose
+        it the moment a human approves the plan unchanged."""
+        from src.orchestrator.nodes.human_nodes import _build_scope_interrupt
+
+        plan = {
+            "subject": "Nova",
+            "subject_entity": "company",
+            "candidates": [],
+            "entities": {
+                "person": [
+                    {
+                        "origin_id": "crm",
+                        "table": "public.people",
+                        "mode": "link_path",
+                        "path": [
+                            {
+                                "from_table": "companies",
+                                "from_column": "id",
+                                "to_table": "jobs",
+                                "to_column": "company_id",
+                            },
+                            {
+                                "from_table": "jobs",
+                                "from_column": "person_id",
+                                "to_table": "people",
+                                "to_column": "person_id",
+                            },
+                        ],
+                        "hops": 2,
+                        "confidence": "declared",
+                        "enabled": False,
+                        "link_entity": "company",
+                        "reason": "2-hop join",
+                    }
+                ]
+            },
+        }
+        out = _build_scope_interrupt(plan)
+        row = out["data"]["plan"][0]
+        assert row["entity_type"] == "person"
+        assert row["hops"] == 2
+        assert row["confidence"] == "declared"
+        assert row["enabled"] is False
+        assert len(row["path"]) == 2
+        assert row["link_entity"] == "company"
+
+    def test_enabled_defaults_true_when_entry_omits_it(self) -> None:
+        from src.orchestrator.nodes.human_nodes import _build_scope_interrupt
+
+        plan = {
+            "entities": {
+                "company": [
+                    {"origin_id": "crm", "table": "companies", "mode": "match", "columns": ["name"]}
+                ]
+            }
+        }
+        out = _build_scope_interrupt(plan)
+        assert out["data"]["plan"][0]["enabled"] is True
+
+    def test_not_found_rows_are_not_doubled(self) -> None:
+        """A real entry covers only origin_1; plan_scope.py's own coverage
+        guarantee (_ensure_complete_origin_coverage) only backfills when an
+        entity's list is entirely empty, so origin_2's not_found placeholder
+        here comes from _build_scope_interrupt's own coverage loop alone --
+        verifying it appears exactly once, not duplicated by the two
+        coverage passes double-counting the same gap."""
+        from src.orchestrator.nodes.human_nodes import _build_scope_interrupt
+
+        plan = {
+            "entities": {
+                "company": [
+                    {
+                        "origin_id": "origin_1",
+                        "table": "Company",
+                        "mode": "match",
+                        "columns": ["name"],
+                    },
+                    {
+                        "origin_id": "origin_2",
+                        "table": "Company",
+                        "mode": "match",
+                        "columns": ["name"],
+                    },
+                ],
+                "person": [
+                    {"origin_id": "origin_1", "table": "Person", "mode": "link_path", "path": []},
+                ],
+            }
+        }
+        out = _build_scope_interrupt(plan)
+        keys = [(r["entity_type"], r["origin_id"]) for r in out["data"]["plan"]]
+        assert len(keys) == len(set(keys)), f"duplicate rows: {keys}"
+        assert ("person", "origin_2") in keys
+
     @pytest.mark.asyncio
     async def test_gate_interrupts_without_feedback(self) -> None:
         from src.orchestrator.nodes.human_nodes import human_review_scope

@@ -96,6 +96,42 @@ class TestFindCandidateEdges:
         candidates = _find_candidate_edges(tables)
         assert candidates == []
 
+    def test_composite_pk_member_is_still_a_candidate_fk(self) -> None:
+        """Found live 2026-08-10: a real ClickHouse Experience table has a
+        COMPOSITE primary key (experienceID, companyID) -- companyID is
+        simultaneously part of Experience's own identity AND a real FK to
+        Company. The old `col_low in own_pk` check treated ANY membership
+        in the pk as disqualifying, so this column was silently skipped
+        and the whole structural tier found nothing for this table --
+        exactly the deep-chain scenario (Company->Experience->Person) this
+        whole join graph exists to support."""
+        tables = [
+            {"name": "Company", "primary_key": ["companyID"], "columns": [{"name": "companyID"}]},
+            {
+                "name": "Experience",
+                "primary_key": ["experienceID", "companyID"],
+                "columns": [{"name": "experienceID"}, {"name": "companyID"}],
+            },
+        ]
+        candidates = _find_candidate_edges(tables)
+        matches = [c for c in candidates if c.child_column == "companyID"]
+        assert len(matches) == 1
+        assert matches[0].parent_table == "Company"
+
+    def test_single_column_pk_is_still_excluded(self) -> None:
+        """A column that IS the whole (single-column) primary key is still
+        excluded -- only composite-key membership stops disqualifying."""
+        tables = [
+            {"name": "Company", "primary_key": ["companyID"], "columns": [{"name": "companyID"}]},
+            {
+                "name": "Experience",
+                "primary_key": ["companyID"],
+                "columns": [{"name": "companyID"}],
+            },
+        ]
+        candidates = _find_candidate_edges(tables)
+        assert candidates == []
+
     def test_no_candidate_when_other_table_has_no_resolvable_pk(self) -> None:
         tables = [
             {"name": "Weird", "columns": [{"name": "a"}, {"name": "b"}]},
@@ -191,8 +227,11 @@ class TestBuildJoinGraph:
         should return for that column, so the test controls exactly which
         candidate edges verify."""
 
-        async def fake_sample(table_name, column, limit=500):
-            return overlaps.get((table_name, column), [])
+        async def fake_sample(table_name, column, limit=500, filter_values=None):
+            values = overlaps.get((table_name, column), [])
+            if filter_values is not None:
+                return [v for v in values if v in filter_values]
+            return values
 
         fake_connector = AsyncMock()
         fake_connector.sample_distinct_values = AsyncMock(side_effect=fake_sample)
@@ -317,6 +356,53 @@ class TestBuildJoinGraph:
         graph, _ = await self._run_with_overlaps({})
         edges = graph.neighbors(("origin_2", "Experience"))
         assert edges == []
+
+    async def test_filtered_parent_lookup_finds_real_overlap_independent_sampling_would_miss(
+        self,
+    ) -> None:
+        """The exact live bug found 2026-08-10: a large parent table's
+        arbitrary LIMIT-N sample essentially never happens to contain the
+        exact values a small child table references, even when the FK
+        relationship is 100% real (verified against a real ClickHouse
+        Company/CompanyFinancials pair: 0.069 overlap under independent
+        sampling for a genuinely-intact relationship). `_verify_inclusion`
+        must query the parent FILTERED to the child's own sampled values
+        (`filter_values=`), not sample both sides independently -- this
+        test's fake parent deliberately returns different results
+        depending on whether it was asked "give me an arbitrary sample"
+        (which excludes the child's real referenced ids) vs. "do these
+        specific ids exist" (which correctly finds them)."""
+        # A "large" parent table an arbitrary LIMIT sample would draw from
+        # -- deliberately does NOT include c1/c2 in that arbitrary slice,
+        # even though c1/c2 are real rows that exist in the full table.
+        arbitrary_parent_sample = [f"c{i}" for i in range(3, 100)]
+        full_parent_table = set(arbitrary_parent_sample) | {"c1", "c2"}
+
+        async def fake_sample(table_name, column, limit=500, filter_values=None):
+            if table_name == "Experience" and column == "companyID":
+                return ["c1", "c2"]
+            if table_name == "Company" and column == "companyID":
+                if filter_values is not None:
+                    return [v for v in filter_values if v in full_parent_table]
+                return arbitrary_parent_sample
+            return []
+
+        fake_connector = AsyncMock()
+        fake_connector.sample_distinct_values = AsyncMock(side_effect=fake_sample)
+        fake_connector.close = AsyncMock()
+
+        with patch(
+            "src.mcp_server.tools.join_graph.create_connector",
+            return_value=fake_connector,
+        ):
+            graph = await build_join_graph(_schemas_for_issue_6(), self.ORIGINS)
+
+        edges = [
+            e for e in graph.neighbors(("origin_2", "Experience")) if e.parent_table == "Company"
+        ]
+        assert len(edges) == 1
+        assert edges[0].confidence == "verified"
+        assert edges[0].overlap_ratio == 1.0
 
     async def test_connector_is_closed_even_on_sampling_error(self) -> None:
         fake_connector = AsyncMock()

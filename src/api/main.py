@@ -56,14 +56,26 @@ _ENV_FILE = _ROOT_DIR / ".env"
 
 def _init_env() -> None:
     try:
-        from dotenv import load_dotenv  # type: ignore[import-not-found]
+        from dotenv import load_dotenv
 
         if _ENV_FILE.exists():
             load_dotenv(dotenv_path=_ENV_FILE, override=True)
         else:
             load_dotenv(override=True)
     except ImportError:
-        pass
+        # A silent `pass` here once left every ${ENV_VAR} placeholder in
+        # config.yaml unexpanded with zero indication why — a live LLM key
+        # rotation looked like three consecutive "invalid API key" errors
+        # from the provider when the real fault was that .env was never
+        # read at all. This is a real, visible warning, not a raise: a
+        # deployment with real OS env vars already set (no .env file, no
+        # python-dotenv) is legitimate and must still start.
+        logger.warning(
+            "python-dotenv is not installed — .env will NOT be loaded. Any "
+            "${VAR} placeholder in config.yaml stays unexpanded unless the "
+            "real environment variable is already set. Run "
+            "`pip install python-dotenv` or `python scripts/bootstrap.py`."
+        )
 
 
 _init_env()
@@ -228,6 +240,11 @@ class Feedback(BaseModel):
     # 2.4) — {child_origin, child_table, child_column, parent_origin,
     # parent_table, parent_column, rationale}, one dict per link.
     column_dependencies: list[dict[str, Any]] | None = None
+    # The edited scope plan from the scope gate (Phase 5.2) — same shape as
+    # scope_plan.entities, with each row's "enabled" possibly toggled off.
+    # human_review_scope's own node body replaces state["scope_plan"]
+    # wholesale with this on resume; no separate merge step needed here.
+    scope_plan: dict[str, Any] | None = None
 
 
 _DECISIONS = {"approve", "edit", "retry", "reject", "abort", "skip"}
@@ -675,6 +692,8 @@ def create_api(config_path: str = "config/config.yaml") -> FastAPI:
             feedback["entity_tables"] = body.entity_tables
         if body.column_dependencies is not None:
             feedback["column_dependencies"] = body.column_dependencies
+        if body.scope_plan is not None:
+            feedback["scope_plan"] = body.scope_plan
 
         manager.resume_workflow(thread_id, feedback)
         # Return the status right after resuming so the client can react

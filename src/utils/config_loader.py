@@ -10,6 +10,7 @@ All origin and destination credentials are entered interactively in the UI.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from pathlib import Path
@@ -18,18 +19,28 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
+logger = logging.getLogger("merge-engine.utils.config_loader")
+
 # Load .env so ${ENV_VAR} placeholders in config.yaml resolve regardless of
 # which module is imported first (client.py also loads it; this just makes
 # config_loader independently correct).
 try:
-    from dotenv import load_dotenv  # type: ignore[import-not-found]
+    from dotenv import load_dotenv
 
     # Resolve .env relative to the project root (config_loader.py is at
     # src/utils/config_loader.py), so placeholders resolve regardless of CWD.
     _ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
     load_dotenv(_ENV_FILE, override=True)
 except ImportError:
-    pass
+    # A silent `pass` here once left every ${ENV_VAR} placeholder below
+    # unexpanded with zero indication why — see main.py's _init_env for
+    # the live incident this was found from.
+    logger.warning(
+        "python-dotenv is not installed — .env will NOT be loaded. Any "
+        "${VAR} placeholder in config.yaml stays unexpanded unless the "
+        "real environment variable is already set. Run "
+        "`pip install python-dotenv` or `python scripts/bootstrap.py`."
+    )
 
 
 # ---------------------------------------------------------------------------

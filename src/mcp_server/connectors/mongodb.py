@@ -304,22 +304,38 @@ class MongoDBConnector(BaseConnector):
     # ── Join-graph support (Phase 4.1) ──────────────────────────────────
 
     async def sample_distinct_values(
-        self, table_name: str, column: str, limit: int = 500
+        self,
+        table_name: str,
+        column: str,
+        limit: int = 500,
+        filter_values: list[Any] | None = None,
     ) -> list[Any]:
         """Bounded distinct sample via aggregation — never a full-collection
         read. MongoDB never carries declared foreign keys, so this is the
-        only edge source that works here, same as ClickHouse."""
+        only edge source that works here, same as ClickHouse.
+
+        ``filter_values``, when given, restricts to documents whose
+        ``column`` is one of these values instead of sampling
+        independently — see postgres.py's identical parameter for why:
+        two independent arbitrary samples of a large parent collection and
+        a small child collection essentially never coincidentally overlap
+        even for a 100%-intact reference relationship.
+        """
         logger.debug(
-            "ENTER sample_distinct_values: table=%s, column=%s, limit=%d",
+            "ENTER sample_distinct_values: table=%s, column=%s, limit=%d, filtered=%s",
             table_name,
             column,
             limit,
+            bool(filter_values),
         )
         client = await self._ensure_client()
         db = client[self._db_name]
         collection = db[table_name]
+        match_stage: dict[str, Any] = (
+            {column: {"$in": filter_values}} if filter_values else {column: {"$ne": None}}
+        )
         pipeline: list[dict[str, Any]] = [
-            {"$match": {column: {"$ne": None}}},
+            {"$match": match_stage},
             {"$group": {"_id": f"${column}"}},
             {"$limit": limit},
         ]

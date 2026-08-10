@@ -10,7 +10,7 @@ import logging
 import re
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from src.mcp_server.connectors.base import BaseConnector
@@ -484,26 +484,52 @@ class PostgresConnector(BaseConnector):
     # ── Join-graph support (Phase 4.1) ──────────────────────────────────
 
     async def sample_distinct_values(
-        self, table_name: str, column: str, limit: int = 500
+        self,
+        table_name: str,
+        column: str,
+        limit: int = 500,
+        filter_values: list[Any] | None = None,
     ) -> list[Any]:
         """Bounded DISTINCT sample, pushed down — never a full-table read.
 
         Same table-name resolution as extract() (bare name defaults to the
         public schema; a "schema.table" string is used as-is).
+
+        ``filter_values``, when given, restricts to rows whose ``column``
+        is one of these values instead of sampling independently — this is
+        what makes join-graph inclusion-dependency verification (Phase
+        4.1) actually work: two independent arbitrary samples of a large
+        parent table and a small child table have a near-zero chance of
+        coincidentally overlapping even when the FK relationship is 100%
+        intact, since the parent sample almost never happens to contain
+        the exact rows the child references. Querying the parent FILTERED
+        to the child's own sampled values instead answers the real
+        question directly. Found live 2026-08-10: Company (thousands of
+        rows) vs. CompanyFinancials (29 rows) scored an 0.069 overlap
+        under independent sampling despite every CompanyFinancials row
+        genuinely referencing a real company.
         """
         logger.debug(
-            "ENTER sample_distinct_values: table=%s, column=%s, limit=%d",
+            "ENTER sample_distinct_values: table=%s, column=%s, limit=%d, filtered=%s",
             table_name,
             column,
             limit,
+            bool(filter_values),
         )
         engine = await self._ensure_engine()
         resolved = table_name if "." in table_name else f"public.{table_name}"
-        sql = text(
-            f'SELECT DISTINCT "{column}" FROM {resolved} WHERE "{column}" IS NOT NULL LIMIT :limit'
-        )
+        if filter_values:
+            sql = text(
+                f'SELECT DISTINCT "{column}" FROM {resolved} WHERE "{column}" IN :values LIMIT :limit'
+            ).bindparams(bindparam("values", expanding=True))
+            params: dict[str, Any] = {"values": filter_values, "limit": limit}
+        else:
+            sql = text(
+                f'SELECT DISTINCT "{column}" FROM {resolved} WHERE "{column}" IS NOT NULL LIMIT :limit'
+            )
+            params = {"limit": limit}
         async with engine.connect() as conn:
-            result = await conn.execute(sql, {"limit": limit})
+            result = await conn.execute(sql, params)
             values = [row[0] for row in result.fetchall()]
             await conn.commit()
         logger.debug("EXIT sample_distinct_values: %d value(s)", len(values))

@@ -152,19 +152,16 @@ def _build_scope_interrupt(scope_plan: dict[str, Any]) -> dict[str, Any]:
     for entity, entries in entities.items():
         covered = {e.get("origin_id") for e in entries if e.get("origin_id")}
         for e in entries:
-            plan_rows.append(
-                {
-                    "entity_type": entity,
-                    "origin_id": e.get("origin_id"),
-                    "table": e.get("table"),
-                    "mode": e.get("mode"),
-                    "columns": e.get("columns", []),
-                    "via_table": e.get("via_table"),
-                    "via_from_column": e.get("via_from_column"),
-                    "via_to_column": e.get("via_to_column"),
-                    "reason": e.get("reason", ""),
-                }
-            )
+            # Forward every field the entry actually has (mode, columns,
+            # path/hops/confidence for link_path, reason, ...) rather than a
+            # hand-picked subset — the edited plan the human sends back on
+            # approve (Phase 5.2) is this same shape round-tripped, so
+            # dropping a field here would silently lose it on resume.
+            # "enabled" defaults True: every row is checked unless a real
+            # path.high_fanout (or an explicit human edit) says otherwise.
+            row = {**e, "entity_type": entity}
+            row.setdefault("enabled", True)
+            plan_rows.append(row)
         for oid in all_origins:
             if oid not in covered:
                 plan_rows.append(

@@ -882,3 +882,31 @@ class TestSampleDistinctValues:
         sql_text = str(conn.execute.call_args.args[0])
         assert "crm.companies" in sql_text
         assert "public.crm.companies" not in sql_text
+
+    async def test_filter_values_pushes_an_in_clause_instead_of_arbitrary_sampling(self) -> None:
+        """Phase 4.1 sampling fix (2026-08-10): given filter_values, this
+        must query for THOSE SPECIFIC values, not an arbitrary top-N --
+        that's what lets a small child table's values be found inside a
+        much larger parent table, where an independent LIMIT sample would
+        essentially never coincide."""
+        from src.mcp_server.connectors.postgres import PostgresConnector
+
+        connector = PostgresConnector({"connection": {"database": "d"}})
+        engine = MagicMock()
+        conn = AsyncMock()
+        result = MagicMock()
+        result.fetchall.return_value = [("c1",), ("c2",)]
+        conn.execute = AsyncMock(return_value=result)
+        conn.commit = AsyncMock()
+        engine.connect = MagicMock(return_value=make_async_cm(conn))
+        connector._engine = engine
+
+        values = await connector.sample_distinct_values(
+            "companies", "id", limit=500, filter_values=["c1", "c2", "c3"]
+        )
+
+        assert values == ["c1", "c2"]
+        sql_text = str(conn.execute.call_args.args[0])
+        params = conn.execute.call_args.args[1]
+        assert " IN " in sql_text
+        assert params["values"] == ["c1", "c2", "c3"]

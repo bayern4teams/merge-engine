@@ -160,6 +160,30 @@ def test_feedback_passes_mapping_edits(client: TestClient, mock_manager):
     assert feedback["mapping_edits"] == edits
 
 
+def test_feedback_passes_scope_plan(client: TestClient, mock_manager):
+    mock_manager.get_workflow_status.return_value = {
+        "status": "interrupted",
+        "current_interrupt_node": "human_review_scope",
+    }
+    scope_plan = {
+        "subject": "Nova",
+        "subject_entity": "company",
+        "candidates": [],
+        "entities": {
+            "person": [{"origin_id": "crm", "table": "public.people", "mode": "not_found"}]
+        },
+    }
+    resp = client.post(
+        "/api/workflow/wf_1/feedback",
+        json={"decision": "approve", "scope_plan": scope_plan},
+    )
+    assert resp.status_code == 200
+    mock_manager.resume_workflow.assert_called_once()
+    _, feedback = mock_manager.resume_workflow.call_args[0]
+    assert feedback["node"] == "human_review_scope"
+    assert feedback["scope_plan"] == scope_plan
+
+
 def test_abort_delegates(client: TestClient, mock_manager):
     resp = client.post("/api/workflow/wf_1/abort", json={})
     assert resp.status_code == 200

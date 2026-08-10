@@ -57,11 +57,19 @@ logger = logging.getLogger("merge-engine.llm.tracing")
 
 # Load .env before Langfuse reads its credentials from the environment.
 try:
-    from dotenv import load_dotenv  # type: ignore[import-not-found]
+    from dotenv import load_dotenv
 
     load_dotenv()
 except ImportError:
-    pass
+    # A silent `pass` here once left LANGFUSE_* env vars unresolved with no
+    # indication why — see main.py's _init_env for the live incident this
+    # was found from.
+    logger.warning(
+        "python-dotenv is not installed — .env will NOT be loaded. Langfuse "
+        "credentials stay unset unless the real environment variables are "
+        "already present. Run `pip install python-dotenv` or "
+        "`python scripts/bootstrap.py`."
+    )
 
 
 _handler: Any = None

@@ -347,12 +347,14 @@ export function sendFeedback(
   threadId: string,
   decision: "approve" | "reject",
   mappingEdits?: MappingRow[],
-  columnDependencies?: ColumnDependency[]
+  columnDependencies?: ColumnDependency[],
+  scopePlan?: Record<string, any>
 ): Promise<WorkflowStatus> {
   return post(`/api/workflow/${threadId}/feedback`, {
     decision,
     mapping_edits: mappingEdits ?? null,
     column_dependencies: columnDependencies ?? null,
+    scope_plan: scopePlan ?? null,
   });
 }
 

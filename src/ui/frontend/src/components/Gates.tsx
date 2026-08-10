@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { ColumnDependency, InterruptData, MappingRow } from "../api";
 import Tooltip from "./Tooltip";
 
@@ -6,7 +6,11 @@ interface GateProps {
   interrupt: InterruptData;
   skippedGates: Record<string, string>;
   busy: boolean;
-  onApprove: (mappingEdits?: MappingRow[], columnDependencies?: ColumnDependency[]) => void;
+  onApprove: (
+    mappingEdits?: MappingRow[],
+    columnDependencies?: ColumnDependency[],
+    scopePlan?: Record<string, any>
+  ) => void;
   onReject: () => void;
 }
 
@@ -27,7 +31,9 @@ export default function Gate(props: GateProps) {
         <span>{icon}</span> {title}
       </h3>
       {node === "human_review_deps" && <DependencyBody data={interrupt.data} {...props} />}
-      {node === "human_review_scope" && <ScopeBody data={interrupt.data} />}
+      {node === "human_review_scope" && (
+        <ScopeBody data={interrupt.data} payloadVersion={interrupt.payload_version} {...props} />
+      )}
       {node === "human_review_matches" && <MatchBody data={interrupt.data} />}
       {node === "human_review_mappings" && (
         <MappingBody
@@ -41,13 +47,14 @@ export default function Gate(props: GateProps) {
         <SummaryBody data={interrupt.data} skippedGates={props.skippedGates} />
       )}
 
-      {/* human_review_mappings and human_review_deps render their own
-          approve/reject row — both need to hand onApprove a local edit
-          (mapping rows, custom dependency links respectively) that only
-          their own component state holds. */}
-      {node !== "human_review_mappings" && node !== "human_review_deps" && (
-        <GateButtons {...props} />
-      )}
+      {/* human_review_mappings, human_review_deps and human_review_scope
+          render their own approve/reject row — all three need to hand
+          onApprove a local edit (mapping rows, custom dependency links,
+          the checked/unchecked scope plan respectively) that only their
+          own component state holds. */}
+      {node !== "human_review_mappings" &&
+        node !== "human_review_deps" &&
+        node !== "human_review_scope" && <GateButtons {...props} />}
     </div>
   );
 }
@@ -59,17 +66,19 @@ function GateButtons({
   approveLabel = "Approve",
   mappingEdits,
   columnDependencies,
+  scopePlan,
 }: Pick<GateProps, "busy" | "onApprove" | "onReject"> & {
   approveLabel?: string;
   mappingEdits?: MappingRow[];
   columnDependencies?: ColumnDependency[];
+  scopePlan?: Record<string, any>;
 }) {
   return (
     <div className="btn-row" style={{ marginTop: 18 }}>
       <button
         className="btn btn-success"
         disabled={busy}
-        onClick={() => onApprove(mappingEdits, columnDependencies)}
+        onClick={() => onApprove(mappingEdits, columnDependencies, scopePlan)}
       >
         ✓ {approveLabel}
       </button>
@@ -530,14 +539,64 @@ function CandidateCard({ candidate, index }: { candidate: any; index: number }) 
   );
 }
 
-function ScopeBody({ data }: { data: Record<string, any> }) {
+function ScopeBody({
+  data,
+  payloadVersion,
+  busy,
+  onApprove,
+  onReject,
+}: { data: Record<string, any>; payloadVersion?: string } & Pick<
+  GateProps,
+  "busy" | "onApprove" | "onReject"
+>) {
   const subject: string = data.subject || "";
   const candidates: any[] = data.candidates || [];
-  const plan: any[] = data.plan || [];
+  const [rows, setRows] = useState<any[]>([]);
+
+  // Keyed on payloadVersion, not `data` itself — same poll-clobbering fix
+  // as MappingBody (Phase 2.2): every 2s poll parses a fresh JSON response,
+  // so `data` is a new object reference every tick even when the plan
+  // hasn't changed. A row's own "enabled" already reflects the backend's
+  // default (true, or false for a high_fanout path) the first time it's
+  // seen; this effect must not re-fire and silently undo a reviewer's
+  // unchecked box just because another poll tick landed.
+  useEffect(() => {
+    setRows((data.plan || []).map((r: any) => ({ ...r, enabled: r.enabled !== false })));
+  }, [payloadVersion]);
+
+  function toggleRow(i: number) {
+    setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, enabled: !r.enabled } : r)));
+  }
+
+  function toggleEntity(entityType: string, nextEnabled: boolean) {
+    setRows((prev) =>
+      prev.map((r) =>
+        r.entity_type === entityType && r.mode !== "not_found" ? { ...r, enabled: nextEnabled } : r
+      )
+    );
+  }
+
+  // Rebuild the nested {entities: {entity_type: [...]}} shape
+  // human_review_scope's node body expects (it replaces state.scope_plan
+  // wholesale with whatever is sent) from the flat, checkbox-edited rows.
+  // Recomputed every render — cheap (bounded by schema table count) and
+  // keeps it in sync with `rows` without a separate effect.
+  const editedEntities: Record<string, any[]> = {};
+  for (const r of rows) {
+    const { entity_type, ...rest } = r;
+    (editedEntities[entity_type] ||= []).push(rest);
+  }
+  const editedScopePlan = {
+    subject,
+    subject_entity: data.subject_entity || "company",
+    candidates,
+    entities: editedEntities,
+  };
+
   return (
     <div>
       <div className="gate-explain">
-        This merge is scoped to <strong>{subject}</strong>. Only its records — and the people, products, and associated entities linked to it — will be extracted. Confirm the match and the scope plan below before proceeding.
+        This merge is scoped to <strong>{subject}</strong>. Only its records — and the people, products, and associated entities linked to it — will be extracted. Confirm the match and the scope plan below before proceeding. Uncheck any row you don't want extracted — a path spanning two or more one-to-many hops (marked "high fan-out") starts unchecked, since that's exactly the shape that can silently pull in unrelated records.
       </div>
 
       <div className="section-label">
@@ -560,6 +619,7 @@ function ScopeBody({ data }: { data: Record<string, any> }) {
         <table className="data-table">
           <thead>
             <tr>
+              <th style={{ width: 28 }}></th>
               <th>Entity</th>
               <th>Origin</th>
               <th>Table</th>
@@ -568,7 +628,7 @@ function ScopeBody({ data }: { data: Record<string, any> }) {
             </tr>
           </thead>
           <tbody>
-            {plan.map((p, i) => {
+            {rows.map((p, i) => {
               let how = "";
               if (p.mode === "match") {
                 how = `name matches "${subject}"`;
@@ -578,8 +638,9 @@ function ScopeBody({ data }: { data: Record<string, any> }) {
                 how = `linked via ${p.via_from_column || ""} -> ${p.via_table || ""} -> ${p.via_to_column || ""}`;
               } else if (p.mode === "link_path") {
                 const hops = p.path || [];
+                const fanoutTag = p.high_fanout || p.hops >= 3 ? " ⚠️ high fan-out" : "";
                 how = hops.length
-                  ? `${hops.length}-hop join (${p.confidence || "?"}): ` +
+                  ? `${hops.length}-hop join (${p.confidence || "?"}${fanoutTag}): ` +
                     hops
                       .map((h: any) => `${h.from_table}.${h.from_column} -> ${h.to_table}.${h.to_column}`)
                       .join(" -> ")
@@ -589,50 +650,103 @@ function ScopeBody({ data }: { data: Record<string, any> }) {
               }
 
               const isNotFound = p.mode === "not_found";
+              const prevEntity = i > 0 ? rows[i - 1].entity_type : null;
+              const showHeader = p.entity_type !== prevEntity;
+              const groupRows = rows.filter((r) => r.entity_type === p.entity_type);
+              const selectable = groupRows.filter((r) => r.mode !== "not_found");
+              const checkedCount = selectable.filter((r) => r.enabled).length;
+              const allChecked = selectable.length > 0 && checkedCount === selectable.length;
+              const noneChecked = checkedCount === 0;
 
               return (
-                <tr key={i} style={isNotFound ? { background: "rgba(255, 0, 0, 0.03)" } : {}}>
-                  <td className="mono">{p.entity_type}</td>
-                  <td className="mono muted">{p.origin_id}</td>
-                  <td className="mono">{p.table}</td>
-                  <td className="mono">{how}</td>
-                  <td>
-                    {isNotFound ? (
-                      <span
-                        style={{
-                          fontSize: 11,
-                          padding: "2px 6px",
-                          borderRadius: 4,
-                          background: "#fff3cd",
-                          color: "#856404",
-                          border: "1px solid #ffeeba",
-                          fontWeight: 600,
-                        }}
-                      >
-                        ⚠️ Not Found in {p.origin_id}
-                      </span>
-                    ) : (
-                      <span
-                        style={{
-                          fontSize: 11,
-                          padding: "2px 6px",
-                          borderRadius: 4,
-                          background: "#d4edda",
-                          color: "#155724",
-                          border: "1px solid #c3e6cb",
-                          fontWeight: 600,
-                        }}
-                      >
-                        ✓ Active
-                      </span>
-                    )}
-                  </td>
-                </tr>
+                <Fragment key={i}>
+                  {showHeader && (
+                    <tr style={{ background: "rgba(0, 0, 0, 0.03)" }}>
+                      <td>
+                        {selectable.length > 0 && (
+                          <input
+                            type="checkbox"
+                            checked={allChecked}
+                            ref={(el) => {
+                              if (el) el.indeterminate = !allChecked && !noneChecked;
+                            }}
+                            onChange={(e) => toggleEntity(p.entity_type, e.target.checked)}
+                          />
+                        )}
+                      </td>
+                      <td colSpan={5} className="mono" style={{ fontWeight: 700 }}>
+                        {p.entity_type}
+                      </td>
+                    </tr>
+                  )}
+                  <tr style={isNotFound ? { background: "rgba(255, 0, 0, 0.03)" } : {}}>
+                    <td>
+                      {!isNotFound && (
+                        <input
+                          type="checkbox"
+                          checked={!!p.enabled}
+                          onChange={() => toggleRow(i)}
+                        />
+                      )}
+                    </td>
+                    <td className="mono">{p.entity_type}</td>
+                    <td className="mono muted">{p.origin_id}</td>
+                    <td className="mono">{p.table}</td>
+                    <td className="mono">{how}</td>
+                    <td>
+                      {isNotFound ? (
+                        <span
+                          style={{
+                            fontSize: 11,
+                            padding: "2px 6px",
+                            borderRadius: 4,
+                            background: "#fff3cd",
+                            color: "#856404",
+                            border: "1px solid #ffeeba",
+                            fontWeight: 600,
+                          }}
+                        >
+                          ⚠️ Not Found in {p.origin_id}
+                        </span>
+                      ) : p.enabled ? (
+                        <span
+                          style={{
+                            fontSize: 11,
+                            padding: "2px 6px",
+                            borderRadius: 4,
+                            background: "#d4edda",
+                            color: "#155724",
+                            border: "1px solid #c3e6cb",
+                            fontWeight: 600,
+                          }}
+                        >
+                          ✓ Active
+                        </span>
+                      ) : (
+                        <span
+                          style={{
+                            fontSize: 11,
+                            padding: "2px 6px",
+                            borderRadius: 4,
+                            background: "#e2e3e5",
+                            color: "#41464b",
+                            border: "1px solid #d3d6d8",
+                            fontWeight: 600,
+                          }}
+                        >
+                          Excluded
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                </Fragment>
               );
             })}
           </tbody>
         </table>
       </div>
+
+      <GateButtons busy={busy} onApprove={onApprove} onReject={onReject} scopePlan={editedScopePlan} />
     </div>
   );
 }

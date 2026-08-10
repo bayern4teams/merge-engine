@@ -127,3 +127,24 @@ class TestSampleDistinctValues:
         assert "`test_db`.`Company`" in query_sql
         params = mock_client.query.call_args.kwargs.get("parameters", {})
         assert params == {"limit": 500}
+
+    async def test_filter_values_pushes_an_in_clause_instead_of_arbitrary_sampling(self) -> None:
+        """Phase 4.1 sampling fix (2026-08-10): given filter_values, this
+        must query for THOSE SPECIFIC values, not an arbitrary top-N --
+        verified live against a real ClickHouse Company/CompanyFinancials
+        pair where independent sampling scored 0.069 overlap despite the
+        relationship being 100% real."""
+        connector, mock_client = _connector_with_mock_client()
+        mock_result = MagicMock()
+        mock_result.result_rows = [("c1",), ("c2",)]
+        mock_client.query.return_value = mock_result
+
+        values = await connector.sample_distinct_values(
+            "Company", "companyID", limit=500, filter_values=["c1", "c2", "c3"]
+        )
+
+        assert values == ["c1", "c2"]
+        query_sql = mock_client.query.call_args.args[0]
+        assert " IN " in query_sql
+        params = mock_client.query.call_args.kwargs.get("parameters", {})
+        assert params["values"] == ["c1", "c2", "c3"]

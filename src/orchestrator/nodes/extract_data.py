@@ -325,6 +325,20 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                         )
                         entity_had_scope_skip = True
                         continue
+                    if entry.get("enabled") is False:
+                        # Unchecked at the scope gate (Phase 5.1/5.2) — a
+                        # human explicitly excluded this row, most often a
+                        # high_fanout path defaulting unchecked. Same skip
+                        # path as "not in the plan": this table contributes
+                        # nothing, not "read it in full".
+                        logger.info(
+                            "Scoped merge: %s:%s was unchecked at the scope gate for '%s' — skipping.",
+                            origin_id,
+                            table_name,
+                            entity_type,
+                        )
+                        entity_had_scope_skip = True
+                        continue
                     ids_here = subject_ids.get(origin_id, [])
                     if entry.get("mode") == "link_path":
                         # N-hop: "people who work at Nova", or deeper chains

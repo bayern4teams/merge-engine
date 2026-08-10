@@ -789,6 +789,37 @@ class TestScopedExtraction:
         assert result.get("failure", {}) == {}
 
     @pytest.mark.asyncio
+    async def test_unchecked_scope_row_is_skipped_entirely(self) -> None:
+        """A row a human unchecked at the scope gate (Phase 5.1/5.2) --
+        enabled: False -- must contribute zero rows and zero extract calls,
+        the same as a table absent from the plan entirely."""
+        state = self._state()
+        state["scope_plan"]["entities"]["person"][0]["enabled"] = False
+        calls: list[dict[str, Any]] = []
+
+        async def fake_extract(**kwargs):
+            calls.append({"table": kwargs["table_name"]})
+            if kwargs["table_name"] == "public.companies":
+                return {"rows": [{"id": 10, "name": "Nova"}], "next_cursor": None}
+            return {"rows": [{"id": 1, "full_name": "A", "company_id": 10}], "next_cursor": None}
+
+        with (
+            patch(
+                "src.orchestrator.nodes.extract_data._get_destination_connector",
+                return_value=MagicMock(get_extraction_state=MagicMock(return_value=None)),
+            ),
+            patch(
+                "src.orchestrator.nodes.extract_data.extract_data_impl",
+                side_effect=fake_extract,
+            ),
+        ):
+            result = await extract_data(state)
+
+        assert not any(c["table"] == "public.employees" for c in calls)
+        assert result["extracted_data"]["person"]["row_count"] == 0
+        assert result.get("failure", {}) == {}
+
+    @pytest.mark.asyncio
     async def test_two_hop_link_path_reads_the_junction_then_the_entity(self) -> None:
         """A 2-hop link_path plan reads the junction, then the entity by its
         keys -- what "link_via" used to be, now just a shorter case of the
