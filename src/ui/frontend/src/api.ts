@@ -52,6 +52,12 @@ export interface MappingRow {
   table?: string;
   is_coalesced?: boolean;
   reason?: string;
+  // Phase 6.2: the destination table this field actually lands on. Usually
+  // the entity's own table, but map_fields_impl's widened family search
+  // can target a sibling table instead (e.g. Company.totalInvestment ->
+  // finance.amount) -- surfaced here so a cross-table mapping is visible,
+  // not indistinguishable from a same-table one.
+  dest_table?: string;
 }
 
 export interface ColumnDependency {

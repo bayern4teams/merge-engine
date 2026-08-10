@@ -947,8 +947,8 @@ class WorkflowManager:
 
         # Live destination schema for validation (best-effort: if the
         # destination is unreachable, validate names/identifiers only).
-        dest_columns_by_entity: dict[str, set[str]] = {}
         dest_table_by_entity: dict[str, str] = {}
+        table_columns_cache: dict[str, set[str]] = {}
         try:
             from src.mcp_server.tools.load_data import _get_destination_connector
 
@@ -961,6 +961,21 @@ class WorkflowManager:
             dest_connector = None
             available_tables = []
 
+        def _columns_for(table: str) -> set[str]:
+            if table in table_columns_cache:
+                return table_columns_cache[table]
+            cols: set[str] = set()
+            if dest_connector is not None:
+                try:
+                    schema = dest_connector.get_table_schema(table)
+                    cols = {c["name"] for c in schema.get("columns", [])}
+                except Exception as exc:
+                    logger.warning(
+                        "Mapping validation: could not read schema for '%s': %s", table, exc
+                    )
+            table_columns_cache[table] = cols
+            return cols
+
         entity_types = {str(row.get("entity_type", "")) for row in edits}
         for entity_type in entity_types:
             dest_table = entity_type
@@ -969,18 +984,6 @@ class WorkflowManager:
                 if resolved:
                     dest_table = resolved
             dest_table_by_entity[entity_type] = dest_table
-            cols: set[str] = set()
-            if dest_connector is not None:
-                try:
-                    schema = dest_connector.get_table_schema(dest_table)
-                    cols = {c["name"] for c in schema.get("columns", [])}
-                except Exception as exc:
-                    logger.warning(
-                        "Mapping validation: could not read schema for '%s': %s",
-                        dest_table,
-                        exc,
-                    )
-            dest_columns_by_entity[entity_type] = cols
 
         errors: list[str] = []
         field_mappings: dict[str, dict[str, Any]] = {et: {} for et in entity_types}
@@ -995,21 +998,36 @@ class WorkflowManager:
 
             if action == "map":
                 dest_col = str(row.get("dest_column", "")).strip()
-                known = dest_columns_by_entity.get(entity_type, set())
+                # Phase 6.2/6.3: a row round-tripped from the gate carries its
+                # own dest_table when map_fields_impl's widened family search
+                # cross-mapped it (Company.totalInvestment -> finance.amount).
+                # Approving the gate resends EVERY row, not just edited ones
+                # (GateButtons' onApprove sends the full table), so without
+                # this a cross-table mapping's tag would be silently dropped
+                # back to the entity's own table on every approval, and
+                # validation below would then reject it outright for
+                # targeting a column that table doesn't have.
+                target_table = str(row.get("dest_table") or "").strip() or dest_table_by_entity.get(
+                    entity_type, entity_type
+                )
+                known = _columns_for(target_table)
                 if not dest_col:
                     errors.append(f"{entity_type}.{src_field}: action=map requires dest_column")
                     continue
                 if known and dest_col not in known:
                     errors.append(
                         f"{entity_type}.{src_field}: dest_column '{dest_col}' does not exist "
-                        f"in table '{dest_table_by_entity.get(entity_type)}'"
+                        f"in table '{target_table}'"
                     )
                     continue
-                field_mappings[entity_type][src_field] = {
+                entry: dict[str, Any] = {
                     "dest_column": dest_col,
                     "confidence": 1.0,
                     "mapped_by": "human",
                 }
+                if target_table != dest_table_by_entity.get(entity_type, entity_type):
+                    entry["dest_table"] = target_table
+                field_mappings[entity_type][src_field] = entry
             elif action == "new_column":
                 errors.append(
                     f"{entity_type}.{src_field}: the destination schema is a fixed "

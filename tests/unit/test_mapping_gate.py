@@ -36,6 +36,7 @@ class TestBuildInterruptDataMappings:
                 "source_field": "org_title",
                 "action": "map",
                 "dest_column": "name",
+                "dest_table": "company",
                 "confidence": 0.9,
                 "origin_id": "",
                 "table": "",
@@ -186,3 +187,78 @@ class TestApplyMappingFeedback:
         )
         assert not ok
         assert "unknown action" in err
+
+    def test_cross_table_dest_table_is_validated_and_preserved(self, manager):
+        """Phase 6.2/6.3: a row the gate already tagged with a sibling
+        dest_table (map_fields_impl's widened family search) must be
+        validated against THAT table's real columns, not the entity's own —
+        and the tag must survive the round-trip, since every approval
+        resends every row, not just edited ones."""
+        conn = MagicMock()
+        conn.list_tables.return_value = ["companies", "finance"]
+
+        def schema_for(table: str) -> dict:
+            cols = {
+                "companies": ["id", "name", "_source_ids"],
+                "finance": ["id", "company_id", "amount"],
+            }[table]
+            return {"columns": [{"name": c, "type": "TEXT"} for c in cols]}
+
+        conn.get_table_schema.side_effect = schema_for
+        manager.graph.get_state.return_value = MagicMock(
+            values={"destination": {"type": "postgresql"}},
+        )
+        with patch("src.mcp_server.tools.load_data._get_destination_connector", return_value=conn):
+            ok, update = manager.apply_mapping_feedback(
+                {"configurable": {}},
+                [
+                    {
+                        "entity_type": "company",
+                        "source_field": "totalInvestment",
+                        "action": "map",
+                        "dest_column": "amount",
+                        "dest_table": "finance",
+                    }
+                ],
+            )
+
+        assert ok
+        assert update["field_mappings"]["company"]["totalInvestment"] == {
+            "dest_column": "amount",
+            "dest_table": "finance",
+            "confidence": 1.0,
+            "mapped_by": "human",
+        }
+
+    def test_cross_table_dest_column_not_on_that_table_is_rejected(self, manager):
+        conn = MagicMock()
+        conn.list_tables.return_value = ["companies", "finance"]
+
+        def schema_for(table: str) -> dict:
+            cols = {
+                "companies": ["id", "name"],
+                "finance": ["id", "company_id", "amount"],
+            }[table]
+            return {"columns": [{"name": c, "type": "TEXT"} for c in cols]}
+
+        conn.get_table_schema.side_effect = schema_for
+        manager.graph.get_state.return_value = MagicMock(
+            values={"destination": {"type": "postgresql"}},
+        )
+        with patch("src.mcp_server.tools.load_data._get_destination_connector", return_value=conn):
+            ok, err = manager.apply_mapping_feedback(
+                {"configurable": {}},
+                [
+                    {
+                        "entity_type": "company",
+                        "source_field": "totalInvestment",
+                        "action": "map",
+                        "dest_column": "no_such_col",
+                        "dest_table": "finance",
+                    }
+                ],
+            )
+
+        assert not ok
+        assert "no_such_col" in err
+        assert "finance" in err

@@ -880,7 +880,26 @@ function MappingBody({
               const globalIndex = rows.indexOf(r);
               return (
                 <tr key={`${r.entity_type}.${r.origin_id || ""}.${r.table || ""}.${r.source_field}.${i}`}>
-                  <td className="mono">{r.entity_type}</td>
+                  <td className="mono">
+                    {r.dest_table || r.entity_type}
+                    {r.dest_table && r.dest_table !== r.entity_type && (
+                      <span
+                        style={{
+                          marginLeft: 6,
+                          fontSize: 10,
+                          padding: "2px 5px",
+                          borderRadius: 4,
+                          background: "#e2e3ff",
+                          color: "#3730a3",
+                          border: "1px solid #c7c9fa",
+                          fontWeight: 600,
+                        }}
+                        title={`Mapped onto a related table (${r.dest_table}), not ${r.entity_type}'s own`}
+                      >
+                        ↗ cross-table
+                      </span>
+                    )}
+                  </td>
                   <td className="mono muted">{r.origin_id || "—"}</td>
                   <td className="mono muted">{r.table || "—"}</td>
                   <td className="mono">

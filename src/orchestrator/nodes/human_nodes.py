@@ -441,6 +441,11 @@ def _build_mapping_rows(state: dict[str, Any]) -> tuple[list[dict[str, Any]], li
                 info.get("source_field", source_field) if isinstance(info, dict) else source_field
             )
             coalesced = info.get("is_coalesced", False) if isinstance(info, dict) else False
+            # Phase 6.2: map_fields_impl's widened family search tags a
+            # cross-table mapping with its real destination table; a plain
+            # same-table mapping has none, so it defaults to the entity's
+            # own table -- unchanged behaviour for every mapping before 6.2.
+            dtable = info.get("dest_table", entity_type) if isinstance(info, dict) else entity_type
 
             mapping_rows.append(
                 {
@@ -448,6 +453,7 @@ def _build_mapping_rows(state: dict[str, Any]) -> tuple[list[dict[str, Any]], li
                     "source_field": sfield,
                     "action": "map",
                     "dest_column": dest_col,
+                    "dest_table": dtable,
                     "confidence": conf,
                     "origin_id": oid,
                     "table": tbl,

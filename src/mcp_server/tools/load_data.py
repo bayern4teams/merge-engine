@@ -109,7 +109,12 @@ async def load_data_impl(
             "inserted": int,
             "updated": int,
             "failed": int,
+            "child_tables": {table: {"inserted": int, "updated": int}, ...},
         }
+        ``child_tables`` (Phase 6.3) covers rows written into sibling
+        destination tables for mapping entries tagged with a ``dest_table``
+        other than this entity's own — empty when the mapping is entirely
+        single-table, which is every call site before Phase 6.2.
     """
     logger.debug(
         "ENTER load_data_impl: entity_type=%s, records_count=%d", entity_type, len(records)
@@ -135,9 +140,20 @@ async def load_data_impl(
     dest_table = table_name or entity_type
     logger.debug("Destination table: %s", dest_table)
 
+    # Phase 6.3: a mapping entry may be tagged with a ``dest_table`` other
+    # than this entity's own (map_fields_impl's widened family search, Phase
+    # 6.2) — those fields belong in a sibling table's child row, not this
+    # one. Only the entries destined for THIS table drive the parent
+    # transform; everything else is written after, once the parent's ids
+    # are known.
+    mapping_by_table = _group_mapping_by_dest_table(mapping, dest_table)
+    parent_mapping = mapping_by_table.pop(dest_table, {})
+
     # Transform records using mapping
-    logger.debug("Transforming %d records with mapping=%s", len(records), mapping is not None)
-    transformed_records = _transform_records(records, mapping, dest_table)
+    logger.debug(
+        "Transforming %d records with mapping=%s", len(records), parent_mapping is not None
+    )
+    transformed_records = _transform_records(records, parent_mapping, dest_table)
     logger.debug("Transformed %d records", len(transformed_records))
 
     if foreign_keys and cluster_lookup_by_table:
@@ -168,10 +184,21 @@ async def load_data_impl(
         result = connector.load_batch(
             table_name=dest_table,
             records=transformed_records,
-            mapping=mapping,
+            mapping=parent_mapping,
             upsert_key="id",
         )
         logger.debug("load_batch completed: %s", result)
+
+        child_results: dict[str, dict[str, int]] = {}
+        if mapping_by_table:
+            child_results = _write_child_rows(
+                connector=connector,
+                primary_table=dest_table,
+                source_records=records,
+                transformed_parent_records=transformed_records,
+                mapping_by_table=mapping_by_table,
+            )
+
         return {
             "success": True,
             "entity_type": entity_type,
@@ -181,12 +208,129 @@ async def load_data_impl(
             "failed": 0,
             "type_coercions_attempted": result.get("type_coercions_attempted", 0),
             "type_coercion_failures": result.get("type_coercion_failures", 0),
+            "child_tables": child_results,
         }
     except Exception as exc:
         logger.error("Load failed for entity '%s': %s", entity_type, exc)
         raise PermanentError(
             f"Load failed for entity '{entity_type}' into table '{dest_table}': {exc}"
         ) from exc
+
+
+def _group_mapping_by_dest_table(
+    mapping: dict[str, Any] | None,
+    primary_table: str,
+) -> dict[str, dict[str, Any]]:
+    """Split one entity's field mapping by which destination table it targets.
+
+    A plain mapping (no ``dest_table`` on any entry — every caller before
+    Phase 6.2, and every entry map_fields_impl placed on the entity's own
+    table) collapses entirely into ``{primary_table: mapping}``, so this is
+    a no-op for the common case.
+    """
+    grouped: dict[str, dict[str, Any]] = {primary_table: {}}
+    for src_field, info in (mapping or {}).items():
+        table = (info.get("dest_table") if isinstance(info, dict) else None) or primary_table
+        grouped.setdefault(table, {})[src_field] = info
+    return grouped
+
+
+def _write_child_rows(
+    connector: Any,
+    primary_table: str,
+    source_records: list[dict[str, Any]],
+    transformed_parent_records: list[dict[str, Any]],
+    mapping_by_table: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, int]]:
+    """Write one child row per parent record into each cross-mapped sibling table.
+
+    Only the direction the destination family graph can actually resolve
+    unambiguously: a sibling table whose OWN foreign key points back at
+    ``primary_table`` (e.g. ``finance.company_id -> company.id``) — a
+    straightforward one-child-row-per-parent-record write. A field
+    cross-mapped onto a sibling table that instead holds the FK the
+    *primary* table points at (the parent references the child, e.g. a
+    hypothetical ``company.location_id -> location.id``) would need
+    find-or-create matching against existing rows in that table, a
+    genuinely different feature this does not attempt — it is logged and
+    the field is dropped rather than guessed at.
+
+    Reuses the existing atomic-load transaction via the caller-supplied
+    ``connector`` (never opens its own), so a partial fan-out cannot commit:
+    an exception here propagates out of ``load_data_impl`` exactly like a
+    parent-table load failure does, rolling the whole load back.
+    """
+    results: dict[str, dict[str, int]] = {}
+    if not hasattr(connector, "get_foreign_keys") or not hasattr(connector, "load_batch"):
+        logger.warning(
+            "Destination connector %s cannot resolve foreign keys for "
+            "cross-table field mapping(s) into %s; those field(s) will not "
+            "reach the destination.",
+            type(connector).__name__,
+            ", ".join(sorted(mapping_by_table)),
+        )
+        return results
+
+    for child_table, field_mapping in mapping_by_table.items():
+        if not field_mapping:
+            continue
+        try:
+            fks = connector.get_foreign_keys(child_table)
+        except Exception as exc:
+            logger.warning("Could not read foreign keys for '%s': %s", child_table, exc)
+            continue
+        fk_column = next((col for col, ref in fks.items() if ref == primary_table), None)
+        if fk_column is None:
+            logger.warning(
+                "Cross-table mapping into '%s' has no foreign key back to "
+                "'%s' — skipping %d field(s), which will not reach the "
+                "destination: %s",
+                child_table,
+                primary_table,
+                len(field_mapping),
+                ", ".join(sorted(field_mapping)),
+            )
+            continue
+
+        dest_cols = {info.get("dest_column") for info in field_mapping.values() if info}
+        child_records: list[dict[str, Any]] = []
+        for src_rec, parent_rec in zip(source_records, transformed_parent_records, strict=True):
+            parent_id = parent_rec.get("id")
+            if parent_id is None:
+                continue
+            child_rec = _transform_records([src_rec], field_mapping, child_table)[0]
+            # A record from an origin that never carried any of this child
+            # table's fields transforms to all-None — writing an empty
+            # child row for it is noise with nothing in it to show.
+            if all(child_rec.get(c) is None for c in dest_cols):
+                continue
+            child_rec["id"] = generate_uuid()
+            child_rec[fk_column] = parent_id
+            child_records.append(child_rec)
+
+        if not child_records:
+            continue
+
+        if hasattr(connector, "ensure_table"):
+            connector.ensure_table(child_table)
+        result = connector.load_batch(
+            table_name=child_table,
+            records=child_records,
+            mapping=field_mapping,
+            upsert_key="id",
+        )
+        results[child_table] = {
+            "inserted": result.get("inserted", 0),
+            "updated": result.get("updated", 0),
+        }
+        logger.info(
+            "Loaded %d child row(s) into '%s' via foreign key '%s' (cross-table mapping from '%s')",
+            len(child_records),
+            child_table,
+            fk_column,
+            primary_table,
+        )
+    return results
 
 
 def _get_destination_connector(
