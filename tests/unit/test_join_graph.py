@@ -16,10 +16,14 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 from src.mcp_server.tools.join_graph import (
+    JoinEdge,
     JoinGraph,
+    JoinPath,
     _find_candidate_edges,
+    _hop_from,
     _resolve_primary_key,
     build_join_graph,
+    find_paths,
     normalize_val,
 )
 
@@ -336,3 +340,231 @@ class TestJoinGraphDataStructure:
     def test_neighbors_of_unknown_node_is_empty(self) -> None:
         graph = JoinGraph()
         assert graph.neighbors(("o1", "Nonexistent")) == []
+
+
+def _edge(
+    child_table: str,
+    child_column: str,
+    parent_table: str,
+    parent_column: str,
+    *,
+    origin: str = "o1",
+    confidence: str = "verified",
+    overlap_ratio: float | None = 1.0,
+) -> JoinEdge:
+    return JoinEdge(
+        child_origin=origin,
+        child_table=child_table,
+        child_column=child_column,
+        parent_origin=origin,
+        parent_table=parent_table,
+        parent_column=parent_column,
+        confidence=confidence,
+        overlap_ratio=overlap_ratio,
+        rationale="test edge",
+    )
+
+
+def _node(table: str, origin: str = "o1") -> tuple[str, str]:
+    return (origin, table)
+
+
+class TestHopFrom:
+    def test_child_side_is_narrow(self) -> None:
+        edge = _edge("Experience", "companyID", "Company", "companyID")
+        hops = _hop_from(edge, _node("Experience"))
+        assert hops == [("narrow", _node("Company"))]
+
+    def test_parent_side_is_fanout(self) -> None:
+        edge = _edge("Experience", "companyID", "Company", "companyID")
+        hops = _hop_from(edge, _node("Company"))
+        assert hops == [("fanout", _node("Experience"))]
+
+    def test_unrelated_node_yields_nothing(self) -> None:
+        edge = _edge("Experience", "companyID", "Company", "companyID")
+        assert _hop_from(edge, _node("Person")) == []
+
+
+class TestFindPaths:
+    def test_same_node_is_a_zero_hop_path(self) -> None:
+        graph = JoinGraph()
+        graph.add_edge(_edge("Experience", "companyID", "Company", "companyID"))
+        paths = find_paths(graph, _node("Company"), _node("Company"))
+        assert len(paths) == 1
+        assert paths[0].hop_count == 0
+        assert paths[0].nodes == (_node("Company"),)
+
+    def test_missing_subject_or_target_returns_empty(self) -> None:
+        graph = JoinGraph()
+        graph.add_edge(_edge("Experience", "companyID", "Company", "companyID"))
+        assert find_paths(graph, _node("Nonexistent"), _node("Company")) == []
+        assert find_paths(graph, _node("Company"), _node("Nonexistent")) == []
+
+    def test_one_hop_narrow_path(self) -> None:
+        graph = JoinGraph()
+        graph.add_edge(_edge("Experience", "companyID", "Company", "companyID"))
+        paths = find_paths(graph, _node("Experience"), _node("Company"))
+        assert len(paths) == 1
+        assert paths[0].hop_count == 1
+        assert paths[0].hops[0].direction == "narrow"
+        assert paths[0].fanout_hop_count == 0
+
+    def test_one_hop_fanout_path(self) -> None:
+        graph = JoinGraph()
+        graph.add_edge(_edge("Experience", "companyID", "Company", "companyID"))
+        paths = find_paths(graph, _node("Company"), _node("Experience"))
+        assert len(paths) == 1
+        assert paths[0].hops[0].direction == "fanout"
+        assert paths[0].fanout_hop_count == 1
+
+    def test_the_issue_6_3hop_chain(self) -> None:
+        """Company -> Experience -> Person -> PersonContact: exactly the
+        chain the old single-junction _find_junction could never express."""
+        graph = JoinGraph()
+        graph.add_edge(_edge("Experience", "companyID", "Company", "companyID"))
+        graph.add_edge(_edge("Experience", "personID", "Person", "personID"))
+        graph.add_edge(_edge("PersonContact", "personID", "Person", "personID"))
+
+        paths = find_paths(graph, _node("Company"), _node("PersonContact"))
+
+        assert len(paths) == 1
+        path = paths[0]
+        assert path.hop_count == 3
+        assert path.nodes == (
+            _node("Company"),
+            _node("Experience"),
+            _node("Person"),
+            _node("PersonContact"),
+        )
+        # Company->Experience (fanout), Experience->Person (narrow),
+        # Person->PersonContact (fanout) -- two fan-out hops, which is
+        # exactly the compounding the high_fanout flag exists to catch.
+        assert [h.direction for h in path.hops] == ["fanout", "narrow", "fanout"]
+        assert path.fanout_hop_count == 2
+        assert path.high_fanout is True
+
+    def test_no_path_within_max_hops_returns_empty(self) -> None:
+        graph = JoinGraph()
+        graph.add_edge(_edge("Experience", "companyID", "Company", "companyID"))
+        graph.add_edge(_edge("Experience", "personID", "Person", "personID"))
+        graph.add_edge(_edge("PersonContact", "personID", "Person", "personID"))
+
+        assert find_paths(graph, _node("Company"), _node("PersonContact"), max_hops=2) == []
+
+    def test_unreachable_target_returns_empty(self) -> None:
+        graph = JoinGraph()
+        graph.add_edge(_edge("Experience", "companyID", "Company", "companyID"))
+        graph.add_node(_node("Location"))  # present in the graph, but disconnected
+        assert find_paths(graph, _node("Company"), _node("Location")) == []
+
+    def test_cycle_terminates_and_finds_shortest_path(self) -> None:
+        """A -> B -> C -> D -> A is a genuine 4-node cycle -- must not
+        infinite-loop. Both directions around the ring are 2 hops from A
+        to C, so both are legitimate equal-length shortest paths; a naive
+        global-visited BFS that only ever records the FIRST route found
+        would silently drop one of them, which is exactly what the
+        two-pass shortest-path-DAG design in find_paths avoids."""
+        graph = JoinGraph()
+        graph.add_edge(_edge("A", "b_id", "B", "id"))
+        graph.add_edge(_edge("B", "c_id", "C", "id"))
+        graph.add_edge(_edge("C", "d_id", "D", "id"))
+        graph.add_edge(_edge("D", "a_id", "A", "id"))
+
+        paths = find_paths(graph, _node("A"), _node("C"))
+
+        assert len(paths) == 2
+        assert all(p.hop_count == 2 for p in paths)
+        middle_nodes = {p.nodes[1] for p in paths}
+        assert middle_nodes == {_node("B"), _node("D")}
+
+    def test_ranks_by_hop_count_first(self) -> None:
+        graph = JoinGraph()
+        # Direct 1-hop route.
+        graph.add_edge(_edge("Experience", "companyID", "Company", "companyID"))
+        # Longer 2-hop route to the same target via a detour.
+        graph.add_edge(_edge("Experience", "locationID", "Location", "id"))
+        graph.add_edge(_edge("Location", "companyID", "Company", "companyID"))
+
+        paths = find_paths(graph, _node("Experience"), _node("Company"))
+
+        assert paths[0].hop_count == 1
+
+    def test_ties_ranked_by_confidence_then_fanout(self) -> None:
+        """Two equal-length routes: the one with the weaker verified
+        overlap ratio, and among equal ratios the one with fewer fan-out
+        hops, must sort first... i.e. worse candidates sort last."""
+        graph = JoinGraph()
+        # Route 1: A -> B, weak overlap (0.6, probable).
+        graph.add_edge(_edge("A", "b_id", "B", "id", overlap_ratio=0.6, confidence="probable"))
+        graph.add_edge(_edge("B", "target_id", "Target", "id", overlap_ratio=1.0))
+        # Route 2: A -> C, strong overlap (1.0, verified), same hop count.
+        graph.add_edge(_edge("A", "c_id", "C", "id", overlap_ratio=1.0))
+        graph.add_edge(_edge("C", "target_id2", "Target", "id2", overlap_ratio=1.0))
+
+        paths = find_paths(graph, _node("A"), _node("Target"))
+
+        assert len(paths) == 2
+        assert all(p.hop_count == 2 for p in paths)
+        # The route through C (min overlap 1.0) ranks ahead of the route
+        # through B (min overlap 0.6, the weakest link in that chain).
+        assert paths[0].nodes[1] == _node("C")
+        assert paths[1].nodes[1] == _node("B")
+
+    def test_declared_edges_have_no_overlap_ratio_but_still_rank(self) -> None:
+        graph = JoinGraph()
+        graph.add_edge(
+            _edge(
+                "Experience",
+                "companyID",
+                "Company",
+                "companyID",
+                confidence="declared",
+                overlap_ratio=None,
+            )
+        )
+        paths = find_paths(graph, _node("Experience"), _node("Company"))
+        assert paths[0].min_overlap_ratio is None
+
+    def test_max_paths_caps_the_result(self) -> None:
+        graph = JoinGraph()
+        # Three independent equal-length routes from A to Target.
+        for name in ("B1", "B2", "B3"):
+            graph.add_edge(_edge("A", f"{name.lower()}_id", name, "id"))
+            graph.add_edge(_edge(name, "target_id", "Target", "id"))
+
+        paths = find_paths(graph, _node("A"), _node("Target"), max_paths=2)
+        assert len(paths) == 2
+
+    def test_cross_origin_nodes_never_connect(self) -> None:
+        """Edges are always same-origin (join_graph.py's own docstring) --
+        a node from a different origin must be unreachable even if a
+        same-named table exists in the graph."""
+        graph = JoinGraph()
+        graph.add_edge(_edge("Experience", "companyID", "Company", "companyID", origin="o1"))
+        graph.add_node(_node("Company", origin="o2"))
+        assert (
+            find_paths(graph, _node("Experience", origin="o1"), _node("Company", origin="o2")) == []
+        )
+
+
+class TestJoinPath:
+    def test_rank_key_orders_ascending_by_hop_count(self) -> None:
+        short = JoinPath(nodes=(("o1", "A"), ("o1", "B")), hops=(_path_hop("A", "B"),))
+        long = JoinPath(
+            nodes=(("o1", "A"), ("o1", "X"), ("o1", "B")),
+            hops=(_path_hop("A", "X"), _path_hop("X", "B")),
+        )
+        assert short.rank_key() < long.rank_key()
+
+    def test_empty_hops_has_none_overlap_ratio(self) -> None:
+        path = JoinPath(nodes=(("o1", "A"),), hops=())
+        assert path.min_overlap_ratio is None
+        assert path.fanout_hop_count == 0
+        assert path.high_fanout is False
+
+
+def _path_hop(child_table: str, parent_table: str):
+    from src.mcp_server.tools.join_graph import PathHop
+
+    edge = _edge(child_table, "x_id", parent_table, "id")
+    return PathHop(edge=edge, direction="narrow")

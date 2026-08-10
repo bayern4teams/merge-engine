@@ -36,6 +36,7 @@ Edges come from three tiers, descending confidence:
 from __future__ import annotations
 
 import logging
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -46,6 +47,8 @@ logger = logging.getLogger("merge-engine.tools.join_graph")
 _DEFAULT_SAMPLE_SIZE = 500
 _VERIFIED_THRESHOLD = 0.95
 _PROBABLE_THRESHOLD = 0.5
+_DEFAULT_MAX_HOPS = 6
+_HIGH_FANOUT_THRESHOLD = 2
 
 # Node = (origin_id, table_name).
 Node = tuple[str, str]
@@ -359,3 +362,181 @@ async def build_join_graph(
         len(graph),
     )
     return graph
+
+
+# ── BFS path finder (Phase 4.2) ──────────────────────────────────────────
+#
+# `plan_scope.py`'s `_find_junction` (pre-Phase-4) is a flat scan returning
+# exactly one junction table — it can express a 2-hop chain and nothing
+# longer, which is why the 4th live run's `Company -> Experience -> Person
+# -> PersonContact` (3 hops) was structurally unreachable rather than an LLM
+# mistake. `find_paths` below replaces that with real graph search.
+#
+# Modelled on Jailer's "subject + associations" traversal: shortest-first,
+# cycle-guarded, ranked. Implementation is a two-pass shortest-path search
+# rather than naive all-paths DFS, which is what keeps it bounded on a real
+# schema instead of exploding combinatorially on diamond-shaped join graphs:
+#   Pass 1 — plain BFS from `subject_node` records each node's shortest hop
+#            distance (`dist`), visited-guarded so cycles simply terminate
+#            the moment a node is revisited, never explored twice.
+#   Pass 2 — backtrack forward from `subject_node`, only stepping onto an
+#            edge whose far side sits exactly one hop further out
+#            (`dist[other] == dist[node] + 1`). That constraint makes this a
+#            walk over a DAG by construction — no separate cycle check is
+#            needed here, `dist` strictly increases along any followed edge.
+#            This still finds every *shortest* path, including ties, which
+#            is what "ranked paths" (plural) means: same hop count, ranked
+#            against each other by confidence and fan-out next.
+
+
+def _hop_from(edge: JoinEdge, node: Node) -> list[tuple[str, Node]]:
+    """The node(s) `edge` leads to when standing on `node`, with direction.
+
+    `child -> parent` is "narrow" (many-to-one: exactly one parent row per
+    child row). `parent -> child` is "fanout" (one-to-many: this is the
+    direction that turns "everything about Airbus" into half the database
+    once two or more fan-out hops compound — Airbus employees -> their
+    other jobs -> those companies).
+    """
+    child_node = (edge.child_origin, edge.child_table)
+    parent_node = (edge.parent_origin, edge.parent_table)
+    hops: list[tuple[str, Node]] = []
+    if node == child_node:
+        hops.append(("narrow", parent_node))
+    if node == parent_node:
+        hops.append(("fanout", child_node))
+    return hops
+
+
+@dataclass(frozen=True)
+class PathHop:
+    """One step of a `JoinPath`: the edge used and which way it was crossed."""
+
+    edge: JoinEdge
+    direction: str  # "narrow" | "fanout"
+
+
+@dataclass(frozen=True)
+class JoinPath:
+    """A verified route from a subject node to a target node.
+
+    `nodes` always has `len(hops) + 1` entries — `nodes[0]` is the subject,
+    `nodes[-1]` is the target. A zero-hop path (`subject_node == target_node`)
+    has `nodes == (subject_node,)` and `hops == ()`.
+    """
+
+    nodes: tuple[Node, ...]
+    hops: tuple[PathHop, ...]
+
+    @property
+    def hop_count(self) -> int:
+        return len(self.hops)
+
+    @property
+    def fanout_hop_count(self) -> int:
+        return sum(1 for h in self.hops if h.direction == "fanout")
+
+    @property
+    def high_fanout(self) -> bool:
+        """True once >= 2 fan-out hops compound — these default UNCHECKED
+        at the scope gate (Phase 5.1), since two one-to-many hops in a row
+        is exactly what silently balloons "everything about Airbus" into
+        unrelated companies."""
+        return self.fanout_hop_count >= _HIGH_FANOUT_THRESHOLD
+
+    @property
+    def min_overlap_ratio(self) -> float | None:
+        """The weakest link in the chain — a path is only as trustworthy as
+        its least-verified hop. `None` only when every hop is a `declared`
+        FK (no sampled ratio at all, but no less trustworthy for it)."""
+        ratios = [h.edge.overlap_ratio for h in self.hops if h.edge.overlap_ratio is not None]
+        return min(ratios) if ratios else None
+
+    def rank_key(self) -> tuple[int, float, int]:
+        """Sort ascending on this: fewer hops first, then higher confidence
+        (inverted so ascending sort == descending confidence), then fewer
+        fan-out hops. Matches the plan's "hop count, then minimum
+        overlap_ratio, then fan-out estimate" ranking exactly."""
+        overlap = self.min_overlap_ratio
+        return (self.hop_count, -(overlap if overlap is not None else 1.0), self.fanout_hop_count)
+
+
+def _bfs_distances(graph: JoinGraph, subject_node: Node, max_hops: int) -> dict[Node, int]:
+    """Plain shortest-hop-count BFS from `subject_node`. Visited-guarded, so
+    a cycle in the underlying graph just stops expanding once every member
+    of the cycle has been reached — it can never loop."""
+    dist: dict[Node, int] = {subject_node: 0}
+    queue: deque[Node] = deque([subject_node])
+    while queue:
+        node = queue.popleft()
+        depth = dist[node]
+        if depth >= max_hops:
+            continue
+        for edge in graph.neighbors(node):
+            for _direction, other in _hop_from(edge, node):
+                if other not in dist:
+                    dist[other] = depth + 1
+                    queue.append(other)
+    return dist
+
+
+def _enumerate_shortest_paths(
+    graph: JoinGraph,
+    subject_node: Node,
+    target_node: Node,
+    dist: dict[Node, int],
+) -> list[JoinPath]:
+    """Every distinct shortest path from `subject_node` to `target_node`,
+    found by only following edges that step exactly one hop further out
+    per `dist` (pass 1's output) — a DAG walk, so no cycle is possible
+    regardless of what the underlying graph looks like."""
+    if target_node not in dist:
+        return []
+
+    results: list[JoinPath] = []
+    nodes_so_far: list[Node] = [subject_node]
+    hops_so_far: list[PathHop] = []
+
+    def backtrack(node: Node) -> None:
+        if node == target_node:
+            results.append(JoinPath(nodes=tuple(nodes_so_far), hops=tuple(hops_so_far)))
+            return
+        for edge in graph.neighbors(node):
+            for direction, other in _hop_from(edge, node):
+                if dist.get(other) != dist[node] + 1:
+                    continue
+                hops_so_far.append(PathHop(edge=edge, direction=direction))
+                nodes_so_far.append(other)
+                backtrack(other)
+                nodes_so_far.pop()
+                hops_so_far.pop()
+
+    backtrack(subject_node)
+    return results
+
+
+def find_paths(
+    graph: JoinGraph,
+    subject_node: Node,
+    target_node: Node,
+    *,
+    max_hops: int = _DEFAULT_MAX_HOPS,
+    max_paths: int = 20,
+) -> list[JoinPath]:
+    """Every shortest verified route from `subject_node` to `target_node`,
+    ranked best-first (hop count, then confidence, then fan-out).
+
+    Returns `[]` when either node is absent from the graph or no route
+    exists within `max_hops` — never raises, since "unreachable" is a
+    legitimate outcome the scope gate (Phase 5) must be able to show as a
+    `not_found` row rather than a crash.
+    """
+    if subject_node not in graph.nodes or target_node not in graph.nodes:
+        return []
+    if subject_node == target_node:
+        return [JoinPath(nodes=(subject_node,), hops=())]
+
+    dist = _bfs_distances(graph, subject_node, max_hops)
+    paths = _enumerate_shortest_paths(graph, subject_node, target_node, dist)
+    paths.sort(key=lambda p: p.rank_key())
+    return paths[:max_paths]
