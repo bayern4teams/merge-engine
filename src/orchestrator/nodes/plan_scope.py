@@ -31,6 +31,7 @@ async def plan_scope(state: dict[str, Any]) -> dict[str, Any]:
     subject_entity = merge_scope.get("scope_type", "company")
     schemas = state.get("schemas", {})
     llm_config: dict[str, Any] = state.get("llm_config", {})
+    origins = state.get("origins", []) or []
 
     logger.info("Planning scope for subject %r (%s)", subject, subject_entity)
     result = await plan_scope_impl(
@@ -39,6 +40,7 @@ async def plan_scope(state: dict[str, Any]) -> dict[str, Any]:
         target_entities=target_entities,
         schemas=schemas,
         llm_config=llm_config,
+        origins=origins,
     )
     scope_plan = result.get("scope_plan", {})
     entities = scope_plan.get("entities", {})
@@ -51,7 +53,6 @@ async def plan_scope(state: dict[str, Any]) -> dict[str, Any]:
     # Preview which subject rows the plan will match, so the confirmation gate
     # can show "did you mean Nova Labs or Novatech?". Best-effort — a probe
     # failure leaves candidates empty but never stops the run.
-    origins = state.get("origins", []) or []
     scope_plan["candidates"] = await probe_subject_candidates(subject, scope_plan, origins)
 
     return {

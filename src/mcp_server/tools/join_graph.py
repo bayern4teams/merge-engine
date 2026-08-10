@@ -31,6 +31,15 @@ Edges come from three tiers, descending confidence:
    docs/plans, the country_code/ticker example) into a genuine per-column-
    pair containment ratio, and pushed into SQL via each connector's new
    `sample_distinct_values` rather than pulling full tables into Python.
+4. Heuristic (unverified) — when an origin has no connector config
+   available to sample with (e.g. scope planning runs before a live
+   connection was ever opened for that origin, or the origin is briefly
+   unreachable), a name-heuristic candidate is kept anyway rather than
+   silently dropped, tagged `confidence="heuristic"`. Losing the join
+   entirely because a connector happened to be unavailable would be worse
+   than surfacing an unverified hypothesis a human or a downstream check
+   can still see and discount — this is the weakest tier and always ranks
+   below `probable` when a `JoinPath` picks the strongest available route.
 """
 
 from __future__ import annotations
@@ -49,6 +58,13 @@ _VERIFIED_THRESHOLD = 0.95
 _PROBABLE_THRESHOLD = 0.5
 _DEFAULT_MAX_HOPS = 6
 _HIGH_FANOUT_THRESHOLD = 2
+
+# Weakest-to-strongest, used to rank a JoinPath by its least-trustworthy hop.
+# "declared" and "heuristic" both carry overlap_ratio=None (nothing was
+# sampled either way) but are NOT equally trustworthy -- one is a real FK
+# constraint, the other an unverified name guess -- so ranking must go
+# through this, never raw overlap_ratio alone.
+_CONFIDENCE_RANK = {"heuristic": 0, "probable": 1, "verified": 2, "declared": 3}
 
 # Node = (origin_id, table_name).
 Node = tuple[str, str]
@@ -87,7 +103,7 @@ class JoinEdge:
     parent_origin: str
     parent_table: str
     parent_column: str
-    confidence: str  # "declared" | "verified" | "probable"
+    confidence: str  # "declared" | "verified" | "probable" | "heuristic"
     overlap_ratio: float | None
     rationale: str
 
@@ -120,6 +136,30 @@ class JoinGraph:
         """Every edge touching `node`, in either direction."""
         return list(self._adjacency.get(node, []))
 
+    def find_edge(
+        self, origin_id: str, table_a: str, column_a: str, table_b: str, column_b: str
+    ) -> JoinEdge | None:
+        """The edge directly connecting (table_a, column_a) and (table_b,
+        column_b), regardless of which side was recorded as child/parent.
+
+        For a caller that only knows two (table, column) pairs -- not which
+        one looks like the foreign key -- this is what lets it confirm a
+        claimed join is real without having to reason about direction
+        itself (plan_scope.py's Phase 4.3 hop validation is exactly this:
+        it must reject an LLM-proposed join that isn't backed by a real
+        edge, and it should not have to guess which side is which).
+        """
+        a_t, a_c = table_a.lower(), column_a.lower()
+        b_t, b_c = table_b.lower(), column_b.lower()
+        for edge in self.neighbors((origin_id, table_a)):
+            ct, cc = edge.child_table.lower(), edge.child_column.lower()
+            pt, pc = edge.parent_table.lower(), edge.parent_column.lower()
+            if (ct == a_t and cc == a_c and pt == b_t and pc == b_c) or (
+                ct == b_t and cc == b_c and pt == a_t and pc == a_c
+            ):
+                return edge
+        return None
+
     def __len__(self) -> int:
         return sum(len(v) for v in self._adjacency.values()) // 2
 
@@ -149,6 +189,28 @@ class _EdgeCandidate:
     parent_column: str
 
 
+# A tiny, deliberately conservative singulariser used only to widen FK-
+# column-name pattern matching: "companies" -> "company_id" is a common
+# convention this repo's own schemas use (e.g. Pagila), and the raw table
+# name alone ("companiesid"/"companies_id") would never match it. This is a
+# local copy of entity_grouping.py's _singularise, not an import from it --
+# src/orchestrator/utils sits above src/mcp_server/tools in CLAUDE.md's
+# layering rule, so importing it here would be a reverse import.
+_IRREGULAR_PLURALS = {"people": "person", "categories": "category"}
+
+
+def _singularise_table(name: str) -> str:
+    if name in _IRREGULAR_PLURALS:
+        return _IRREGULAR_PLURALS[name]
+    if name.endswith("ies") and len(name) > 3:
+        return name[:-3] + "y"
+    if name.endswith("es") and len(name) > 2 and name[-3] in "sxzh":
+        return name[:-2]
+    if name.endswith("s") and not name.endswith("ss") and len(name) > 1:
+        return name[:-1]
+    return name
+
+
 def _find_candidate_edges(
     tables: list[dict[str, Any]],
 ) -> list[_EdgeCandidate]:
@@ -173,6 +235,7 @@ def _find_candidate_edges(
         if not table_name:
             continue
         own_pk = {c.lower() for c in pk_by_table.get(table_name, [])}
+        self_names = {table_name.lower(), _singularise_table(table_name.lower())}
         for col in table.get("columns", []) or []:
             col_name = col.get("name", "")
             if not col_name:
@@ -180,17 +243,17 @@ def _find_candidate_edges(
             col_low = col_name.lower()
             # Skip this table's own primary key -- it identifies this
             # table's own rows, it does not point elsewhere.
-            if col_low in own_pk or col_low in (
-                "id",
-                f"{table_name.lower()}id",
-                f"{table_name.lower()}_id",
-            ):
+            if col_low == "id" or col_low in own_pk:
+                continue
+            if any(col_low in (f"{n}id", f"{n}_id") for n in self_names):
                 continue
             for other_name, other_pk in pk_by_table.items():
                 if other_name == table_name or not other_pk:
                     continue
-                ot_low = other_name.lower()
-                if col_low in (f"{ot_low}id", f"{ot_low}_id", f"{ot_low}key", f"{ot_low}_key"):
+                other_names = {other_name.lower(), _singularise_table(other_name.lower())}
+                if any(
+                    col_low in (f"{n}id", f"{n}_id", f"{n}key", f"{n}_key") for n in other_names
+                ):
                     candidates.append(
                         _EdgeCandidate(
                             child_table=table_name,
@@ -315,11 +378,30 @@ async def build_join_graph(
         origin_config = origins_by_id.get(origin_id)
         if origin_config is None:
             logger.warning(
-                "No origin config for '%s' -- skipping inclusion-dependency "
-                "verification for %d candidate edge(s)",
+                "No origin config for '%s' -- %d candidate edge(s) added "
+                "unverified (confidence=heuristic) since inclusion-dependency "
+                "sampling has no connection to run against",
                 origin_id,
                 len(candidates),
             )
+            for candidate in candidates:
+                graph.add_edge(
+                    JoinEdge(
+                        child_origin=origin_id,
+                        child_table=candidate.child_table,
+                        child_column=candidate.child_column,
+                        parent_origin=origin_id,
+                        parent_table=candidate.parent_table,
+                        parent_column=candidate.parent_column,
+                        confidence="heuristic",
+                        overlap_ratio=None,
+                        rationale=(
+                            f"{candidate.child_table}.{candidate.child_column} name-matches "
+                            f"{candidate.parent_table}.{candidate.parent_column} "
+                            "(unverified: no connection available to sample)"
+                        ),
+                    )
+                )
             continue
 
         connector = create_connector(
@@ -410,10 +492,34 @@ def _hop_from(edge: JoinEdge, node: Node) -> list[tuple[str, Node]]:
 
 @dataclass(frozen=True)
 class PathHop:
-    """One step of a `JoinPath`: the edge used and which way it was crossed."""
+    """One step of a `JoinPath`: the edge used and which way it was crossed.
+
+    `from_*`/`to_*` express the hop the way an extraction filter actually
+    needs it regardless of direction: "select `to_table` rows whose
+    `to_column` value is in the set of known `from_table.from_column`
+    values" — the same fixpoint shape whether the hop narrows (child to
+    parent) or fans out (parent to child). Consumers (plan_scope.py,
+    extract_data.py) never need to branch on `direction` themselves.
+    """
 
     edge: JoinEdge
     direction: str  # "narrow" | "fanout"
+
+    @property
+    def from_table(self) -> str:
+        return self.edge.parent_table if self.direction == "fanout" else self.edge.child_table
+
+    @property
+    def from_column(self) -> str:
+        return self.edge.parent_column if self.direction == "fanout" else self.edge.child_column
+
+    @property
+    def to_table(self) -> str:
+        return self.edge.child_table if self.direction == "fanout" else self.edge.parent_table
+
+    @property
+    def to_column(self) -> str:
+        return self.edge.child_column if self.direction == "fanout" else self.edge.parent_column
 
 
 @dataclass(frozen=True)
@@ -452,13 +558,33 @@ class JoinPath:
         ratios = [h.edge.overlap_ratio for h in self.hops if h.edge.overlap_ratio is not None]
         return min(ratios) if ratios else None
 
-    def rank_key(self) -> tuple[int, float, int]:
+    @property
+    def confidence(self) -> str:
+        """The path's overall confidence — the WEAKEST confidence among its
+        hops via `_CONFIDENCE_RANK`, since a chain is only as trustworthy as
+        its least-verified link. A zero-hop (self) path is trivially
+        "declared": there is nothing to verify."""
+        if not self.hops:
+            return "declared"
+        weakest = min(self.hops, key=lambda h: _CONFIDENCE_RANK.get(h.edge.confidence, 0))
+        return weakest.edge.confidence
+
+    def rank_key(self) -> tuple[int, int, float, int]:
         """Sort ascending on this: fewer hops first, then higher confidence
-        (inverted so ascending sort == descending confidence), then fewer
-        fan-out hops. Matches the plan's "hop count, then minimum
-        overlap_ratio, then fan-out estimate" ranking exactly."""
+        (declared/verified beat probable/heuristic — `declared` and
+        `heuristic` both carry `overlap_ratio=None`, so confidence must be
+        compared before overlap_ratio, not folded into it), then higher
+        minimum overlap ratio among hops that have one, then fewer fan-out
+        hops. Matches the plan's "hop count, then minimum overlap_ratio,
+        then fan-out estimate" ranking, extended with the confidence tier
+        the plan's spec predates (Phase 4.3's heuristic-tier addition)."""
         overlap = self.min_overlap_ratio
-        return (self.hop_count, -(overlap if overlap is not None else 1.0), self.fanout_hop_count)
+        return (
+            self.hop_count,
+            -_CONFIDENCE_RANK.get(self.confidence, 0),
+            -(overlap if overlap is not None else 1.0),
+            self.fanout_hop_count,
+        )
 
 
 def _bfs_distances(graph: JoinGraph, subject_node: Node, max_hops: int) -> dict[Node, int]:

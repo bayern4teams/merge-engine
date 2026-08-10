@@ -576,6 +576,14 @@ function ScopeBody({ data }: { data: Record<string, any> }) {
                 how = `linked via ${(p.columns || []).join(", ")}`;
               } else if (p.mode === "link_via") {
                 how = `linked via ${p.via_from_column || ""} -> ${p.via_table || ""} -> ${p.via_to_column || ""}`;
+              } else if (p.mode === "link_path") {
+                const hops = p.path || [];
+                how = hops.length
+                  ? `${hops.length}-hop join (${p.confidence || "?"}): ` +
+                    hops
+                      .map((h: any) => `${h.from_table}.${h.from_column} -> ${h.to_table}.${h.to_column}`)
+                      .join(" -> ")
+                  : "linked (path)";
               } else if (p.mode === "not_found") {
                 how = p.reason || `No matching or linked table found in ${p.origin_id}`;
               }

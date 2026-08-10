@@ -7,8 +7,18 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.mcp_server.tools.plan_scope import _heuristic_plan, plan_scope_impl
+from src.mcp_server.tools.join_graph import build_join_graph
+from src.mcp_server.tools.plan_scope import _heuristic_plan, _sanitize_plan, plan_scope_impl
 from src.orchestrator.nodes.plan_scope import plan_scope
+
+
+def _hop(from_table: str, from_column: str, to_table: str, to_column: str) -> dict[str, str]:
+    return {
+        "from_table": from_table,
+        "from_column": from_column,
+        "to_table": to_table,
+        "to_column": to_column,
+    }
 
 
 def _schemas() -> dict[str, Any]:
@@ -72,8 +82,11 @@ def _schemas() -> dict[str, Any]:
 
 
 class TestHeuristicPlan:
-    def test_subject_entity_matches_on_name(self) -> None:
-        plan = _heuristic_plan("company", ["company", "person", "product"], _schemas())
+    @pytest.mark.asyncio
+    async def test_subject_entity_matches_on_name(self) -> None:
+        schemas = _schemas()
+        graph = await build_join_graph(schemas, origins=[])
+        plan = _heuristic_plan("company", ["company", "person", "product"], schemas, graph)
         company = plan["company"]
         # Both origins' company tables are matched on a name-like column.
         crm = next(t for t in company if t["origin_id"] == "crm_origin")
@@ -83,28 +96,45 @@ class TestHeuristicPlan:
         assert hr["mode"] == "match"
         assert "org_name" in hr["columns"]
 
-    def test_dependent_links_via_declared_fk(self) -> None:
-        plan = _heuristic_plan("company", ["company", "person", "product"], _schemas())
+    @pytest.mark.asyncio
+    async def test_dependent_links_via_declared_fk(self) -> None:
+        schemas = _schemas()
+        graph = await build_join_graph(schemas, origins=[])
+        plan = _heuristic_plan("company", ["company", "person", "product"], schemas, graph)
         emp = next(t for t in plan["person"] if t["origin_id"] == "crm_origin")
-        assert emp["mode"] == "link"
-        assert emp["columns"] == ["company_id"]
+        assert emp["mode"] == "link_path"
+        assert emp["hops"] == 1
+        assert emp["path"] == [_hop("companies", "id", "employees", "company_id")]
+        assert emp["confidence"] == "declared"
         assert emp["link_entity"] == "company"
+        assert emp["columns"] == ["company_id"]
 
-    def test_dependent_links_via_name_hint_without_fk(self) -> None:
-        # hr_origin.people has no FK; the link column is inferred from "org_id".
-        plan = _heuristic_plan("company", ["company", "person"], _schemas())
+    @pytest.mark.asyncio
+    async def test_dependent_links_via_name_hint_without_fk(self) -> None:
+        # hr_origin.people has no FK; no origin config is supplied either,
+        # so the name-matched edge lands in the graph unverified.
+        schemas = _schemas()
+        graph = await build_join_graph(schemas, origins=[])
+        plan = _heuristic_plan("company", ["company", "person"], schemas, graph)
         ppl = next(t for t in plan["person"] if t["origin_id"] == "hr_origin")
-        assert ppl["mode"] == "link"
-        assert ppl["columns"] == ["org_id"]
+        assert ppl["mode"] == "link_path"
+        assert ppl["path"] == [_hop("organizations", "org_id", "people", "org_id")]
+        assert ppl["confidence"] == "heuristic"
 
-    def test_product_links_in_crm(self) -> None:
-        plan = _heuristic_plan("company", ["company", "product"], _schemas())
+    @pytest.mark.asyncio
+    async def test_product_links_in_crm(self) -> None:
+        schemas = _schemas()
+        graph = await build_join_graph(schemas, origins=[])
+        plan = _heuristic_plan("company", ["company", "product"], schemas, graph)
         prod = next(t for t in plan["product"] if t["origin_id"] == "crm_origin")
-        assert prod["mode"] == "link"
-        assert prod["columns"] == ["company_id"]
+        assert prod["mode"] == "link_path"
+        assert prod["path"] == [_hop("companies", "id", "products", "company_id")]
 
-    def test_junction_produces_link_via(self) -> None:
-        # people has no company column; jobs (person_id, company_id) links them.
+    @pytest.mark.asyncio
+    async def test_deep_chain_produces_multi_hop_link_path(self) -> None:
+        # people has no company column; jobs (person_id, company_id) links them
+        # -- exactly the 2-hop case _find_junction used to special-case, now
+        # just another find_paths result.
         schema = {
             "crm": {
                 "origin_type": "postgres",
@@ -137,13 +167,279 @@ class TestHeuristicPlan:
                 ],
             },
         }
-        plan = _heuristic_plan("company", ["company", "person"], schema)
+        graph = await build_join_graph(schema, origins=[])
+        plan = _heuristic_plan("company", ["company", "person"], schema, graph)
         person = next(t for t in plan["person"] if t["table"] == "public.people")
-        assert person["mode"] == "link_via"
-        assert person["columns"] == ["person_id"]
-        assert person["via_table"] == "public.jobs"
-        assert person["via_from_column"] == "company_id"
-        assert person["via_to_column"] == "person_id"
+        assert person["mode"] == "link_path"
+        assert person["hops"] == 2
+        assert person["path"] == [
+            _hop("companies", "id", "jobs", "company_id"),
+            _hop("jobs", "person_id", "people", "person_id"),
+        ]
+
+
+class TestSanitizePlan:
+    """The LLM can still describe a join in the familiar match/link/
+    link_via/link_path shapes, but _sanitize_plan must validate every hop
+    against the real join graph -- it can no longer invent one."""
+
+    @pytest.mark.asyncio
+    async def test_valid_link_is_normalised_to_link_path(self) -> None:
+        schemas = _schemas()
+        graph = await build_join_graph(schemas, origins=[])
+        proposed = {
+            "person": [
+                {
+                    "origin_id": "crm_origin",
+                    "table": "employees",
+                    "mode": "link",
+                    "columns": ["company_id"],
+                    "link_entity": "company",
+                    "reason": "works there",
+                }
+            ]
+        }
+        clean = _sanitize_plan(
+            proposed, ["company", "person", "product"], "company", schemas, graph
+        )
+        assert len(clean["person"]) == 1
+        entry = clean["person"][0]
+        assert entry["mode"] == "link_path"
+        assert entry["path"] == [_hop("companies", "id", "employees", "company_id")]
+        assert entry["confidence"] == "declared"
+
+    @pytest.mark.asyncio
+    async def test_hallucinated_link_column_is_dropped(self) -> None:
+        """A link column that doesn't correspond to any real edge -- an
+        invented join, not a name-inference miss -- must be rejected, not
+        silently trusted."""
+        schemas = _schemas()
+        graph = await build_join_graph(schemas, origins=[])
+        proposed = {
+            "person": [
+                {
+                    "origin_id": "crm_origin",
+                    "table": "employees",
+                    "mode": "link",
+                    "columns": ["totally_made_up_column"],
+                    "link_entity": "company",
+                }
+            ]
+        }
+        clean = _sanitize_plan(
+            proposed, ["company", "person", "product"], "company", schemas, graph
+        )
+        assert clean["person"] == []
+
+    @pytest.mark.asyncio
+    async def test_valid_link_via_is_normalised_to_2hop_link_path(self) -> None:
+        schema = {
+            "crm": {
+                "origin_type": "postgres",
+                "tables": [
+                    {
+                        "name": "companies",
+                        "full_name": "public.companies",
+                        "columns": [{"name": "id"}, {"name": "name"}],
+                        "primary_key": ["id"],
+                        "foreign_keys": [],
+                    },
+                    {
+                        "name": "people",
+                        "full_name": "public.people",
+                        "columns": [{"name": "person_id"}, {"name": "full_name"}],
+                        "primary_key": ["person_id"],
+                        "foreign_keys": [],
+                    },
+                    {
+                        "name": "jobs",
+                        "full_name": "public.jobs",
+                        "columns": [
+                            {"name": "job_id"},
+                            {"name": "person_id"},
+                            {"name": "company_id"},
+                        ],
+                        "primary_key": ["job_id"],
+                        "foreign_keys": [],
+                    },
+                ],
+            },
+        }
+        graph = await build_join_graph(schema, origins=[])
+        proposed = {
+            "person": [
+                {
+                    "origin_id": "crm",
+                    "table": "people",
+                    "mode": "link_via",
+                    "columns": ["person_id"],
+                    "link_entity": "company",
+                    "via_table": "jobs",
+                    "via_from_column": "company_id",
+                    "via_to_column": "person_id",
+                    "reason": "people are linked via their jobs",
+                }
+            ]
+        }
+        clean = _sanitize_plan(proposed, ["company", "person"], "company", schema, graph)
+        assert len(clean["person"]) == 1
+        entry = clean["person"][0]
+        assert entry["mode"] == "link_path"
+        assert entry["hops"] == 2
+        assert entry["path"] == [
+            _hop("companies", "id", "jobs", "company_id"),
+            _hop("jobs", "person_id", "people", "person_id"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_fabricated_link_via_junction_is_dropped(self) -> None:
+        schema = {
+            "crm": {
+                "origin_type": "postgres",
+                "tables": [
+                    {
+                        "name": "companies",
+                        "full_name": "public.companies",
+                        "columns": [{"name": "id"}, {"name": "name"}],
+                        "primary_key": ["id"],
+                        "foreign_keys": [],
+                    },
+                    {
+                        "name": "people",
+                        "full_name": "public.people",
+                        "columns": [{"name": "person_id"}, {"name": "full_name"}],
+                        "primary_key": ["person_id"],
+                        "foreign_keys": [],
+                    },
+                ],
+            },
+        }
+        graph = await build_join_graph(schema, origins=[])
+        proposed = {
+            "person": [
+                {
+                    "origin_id": "crm",
+                    "table": "people",
+                    "mode": "link_via",
+                    "columns": ["person_id"],
+                    "link_entity": "company",
+                    "via_table": "nonexistent_jobs_table",
+                    "via_from_column": "company_id",
+                    "via_to_column": "person_id",
+                }
+            ]
+        }
+        clean = _sanitize_plan(proposed, ["company", "person"], "company", schema, graph)
+        assert clean["person"] == []
+
+    @pytest.mark.asyncio
+    async def test_explicit_link_path_validated_hop_by_hop(self) -> None:
+        schema = {
+            "crm": {
+                "origin_type": "postgres",
+                "tables": [
+                    {
+                        "name": "companies",
+                        "full_name": "public.companies",
+                        "columns": [{"name": "id"}, {"name": "name"}],
+                        "primary_key": ["id"],
+                        "foreign_keys": [],
+                    },
+                    {
+                        "name": "people",
+                        "full_name": "public.people",
+                        "columns": [{"name": "person_id"}, {"name": "full_name"}],
+                        "primary_key": ["person_id"],
+                        "foreign_keys": [],
+                    },
+                    {
+                        "name": "jobs",
+                        "full_name": "public.jobs",
+                        "columns": [
+                            {"name": "job_id"},
+                            {"name": "person_id"},
+                            {"name": "company_id"},
+                        ],
+                        "primary_key": ["job_id"],
+                        "foreign_keys": [],
+                    },
+                ],
+            },
+        }
+        graph = await build_join_graph(schema, origins=[])
+        proposed = {
+            "person": [
+                {
+                    "origin_id": "crm",
+                    "table": "people",
+                    "mode": "link_path",
+                    "path": [
+                        _hop("companies", "id", "jobs", "company_id"),
+                        _hop("jobs", "person_id", "people", "person_id"),
+                    ],
+                    "reason": "explicit two-hop path",
+                }
+            ]
+        }
+        clean = _sanitize_plan(proposed, ["company", "person"], "company", schema, graph)
+        assert len(clean["person"]) == 1
+        assert clean["person"][0]["mode"] == "link_path"
+        assert clean["person"][0]["hops"] == 2
+
+    @pytest.mark.asyncio
+    async def test_explicit_link_path_with_a_fabricated_hop_is_dropped(self) -> None:
+        schema = {
+            "crm": {
+                "origin_type": "postgres",
+                "tables": [
+                    {
+                        "name": "companies",
+                        "full_name": "public.companies",
+                        "columns": [{"name": "id"}, {"name": "name"}],
+                        "primary_key": ["id"],
+                        "foreign_keys": [],
+                    },
+                    {
+                        "name": "people",
+                        "full_name": "public.people",
+                        "columns": [{"name": "person_id"}, {"name": "full_name"}],
+                        "primary_key": ["person_id"],
+                        "foreign_keys": [],
+                    },
+                ],
+            },
+        }
+        graph = await build_join_graph(schema, origins=[])
+        proposed = {
+            "person": [
+                {
+                    "origin_id": "crm",
+                    "table": "people",
+                    "mode": "link_path",
+                    # A real hop that doesn't exist: no jobs table, no edge.
+                    "path": [_hop("companies", "id", "jobs", "company_id")],
+                }
+            ]
+        }
+        clean = _sanitize_plan(proposed, ["company", "person"], "company", schema, graph)
+        assert clean["person"] == []
+
+    @pytest.mark.asyncio
+    async def test_unknown_table_is_dropped(self) -> None:
+        schemas = _schemas()
+        graph = await build_join_graph(schemas, origins=[])
+        proposed = {
+            "person": [
+                {
+                    "origin_id": "crm_origin",
+                    "table": "ghost_table",
+                    "mode": "link",
+                    "columns": ["x"],
+                }
+            ]
+        }
+        clean = _sanitize_plan(proposed, ["company", "person"], "company", schemas, graph)
+        assert clean["person"] == []
 
 
 class TestPlanScopeImpl:

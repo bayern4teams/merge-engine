@@ -108,6 +108,40 @@ class TestFindCandidateEdges:
         candidates = _find_candidate_edges(tables)
         assert candidates == []
 
+    def test_matches_pluralised_table_name_convention(self) -> None:
+        """A common real convention this repo's own fixtures use (Pagila-
+        style): a plural table "companies" with FK columns named after the
+        SINGULAR concept ("company_id"), not the plural table name itself
+        ("companiesid"/"companies_id" would never occur in practice)."""
+        tables = [
+            {"name": "companies", "primary_key": ["id"], "columns": [{"name": "id"}]},
+            {
+                "name": "employees",
+                "primary_key": ["id"],
+                "columns": [{"name": "id"}, {"name": "company_id"}],
+            },
+        ]
+        candidates = _find_candidate_edges(tables)
+        matches = [c for c in candidates if c.child_column == "company_id"]
+        assert len(matches) == 1
+        assert matches[0].parent_table == "companies"
+
+    def test_irregular_plural_people_matches_person_id(self) -> None:
+        tables = [
+            {"name": "people", "primary_key": ["person_id"], "columns": [{"name": "person_id"}]},
+            {
+                "name": "jobs",
+                "primary_key": ["job_id"],
+                "columns": [{"name": "job_id"}, {"name": "person_id"}],
+            },
+        ]
+        candidates = _find_candidate_edges(tables)
+        matches = [
+            c for c in candidates if c.child_column == "person_id" and c.child_table == "jobs"
+        ]
+        assert len(matches) == 1
+        assert matches[0].parent_table == "people"
+
 
 def _schemas_for_issue_6() -> dict[str, Any]:
     """origin_2's real 7-table schema from the 4th live run, minimal
@@ -562,9 +596,103 @@ class TestJoinPath:
         assert path.fanout_hop_count == 0
         assert path.high_fanout is False
 
+    def test_zero_hop_path_is_declared_confidence(self) -> None:
+        path = JoinPath(nodes=(("o1", "A"),), hops=())
+        assert path.confidence == "declared"
 
-def _path_hop(child_table: str, parent_table: str):
+    def test_confidence_is_the_weakest_hop(self) -> None:
+        strong = _path_hop("A", "B", confidence="verified", overlap_ratio=1.0)
+        weak = _path_hop("B", "C", confidence="probable", overlap_ratio=0.6)
+        path = JoinPath(nodes=(("o1", "A"), ("o1", "B"), ("o1", "C")), hops=(strong, weak))
+        assert path.confidence == "probable"
+
+    def test_declared_and_heuristic_are_not_ranked_equal(self) -> None:
+        """Both carry overlap_ratio=None, but a real FK (declared) must
+        outrank an unverified name guess (heuristic) -- this is the exact
+        bug rank_key would have if it only compared overlap_ratio."""
+        declared_path = JoinPath(
+            nodes=(("o1", "A"), ("o1", "B")),
+            hops=(_path_hop("A", "B", confidence="declared", overlap_ratio=None),),
+        )
+        heuristic_path = JoinPath(
+            nodes=(("o1", "A"), ("o1", "C")),
+            hops=(_path_hop("A", "C", confidence="heuristic", overlap_ratio=None),),
+        )
+        assert declared_path.rank_key() < heuristic_path.rank_key()
+
+
+class TestJoinGraphFindEdge:
+    def test_finds_edge_regardless_of_which_side_is_named_first(self) -> None:
+        graph = JoinGraph()
+        edge = _edge("Experience", "companyID", "Company", "companyID")
+        graph.add_edge(edge)
+
+        assert graph.find_edge("o1", "Experience", "companyID", "Company", "companyID") is edge
+        # Same edge, arguments given in the opposite order.
+        assert graph.find_edge("o1", "Company", "companyID", "Experience", "companyID") is edge
+
+    def test_returns_none_when_no_such_edge(self) -> None:
+        graph = JoinGraph()
+        graph.add_edge(_edge("Experience", "companyID", "Company", "companyID"))
+        assert graph.find_edge("o1", "Experience", "companyID", "Person", "personID") is None
+
+    def test_column_mismatch_does_not_match(self) -> None:
+        graph = JoinGraph()
+        graph.add_edge(_edge("Experience", "companyID", "Company", "companyID"))
+        assert graph.find_edge("o1", "Experience", "wrongColumn", "Company", "companyID") is None
+
+
+class TestPathHopDirectionAwareProperties:
+    def test_narrow_hop_from_child_to_parent(self) -> None:
+        from src.mcp_server.tools.join_graph import PathHop
+
+        edge = _edge("Experience", "companyID", "Company", "companyID")
+        hop = PathHop(edge=edge, direction="narrow")
+        assert hop.from_table == "Experience"
+        assert hop.from_column == "companyID"
+        assert hop.to_table == "Company"
+        assert hop.to_column == "companyID"
+
+    def test_fanout_hop_from_parent_to_child(self) -> None:
+        from src.mcp_server.tools.join_graph import PathHop
+
+        edge = _edge("Experience", "companyID", "Company", "companyID")
+        hop = PathHop(edge=edge, direction="fanout")
+        assert hop.from_table == "Company"
+        assert hop.from_column == "companyID"
+        assert hop.to_table == "Experience"
+        assert hop.to_column == "companyID"
+
+
+class TestBuildJoinGraphHeuristicTier:
+    async def test_missing_origin_config_adds_heuristic_edges_instead_of_dropping(self) -> None:
+        """The old behaviour silently lost the join whenever a connector
+        wasn't available for an origin -- unverified is a better outcome
+        than absent, since a human or a downstream check can still see and
+        discount a low-confidence edge, but cannot act on one that was
+        never recorded at all."""
+        with patch("src.mcp_server.tools.join_graph.create_connector") as mock_create:
+            graph = await build_join_graph(_schemas_for_issue_6(), origins=[])
+
+        mock_create.assert_not_called()
+        edges = [
+            e for e in graph.neighbors(("origin_2", "Experience")) if e.parent_table == "Company"
+        ]
+        assert len(edges) == 1
+        assert edges[0].confidence == "heuristic"
+        assert edges[0].overlap_ratio is None
+
+
+def _path_hop(
+    child_table: str,
+    parent_table: str,
+    *,
+    confidence: str = "verified",
+    overlap_ratio: float | None = 1.0,
+):
     from src.mcp_server.tools.join_graph import PathHop
 
-    edge = _edge(child_table, "x_id", parent_table, "id")
+    edge = _edge(
+        child_table, "x_id", parent_table, "id", confidence=confidence, overlap_ratio=overlap_ratio
+    )
     return PathHop(edge=edge, direction="narrow")
