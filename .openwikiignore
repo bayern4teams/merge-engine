@@ -1,0 +1,13 @@
+sample_databases/
+logs/
+.agent/
+.claude/
+.langgraph_api/
+.mypy_cache/
+.playwright-mcp/
+.pytest_cache/
+.ruff_cache/
+.tokensave/
+.venv/
+.worktrees/
+_pycache_/

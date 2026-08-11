@@ -114,3 +114,6 @@ node_modules/
 # nested under the repo root so they never touch a parent folder, but they
 # are not repo content and must never be tracked or committed.
 .worktrees/
+
+# diagnosis files
+*.png
