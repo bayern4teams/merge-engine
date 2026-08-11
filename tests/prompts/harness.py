@@ -33,6 +33,58 @@ from typing import Any
 
 _GOLDEN_DIR = Path(__file__).parent / "golden"
 
+# Shared discovered-schema fixture for every request_parsing golden case
+# (Phase 8.2 of the fix-bugs follow-up plan). One fixture, not one per case:
+# group_tables_into_entities' output only depends on table/column NAMES, not
+# on the request text, so every case in the golden file can share it and the
+# JSON only needs to state user_request + the expected explicit_group_keys —
+# no ~1.2KB rendered catalog repeated 14 times. Mirrors the table names from
+# the plan's own real Airbus run (Bugs/Logs/4th_try_05_18_local_enrichprompt.txt)
+# closely enough to exercise the same owning-prefix-stripping/alias-merging
+# paths that run's data actually hit (CompanyExperience+Experience ->
+# "experience", CompanyContact+PersonContact -> "contact", etc.).
+_REQUEST_PARSING_SCHEMA: dict[str, Any] = {
+    "origin_1": {
+        "tables": [
+            {"name": "Company", "columns": [{"name": c} for c in ("id", "name", "website")]},
+            {
+                "name": "CompanyContact",
+                "columns": [{"name": c} for c in ("id", "email", "phone")],
+            },
+            {
+                "name": "CompanyExperience",
+                "columns": [{"name": c} for c in ("id", "role", "start_date")],
+            },
+            {
+                "name": "CompanyFinancials",
+                "columns": [{"name": c} for c in ("id", "revenue", "year")],
+            },
+            {"name": "CompanyIndustry", "columns": [{"name": c} for c in ("id", "sector")]},
+            {
+                "name": "CompanyRelation",
+                "columns": [{"name": c} for c in ("id", "related_company_id")],
+            },
+            {
+                "name": "IndustryClassification",
+                "columns": [{"name": c} for c in ("id", "code", "label")],
+            },
+            {"name": "Location", "columns": [{"name": c} for c in ("id", "city", "country")]},
+            {"name": "Person", "columns": [{"name": c} for c in ("id", "first_name", "last_name")]},
+            {"name": "Product", "columns": [{"name": c} for c in ("id", "sku", "name")]},
+            {"name": "Contract", "columns": [{"name": c} for c in ("id", "value", "start_date")]},
+        ]
+    },
+    "origin_2": {
+        "tables": [
+            {"name": "Company", "columns": [{"name": c} for c in ("id", "org_name", "homepage")]},
+            {"name": "Experience", "columns": [{"name": c} for c in ("id", "title")]},
+            {"name": "Industry", "columns": [{"name": c} for c in ("id", "sector_name")]},
+            {"name": "Person", "columns": [{"name": c} for c in ("id", "full_name")]},
+            {"name": "PersonContact", "columns": [{"name": c} for c in ("id", "email")]},
+        ]
+    },
+}
+
 _STAGES = (
     "request_parsing",
     "dependency_analysis",
@@ -114,17 +166,20 @@ def _build_prompt(stage: str, case: dict[str, Any]) -> tuple[str, str]:
     inp = case["input"]
 
     if stage == "request_parsing":
-        # Falls back to the same "(No discovered tables)" string production
-        # emits for an empty catalog (parse_request.py's
-        # _build_group_catalog), so a golden case that omits group_catalog
-        # still substitutes real text rather than leaving the literal
-        # {group_catalog} token in the prompt sent to the model. The golden
-        # cases themselves still encode the pre-Phase-3.2 contract
-        # (entity_types/entity_tables) — regenerating them against the new
-        # group_names/explicit_groups contract is tracked separately
-        # (Phase 8.2 of the fix-bugs follow-up plan) since it depends on
-        # real discovered-schema fixtures, not just a prompt-shape fix.
-        group_catalog = inp.get("group_catalog", "(No discovered tables)")
+        # Phase 8.2: built from the shared _REQUEST_PARSING_SCHEMA fixture
+        # via the SAME production functions parse_request.py itself calls
+        # (group_tables_into_entities + _build_group_catalog), so the
+        # catalog text sent to the model here is byte-identical in shape to
+        # what a real run sends for this fixture. A case may override the
+        # fixture with its own `schemas` input for a scenario the shared one
+        # can't express; none currently need to.
+        from src.orchestrator.nodes.parse_request import _build_group_catalog
+        from src.orchestrator.utils.entity_grouping import group_tables_into_entities
+
+        schemas = inp.get("schemas", _REQUEST_PARSING_SCHEMA)
+        groups, unassigned = group_tables_into_entities(schemas)
+        assert not unassigned, f"request_parsing fixture left tables unassigned: {unassigned}"
+        group_catalog = _build_group_catalog(groups, schemas)
         return system, human.replace("{user_request}", inp["user_request"]).replace(
             "{group_catalog}", group_catalog
         )
@@ -203,16 +258,23 @@ def _score(stage: str, case: dict[str, Any], result: Any) -> tuple[bool, str]:
         return False, f"non-dict result: {type(result).__name__}"
 
     if stage == "request_parsing":
-        got = set(result.get("entity_types", []) or [])
-        want = set(expected["entity_types"])
+        # Phase 8.2: group MEMBERSHIP is a deterministic invariant now
+        # (group_tables_into_entities, enforced by an assert in
+        # parse_request.py itself), not something the LLM call can get
+        # wrong — so there is nothing left to score there. What the LLM
+        # still decides is explicit_groups; filtered to real deterministic
+        # keys exactly as parse_request.py's own `{g for g in raw_explicit
+        # if g in deterministic_groups}` does, so a hallucinated group name
+        # scores as the miss it would actually be downstream, not as noise.
+        from src.orchestrator.utils.entity_grouping import group_tables_into_entities
+
+        schemas = case["input"].get("schemas", _REQUEST_PARSING_SCHEMA)
+        groups, _unassigned = group_tables_into_entities(schemas)
+        raw_explicit = result.get("explicit_groups", []) or []
+        got = {g for g in raw_explicit if g in groups} if isinstance(raw_explicit, list) else set()
+        want = set(expected["explicit_group_keys"])
         ok = got == want
-        detail = f"got={sorted(got)} want={sorted(want)}"
-        if ok and "explicit_entity_types" in expected:
-            got_explicit = set(result.get("explicit_entity_types", []) or [])
-            want_explicit = set(expected["explicit_entity_types"])
-            ok = got_explicit == want_explicit
-            detail = f"explicit got={sorted(got_explicit)} want={sorted(want_explicit)}"
-        return ok, detail
+        return ok, f"explicit got={sorted(got)} want={sorted(want)}"
 
     if stage == "dependency_analysis":
         tree = result.get("dependency_tree", {}) or {}

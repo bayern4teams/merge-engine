@@ -96,6 +96,16 @@ NODE_SUCCESSOR = {
     "parse_request": "analyze_dependencies",
     "analyze_dependencies": "human_review_deps",
     "map_fields": "plan_scope",
+    # plan_scope_impl currently catches every exception itself and falls back
+    # to a heuristic plan (never raises, never sets state["failure"]) — but
+    # _error_gate_destinations() must cover every node that COULD reach the
+    # error gate, not just the ones that do today. Without this entry, a
+    # future hard failure in plan_scope would hit `if decision == "skip" and
+    # failed_node in NODE_SUCCESSOR` (false), silently downgrading "skip" to
+    # "abort" with no warning. Skipping a failed plan_scope means treating
+    # the merge as unscoped, same as _scope_router's own "continue" path
+    # when there is no plan.
+    "plan_scope": "extract_data",
     "extract_data": "validate_data",
     "validate_data": "resolve_entities",
     "resolve_entities": "unify_entities",

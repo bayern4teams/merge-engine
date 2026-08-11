@@ -297,6 +297,23 @@ class TestNodeOrder:
             NODE_SUCCESSOR.get("unify_entities"),
         }, "map_fields must not still be wired to run after unify_entities"
 
+    def test_plan_scope_has_a_skip_destination(self):
+        """Phase 8.1: plan_scope must have a NODE_SUCCESSOR entry.
+
+        plan_scope_impl currently catches every exception itself and never
+        sets state["failure"], so this node cannot reach the error gate
+        today — but _error_gate_router's "skip" branch checks
+        `failed_node in NODE_SUCCESSOR` before it checks anything about
+        whether that failure is even reachable in practice. Without this
+        entry, a future hard failure in plan_scope would silently downgrade
+        a user's "skip" decision to "abort" with no warning. Skipping means
+        treating the merge as unscoped — the same destination _scope_router
+        already sends an ordinary unscoped run to.
+        """
+        from src.orchestrator.graph import NODE_SUCCESSOR
+
+        assert NODE_SUCCESSOR["plan_scope"] == "extract_data"
+
 
 # =============================================================================
 # Workflow Manager Integration Tests

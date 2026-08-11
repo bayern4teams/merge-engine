@@ -196,6 +196,19 @@ class TestErrorGateRouting:
 
         assert _error_gate_router(state) == NODE_SUCCESSOR["extract_data"]
 
+    def test_skip_on_plan_scope_does_not_silently_downgrade_to_abort(self) -> None:
+        """Phase 8.1 regression: NODE_SUCCESSOR must cover plan_scope.
+
+        Before this entry existed, `failed_node in NODE_SUCCESSOR` was False
+        for "plan_scope", so a user choosing "skip" for a plan_scope failure
+        silently fell through to "abort" instead — the exact "guessing
+        carry-on is unsafe, but so is silently overriding an explicit skip"
+        failure mode this whole router exists to prevent.
+        """
+        state = {"handled_failures": [{"node": "plan_scope", "decision": "skip"}]}
+
+        assert _error_gate_router(state) == "extract_data"
+
     def test_abort_ends_the_run(self) -> None:
         state = {"handled_failures": [{"node": "extract_data", "decision": "abort"}]}
 
