@@ -478,6 +478,26 @@ async def resolve_entities_impl(
     # behaviour it had before: auto-detected blocking, hint-derived unique
     # identifiers, and the standard thresholds.
     rules = matching_rules or {}
+    # Phase 7.4: an optional per-entity engine override. Splink replaces only
+    # scoring+clustering-input (steps 1-3 below); resolve_cache, the LLM
+    # borderline pass and _build_clusters are untouched. A clean, pure
+    # insertion — the rest of this function is not rewritten. On any Splink
+    # failure (untrainable model, no usable blocking rule, exception)
+    # resolve_with_splink returns None and execution falls through to the
+    # builtin path below exactly as if no engine were configured.
+    engine = rules.get("engine", "builtin")
+    if engine == "splink":
+        from src.mcp_server.tools.splink_matcher import resolve_with_splink
+
+        splink_res = await resolve_with_splink(
+            entity_type,
+            records,
+            matching_rules=rules,
+            known_cluster_ids=known_cluster_ids,
+            build_clusters_fn=_build_clusters,
+        )
+        if splink_res is not None:
+            return splink_res
     blocking_keys = blocking_keys or rules.get("blocking_keys") or None
     # auto_match/unique_ids here are for the log line below and the cache
     # key only — _resolve_core (Part 1.5 B.3) re-derives its own copies

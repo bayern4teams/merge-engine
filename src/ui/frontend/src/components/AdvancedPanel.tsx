@@ -12,6 +12,7 @@ export interface AdvancedState {
   entityResolutionEnabled: boolean;
   fieldMappingEnabled: boolean;
   strictness: "" | "loose" | "normal" | "strict";
+  engine: "" | "builtin" | "splink";
   autoApproveGates: string[];
 }
 
@@ -22,6 +23,7 @@ export const ADVANCED_DEFAULT: AdvancedState = {
   entityResolutionEnabled: true,
   fieldMappingEnabled: true,
   strictness: "",
+  engine: "",
   autoApproveGates: [],
 };
 
@@ -48,7 +50,14 @@ export function buildRunOverrides(state: AdvancedState): {
 
   const out: { run_config?: RunConfig; matching_rules?: Record<string, any> } = {};
   if (Object.keys(runConfig).length > 0) out.run_config = runConfig;
-  if (state.strictness) out.matching_rules = { _default: { strictness: state.strictness } };
+  if (state.strictness || state.engine) {
+    out.matching_rules = {
+      _default: {
+        ...(state.strictness ? { strictness: state.strictness } : {}),
+        ...(state.engine ? { engine: state.engine } : {}),
+      },
+    };
+  }
   return out;
 }
 
@@ -129,6 +138,21 @@ export default function AdvancedPanel({ value, onChange, disabled }: Props) {
               <option value="loose">Loose</option>
               <option value="normal">Normal</option>
               <option value="strict">Strict</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="profile-row">
+          <label>
+            <span className="field-label">Matching engine</span>
+            <select
+              value={value.engine}
+              disabled={disabled}
+              onChange={(e) => set("engine", e.target.value as AdvancedState["engine"])}
+            >
+              <option value="">— platform default (Built-in) —</option>
+              <option value="builtin">Built-in (Fellegi-Sunter + LLM)</option>
+              <option value="splink">Splink 4 (DuckDB EM probabilistic, experimental)</option>
             </select>
           </label>
         </div>
