@@ -6,7 +6,7 @@
 #     ports (5432, 6379, 8123/9000) are already held by other containers on
 #     this machine (delta_db, delta_redis, merge-test-ch). langfuse-web/worker
 #     reach them over the internal compose network by service name, so no host
-#     publish is needed. Only langfuse-web (3000) and minio (9090) are exposed.
+#     publish is needed. Only langfuse-web (3001) and minio (9090) are exposed.
 #   * Secrets + LANGFUSE_INIT_* bootstrap values come from docker/langfuse.env
 #     (gitignored). Start with:
 #       docker compose -f docker/langfuse-compose.yml --env-file docker/langfuse.env up -d
@@ -28,7 +28,7 @@ services:
       clickhouse:
         condition: service_healthy
     ports:
-      - 127.0.0.1:3030:3030
+      - 3033:3030
     environment: &langfuse-worker-env
       NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
       DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/postgres}
@@ -70,7 +70,7 @@ services:
     restart: always
     depends_on: *langfuse-depends-on
     ports:
-      - 3000:3000
+      - 3003:3000
     environment:
       <<: *langfuse-worker-env
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-mysecret}
