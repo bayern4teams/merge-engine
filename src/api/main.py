@@ -401,16 +401,9 @@ def create_api(config_path: str = "config/config.yaml") -> FastAPI:
 
     _ENV_EXPECTED = (
         "LLM_API_KEY",
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
         "LANGFUSE_PUBLIC_KEY",
         "LANGFUSE_SECRET_KEY",
         "LANGFUSE_HOST",
-        "CLICKHOUSE_HOST",
-        "CLICKHOUSE_PORT",
-        "POSTGRES_HOST",
-        "POSTGRES_PORT",
-        "POSTGRES_PASSWORD",
     )
 
     def _mask_env_val(val: str) -> str:
