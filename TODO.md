@@ -73,9 +73,28 @@ memory) -> update this file with independent evidence, never the app's own succe
     brought in; the only *new* entries are this file's 3 already-accepted-pattern
     `psycopg2` stub-missing lines, identical to `postgresql_destination.py`'s own baselined
     entries).
-- [ ] **P-2** Connector capability matrix (`capabilities()`, `discover_indexes()`,
-  `discover_statistics()`, `profile_column()`, `estimate_query_cost()` on the existing connector
-  base).
+- [x] **P-2** Connector capability matrix. `BaseConnector.capabilities()` (conservative default)
+  + `discover_indexes()`/`discover_statistics()`/`profile_column()`/`estimate_query_cost()`
+  (base defaults raise `NotImplementedError`, matching the existing `sample_distinct_values`
+  pattern). Real overrides for `PostgresConnector` and `ClickHouseConnector`; `MongoDBConnector`
+  gets `capabilities()` only (no live Mongo container available to verify the other four
+  against — tracked as a follow-up, not silently skipped).
+  - *Evidence (unit):* `tests/unit/test_connector_capabilities.py`, 13/13 passed — includes the
+    load-bearing case the module docstring calls out (`supports_declared_fk: False` for
+    ClickHouse/MongoDB) and a regression test for a bug caught live (below).
+  - *Evidence (live, independent — real ClickHouse `origin2` + real PostgreSQL
+    `global_warehouse`):* `capabilities()`, `discover_indexes()`, `discover_statistics()`,
+    `profile_column()` (all 3 modes), `estimate_query_cost()` all run against real data and
+    return real, checkable numbers (e.g. ClickHouse `Company`: 1,270,564 rows, 9 parts, sorting
+    key `companyID`; PostgreSQL `company`: real `company_pkey` btree index found).
+  - **Real bug found and fixed during live verification:** PostgreSQL's `pg_class.reltuples`
+    is `-1` for a never-analyzed table — a genuine 2-row table reported `row_count_estimate: -1`,
+    not 0 or 2. Fixed with a fallback to `pg_stat_user_tables.n_live_tup` (tracked by autovacuum
+    independently of `ANALYZE`). Verified live across all three real states: never-analyzed
+    (-1 -> falls back to n_live_tup, itself still 0 immediately after a fresh write since
+    autovacuum's stats collector lags), and post-`ANALYZE` (correctly reports the real count,
+    2, with `last_analyzed` populated) — confirmed by running `ANALYZE company;` on the real
+    container and re-querying.
 - [ ] **P-3** Profiling engine (FULL/SAMPLED/APPROXIMATE, database-native per connector).
 - [ ] **P-4** Semantic type inference (evidence-carrying, no LLM in the first pass).
 - [ ] **P-5** Candidate & composite keys (declared PK/unique first, then inferred, then pruned

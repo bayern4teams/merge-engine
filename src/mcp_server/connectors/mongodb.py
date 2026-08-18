@@ -358,6 +358,35 @@ class MongoDBConnector(BaseConnector):
             pass
         return value
 
+    # ── Capability matrix (Part B / P-2) ────────────────────────────────
+
+    def capabilities(self) -> dict[str, bool]:
+        return {
+            # A MongoDB collection can declare a schema validator and
+            # unique indexes, but neither a primary key nor a foreign key
+            # in the relational sense -- _id is unique by construction, not
+            # a declared PK a caller looks up the same way.
+            "supports_declared_pk": False,
+            "supports_declared_fk": False,
+            "supports_declared_unique_constraints": True,
+            "supports_statistics": True,
+            "supports_sampling": True,
+            "supports_explain": True,
+            "supports_cte": False,
+            "supports_temp_tables": False,
+            "supports_window_functions": False,
+            "supports_pushdown": True,
+            "supports_parallel_queries": True,
+            "supports_column_comments": False,
+            "supports_table_comments": False,
+        }
+
+    # discover_indexes/discover_statistics/profile_column/estimate_query_cost:
+    # not yet implemented for MongoDB (no live Mongo container available in
+    # this environment to verify against -- tracked in TODO.md as a P-2
+    # follow-up rather than shipped untested). The base class's
+    # NotImplementedError default applies until then.
+
     # ── Import Flagging ───────────────────────────────────────────────
 
     @retry_on_transient(max_attempts=3, backoff="exponential")
