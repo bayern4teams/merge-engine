@@ -182,7 +182,7 @@ The matrix scans for:
 
 ### Component 4: Fix Empty `{}` Dependency Tree Bug
 
-The bug from the [error log](../../Bugs/Logs/2nd_try_05_17_local_enrichprompt_temp4.txt) (line 398-405):
+The bug from the error log `2nd_try_05_17_local_enrichprompt_temp4.txt` (line 398-405; log since rotated out of `Bugs/Logs/`):
 
 ```
 LLM response received: type=str, len=2 chars

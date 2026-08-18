@@ -22,6 +22,8 @@ import logging
 from typing import Any
 
 from src.llm import PROMPT_TEMPLATES, LLMClient
+from src.orchestrator.fingerprint import origins_fingerprint, stage_fingerprint
+from src.orchestrator.profiles import stage_cache_get
 from src.orchestrator.utils.entity_grouping import group_tables_into_entities
 from src.orchestrator.utils.retry import classify_exception
 
@@ -109,12 +111,50 @@ async def parse_request(state: dict[str, Any]) -> dict[str, Any]:
     if pre_set_scope is not None:
         logger.debug("Pre-set merge_scope from subject-first mode: %s", pre_set_scope)
 
-    deterministic_groups, unassigned = group_tables_into_entities(schemas)
-    # group_tables_into_entities itself asserts this, but state can carry a
-    # stale/hand-built schemas dict from a legacy caller — verify again at
-    # this boundary rather than trust an invariant enforced two call frames
-    # away.
-    assert unassigned == [], f"group_tables_into_entities left tables unassigned: {unassigned}"
+    # Phase A4: reuse a profile-pinned decision if the origins' schema
+    # shape AND the request text match exactly what it was computed from.
+    # Request text is part of the fingerprint (not just the schema) because
+    # explicit_target_entities/merge_scope depend on it as much as
+    # entity_tables depends on the schema -- reusing them for a DIFFERENT
+    # request would silently answer the wrong question. This is what fixes
+    # entity_tables being "pinned then immediately overwritten" (O.1 was
+    # inert): the pin is now actually consulted before any work happens,
+    # not just seeded into state and ignored.
+    origins = state.get("origins", []) or []
+    profile_cache = state.get("_profile_cache") or {}
+    entity_tables_fp = stage_fingerprint(
+        "entity_tables",
+        origins_fp=origins_fingerprint(origins, schemas),
+        user_request=user_request,
+        subject=(pre_set_scope or {}).get("subject", ""),
+    )
+    cached = stage_cache_get(profile_cache, "entity_tables", entity_tables_fp)
+    if cached and cached.get("entity_tables"):
+        logger.info(
+            "Reusing entity_tables/target_entities from profile %r (fingerprint match)",
+            state.get("profile_name"),
+        )
+        logger.debug("EXIT parse_request (reused from profile)")
+        return {
+            "target_entities": cached.get("target_entities", []),
+            "explicit_target_entities": cached.get("explicit_target_entities", []),
+            "merge_scope": pre_set_scope or cached.get("merge_scope", dict(_INACTIVE_SCOPE)),
+            "entity_tables": cached["entity_tables"],
+            "table_selection_notes": cached.get("table_selection_notes", ""),
+            "interrupt_data": None,
+            "reused_stages": ["entity_tables"],
+            "_entity_tables_fingerprint": entity_tables_fp,
+        }
+
+    # group_tables_into_entities raises ValueError on any unassigned table —
+    # deliberately NOT caught by the `except Exception` below. A grouping
+    # failure is a bug in discover_schemas' output (an unnamed table), not
+    # something the LLM-naming fallback can meaningfully paper over, and it
+    # must not be misreported as "LLM call failed" the way it was before
+    # this fix (the failure was previously an AssertionError raised *inside*
+    # `_finish`, which `_finish` being called from within the `try` caused
+    # to be caught, logged with the wrong diagnosis, and re-raised).
+    deterministic_groups, _unassigned = group_tables_into_entities(schemas)
     logger.debug(
         "Deterministic groups: %d covering %d tables",
         len(deterministic_groups),
@@ -179,7 +219,13 @@ async def parse_request(state: dict[str, Any]) -> dict[str, Any]:
         discovered = _discovered_table_pairs(schemas)
         mapped = {(e["origin_id"], e["table"]) for lst in entity_tables.values() for e in lst}
         orphaned = discovered - mapped
-        assert not orphaned, f"Orphaned source tables in parse_request: {orphaned}"
+        if orphaned:
+            # Not an `assert` (silently vanishes under `python -O`) and
+            # deliberately raised from OUTSIDE the LLM `try/except` below —
+            # see the call site. A failure here must surface as exactly what
+            # it is: a bug in this function or in group_tables_into_entities,
+            # never as "the LLM call failed".
+            raise ValueError(f"Orphaned source tables in parse_request: {orphaned}")
 
         logger.debug("Extracted target_entities: %s", target_entities)
         logger.debug("Extracted explicit_target_entities: %s", explicit_target_entities)
@@ -199,8 +245,22 @@ async def parse_request(state: dict[str, Any]) -> dict[str, Any]:
             "entity_tables": entity_tables,
             "table_selection_notes": table_selection_notes,
             "interrupt_data": None,
+            # Recorded even on a normal (non-degraded) computation so a
+            # completed run's capture_from_state can cache this decision for
+            # the NEXT run against the same schema/request -- the cache
+            # check above is what actually consumes it.
+            "_entity_tables_fingerprint": entity_tables_fp,
         }
 
+    # Only the LLM call and the parsing of its response are caught here.
+    # `_finish` (called exactly once, below, outside this block) is
+    # deliberately NOT inside the try — its post-condition raising must
+    # never be caught and re-logged as "the LLM call failed", which is what
+    # happened when `_finish` used to be called from inside this block: the
+    # AssertionError it raised was swallowed by `except Exception`, logged
+    # with a false diagnosis, and `_finish` was then called a second time
+    # from the handler, raising the same error uncaught anyway.
+    degraded_errors: list[str] | None = None
     try:
         logger.debug("Calling LLMClient.call_json()")
         result = await client.call_json(
@@ -240,10 +300,6 @@ async def parse_request(state: dict[str, Any]) -> dict[str, Any]:
             }
         table_selection_notes = str(result.get("notes", "")).strip()
 
-        response = _finish(name_map, explicit_keys, merge_scope, table_selection_notes)
-        logger.debug("EXIT parse_request")
-        return response
-
     except Exception as exc:
         # Grouping never depended on the LLM (Phase 3.1) — only naming,
         # explicit/inferred classification, and subject extraction did. A
@@ -261,13 +317,14 @@ async def parse_request(state: dict[str, Any]) -> dict[str, Any]:
         )
         classified = classify_exception(exc)
         name_map = {g: g for g in deterministic_groups}
-        notes = (
+        explicit_keys = set()
+        merge_scope = pre_set_scope or dict(_INACTIVE_SCOPE)
+        table_selection_notes = (
             f"LLM naming/scope extraction failed ({classify_exception(exc).__class__.__name__}: "
             f"{exc}); entity groups use their deterministic keys as-is and no merge scope was "
             f"extracted from the request text."
         )
-        response = _finish(name_map, set(), pre_set_scope or dict(_INACTIVE_SCOPE), notes)
-        response["errors"] = [f"Request parsing degraded: {exc}"]
+        degraded_errors = [f"Request parsing degraded: {exc}"]
         # Not a hard failure (state["failure"]) — the run has usable,
         # complete entity_tables and can continue. classified.disposition
         # is still logged so the pattern (transient vs permanent) is
@@ -275,5 +332,9 @@ async def parse_request(state: dict[str, Any]) -> dict[str, Any]:
         logger.debug(
             "Classified as %s (disposition=%s)", type(classified).__name__, classified.disposition
         )
-        logger.debug("EXIT parse_request (degraded)")
-        return response
+
+    response = _finish(name_map, explicit_keys, merge_scope, table_selection_notes)
+    if degraded_errors is not None:
+        response["errors"] = degraded_errors
+    logger.debug("EXIT parse_request%s", " (degraded)" if degraded_errors is not None else "")
+    return response

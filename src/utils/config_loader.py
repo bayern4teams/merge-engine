@@ -89,6 +89,11 @@ class LLMConfig(BaseModel):
     # LLM fallback for borderline entity pairs / unmappable fields.
     entity_resolution_enabled: bool = True
     field_mapping_enabled: bool = True
+    # Phase A5: the durable second cache layer underneath the always-on
+    # in-memory one (src/llm/cache_store.py) -- see that module's docstring.
+    persistent_cache_enabled: bool = True
+    persistent_cache_ttl_days: int = 30
+    persistent_cache_max_rows: int = 50_000
 
     @field_validator("provider")
     @classmethod
@@ -115,6 +120,19 @@ class ExtractionConfig(BaseModel):
     max_batch_size: int = 10000
 
 
+class ScopeConfig(BaseModel):
+    """Scope-planning defaults (Phase 4.2's join-graph BFS)."""
+
+    # Longest join-path find_paths will consider from the subject to a
+    # dependent table. join_graph.py's own _DEFAULT_MAX_HOPS is the
+    # fallback when this config isn't wired through -- kept in sync
+    # deliberately (see plan_scope_impl's config-not-supplied path).
+    max_hops: int = 6
+    # Distinct values sampled per column when verifying a candidate join
+    # edge's inclusion dependency (join_graph.py's build_join_graph).
+    join_graph_sample_size: int = 500
+
+
 class Config(BaseModel):
     """Top-level application configuration."""
 
@@ -122,6 +140,7 @@ class Config(BaseModel):
     llm: LLMConfig
     retry: RetryConfig = Field(default_factory=RetryConfig)
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
+    scope: ScopeConfig = Field(default_factory=ScopeConfig)
 
 
 # ---------------------------------------------------------------------------

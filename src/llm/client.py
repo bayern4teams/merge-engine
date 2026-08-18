@@ -19,6 +19,7 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
+from src.llm.cache_store import PERSISTENT_CACHE
 from src.llm.cost import (
     COST_LEDGER,
     SEMANTIC_CACHE,
@@ -85,6 +86,21 @@ class LLMClient:
         # about the same record pairs over and over; set cache_enabled=false
         # to compare against an uncached run.
         self.cache_enabled = config.get("cache_enabled", True)
+        # Phase A5: the in-memory SEMANTIC_CACHE above dies with the process
+        # -- a fresh `python -m src.main` starts with zero entries, so a
+        # repeat merge over unchanged data paid for every naming/mapping/
+        # matching call again even though the exact same questions were
+        # already answered. This is the same cache_key, a second, durable
+        # layer underneath it. Gated separately from cache_enabled (a user
+        # comparing cached-vs-uncached wants the in-memory layer off too;
+        # someone who only wants to skip the disk I/O for one run does not
+        # need to lose the process-lifetime cache to do it).
+        self.persistent_cache_enabled = config.get("persistent_cache_enabled", True)
+        if self.persistent_cache_enabled:
+            ttl_days = config.get("persistent_cache_ttl_days")
+            max_rows = config.get("persistent_cache_max_rows")
+            if ttl_days is not None or max_rows is not None:
+                PERSISTENT_CACHE.configure(ttl_days=ttl_days, max_rows=max_rows)
         self.run_id = config.get("run_id", "") or session_name
         self._model: Any = None
         self._json_mode_unsupported = False
@@ -216,7 +232,7 @@ class LLMClient:
         if self.cache_enabled:
             found, cached = SEMANTIC_CACHE.get(key)
             if found:
-                logger.debug("LLM cache hit (%s…)", key[:12])
+                logger.debug("LLM cache hit (in-memory, %s…)", key[:12])
                 COST_LEDGER.record(
                     self.run_id,
                     model=self.model_name,
@@ -224,6 +240,21 @@ class LLMClient:
                     input_tokens=_estimate_tokens(system_prompt, user_prompt),
                 )
                 return cached
+            if self.persistent_cache_enabled:
+                found, cached = PERSISTENT_CACHE.get(key)
+                if found:
+                    logger.debug("LLM cache hit (persistent, %s…)", key[:12])
+                    # Populate the in-memory layer too, so every call after
+                    # this one in the same process hits L1 without another
+                    # disk round trip.
+                    SEMANTIC_CACHE.put(key, cached)
+                    COST_LEDGER.record(
+                        self.run_id,
+                        model=self.model_name,
+                        cached=True,
+                        input_tokens=_estimate_tokens(system_prompt, user_prompt),
+                    )
+                    return cached
 
         messages = [
             SystemMessage(content=system_prompt),
@@ -293,6 +324,11 @@ class LLMClient:
                     logger.debug("Not caching: response did not parse as JSON")
             if should_cache:
                 SEMANTIC_CACHE.put(key, response.content)
+                if self.persistent_cache_enabled:
+                    # Same validated response, same guarantee as the
+                    # in-memory write above: never persist something that
+                    # didn't pass validate_before_cache's check.
+                    PERSISTENT_CACHE.put(key, response.content, model=self.model_name)
 
         logger.debug("EXIT LLMClient.call")
         return response.content

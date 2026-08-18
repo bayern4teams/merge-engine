@@ -490,6 +490,7 @@ class TestAnalyzeDependencies:
                     {
                         "name": "Company",
                         "columns": [{"name": "companyID", "type": "String"}],
+                        "primary_key": ["companyID"],
                     },
                     {
                         "name": "CompanyFinancials",
@@ -509,6 +510,48 @@ class TestAnalyzeDependencies:
         finance_entry = next(m for m in matrix if m["child_table"] == "CompanyFinancials")
         assert finance_entry["child_entity"] == "finance"
         assert finance_entry["parent_entity"] == "company"
+        # Regression: this used to hardcode parent_column="id" regardless of
+        # what the parent table's real primary key was named. Company's PK
+        # here is "companyID", not "id" -- the entry must reflect that, or
+        # every dependency-gate row built from it fails
+        # _sanitise_column_dependencies' real-column check and silently
+        # vanishes the moment a human approves without editing (live-observed
+        # as 14 rejected "unknown parent column: ...Company.id" entries in
+        # one run against a schema where Company has no "id" column at all).
+        assert finance_entry["parent_column"] == "companyID"
+
+    def test_build_coverage_matrix_omits_entry_when_no_real_parent_key_exists(self) -> None:
+        """When the parent table has neither a declared primary_key nor a
+        literal "id" column, the heuristic must NOT fabricate one -- an
+        omitted entry is an honest gap; a guessed "id" is a dependency-gate
+        row guaranteed to fail validation."""
+        from src.orchestrator.nodes.analyze_dependencies import _build_coverage_matrix
+
+        schemas = {
+            "origin_1": {
+                "origin_type": "clickhouse",
+                "tables": [
+                    {
+                        "name": "Company",
+                        "columns": [{"name": "companyID", "type": "String"}],
+                        # No primary_key declared, and no literal "id" column.
+                    },
+                    {
+                        "name": "CompanyFinancials",
+                        "columns": [
+                            {"name": "financialID", "type": "String"},
+                            {"name": "companyID", "type": "String"},
+                        ],
+                    },
+                ],
+            }
+        }
+        entity_tables = {
+            "company": [{"origin_id": "origin_1", "table": "Company"}],
+            "finance": [{"origin_id": "origin_1", "table": "CompanyFinancials"}],
+        }
+        matrix = _build_coverage_matrix(schemas, entity_tables, ["company", "finance"])
+        assert not any(m["child_table"] == "CompanyFinancials" for m in matrix)
 
     @pytest.mark.asyncio
     async def test_empty_dependency_tree_retries_and_falls_back(

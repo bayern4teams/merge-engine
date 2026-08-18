@@ -385,6 +385,99 @@ class ClickHouseDestinationConnector:
         )
         return -1
 
+    # ── Merge Lineage (Phase 7.2) ───────────────────────────────────────
+
+    def ensure_merge_audit(self) -> None:
+        """Create the merge-lineage audit table if it doesn't exist.
+
+        Mirrors the PostgreSQL destination's ``merge_engine_merge_audit``
+        (same columns, same purpose: one row per matched pair, queryable
+        long after the run's own spool is cleaned up) — this table did not
+        previously exist on the ClickHouse destination at all, so a merge
+        into ClickHouse had zero lineage.
+
+        ``ReplacingMergeTree(created_at)`` is the closest ClickHouse
+        equivalent to PostgreSQL's ``ON CONFLICT DO UPDATE``, but it is NOT
+        equivalent: a later write for the same key fully replaces the
+        earlier row rather than PostgreSQL's ``COALESCE(EXCLUDED.
+        human_override, existing)``, which preserves a human override
+        against being blanked by a later non-human write. Every other
+        ReplacingMergeTree table in this connector (``merge_engine_
+        extraction_state``) already accepts this same simple
+        last-write-wins semantics; documenting it here rather than
+        silently pretending ClickHouse and PostgreSQL behave identically.
+        """
+        client = self._ensure_client()
+        client.command(f"""
+            CREATE TABLE IF NOT EXISTS `{self._database}`.`merge_engine_merge_audit` (
+                run_id String,
+                entity_type String,
+                cluster_id String,
+                record_a String,
+                record_b String,
+                confidence Nullable(Float64),
+                method Nullable(String),
+                evidence String,
+                decided_by Nullable(String),
+                human_override Nullable(String),
+                created_at DateTime
+            ) ENGINE = ReplacingMergeTree(created_at)
+            ORDER BY (run_id, entity_type, record_a, record_b)
+        """)
+
+    def save_merge_audit(
+        self,
+        entity_type: str,
+        run_id: str,
+        rows: list[dict[str, Any]],
+    ) -> int:
+        """Persist per-pair merge evidence rows.
+
+        Same row shape and same ``(record_a, record_b)`` ordering
+        convention as the PostgreSQL destination's ``save_merge_audit``, so
+        ``load_data._persist_merge_audit`` can call either connector
+        without a type check.
+        """
+        if not rows:
+            return 0
+        self.ensure_merge_audit()
+        client = self._ensure_client()
+        now = datetime.now(UTC).replace(tzinfo=None)
+        data = [
+            [
+                run_id,
+                entity_type,
+                row.get("cluster_id", ""),
+                row["record_a"],
+                row["record_b"],
+                row.get("confidence"),
+                row.get("method"),
+                json.dumps(row.get("evidence") or {}, default=str),
+                row.get("decided_by"),
+                row.get("human_override"),
+                now,
+            ]
+            for row in rows
+        ]
+        client.insert(
+            "merge_engine_merge_audit",
+            data,
+            column_names=[
+                "run_id",
+                "entity_type",
+                "cluster_id",
+                "record_a",
+                "record_b",
+                "confidence",
+                "method",
+                "evidence",
+                "decided_by",
+                "human_override",
+                "created_at",
+            ],
+        )
+        return len(rows)
+
     # ── Data Loading ──────────────────────────────────────────────────
 
     def _clickhouse_type_from_string(self, data_type: str) -> str:

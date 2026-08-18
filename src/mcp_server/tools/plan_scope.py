@@ -40,6 +40,8 @@ import logging
 from typing import Any
 
 from src.mcp_server.tools.join_graph import (
+    _DEFAULT_MAX_HOPS,
+    _DEFAULT_SAMPLE_SIZE,
     JoinEdge,
     JoinGraph,
     JoinPath,
@@ -149,6 +151,7 @@ def _entry_from_hops(
         "hops": path.hop_count,
         "confidence": path.confidence,
         "enabled": not path.high_fanout,
+        "high_fanout": path.high_fanout,
         "link_entity": subject_entity,
         "columns": [wire[-1]["to_column"]] if wire else [],
         "reason": reason or f"linked to the subject via a {path.hop_count}-hop join ({chain})",
@@ -160,6 +163,8 @@ def _heuristic_plan(
     target_entities: list[str],
     schemas: dict[str, Any],
     graph: JoinGraph,
+    *,
+    max_hops: int = _DEFAULT_MAX_HOPS,
 ) -> dict[str, list[dict[str, Any]]]:
     """A best-effort plan when the LLM is unavailable.
 
@@ -218,7 +223,7 @@ def _heuristic_plan(
             for subj_node in subject_nodes.get(origin_id, []):
                 if subj_node == target_node:
                     continue
-                for candidate in find_paths(graph, subj_node, target_node):
+                for candidate in find_paths(graph, subj_node, target_node, max_hops=max_hops):
                     if best is None or candidate.rank_key() < best.rank_key():
                         best = candidate
             if best is not None and best.hop_count >= 1:
@@ -544,23 +549,43 @@ async def plan_scope_impl(
     schemas: dict[str, Any],
     llm_config: dict[str, Any] | None = None,
     origins: list[dict[str, Any]] | None = None,
+    scope_config: dict[str, Any] | None = None,
+    cached_graph: JoinGraph | None = None,
 ) -> dict[str, Any]:
     """Build the per-table extraction plan for a scoped ("Nova") merge.
 
-    Returns ``{"scope_plan": {...}, "notes": str, "llm_used": bool}`` where
-    ``scope_plan`` is ``{subject, subject_entity, entities: {entity: [filters]}}``.
-    The heuristic floor is always computed; the LLM plan replaces it when
-    available and well-formed, else the floor stands.
+    Returns ``{"scope_plan": {...}, "notes": str, "llm_used": bool,
+    "join_graph": JoinGraph}`` where ``scope_plan`` is ``{subject,
+    subject_entity, entities: {entity: [filters]}}``. The heuristic floor is
+    always computed; the LLM plan replaces it when available and
+    well-formed, else the floor stands.
 
     ``origins`` supplies connection details for the join graph's
     inclusion-dependency verification tier (Phase 4.1); when absent (or an
     origin is missing from it), name-heuristic candidates for that origin
     still enter the graph, tagged ``confidence="heuristic"`` rather than lost.
+
+    ``scope_config`` carries ``max_hops``/``join_graph_sample_size`` from
+    config.yaml's ``scope:`` section (state's ``scope_config`` key); absent
+    or missing keys fall back to join_graph.py's own module defaults.
+
+    ``cached_graph``: a previously built ``JoinGraph`` (state's
+    ``join_graph`` key, or a saved profile's) to reuse instead of rebuilding
+    — value-overlap sampling is one connector round-trip per candidate edge,
+    so skipping it on a node retry or a profile-matched repeat run is a real
+    saving, not a cosmetic one. Only reused when the schema/origin/
+    sample-size inputs it would otherwise be rebuilt from are unchanged;
+    callers that can't easily prove that should just leave this ``None``.
     """
     subject = str(subject or "").strip()
     subject_entity = str(subject_entity or "company").strip() or "company"
-    graph = await build_join_graph(schemas, origins or [])
-    floor = _heuristic_plan(subject_entity, target_entities, schemas, graph)
+    scope_config = scope_config or {}
+    max_hops = int(scope_config.get("max_hops") or _DEFAULT_MAX_HOPS)
+    sample_size = int(scope_config.get("join_graph_sample_size") or _DEFAULT_SAMPLE_SIZE)
+    graph = cached_graph
+    if graph is None:
+        graph = await build_join_graph(schemas, origins or [], sample_size=sample_size)
+    floor = _heuristic_plan(subject_entity, target_entities, schemas, graph, max_hops=max_hops)
 
     def _wrap(entities: dict[str, list[dict[str, Any]]], notes: str, llm_used: bool):
         return {
@@ -571,6 +596,7 @@ async def plan_scope_impl(
             },
             "notes": notes,
             "llm_used": llm_used,
+            "join_graph": graph,
         }
 
     def _ensure_complete_origin_coverage(entities: dict[str, list[dict[str, Any]]]):
@@ -586,12 +612,57 @@ async def plan_scope_impl(
                             "mode": "not_found",
                             "columns": [],
                             "reason": f"No matching or linked {entity} table found in {oid}",
+                            "est_rows": None,
                         }
                     )
+
+    from src.mcp_server.tools.extract_data import extract_data_impl
+
+    by_origin_id = {str(o.get("id")): o for o in (origins or [])}
+    _est_rows_cache: dict[tuple[str, str], int | None] = {}
+
+    async def _annotate_est_rows(entities: dict[str, list[dict[str, Any]]]) -> None:
+        """Best-effort, coarse row-count annotation for the scope gate.
+
+        Deliberately NOT a count of rows the join filter would actually
+        match — the subject's own ids aren't known yet at scope-plan time
+        (extract_data, which resolves them, runs after this stage), so a
+        true filtered estimate would mean pre-running the join walk before
+        a human has even seen the plan. Reports each table's own
+        unfiltered row count instead (`extract_data_impl` already computes
+        this as `total_count` on any query, so this adds no new connector
+        capability) — still enough to distinguish "a 40-row lookup table"
+        from "a 43M-row event table" without pretending false precision.
+        `None` (never a guess) when no origin connection is available or
+        the probe fails; the gate renders that as "—".
+        """
+        for entries in entities.values():
+            for entry in entries:
+                if entry.get("mode") == "not_found":
+                    continue
+                oid, table = str(entry.get("origin_id")), str(entry.get("table"))
+                key = (oid, table)
+                if key not in _est_rows_cache:
+                    origin = by_origin_id.get(oid)
+                    count: int | None = None
+                    if origin and origin.get("connection"):
+                        try:
+                            result = await extract_data_impl(
+                                origin_config=origin,
+                                table_name=table,
+                                columns=["*"],
+                                batch_size=1,
+                            )
+                            count = result.get("total_count")
+                        except Exception as exc:
+                            logger.debug("est_rows probe failed for %s.%s: %s", oid, table, exc)
+                    _est_rows_cache[key] = count
+                entry["est_rows"] = _est_rows_cache[key]
 
     llm_enabled = bool(llm_config) and llm_config.get("scope_planning_enabled", True)
     if not subject or not target_entities or not schemas or not llm_enabled:
         _ensure_complete_origin_coverage(floor)
+        await _annotate_est_rows(floor)
         return _wrap(floor, "", False)
 
     from src.llm import PROMPT_TEMPLATES, LLMClient
@@ -602,6 +673,7 @@ async def plan_scope_impl(
     if not system_prompt or not human_template:
         logger.warning("scope_planning prompts missing; using heuristic scope plan")
         _ensure_complete_origin_coverage(floor)
+        await _annotate_est_rows(floor)
         return _wrap(floor, "", False)
 
     catalog = build_table_catalog(schemas, include_foreign_keys=True)
@@ -624,15 +696,34 @@ async def plan_scope_impl(
         if not any(clean.values()):
             logger.warning("LLM scope plan had no usable entries; falling back to heuristic.")
             _ensure_complete_origin_coverage(floor)
+            await _annotate_est_rows(floor)
             return _wrap(floor, notes or "LLM plan empty; used heuristic.", False)
 
-        # Fill in entities the model skipped from the floor, so a partial answer
-        # never silently drops an entity the user asked to scope.
+        # Merge in floor entries the model didn't cover, per (origin, table)
+        # -- not per entity. The scope-planning prompt deliberately tells the
+        # model it MAY omit a deep join-path table and let "the automatic
+        # path search find and verify the full chain" (see
+        # scope_planning.system.txt), which is exactly what the floor exists
+        # to backfill. An entity-level merge (`if not clean.get(entity)`)
+        # discarded the ENTIRE floor for an entity the moment the model
+        # returned even one entry for it — so a model answer of
+        # `person: [origin_1.Person]` silently dropped the floor's
+        # `origin_2.PersonContact` deep-chain entry outright. Live-observed
+        # on the Airbus run: seven "does not correspond to a real
+        # relationship" drops and three zero-row entities behind a passing
+        # scorecard. Merging per (origin_id, table) means a partial LLM
+        # answer for an entity can only ADD tables beyond what the model
+        # named, never remove one the floor already covers.
         for entity, entries in floor.items():
-            if not clean.get(entity) and entries:
-                clean[entity] = entries
+            have = {(e.get("origin_id"), e.get("table")) for e in clean.get(entity, [])}
+            for e in entries:
+                key = (e.get("origin_id"), e.get("table"))
+                if key not in have:
+                    clean.setdefault(entity, []).append(e)
+                    have.add(key)
 
         _ensure_complete_origin_coverage(clean)
+        await _annotate_est_rows(clean)
         logger.info(
             "Scope plan for %r: %s",
             subject,
@@ -646,6 +737,7 @@ async def plan_scope_impl(
             exc,
         )
         _ensure_complete_origin_coverage(floor)
+        await _annotate_est_rows(floor)
         return _wrap(floor, f"LLM scope planning unavailable: {exc}", False)
 
 

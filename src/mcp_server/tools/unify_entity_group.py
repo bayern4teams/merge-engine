@@ -61,6 +61,7 @@ _KNOWN_RULES = {
     "numeric_max",
     "numeric_min",
     "non_null",
+    "measured_reliability",
 }
 
 # Smart built-in defaults by field-name pattern (fnmatch glob syntax),
@@ -70,19 +71,30 @@ _KNOWN_RULES = {
 # like revenue, and why an identity field like `name`/`website` could be
 # decided by which value happened to be a longer string rather than by which
 # origin is actually more authoritative.
+#
+# "measured_reliability" (Phase A6) sits between "priority" and "non_null"
+# for identity fields: an explicit, user-set priority still wins outright
+# when configured, but "priority" is a no-op tiebreak when every origin
+# defaults to 0 (the common case — most users never set it), and used to
+# fall straight through to "non_null" (also a no-op here) then "recency"
+# (only useful if a timestamp field exists). measured_reliability replaces
+# that blind fallthrough with each origin's OBSERVED completeness for this
+# specific field, so "which origin actually has better data for `name`" is
+# answered from the data rather than left to whichever record happened to
+# come first.
 _DEFAULT_FIELD_POLICIES: list[tuple[str, tuple[str, ...]]] = [
     ("revenue", ("numeric_max", "priority")),
     ("employee_count", ("numeric_max", "priority")),
     ("*_count", ("numeric_max", "priority")),
     ("*_amount", ("numeric_max", "priority")),
     ("total_*", ("numeric_max", "priority")),
-    ("name", ("priority", "non_null", "recency")),
-    ("legal_name", ("priority", "non_null", "recency")),
-    ("website", ("priority", "non_null", "recency")),
-    ("domain", ("priority", "non_null", "recency")),
-    ("ticker", ("priority", "non_null", "recency")),
-    ("founded_date", ("priority", "non_null", "recency")),
-    ("*_id", ("priority", "non_null", "recency")),
+    ("name", ("priority", "measured_reliability", "non_null", "recency")),
+    ("legal_name", ("priority", "measured_reliability", "non_null", "recency")),
+    ("website", ("priority", "measured_reliability", "non_null", "recency")),
+    ("domain", ("priority", "measured_reliability", "non_null", "recency")),
+    ("ticker", ("priority", "measured_reliability", "non_null", "recency")),
+    ("founded_date", ("priority", "measured_reliability", "non_null", "recency")),
+    ("*_id", ("priority", "measured_reliability", "non_null", "recency")),
     ("description", ("completeness", "priority")),
     ("summary", ("completeness", "priority")),
     ("*_notes", ("completeness", "priority")),
@@ -151,11 +163,24 @@ def _apply_rule(
     candidates: list[tuple[dict[str, Any], str]],
     field: str,
     origin_priorities: dict[str, int],
+    field_reliability: dict[str, dict[str, float]] | None = None,
 ) -> list[tuple[dict[str, Any], str]]:
     """Narrow the candidates by one rule. Never returns an empty list."""
     if rule == "priority":
         best = max(origin_priorities.get(o, 0) for _, o in candidates)
         return [(r, o) for r, o in candidates if origin_priorities.get(o, 0) == best]
+    if rule == "measured_reliability":
+        # Phase A6: each origin's OBSERVED completeness for this field
+        # (survivorship.measure_field_reliability), not an asserted number.
+        # A score of 0.0 means "no measured data for this origin/field" --
+        # never treated as a real signal, so an unmeasured run (no
+        # field_reliability supplied at all) degrades to a no-op exactly
+        # like "priority" does when every origin defaults to 0.
+        scores = field_reliability or {}
+        best_score = max(scores.get(o, {}).get(field, 0.0) for _, o in candidates)
+        if best_score <= 0.0:
+            return candidates
+        return [(r, o) for r, o in candidates if scores.get(o, {}).get(field, 0.0) == best_score]
     if rule == "completeness":
         best = max(_completeness(r.get(field)) for r, _ in candidates)
         return [(r, o) for r, o in candidates if _completeness(r.get(field)) == best]
@@ -208,6 +233,7 @@ def _resolve_conflict(
     field: str,
     origin_priorities: dict[str, int],
     conflict_policy: dict[str, Any] | None = None,
+    field_reliability: dict[str, dict[str, float]] | None = None,
 ) -> tuple[tuple[dict[str, Any], str], str]:
     """Pick the winning (record, origin) by this field's configured rules.
 
@@ -217,7 +243,7 @@ def _resolve_conflict(
     """
     candidates = list(non_null_values)
     for rule in resolve_policy(field, conflict_policy):
-        candidates = _apply_rule(rule, candidates, field, origin_priorities)
+        candidates = _apply_rule(rule, candidates, field, origin_priorities, field_reliability)
         if len(candidates) == 1:
             return candidates[0], rule
 
@@ -229,6 +255,7 @@ async def unify_entity_group_impl(
     records: list[dict[str, Any]],
     origins: list[dict[str, Any]] | None = None,
     conflict_policy: dict[str, Any] | None = None,
+    field_reliability: dict[str, dict[str, float]] | None = None,
 ) -> dict[str, Any]:
     """Unify a cluster of matching records into one record.
 
@@ -241,6 +268,13 @@ async def unify_entity_group_impl(
     origins : list[dict], optional
         Origin configs (each with "id" and "priority") used to resolve
         conflicts in favor of the higher-priority origin.
+    field_reliability : dict, optional
+        ``{origin_id: {field: completeness_ratio}}`` (Phase A6,
+        ``survivorship.measure_field_reliability``), measured once per
+        entity type across ALL of that origin's records — a single
+        cluster is usually too small a sample to measure anything
+        meaningful from on its own. Feeds the ``"measured_reliability"``
+        conflict rule.
 
     Returns
     -------
@@ -321,21 +355,28 @@ async def unify_entity_group_impl(
                 # Conflict! priority → completeness → recency tiebreaks
                 fields_with_conflicts += 1
                 best, rule = _resolve_conflict(
-                    non_null_values, field, origin_priorities, conflict_policy
+                    non_null_values, field, origin_priorities, conflict_policy, field_reliability
                 )
                 unified[field] = best[0][field]
 
-                conflicts.append(
-                    {
-                        "field": field,
-                        "values": [
-                            {"origin": orig, "value": rec[field]} for rec, orig in non_null_values
-                        ],
-                        "selected_origin": best[1],
-                        "selected_value": best[0][field],
-                        "winning_rule": rule,
+                conflict_record: dict[str, Any] = {
+                    "field": field,
+                    "values": [
+                        {"origin": orig, "value": rec[field]} for rec, orig in non_null_values
+                    ],
+                    "selected_origin": best[1],
+                    "selected_value": best[0][field],
+                    "winning_rule": rule,
+                }
+                if rule == "measured_reliability" and field_reliability:
+                    # The actual evidence, not just the rule name -- what
+                    # makes "name taken from origin_1" into "name taken
+                    # from origin_1 (98% complete vs 41%)" at the gate.
+                    conflict_record["reliability_scores"] = {
+                        orig: field_reliability.get(orig, {}).get(field, 0.0)
+                        for _, orig in non_null_values
                     }
-                )
+                conflicts.append(conflict_record)
                 logger.debug(
                     "Field '%s': CONFLICT! %d values, selected %s from %s (rule=%s)",
                     field,

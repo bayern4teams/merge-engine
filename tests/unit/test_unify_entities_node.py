@@ -104,6 +104,29 @@ class TestUnifyEntityGroups:
         assert not result["errors"]
 
     @pytest.mark.asyncio
+    async def test_measured_field_reliability_is_computed_and_passed_through(
+        self, base_state: dict[str, Any], mock_unify_impl: AsyncMock
+    ) -> None:
+        """Phase A6: field_reliability must be measured ONCE from the
+        entity's full record set (not per-cluster -- a single cluster is
+        usually too small a sample) and threaded into
+        unify_entity_group_impl as a real kwarg, not silently dropped."""
+        with patch(
+            "src.orchestrator.nodes.unify_entities.unify_entity_group_impl",
+            mock_unify_impl,
+        ):
+            await unify_entity_groups(base_state)
+
+        call_kwargs = mock_unify_impl.call_args.kwargs
+        assert "field_reliability" in call_kwargs
+        reliability = call_kwargs["field_reliability"]
+        # Both origins in base_state's fixture are 100% complete for both
+        # fields they carry -- computed from the SAME extracted_data the
+        # node already had, not re-fetched or faked.
+        assert reliability["postgres_main"]["name"] == 1.0
+        assert reliability["mongo_analytics"]["email"] == 1.0
+
+    @pytest.mark.asyncio
     async def test_unify_entity_groups_sets_real_source_ids(
         self, base_state: dict[str, Any], mock_unify_impl: AsyncMock
     ) -> None:

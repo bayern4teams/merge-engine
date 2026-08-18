@@ -223,9 +223,40 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
     # real extraction failure (tracked in failed_tables). Invisible before
     # this beyond an unexplained "extracted_total: 0".
     scoped_out_entities: list[str] = []
-    # PK values of the matched subject rows, per origin — the set each dependent
-    # table's link column is filtered against.
-    subject_ids: dict[str, list[Any]] = {}
+    # Every dependent entity's link_path needs a specific column captured off
+    # the subject table's own rows to seed the first hop -- NOT necessarily
+    # its primary key. A fan-out (parent->child) first hop's `from_column`
+    # (e.g. Company.id -> Experience.companyID) happens to equal the
+    # subject's own PK, but a narrow (child->parent) first hop (e.g.
+    # Company.locationID -> Location.locationID) needs the subject's
+    # `locationID` VALUES, not its `id` values. Collecting only the PK and
+    # always treating it as "the" seed set filtered the wrong id space on
+    # any narrow first hop -- proven live: a real Company.locationID ->
+    # Location.locationID edge produced `Location.locationID IN <Company
+    # PKs>`, near-certainly zero rows, reported as a clean scoping outcome
+    # rather than the bug it was.
+    required_seed_columns: dict[str, set[str]] = {}
+    if scope_active:
+        for _ent, _entries in scope_entities.items():
+            if _ent == subject_entity_name:
+                continue
+            for _entry in _entries or []:
+                if not isinstance(_entry, dict) or _entry.get("enabled") is False:
+                    continue
+                if _entry.get("mode") != "link_path":
+                    continue
+                _path = _entry.get("path") or []
+                if not _path:
+                    continue
+                _col = (_path[0] or {}).get("from_column")
+                _oid = _entry.get("origin_id")
+                if _col and _oid:
+                    required_seed_columns.setdefault(str(_oid), set()).add(_col)
+    # origin_id -> column -> values collected from the subject table's own
+    # rows -- the value set each dependent table's first hop is filtered
+    # against. Always includes the PK (harmless superset; some callers still
+    # only need it) plus whatever required_seed_columns named.
+    subject_seed_values: dict[str, dict[str, list[Any]]] = {}
     if scope_active:
         logger.info(
             "Scoped extraction for subject %r (entity %r).",
@@ -339,7 +370,6 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                         )
                         entity_had_scope_skip = True
                         continue
-                    ids_here = subject_ids.get(origin_id, [])
                     if entry.get("mode") == "link_path":
                         # N-hop: "people who work at Nova", or deeper chains
                         # like "Nova's people's contact records" -- walk every
@@ -358,6 +388,36 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                             )
                             entity_had_scope_skip = True
                             continue
+                        # The value set to seed the walk with is whatever the
+                        # FIRST hop's from_column actually is -- the subject's
+                        # own PK only when that hop happens to fan out from
+                        # it (e.g. Company.id -> Experience.companyID). A
+                        # narrow first hop (e.g. Company.locationID ->
+                        # Location.locationID) needs Company's locationID
+                        # values instead; required_seed_columns (built above,
+                        # before extraction) guarantees this column was
+                        # captured off the subject table's own rows.
+                        seed_col = (path[0] or {}).get("from_column")
+                        origin_seeds = subject_seed_values.get(origin_id, {})
+                        if not seed_col or seed_col not in origin_seeds:
+                            # The join graph verified this hop when the scope
+                            # plan was built, so this column should always
+                            # have been captured above; landing here means
+                            # the subject table's own extraction never ran
+                            # for this origin (or found no candidate table at
+                            # all) -- fail loudly rather than silently
+                            # falling through to a wrong-column filter.
+                            msg = (
+                                f"Scoped merge: link_path's seed column "
+                                f"{seed_col!r} for {origin_id}:{table_name} was "
+                                "never captured from the subject table's own "
+                                "extraction — cannot resolve this join path."
+                            )
+                            logger.error(msg)
+                            errors.append(msg)
+                            entity_had_scope_skip = True
+                            continue
+                        ids_here = origin_seeds[seed_col]
                         if not ids_here:
                             logger.info(
                                 "Scoped merge: no subject ids in %s — %s skipped.",
@@ -379,7 +439,7 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                             continue
                         scope_filter = {path[-1]["to_column"]: {"op": "in", "value": final_keys}}
                     else:
-                        scope_filter, skip = _scope_filter_for(entry, subject, ids_here)
+                        scope_filter, skip = _scope_filter_for(entry, subject, [])
                         if skip:
                             logger.info(
                                 "Scoped merge: no subject ids for %r in origin %s "
@@ -537,16 +597,26 @@ async def extract_data(state: dict[str, Any]) -> dict[str, Any]:
                             # node ever holds in memory.
                             rows_written += spool.append(entity_type, batch_rows)
 
-                            # Phase 1: collect the subject entity's ids so the
-                            # dependent tables can be restricted to them. Uses the
-                            # primary key, which is what a foreign key references.
-                            if scope_active and entity_type == subject_entity_name and pk_columns:
-                                pk = pk_columns[0]
-                                bucket = subject_ids.setdefault(origin_id, [])
-                                for row in batch_rows:
-                                    val = row.get(pk)
-                                    if val is not None:
-                                        bucket.append(val)
+                            # Phase 1: collect the subject entity's own column
+                            # values so the dependent tables can be restricted
+                            # to them. Captures every column any dependent's
+                            # link_path first hop actually needs
+                            # (required_seed_columns), not just the primary
+                            # key -- a narrow first hop's from_column is some
+                            # other column on the subject table, not its PK.
+                            if scope_active and entity_type == subject_entity_name:
+                                seed_cols = set(required_seed_columns.get(origin_id, ()))
+                                if pk_columns:
+                                    seed_cols.add(pk_columns[0])
+                                if seed_cols:
+                                    per_col = subject_seed_values.setdefault(origin_id, {})
+                                    for col in seed_cols:
+                                        per_col.setdefault(col, [])
+                                    for row in batch_rows:
+                                        for col in seed_cols:
+                                            val = row.get(col)
+                                            if val is not None:
+                                                per_col[col].append(val)
 
                             # Rows are ordered ascending by the watermark column
                             # when one is pushed down, so the last row of the

@@ -11,6 +11,7 @@ import json
 import logging
 from typing import Any
 
+from src.mcp_server.tools.survivorship import measure_field_reliability
 from src.mcp_server.tools.unify_entity_group import unify_entity_group_impl
 from src.orchestrator.spool import (
     clusters_for,
@@ -67,6 +68,14 @@ async def unify_entity_groups(state: dict[str, Any]) -> dict[str, Any]:
             len(all_records),
         )
 
+        # Phase A6: each origin's measured field completeness for this
+        # entity type, computed once here rather than per-cluster -- a
+        # single cluster (often 1-3 records) is too small a sample to
+        # measure anything meaningful from; the full entity-level record
+        # set is. Feeds unify_entity_group_impl's "measured_reliability"
+        # conflict rule.
+        field_reliability = measure_field_reliability(all_records)
+
         # Build record lookup by origin_id
         record_lookup: dict[str, dict] = {}
         for rec in all_records:
@@ -106,6 +115,7 @@ async def unify_entity_groups(state: dict[str, Any]) -> dict[str, Any]:
                     records=cluster_records,
                     origins=origins,
                     conflict_policy=conflict_policy,
+                    field_reliability=field_reliability,
                 )
                 logger.debug("    unify_entity_group_impl result keys: %s", list(result.keys()))
 

@@ -328,7 +328,9 @@ async def human_review_matches(state: dict[str, Any]) -> dict[str, Any]:
         # user's splits, and write the result back as a handle.
         run_id = str(state.get("run_id") or "unknown")
         materialised = {e: clusters_for(state, e) for e in state.get("entity_clusters", {})}
-        rebuilt, stats = apply_cluster_decisions(materialised, human_feedback["cluster_decisions"])
+        rebuilt, stats, split_pairs = apply_cluster_decisions(
+            materialised, human_feedback["cluster_decisions"]
+        )
         rebuilt = {
             e: store_clusters(
                 run_id,
@@ -342,6 +344,12 @@ async def human_review_matches(state: dict[str, Any]) -> dict[str, Any]:
         logger.info("Cluster decisions applied: %s", stats)
         return {
             "entity_clusters": rebuilt,
+            # Phase 7.2: preserved so a human split is queryable in
+            # merge_engine_merge_audit like any other merge decision, instead
+            # of the evidence vanishing with the torn-apart cluster. Just the
+            # NEW pairs -- human_split_pairs' operator.add reducer appends
+            # this to the existing accumulated list.
+            "human_split_pairs": split_pairs,
         }
 
     logger.debug("Interrupting at human_review_matches checkpoint")

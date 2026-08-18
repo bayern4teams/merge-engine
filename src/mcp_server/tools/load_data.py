@@ -18,7 +18,7 @@ from typing import Any
 from src.mcp_server.connectors.clickhouse_destination import ClickHouseDestinationConnector
 from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
 from src.orchestrator.utils.retry import PermanentError
-from src.utils.id_utils import generate_uuid
+from src.utils.id_utils import deterministic_uuid, generate_uuid
 
 logger = logging.getLogger("merge-engine.tools.load_data")
 
@@ -79,6 +79,7 @@ async def load_data_impl(
     connector: Any = None,
     foreign_keys: dict[str, str] | None = None,
     cluster_lookup_by_table: dict[str, dict[str, str]] | None = None,
+    other_primary_tables: set[str] | None = None,
 ) -> dict[str, Any]:
     """Upsert unified records into the PostgreSQL destination.
 
@@ -98,6 +99,17 @@ async def load_data_impl(
         passes one when several entities must land in a single transaction —
         creating a fresh connector per entity would give each its own
         connection, and therefore its own independent commit.
+    other_primary_tables : set[str], optional
+        Destination tables every OTHER entity in this run already loads as
+        its own independently-matched, deduplicated primary record. A
+        cross-table mapping into one of these is never a genuine child
+        write, even when the child table's own FK happens to point back at
+        this entity (e.g. `company.industry_id -> industry.id`, discovered
+        while processing the `industry` entity): company is not an
+        anonymous child row per industry record, it is a full entity
+        loaded on its own with its own real name/website/etc, and blindly
+        appending a near-empty row for every unrelated industry record
+        would duplicate it with ghost rows carrying no identifying data.
 
     Returns
     -------
@@ -189,7 +201,7 @@ async def load_data_impl(
         )
         logger.debug("load_batch completed: %s", result)
 
-        child_results: dict[str, dict[str, int]] = {}
+        child_results: dict[str, dict[str, Any]] = {}
         if mapping_by_table:
             child_results = _write_child_rows(
                 connector=connector,
@@ -197,6 +209,7 @@ async def load_data_impl(
                 source_records=records,
                 transformed_parent_records=transformed_records,
                 mapping_by_table=mapping_by_table,
+                other_primary_tables=other_primary_tables,
             )
 
         return {
@@ -241,7 +254,8 @@ def _write_child_rows(
     source_records: list[dict[str, Any]],
     transformed_parent_records: list[dict[str, Any]],
     mapping_by_table: dict[str, dict[str, Any]],
-) -> dict[str, dict[str, int]]:
+    other_primary_tables: set[str] | None = None,
+) -> dict[str, dict[str, Any]]:
     """Write one child row per parent record into each cross-mapped sibling table.
 
     Only the direction the destination family graph can actually resolve
@@ -255,12 +269,27 @@ def _write_child_rows(
     genuinely different feature this does not attempt — it is logged and
     the field is dropped rather than guessed at.
 
+    That "child's own FK points back at primary" test is necessary but,
+    live-caught (BP-A2, a real two-origin ClickHouse run), not sufficient:
+    ``company.industry_id -> industry.id`` and ``company.location_id ->
+    location.id`` both pass it just as cleanly as the genuine
+    ``finance.company_id -> company.id`` case, but "company" there is not
+    an anonymous many-side child of industry/location — it is itself a
+    full, independently-matched, independently-deduplicated primary entity
+    elsewhere in the SAME run. Treating it as a child manufactured one
+    company row per unrelated industry/location record, each carrying
+    nothing but that one FK value and a timestamp — 23 nameless ghost
+    company rows out of 25 in the live run that caught this. Any
+    ``child_table`` that is itself one of ``other_primary_tables`` is
+    therefore never eligible, regardless of what its own FKs point at.
+
     Reuses the existing atomic-load transaction via the caller-supplied
     ``connector`` (never opens its own), so a partial fan-out cannot commit:
     an exception here propagates out of ``load_data_impl`` exactly like a
     parent-table load failure does, rolling the whole load back.
     """
-    results: dict[str, dict[str, int]] = {}
+    results: dict[str, dict[str, Any]] = {}
+    other_primary_tables = other_primary_tables or set()
     if not hasattr(connector, "get_foreign_keys") or not hasattr(connector, "load_batch"):
         logger.warning(
             "Destination connector %s cannot resolve foreign keys for "
@@ -274,6 +303,20 @@ def _write_child_rows(
     for child_table, field_mapping in mapping_by_table.items():
         if not field_mapping:
             continue
+        if child_table in other_primary_tables:
+            dropped = sorted(field_mapping)
+            logger.warning(
+                "Cross-table mapping into '%s' targets a table this run "
+                "already loads as its own independent entity, not an "
+                "anonymous child of '%s' -- skipping %d field(s) rather "
+                "than manufacturing a duplicate/ghost row: %s",
+                child_table,
+                primary_table,
+                len(dropped),
+                ", ".join(dropped),
+            )
+            results[child_table] = {"inserted": 0, "updated": 0, "dropped_fields": dropped}
+            continue
         try:
             fks = connector.get_foreign_keys(child_table)
         except Exception as exc:
@@ -281,16 +324,63 @@ def _write_child_rows(
             continue
         fk_column = next((col for col, ref in fks.items() if ref == primary_table), None)
         if fk_column is None:
+            dropped = sorted(field_mapping)
             logger.warning(
                 "Cross-table mapping into '%s' has no foreign key back to "
                 "'%s' — skipping %d field(s), which will not reach the "
                 "destination: %s",
                 child_table,
                 primary_table,
-                len(field_mapping),
-                ", ".join(sorted(field_mapping)),
+                len(dropped),
+                ", ".join(dropped),
             )
+            # Surfaced beyond the log: this used to be invisible to anyone
+            # reviewing the run — a mapping approved at the gate, silently
+            # unwritable at load time, with no trace anywhere a human would
+            # look. results[child_table] is normally only set for tables
+            # that were actually written; a dropped_fields-only entry marks
+            # "we tried, and couldn't" distinctly from "nothing to write".
+            results[child_table] = {"inserted": 0, "updated": 0, "dropped_fields": dropped}
             continue
+
+        # A field cross-mapped onto one of child_table's OTHER foreign-key
+        # columns (e.g. a Location record's `companyID` landing on
+        # `experience.company_id` purely because the names normalize the
+        # same way) is not safe to write literally: that slot expects an
+        # already-resolved DESTINATION row id, but the mapped value is the
+        # raw, unresolved ORIGIN id -- writing it either violates the FK
+        # constraint outright (the common case, since origin and
+        # destination ids live in different id spaces) or, worse, silently
+        # links to the wrong row on the rare id collision. Only fk_column
+        # itself (set below from the already-resolved parent_id, never
+        # from field_mapping) is a legitimate FK write here.
+        fk_target_cols = set(fks) - {fk_column}
+        suspect = {
+            field: info
+            for field, info in field_mapping.items()
+            if info and info.get("dest_column") in fk_target_cols
+        }
+        dropped_fk_fields: list[str] = []
+        if suspect:
+            dropped_fk_fields = sorted(suspect)
+            logger.warning(
+                "Cross-table mapping into '%s' targets foreign-key column(s) "
+                "%s with a raw, unresolved origin value rather than a "
+                "matched destination id -- skipping %d field(s), which will "
+                "not reach the destination: %s",
+                child_table,
+                sorted({info.get("dest_column") for info in suspect.values()}),
+                len(dropped_fk_fields),
+                ", ".join(dropped_fk_fields),
+            )
+            field_mapping = {k: v for k, v in field_mapping.items() if k not in suspect}
+            if not field_mapping:
+                results[child_table] = {
+                    "inserted": 0,
+                    "updated": 0,
+                    "dropped_fields": dropped_fk_fields,
+                }
+                continue
 
         dest_cols = {info.get("dest_column") for info in field_mapping.values() if info}
         child_records: list[dict[str, Any]] = []
@@ -304,11 +394,26 @@ def _write_child_rows(
             # child row for it is noise with nothing in it to show.
             if all(child_rec.get(c) is None for c in dest_cols):
                 continue
-            child_rec["id"] = generate_uuid()
+            # Deterministic, not generate_uuid(): a random id here meant
+            # upsert_key="id" could never match an existing row on a
+            # repeat run of the same merge (the parent is idempotent via
+            # its own _cluster_id-derived id -- _transform_records:441 --
+            # but a fresh random id every run made every child-table
+            # re-load an INSERT, duplicating child rows on each re-run).
+            # This loop pairs each parent record with exactly one child
+            # row per child_table (the zip above), so (parent_id,
+            # child_table) alone is already a unique, stable key.
+            child_rec["id"] = deterministic_uuid("child_row", parent_id, child_table)
             child_rec[fk_column] = parent_id
             child_records.append(child_rec)
 
         if not child_records:
+            if dropped_fk_fields:
+                results[child_table] = {
+                    "inserted": 0,
+                    "updated": 0,
+                    "dropped_fields": dropped_fk_fields,
+                }
             continue
 
         if hasattr(connector, "ensure_table"):
@@ -323,6 +428,8 @@ def _write_child_rows(
             "inserted": result.get("inserted", 0),
             "updated": result.get("updated", 0),
         }
+        if dropped_fk_fields:
+            results[child_table]["dropped_fields"] = dropped_fk_fields
         logger.info(
             "Loaded %d child row(s) into '%s' via foreign key '%s' (cross-table mapping from '%s')",
             len(child_records),

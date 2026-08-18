@@ -131,6 +131,66 @@ class TestPersistMergeAudit:
         assert row["decided_by"] == "human"
         assert row["human_override"] == "merge"
 
+    def test_human_split_pairs_are_persisted_with_split_override(self) -> None:
+        """Phase 7.2's other half: a human split's evidence (captured by
+        cluster_edits.apply_cluster_decisions before the cluster was torn
+        apart, carried in state["human_split_pairs"]) must reach the audit
+        table too, not just a human's "keep" confirmation."""
+        connector = MagicMock()
+        connector.save_merge_audit = MagicMock(return_value=1)
+        state = {
+            "run_id": "run-123",
+            "entity_clusters": {"person": []},
+            "human_split_pairs": [
+                {
+                    "entity_type": "person",
+                    "cluster_id": "cid-1",
+                    "record_a": "o1:t:a",
+                    "record_b": "o2:t:b",
+                    "confidence": 0.8,
+                    "method": "fellegi_sunter",
+                    "matched_fields": [{"field": "name", "weight": 3.1}],
+                    "mismatched_fields": [{"field": "email", "weight": -2.0}],
+                    "reason": None,
+                }
+            ],
+        }
+        _persist_merge_audit(state, {"type": "postgresql"}, {"person"}, connector=connector)
+
+        connector.save_merge_audit.assert_called_once()
+        call = connector.save_merge_audit.call_args
+        assert call.args[0] == "person"
+        assert call.args[1] == "run-123"
+        row = call.args[2][0]
+        assert row["cluster_id"] == "cid-1"
+        assert row["record_a"] == "o1:t:a"
+        assert row["record_b"] == "o2:t:b"
+        assert row["decided_by"] == "human"
+        assert row["human_override"] == "split"
+        assert row["evidence"]["matched_fields"] == [{"field": "name", "weight": 3.1}]
+        assert row["evidence"]["mismatched_fields"] == [{"field": "email", "weight": -2.0}]
+
+    def test_human_split_pairs_for_a_different_entity_type_are_ignored(self) -> None:
+        """A split pair for an entity this load run never touched must not
+        be written -- entity_types mirrors the per-cluster loop's own
+        filter."""
+        connector = MagicMock()
+        connector.save_merge_audit = MagicMock(return_value=0)
+        state = {
+            "run_id": "run-123",
+            "entity_clusters": {},
+            "human_split_pairs": [
+                {
+                    "entity_type": "company",
+                    "cluster_id": "cid-1",
+                    "record_a": "a",
+                    "record_b": "b",
+                }
+            ],
+        }
+        _persist_merge_audit(state, {"type": "postgresql"}, {"person"}, connector=connector)
+        connector.save_merge_audit.assert_not_called()
+
     def test_singleton_cluster_with_no_match_evidence_writes_nothing(self) -> None:
         connector = MagicMock()
         connector.save_merge_audit = MagicMock(return_value=0)

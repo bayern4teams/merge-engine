@@ -85,6 +85,94 @@ class TestResolveEntities:
         assert not result["errors"]
 
     @pytest.mark.asyncio
+    async def test_comparison_budget_truncation_surfaces_as_quality_report(
+        self, base_state: dict[str, Any]
+    ) -> None:
+        """Regression: uncompared_pairs was only ever a log line and a JSON
+        field no UI rendered. It must now reach quality_report/
+        has_quality_failure -- the same keys the final-approval gate
+        already surfaces red flags from."""
+        with patch(
+            "src.orchestrator.nodes.resolve_entities.resolve_entities_impl",
+            AsyncMock(
+                return_value={
+                    "clusters": [],
+                    "total_records": 3,
+                    "auto_matched": 0,
+                    "llm_scored": 0,
+                    "uncompared_pairs": 2_404_984,
+                }
+            ),
+        ):
+            result = await resolve_entities(base_state)
+
+        report = result["quality_report"]
+        assert report["severity"] == "warn"
+        company_checks = report["entities"]["company"]["checks"]
+        assert any(c["check"] == "comparison_budget" for c in company_checks)
+        assert (
+            "2404984" in company_checks[-1]["details"]
+            or "2,404,984" in company_checks[-1]["details"]
+        )
+        # A "warn"-only finding must not force has_quality_failure -- only a
+        # hard "fail" (validate_data's own domain) does that.
+        assert result["has_quality_failure"] is False
+
+    @pytest.mark.asyncio
+    async def test_comparison_budget_truncation_never_clobbers_validate_data(
+        self, base_state: dict[str, Any]
+    ) -> None:
+        """validate_data runs immediately before this node and already set
+        quality_report/has_quality_failure -- neither has a LangGraph
+        reducer, so a plain return here would silently discard
+        validate_data's own findings for an unrelated entity."""
+        base_state["quality_report"] = {
+            "status": "completed",
+            "severity": "fail",
+            "entities": {"person": {"severity": "fail", "row_count": 0, "checks": []}},
+        }
+        base_state["has_quality_failure"] = True
+
+        with patch(
+            "src.orchestrator.nodes.resolve_entities.resolve_entities_impl",
+            AsyncMock(
+                return_value={
+                    "clusters": [],
+                    "total_records": 3,
+                    "auto_matched": 0,
+                    "llm_scored": 0,
+                    "uncompared_pairs": 500,
+                }
+            ),
+        ):
+            result = await resolve_entities(base_state)
+
+        report = result["quality_report"]
+        # person's pre-existing "fail" from validate_data must survive...
+        assert report["entities"]["person"]["severity"] == "fail"
+        # ...alongside company's new budget-truncation finding...
+        assert report["entities"]["company"]["severity"] == "warn"
+        # ...and the overall severity stays "fail" (the harder finding wins).
+        assert report["severity"] == "fail"
+        assert result["has_quality_failure"] is True
+
+    @pytest.mark.asyncio
+    async def test_no_truncation_leaves_quality_report_untouched(
+        self, base_state: dict[str, Any], mock_resolve_impl: AsyncMock
+    ) -> None:
+        """No uncompared pairs -> this node must not even mention
+        quality_report in its return dict, so LangGraph's per-key state
+        update leaves whatever validate_data already set completely alone."""
+        with patch(
+            "src.orchestrator.nodes.resolve_entities.resolve_entities_impl",
+            mock_resolve_impl,
+        ):
+            result = await resolve_entities(base_state)
+
+        assert "quality_report" not in result
+        assert "has_quality_failure" not in result
+
+    @pytest.mark.asyncio
     async def test_resolve_entities_no_records_skipped(self, base_state: dict[str, Any]) -> None:
         """Test that entities with no records are skipped."""
         base_state["extracted_data"]["person"] = []

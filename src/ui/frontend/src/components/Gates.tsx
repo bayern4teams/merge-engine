@@ -624,6 +624,7 @@ function ScopeBody({
               <th>Origin</th>
               <th>Table</th>
               <th>Scoping Mode / Link Path</th>
+              <th>Est. Rows</th>
               <th>Status</th>
             </tr>
           </thead>
@@ -638,7 +639,12 @@ function ScopeBody({
                 how = `linked via ${p.via_from_column || ""} -> ${p.via_table || ""} -> ${p.via_to_column || ""}`;
               } else if (p.mode === "link_path") {
                 const hops = p.path || [];
-                const fanoutTag = p.high_fanout || p.hops >= 3 ? " ⚠️ high fan-out" : "";
+                // high_fanout now comes straight from the backend
+                // (JoinPath.high_fanout, computed from >= 2 compounding
+                // one-to-many hops) -- no more guessing from hop count,
+                // which mislabeled a 3-hop all-narrow path and missed a
+                // genuine 2-hop/2-fanout one.
+                const fanoutTag = p.high_fanout ? " ⚠️ high fan-out" : "";
                 how = hops.length
                   ? `${hops.length}-hop join (${p.confidence || "?"}${fanoutTag}): ` +
                     hops
@@ -674,7 +680,7 @@ function ScopeBody({
                           />
                         )}
                       </td>
-                      <td colSpan={5} className="mono" style={{ fontWeight: 700 }}>
+                      <td colSpan={6} className="mono" style={{ fontWeight: 700 }}>
                         {p.entity_type}
                       </td>
                     </tr>
@@ -693,6 +699,9 @@ function ScopeBody({
                     <td className="mono muted">{p.origin_id}</td>
                     <td className="mono">{p.table}</td>
                     <td className="mono">{how}</td>
+                    <td className="mono muted">
+                      {typeof p.est_rows === "number" ? p.est_rows.toLocaleString() : "—"}
+                    </td>
                     <td>
                       {isNotFound ? (
                         <span
@@ -869,8 +878,8 @@ function MappingBody({
               <th>Origin</th>
               <th>Source Table</th>
               <th>Source Field</th>
-              <th>Action</th>
-              <th>Dest Column</th>
+              <th className="mapping-action-col">Action</th>
+              <th className="mapping-dest-col">Dest Column</th>
               <th>Reason</th>
               <th>Conf.</th>
             </tr>
@@ -922,7 +931,7 @@ function MappingBody({
                       </span>
                     )}
                   </td>
-                  <td>
+                  <td className="mapping-action-col">
                     <select
                       className="mini-input"
                       value={r.action}
@@ -935,7 +944,7 @@ function MappingBody({
                       ))}
                     </select>
                   </td>
-                  <td>
+                  <td className="mapping-dest-col">
                     <input
                       className="mini-input"
                       value={r.dest_column}

@@ -98,7 +98,42 @@ class TestWriteChildRows:
         assert len(child_records) == 1
         assert child_records[0]["amount"] == 4_200_000
         assert child_records[0]["company_id"] == "dest-id-1"
-        assert child_records[0]["id"]  # a fresh id was generated for the child row
+        assert child_records[0]["id"]  # a stable id was derived for the child row
+
+    def test_child_row_id_is_deterministic_across_runs(self) -> None:
+        """Regression: child_rec["id"] used to be generate_uuid() -- random
+        every call -- so upsert_key="id" could never match an existing row
+        on a repeat run of the same merge, duplicating child rows each
+        time. Two independent calls with the same parent id and child table
+        must derive the SAME child row id."""
+        source_records = [{"totalInvestment": 4_200_000, "_cluster_id": "c1"}]
+        transformed_parents = [{"id": "dest-id-1"}]
+        mapping_by_table = {
+            "finance": {"totalInvestment": {"dest_column": "amount", "dest_table": "finance"}}
+        }
+
+        connector_1 = _connector_with_fk("finance", "company_id", "company")
+        _write_child_rows(
+            connector=connector_1,
+            primary_table="company",
+            source_records=source_records,
+            transformed_parent_records=transformed_parents,
+            mapping_by_table=mapping_by_table,
+        )
+        id_run_1 = connector_1.load_batch.call_args.kwargs["records"][0]["id"]
+
+        # A second, independent "run" over the identical input.
+        connector_2 = _connector_with_fk("finance", "company_id", "company")
+        _write_child_rows(
+            connector=connector_2,
+            primary_table="company",
+            source_records=source_records,
+            transformed_parent_records=transformed_parents,
+            mapping_by_table=mapping_by_table,
+        )
+        id_run_2 = connector_2.load_batch.call_args.kwargs["records"][0]["id"]
+
+        assert id_run_1 == id_run_2
 
     def test_all_none_child_record_is_not_written(self) -> None:
         connector = _connector_with_fk("finance", "company_id", "company")
@@ -138,7 +173,95 @@ class TestWriteChildRows:
             mapping_by_table=mapping_by_table,
         )
 
-        assert results == {}
+        # Regression: the dropped field(s) used to be reported nowhere but
+        # a log line -- a mapping approved at the gate, silently unwritable
+        # at load time, invisible to anyone reviewing the run. Now recorded
+        # so the caller (load_data_node) can surface it in the final report.
+        assert results == {
+            "finance": {"inserted": 0, "updated": 0, "dropped_fields": ["totalInvestment"]}
+        }
+        connector.load_batch.assert_not_called()
+
+    def test_a_field_mapped_onto_a_different_fk_column_is_dropped_not_written(self) -> None:
+        """Live-caught (BP-A2, a real ClickHouse origin + PostgreSQL
+        destination run): map_fields_impl scored `Location.companyID` onto
+        `experience.company_id` at 0.85 purely because both names
+        normalize to "companyid" -- `experience` was the only sibling
+        table with a column by that name, since `location` itself has no
+        `company_id` column (the real FK runs the other way: company ->
+        location). But `experience.company_id` is itself a foreign key
+        expecting an already-resolved DESTINATION company row id, and the
+        mapped value is `Location.companyID` -- a raw, unresolved ORIGIN
+        id string. Writing it literally either violates the FK constraint
+        (the live failure: "Key (company_id)=(1106943476) is not present
+        in table company") or, worse, silently mislinks to an unrelated
+        row on an id collision. Only the reverse-FK column this function
+        itself resolves (location_id, set from parent_id below) may hold a
+        destination id; any OTHER FK-shaped column in the mapping must be
+        dropped, exactly like the no-reverse-FK-at-all case above."""
+        connector = MagicMock()
+        connector.get_foreign_keys = MagicMock(
+            return_value={"location_id": "location", "company_id": "company"}
+        )
+        connector.ensure_table = MagicMock(return_value=False)
+        connector.load_batch = MagicMock(return_value={"inserted": 1, "updated": 0})
+        source_records = [{"companyID": "1106943476", "street": "1 Main St"}]
+        transformed_parents = [{"id": "dest-location-1"}]
+        mapping_by_table = {
+            "experience": {
+                "companyID": {"dest_column": "company_id", "dest_table": "experience"},
+                "street": {"dest_column": "address_note", "dest_table": "experience"},
+            }
+        }
+
+        results = _write_child_rows(
+            connector=connector,
+            primary_table="location",
+            source_records=source_records,
+            transformed_parent_records=transformed_parents,
+            mapping_by_table=mapping_by_table,
+        )
+
+        assert results == {
+            "experience": {"inserted": 1, "updated": 0, "dropped_fields": ["companyID"]}
+        }
+        child_records = connector.load_batch.call_args.kwargs["records"]
+        assert len(child_records) == 1
+        # The legitimate reverse FK (this location's own destination id).
+        assert child_records[0]["location_id"] == "dest-location-1"
+        # The other, wrongly-targeted FK column must be absent, not a raw
+        # origin id that would violate the constraint or mislink.
+        assert "company_id" not in child_records[0]
+        assert child_records[0]["address_note"] == "1 Main St"
+
+    def test_a_child_table_whose_only_mapped_field_is_a_foreign_key_writes_nothing(self) -> None:
+        """The narrower case of the same bug: every field cross-mapped onto
+        the child table turns out to target a foreign-key column, so
+        nothing legitimate is left to write at all."""
+        connector = MagicMock()
+        connector.get_foreign_keys = MagicMock(
+            return_value={"location_id": "location", "company_id": "company"}
+        )
+        connector.load_batch = MagicMock(return_value={"inserted": 1, "updated": 0})
+        source_records = [{"companyID": "1106943476"}]
+        transformed_parents = [{"id": "dest-location-1"}]
+        mapping_by_table = {
+            "experience": {
+                "companyID": {"dest_column": "company_id", "dest_table": "experience"},
+            }
+        }
+
+        results = _write_child_rows(
+            connector=connector,
+            primary_table="location",
+            source_records=source_records,
+            transformed_parent_records=transformed_parents,
+            mapping_by_table=mapping_by_table,
+        )
+
+        assert results == {
+            "experience": {"inserted": 0, "updated": 0, "dropped_fields": ["companyID"]}
+        }
         connector.load_batch.assert_not_called()
 
     def test_connector_without_get_foreign_keys_skips_everything(self) -> None:
@@ -206,6 +329,67 @@ class TestWriteChildRows:
 
         assert set(results) == {"finance", "contact_email"}
         assert connector.load_batch.call_count == 2
+
+    def test_a_child_table_that_is_itself_another_primary_entity_is_not_written(self) -> None:
+        """Live-caught (BP-A2, a real two-origin run): `company.industry_id
+        -> industry.id` and `company.location_id -> location.id` both pass
+        the "child's own FK points back at primary" test just as cleanly
+        as the genuine `finance.company_id -> company.id` case -- but
+        "company" here is not an anonymous many-side child of
+        industry/location, it is itself a full, independently-matched
+        primary entity elsewhere in the SAME run. Without this guard, the
+        live run wrote 23 nameless ghost company rows (just an industry_id
+        or location_id and a created_at, no name) alongside the 2 real
+        ones. other_primary_tables carries the set of destination tables
+        every OTHER entity in this run already owns as its own primary
+        table; a cross-mapped write into one of those must be dropped
+        exactly like the no-reverse-FK case, never attempted."""
+        connector = MagicMock()
+        connector.get_foreign_keys = MagicMock(return_value={"industry_id": "industry"})
+        connector.load_batch = MagicMock(return_value={"inserted": 1, "updated": 0})
+        source_records = [{"created_at": "2026-01-01"}]
+        transformed_parents = [{"id": "dest-industry-1"}]
+        mapping_by_table = {
+            "company": {"created_at": {"dest_column": "created_at", "dest_table": "company"}}
+        }
+
+        results = _write_child_rows(
+            connector=connector,
+            primary_table="industry",
+            source_records=source_records,
+            transformed_parent_records=transformed_parents,
+            mapping_by_table=mapping_by_table,
+            other_primary_tables={"company", "location", "person"},
+        )
+
+        assert results == {
+            "company": {"inserted": 0, "updated": 0, "dropped_fields": ["created_at"]}
+        }
+        connector.load_batch.assert_not_called()
+
+    def test_a_genuine_child_table_that_is_not_a_primary_entity_still_writes(self) -> None:
+        """The guard must be scoped to other_primary_tables, not blanket-
+        disable cross-table writes: finance is a real child of company
+        (Phase 6.3's original case) and is not itself a primary entity
+        this run loads, so it must still write normally."""
+        connector = _connector_with_fk("finance", "company_id", "company")
+        source_records = [{"totalInvestment": 100}]
+        transformed_parents = [{"id": "dest-company-1"}]
+        mapping_by_table = {
+            "finance": {"totalInvestment": {"dest_column": "amount", "dest_table": "finance"}}
+        }
+
+        results = _write_child_rows(
+            connector=connector,
+            primary_table="company",
+            source_records=source_records,
+            transformed_parent_records=transformed_parents,
+            mapping_by_table=mapping_by_table,
+            other_primary_tables={"location", "person"},
+        )
+
+        assert results == {"finance": {"inserted": 1, "updated": 0}}
+        connector.load_batch.assert_called_once()
 
 
 @pytest.mark.asyncio

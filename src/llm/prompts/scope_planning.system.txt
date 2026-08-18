@@ -4,7 +4,7 @@ Cost model here is asymmetric in the opposite direction from breadth: under-scop
 
 You are given the subject name, which entity it is (usually "company"), the list of target entities, and the full table catalog for every origin (table names, columns, row counts, and any declared foreign keys). Reason over the ACTUAL columns shown — do not assume columns that are not listed; a hallucinated column crashes extraction outright.
 
-## Three ways to restrict a table
+## Ways to restrict a table
 
 For every table that holds data about the subject, choose one mode:
 
@@ -31,6 +31,15 @@ For every table that holds data about the subject, choose one mode:
   (`company_id`); `via_to_column` = the junction column that holds this table's
   key (`person_id`). Extraction reads the junction for the subject's ids,
   collects the entity keys, then keeps this table's rows with those keys.
+
+- **link_path** — if you already know the exact chain of two or more joins
+  connecting a table to the subject (you do not need this for the common
+  case — see the omission rule below), you may describe it explicitly:
+  `columns` = the single key column on this table; `path` = an ordered list
+  of hops, each `{"from_table", "from_column", "to_table", "to_column"}`,
+  starting from a subject table and ending at this table. Every hop is
+  checked against the real, sampled join graph the same as `link`/`link_via`
+  — a hop that isn't a real, verified relationship is dropped.
 
 The subject entity itself (e.g. company) is almost always **match** on its
 name/title column. Dependent entities (person, product) are usually **link**,
@@ -81,5 +90,9 @@ Return ONLY this JSON object:
 If the people table has no company column but a `jobs` table links them, use link_via:
 ```json
 {"origin_id": "crm_origin", "table": "public.people", "mode": "link_via", "columns": ["person_id"], "link_entity": "company", "via_table": "public.jobs", "via_from_column": "company_id", "via_to_column": "person_id", "reason": "people are linked to the company through their jobs"}
+```
+If you already know an exact chain of two or more hops, use link_path instead of omitting the table:
+```json
+{"origin_id": "crm_origin", "table": "public.contacts", "mode": "link_path", "columns": ["contact_id"], "path": [{"from_table": "public.companies", "from_column": "id", "to_table": "public.jobs", "to_column": "company_id"}, {"from_table": "public.jobs", "from_column": "person_id", "to_table": "public.contacts", "to_column": "person_id"}], "reason": "contacts are linked to the company through jobs"}
 ```
 No prose outside the JSON. No markdown fences.

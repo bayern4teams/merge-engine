@@ -34,6 +34,26 @@ logger = logging.getLogger("merge-engine.profiles")
 
 PROFILE_DIR = Path("config") / "profiles"
 
+# Stages a profile can cache a fingerprint + artefact for (Phase A4), each
+# mapped to the MergeState key(s) it bundles. A stage is usually more than
+# one node output that only makes sense reused together (e.g. parse_request's
+# entity_tables ships with the target_entities list derived from its own
+# keys, and the merge_scope the same LLM call decided) -- `capture_from_state`
+# below packages exactly these keys into one artefact, and each caching node
+# unpacks the same bundle back into its own return dict on a cache hit.
+CACHEABLE_STAGES: dict[str, tuple[str, ...]] = {
+    "entity_tables": (  # parse_request's deterministic groups + LLM names
+        "entity_tables",
+        "target_entities",
+        "explicit_target_entities",
+        "merge_scope",
+        "table_selection_notes",
+    ),
+    "dependency_tree": ("dependency_tree", "column_dependencies"),  # analyze_dependencies
+    "join_graph": ("join_graph",),  # plan_scope's build_join_graph result
+    "field_mappings": ("field_mappings",),  # map_fields
+}
+
 # Anything that isn't a safe filename character becomes "-", so a profile name
 # can never escape PROFILE_DIR or collide with a path separator.
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -122,9 +142,19 @@ def build_profile(
         "user_request": user_request,
         "origins": strip_secrets(origins or []),
         "destination": strip_secrets(destination or {}),
+        "fingerprints": {},
+        "artefacts": {},
     }
     for key in PINNED_KEYS:
         profile[key] = state.get(key) or {}
+    if state.get("schemas"):
+        # Phase A4: the identity a repeat run auto-matches this profile by.
+        # Computed here (and refreshed in capture_from_state) rather than
+        # left for the caller, so it's never accidentally stale relative to
+        # the origins/destination this same profile pins.
+        profile["overall_fingerprint"] = overall_fingerprint(
+            origins or [], state["schemas"], destination or {}
+        )
     return profile
 
 
@@ -147,6 +177,11 @@ def save_profile(profile: dict[str, Any]) -> Path:
 
     path.write_text(json.dumps(profile, indent=2, default=str), encoding="utf-8")
     logger.info("saved run profile %s -> %s", profile.get("name"), path)
+
+    fp = profile.get("overall_fingerprint")
+    if fp:
+        register_in_index(fp, profile.get("name") or profile.get("id") or "")
+
     return path
 
 
@@ -171,6 +206,9 @@ def list_profiles() -> list[dict[str, Any]]:
         return []
     out: list[dict[str, Any]] = []
     for path in PROFILE_DIR.glob("*.json"):
+        if path == _index_path():
+            # The fingerprint->profile-name lookup file, not a user profile.
+            continue
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -250,6 +288,15 @@ def apply_profile(state: dict[str, Any], profile: dict[str, Any]) -> dict[str, A
         if value and not state.get(key):
             state[key] = value
     state["profile_name"] = profile.get("name", "")
+    # Phase A4: fingerprints/artefacts ride along separately from
+    # PINNED_KEYS above -- a node consults state["_profile_cache"] via
+    # stage_cache_get(...) to decide whether ITS OWN cached artefact still
+    # matches the current run's input shape, rather than trusting a pin
+    # blindly the way PINNED_KEYS is applied above.
+    state["_profile_cache"] = {
+        "fingerprints": dict(profile.get("fingerprints") or {}),
+        "artefacts": dict(profile.get("artefacts") or {}),
+    }
     return state
 
 
@@ -264,4 +311,126 @@ def capture_from_state(profile: dict[str, Any], state: dict[str, Any]) -> dict[s
         value = state.get(key)
         if value:
             profile[key] = value
+    if state.get("schemas"):
+        profile["overall_fingerprint"] = overall_fingerprint(
+            state.get("origins") or [], state["schemas"], state.get("destination") or {}
+        )
+    # Cacheable per-stage artefacts (Phase A4) -- distinct from PINNED_KEYS
+    # above: these are keyed by the exact input fingerprint they were
+    # computed from, not just "the last value seen", so a later run against
+    # a DIFFERENT source shape correctly misses the cache instead of
+    # reusing a stale answer. Each stage bundles every state key
+    # CACHEABLE_STAGES lists for it (e.g. entity_tables ships with the
+    # target_entities/merge_scope the same LLM call decided), so a cache hit
+    # can restore the node's FULL return dict, not just one field of it.
+    for stage, keys in CACHEABLE_STAGES.items():
+        fp = state.get(f"_{stage}_fingerprint")
+        if not fp:
+            continue
+        bundle = {k: state[k] for k in keys if state.get(k)}
+        if bundle:
+            stage_cache_set(profile, stage, fp, bundle)
+    return profile
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Stage-level fingerprint caching (Phase A4).
+#
+# PINNED_KEYS/apply_profile above are the *decisions* a profile pins — they
+# say nothing about whether those decisions still apply to the run in front
+# of you. This section adds that check: every cacheable stage's output is
+# stored alongside the exact fingerprint of the inputs it was computed
+# from, so a lookup can tell "reuse this" from "the source shape moved,
+# recompute" without re-running the stage to find out.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def overall_fingerprint(
+    origins: list[dict[str, Any]], schemas: dict[str, Any], destination: dict[str, Any]
+) -> str:
+    """The identity a profile is looked up by: this (origins, destination)
+    coordinate + shape combination, nothing else. Two runs against the same
+    databases with the same discovered schema resolve to the same profile
+    automatically — no name to remember or select from a dropdown.
+    """
+    from src.orchestrator.fingerprint import destination_fingerprint, origins_fingerprint
+
+    return origins_fingerprint(origins, schemas) + ":" + destination_fingerprint(destination)
+
+
+def _index_path() -> Path:
+    # Computed fresh on every call (never a frozen module-level constant)
+    # so tests that monkeypatch PROFILE_DIR to an isolated tmp_path -- the
+    # existing convention this whole module already follows via
+    # profile_path() -- correctly redirect the index too, not just
+    # individual profile files.
+    return PROFILE_DIR / "_index.json"
+
+
+def _load_index() -> dict[str, str]:
+    path = _index_path()
+    if not path.exists():
+        return {}
+    try:
+        loaded: dict[str, str] = json.loads(path.read_text(encoding="utf-8"))
+        return loaded
+    except (OSError, json.JSONDecodeError):
+        logger.warning("profile fingerprint index is unreadable; starting fresh")
+        return {}
+
+
+def _save_index(index: dict[str, str]) -> None:
+    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    _index_path().write_text(json.dumps(index, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def register_in_index(fingerprint: str, profile_name: str) -> None:
+    """Record that ``fingerprint`` resolves to ``profile_name``.
+
+    Last-write-wins by design: if two profiles were ever saved for the same
+    (origins, destination) shape, the most recently saved one is what
+    auto-detection offers — a stale duplicate is not preferred over a fresh
+    one just because it was created first.
+    """
+    index = _load_index()
+    index[fingerprint] = profile_name
+    _save_index(index)
+
+
+def find_profile_by_fingerprint(fingerprint: str) -> dict[str, Any] | None:
+    """The saved profile matching this exact (origins, destination) shape,
+    or None on no match — including when the indexed profile's own file has
+    since been deleted, which is treated as "no match" rather than an
+    error."""
+    name = _load_index().get(fingerprint)
+    if not name:
+        return None
+    return load_profile(name)
+
+
+def stage_cache_get(profile: dict[str, Any] | None, stage: str, current_fingerprint: str) -> Any:
+    """The cached artefact for ``stage``, or None if there isn't one or it
+    was computed from different inputs than ``current_fingerprint``
+    describes.
+
+    Returning None on ANY mismatch (missing profile, missing stage,
+    fingerprint drift) is deliberate: every caller's fallback is "compute it
+    normally", so the failure mode of this function being wrong is always
+    "did more work than strictly necessary", never "used a stale answer".
+    """
+    if not profile:
+        return None
+    fingerprints = profile.get("fingerprints") or {}
+    if fingerprints.get(stage) != current_fingerprint:
+        return None
+    return (profile.get("artefacts") or {}).get(stage)
+
+
+def stage_cache_set(
+    profile: dict[str, Any], stage: str, fingerprint: str, artefact: Any
+) -> dict[str, Any]:
+    """Record ``stage``'s output and the fingerprint it was computed from,
+    in place, returning the same profile dict for chaining."""
+    profile.setdefault("fingerprints", {})[stage] = fingerprint
+    profile.setdefault("artefacts", {})[stage] = artefact
     return profile

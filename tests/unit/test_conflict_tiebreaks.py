@@ -152,6 +152,71 @@ class TestConflictTiebreaks:
         assert result["unified_record"]["note"] == "first"
 
     @pytest.mark.asyncio
+    async def test_measured_reliability_breaks_a_priority_tie_for_identity_fields(self):
+        """Phase A6: when no one has set an explicit per-origin priority
+        (both default to 0, the common case), `name` used to fall straight
+        through "priority" (no-op) -> "non_null" (no-op) -> "recency" (no
+        timestamp here, so also a no-op) -> "first_seen" -- an arbitrary
+        pick with no connection to which origin's data is actually better.
+        measured_reliability breaks the tie using each origin's OBSERVED
+        completeness for this field instead."""
+        result = await unify_entity_group_impl(
+            "c9",
+            [
+                {"_origin_id": "sparse", "name": "Acme"},
+                {"_origin_id": "rich", "name": "Acme Corporation"},
+            ],
+            origins=[{"id": "sparse", "priority": 0}, {"id": "rich", "priority": 0}],
+            field_reliability={
+                "sparse": {"name": 0.2},
+                "rich": {"name": 0.95},
+            },
+        )
+        conflict = _conflict_for(result, "name")
+        assert conflict["winning_rule"] == "measured_reliability"
+        assert conflict["selected_origin"] == "rich"
+        assert result["unified_record"]["name"] == "Acme Corporation"
+        assert conflict["reliability_scores"] == {"sparse": 0.2, "rich": 0.95}
+
+    @pytest.mark.asyncio
+    async def test_explicit_priority_still_wins_over_measured_reliability(self):
+        """A manually-set priority is still authoritative when configured
+        -- measured_reliability only fills the gap when priority is a
+        genuine tie (the common unconfigured case)."""
+        result = await unify_entity_group_impl(
+            "c10",
+            [
+                {"_origin_id": "sparse", "name": "Acme"},
+                {"_origin_id": "rich", "name": "Acme Corporation"},
+            ],
+            origins=[{"id": "sparse", "priority": 5}, {"id": "rich", "priority": 1}],
+            field_reliability={
+                "sparse": {"name": 0.2},
+                "rich": {"name": 0.95},
+            },
+        )
+        conflict = _conflict_for(result, "name")
+        assert conflict["winning_rule"] == "priority"
+        assert conflict["selected_origin"] == "sparse"
+
+    @pytest.mark.asyncio
+    async def test_missing_field_reliability_degrades_to_the_old_behaviour(self):
+        """No field_reliability supplied at all (e.g. a caller that hasn't
+        been updated, or a single-cluster call with nothing measured) must
+        behave exactly as before this feature existed."""
+        result = await unify_entity_group_impl(
+            "c11",
+            [
+                {"_origin_id": "a", "name": "Acme"},
+                {"_origin_id": "b", "name": "Acme Corporation"},
+            ],
+            origins=[{"id": "a", "priority": 0}, {"id": "b", "priority": 0}],
+        )
+        conflict = _conflict_for(result, "name")
+        assert conflict["winning_rule"] == "first_seen"
+        assert "reliability_scores" not in conflict
+
+    @pytest.mark.asyncio
     async def test_no_shadowing_regression_multiple_conflicts(self):
         """Multiple conflicting fields must not crash on the (formerly
         shadowed) origins variable."""

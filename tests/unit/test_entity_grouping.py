@@ -10,6 +10,8 @@ problem, and this module is what makes that structurally impossible.
 
 from __future__ import annotations
 
+import pytest
+
 from src.orchestrator.utils.entity_grouping import group_tables_into_entities
 
 
@@ -74,6 +76,59 @@ class TestFullCoverage:
         entity_tables, unassigned = group_tables_into_entities({})
         assert entity_tables == {}
         assert unassigned == []
+
+
+class TestFullNameIdentity:
+    """Regression test for the bug that made parse_request crash on any
+    PostgreSQL origin: a prior version of this function stored `full_name`
+    (e.g. "public.Company") in the `table` key instead of the bare name,
+    which matched nothing any downstream consumer (or parse_request's own
+    orphan post-condition) was keyed on. `table` must stay the bare name;
+    `full_name` is carried alongside for consumers that need it."""
+
+    def test_table_key_is_bare_name_full_name_carried_separately(self):
+        schemas = {
+            "origin_1": {
+                "origin_type": "postgres",
+                "tables": [
+                    {
+                        "name": "Company",
+                        "full_name": "public.Company",
+                        "columns": [{"name": "id"}],
+                    },
+                    {
+                        "name": "Person",
+                        "full_name": "public.Person",
+                        "columns": [{"name": "id"}],
+                    },
+                ],
+            }
+        }
+        entity_tables, unassigned = group_tables_into_entities(schemas)
+        assert unassigned == []
+
+        all_entries = [e for tables in entity_tables.values() for e in tables]
+        assigned_pairs = {(e["origin_id"], e["table"]) for e in all_entries}
+        assert assigned_pairs == {("origin_1", "Company"), ("origin_1", "Person")}
+
+        full_names_by_table = {e["table"]: e["full_name"] for e in all_entries}
+        assert full_names_by_table == {
+            "Company": "public.Company",
+            "Person": "public.Person",
+        }
+
+    def test_unnamed_table_is_recorded_as_unassigned_and_raises(self):
+        schemas = {
+            "origin_1": {
+                "origin_type": "postgres",
+                "tables": [
+                    {"name": "Company", "full_name": "public.Company", "columns": []},
+                    {"name": "", "full_name": "public.<unnamed>", "columns": []},
+                ],
+            }
+        }
+        with pytest.raises(ValueError, match="Orphaned tables"):
+            group_tables_into_entities(schemas)
 
 
 class TestCrossOriginMerging:

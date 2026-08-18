@@ -13,6 +13,7 @@ from typing import Any
 
 from src.llm import PROMPT_TEMPLATES, LLMClient
 from src.orchestrator.utils.dependency_sort import topological_sort
+from src.orchestrator.utils.entity_aliases import ALIAS_GROUPS, concept_matches
 from src.orchestrator.utils.retry_hints import apply_retry_hint
 
 logger = logging.getLogger("merge-engine.orchestrator.analyze_dependencies")
@@ -311,14 +312,35 @@ def _build_coverage_matrix(
                     # now does this matching for real (with an
                     # inclusion-dependency check against sampled data, not
                     # just a name guess) — this coverage matrix stays a
-                    # lighter-weight, unverified heuristic feeding only the
-                    # LLM's prompt context in this node.
+                    # lighter-weight, unverified heuristic. NOT prompt-only,
+                    # despite an earlier version of this comment claiming
+                    # so: the node below appends every one of these entries
+                    # straight into state["column_dependencies"], which
+                    # pre-populates the deps gate's UI. A wrong parent_column
+                    # here isn't just a worse LLM hint, it's a dependency-gate
+                    # row that fails validation and vanishes silently the
+                    # moment a human approves without editing it.
                     if col_low in (
                         f"{ot_low}id",
                         f"{ot_low}_id",
                         f"{ot_low}key",
                         f"{ot_low}_key",
                     ):
+                        parent_column = _resolve_parent_key_column(table_dict[other_table])
+                        if parent_column is None:
+                            # Every table this heuristic has ever guessed
+                            # "id" for regardless of the table's real
+                            # columns -- live-observed as 14 rejected
+                            # dependency-gate entries in one run, all
+                            # "unknown parent column: <origin>.<table>.id",
+                            # because the destination's own tables are
+                            # rarely literally named "id" (companyID,
+                            # entityId, etc.). Omit the entry entirely
+                            # rather than fabricate a column this table
+                            # doesn't have -- an honest gap in the coverage
+                            # matrix, not a guaranteed-wrong dependency-gate
+                            # row a human has to notice and delete.
+                            continue
                         parent_entity = find_entity_for_table(other_table)
                         entries.append(
                             {
@@ -327,13 +349,31 @@ def _build_coverage_matrix(
                                 "child_column": col,
                                 "parent_origin": origin_id,
                                 "parent_table": other_table,
-                                "parent_column": "id",
+                                "parent_column": parent_column,
                                 "child_entity": child_entity or table_name,
                                 "parent_entity": parent_entity or other_table,
                                 "rationale": f"Column match heuristic: {table_name}.{col} references {other_table}",
                             }
                         )
     return entries
+
+
+def _resolve_parent_key_column(table_info: dict[str, Any]) -> str | None:
+    """The real column on ``table_info`` the heuristic ID-column match
+    (above) should point a guessed FK at, instead of always assuming "id".
+
+    Prefers the table's own declared primary key (what a real FK would
+    reference); falls back to a literal "id" column only if one actually
+    exists; returns None — never a guess — otherwise.
+    """
+    pk = table_info.get("primary_key") or []
+    if isinstance(pk, list) and pk and pk[0]:
+        return str(pk[0])
+    for col in table_info.get("columns", []) or []:
+        name = col.get("name")
+        if name and str(name).lower() == "id":
+            return str(name)
+    return None
 
 
 def _format_coverage_matrix(matrix_entries: list[dict[str, str]]) -> str:
@@ -426,39 +466,30 @@ def _build_schema_summary(schemas: dict[str, Any], target_entities: list[str]) -
     return "\n".join(lines)
 
 
-# Common irregular plurals not caught by the +s/+es heuristic below.
-_IRREGULAR_PLURALS = {"person": "people"}
-
-# Relational and domain junction terms relevant for dependency analysis
-_RELATIONAL_TERMS = {
-    "experience",
-    "relation",
-    "employment",
-    "job",
-    "address",
-    "location",
-    "industry",
-    "history",
-}
-
-
 def _table_may_be_related(table_name: str, target_entities: list[str]) -> bool:
-    """Check if a table name matches a target entity or relational concept."""
+    """Check if a table name matches a target entity or a recognised
+    business concept.
+
+    Broad recall for the dependency-analysis LLM prompt's schema summary,
+    not a precision gate — Phase 3.1's entity_grouping.py is what actually
+    guarantees every discovered table reaches an entity; this only decides
+    what schema context the LLM sees when reasoning about relationships.
+
+    Delegates to entity_aliases' ALIAS_GROUPS / concept_matches — the
+    single vocabulary source the pipeline is meant to consult — instead of
+    maintaining a second, hand-curated relational-terms list and a third
+    copy of the irregular-plurals table (this module used to carry its
+    own `_RELATIONAL_TERMS` and `_IRREGULAR_PLURALS`, alongside
+    entity_grouping.py's and join_graph.py's own copies of the latter).
+    """
     if not target_entities:
         return True
     name_lower = table_name.lower().replace("_", " ").replace("-", " ")
-    if any(term in name_lower for term in _RELATIONAL_TERMS):
-        return True
     for entity in target_entities:
-        if entity in name_lower:
+        if concept_matches(entity, table_name):
             return True
-        entity_plural = entity + "s"
-        entity_possessive = entity + "'" + "s"
-        if entity_plural in name_lower or entity_possessive in name_lower:
-            return True
-        if entity + "es" in name_lower:
-            return True
-        irregular = _IRREGULAR_PLURALS.get(entity)
-        if irregular and irregular in name_lower:
-            return True
-    return False
+    # A table naming ANY recognised business concept -- not just one of
+    # today's target entities -- is plausibly a junction/relational table
+    # worth showing the LLM (e.g. a "person" merge still benefits from
+    # seeing an "employment_history" table's foreign keys).
+    return any(term in name_lower for group in ALIAS_GROUPS for term in group)

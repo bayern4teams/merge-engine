@@ -172,11 +172,18 @@ class TestHeuristicCrossTableMatching:
             "totalInvestment": {"type": "float", "sample_values": [2.0]},
         }
         result = await map_fields_impl("company", unified, dest, family_schemas=family)
-        # "amount" exact-matches company.amount; totalInvestment's only
-        # strong candidate is finance.amount (taken by neither field, so it
-        # heuristically matches directly, not via coalesce) -- either way
-        # neither entry should claim is_coalesced against the other since
-        # they land on different tables.
+        # Asserted BEFORE the loop below on purpose: a regression that drops
+        # every field to unmapped_fields would leave field_mapping empty,
+        # and a loop body that never executes still "passes" a bare
+        # `for ... : assert` -- the vacuous-test failure mode this guards
+        # against. "amount" exact-matches company.amount; totalInvestment
+        # does NOT clear the heuristic tiers' confidence threshold against
+        # finance.amount without an LLM call (none is configured here), so
+        # it correctly falls to unmapped_fields rather than a guessed match.
+        assert set(result["field_mapping"]) == {"amount"}
+        assert result["unmapped_fields"][0]["field"] == "totalInvestment"
+        # Neither mapped entry should claim is_coalesced against another
+        # table's same-named column just because the bare name matches.
         for entry in result["field_mapping"].values():
             assert entry["is_coalesced"] is False
 

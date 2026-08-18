@@ -19,11 +19,16 @@ from src.orchestrator.profiles import (
     capture_from_state,
     connection_key,
     delete_profile,
+    find_profile_by_fingerprint,
     list_profiles,
     load_profile,
+    overall_fingerprint,
+    register_in_index,
     restore_credentials,
     safe_name,
     save_profile,
+    stage_cache_get,
+    stage_cache_set,
     strip_secrets,
 )
 
@@ -227,6 +232,16 @@ class TestProfileStore:
         (profiles_mod.PROFILE_DIR / "broken.json").write_text("{not json")
         assert [p["name"] for p in list_profiles()] == ["good"]
 
+    def test_the_fingerprint_index_file_is_not_listed_as_a_profile(self) -> None:
+        # register_in_index() (Phase A4) writes _index.json into the same
+        # directory as real profiles -- a bare `*.json` glob would surface
+        # it in the UI's profile dropdown as a selectable (but bogus) run.
+        save_profile(
+            build_profile("good", user_request="r", origins=ORIGINS, destination=DESTINATION)
+        )
+        register_in_index("some-fingerprint", "good")
+        assert [p["name"] for p in list_profiles()] == ["good"]
+
     def test_missing_profile_returns_none(self) -> None:
         assert load_profile("never-saved") is None
 
@@ -257,3 +272,195 @@ def load_profile_after_save(name: str) -> dict:
     loaded = load_profile(name)
     assert loaded is not None
     return loaded
+
+
+_SCHEMAS = {
+    "pagila_pg": {
+        "tables": [
+            {
+                "name": "staff",
+                "full_name": "public.staff",
+                "columns": [{"name": "id", "type": "int"}, {"name": "email", "type": "text"}],
+            }
+        ]
+    }
+}
+
+
+class TestOverallFingerprintAutoDetection:
+    """Phase A4: a profile is found by (origins, destination, schema)
+    coordinates, not just selected by name -- this is what lets a repeat
+    run skip re-deciding things without the user having to remember or
+    pick a profile from a dropdown."""
+
+    def test_saving_a_profile_with_schemas_registers_it_for_auto_detection(self) -> None:
+        profile = build_profile(
+            "nightly",
+            user_request="merge people",
+            origins=ORIGINS,
+            destination=DESTINATION,
+            state={**_state(), "schemas": _SCHEMAS},
+        )
+        save_profile(profile)
+
+        fp = overall_fingerprint(ORIGINS, _SCHEMAS, DESTINATION)
+        found = find_profile_by_fingerprint(fp)
+        assert found is not None
+        assert found["name"] == "nightly"
+
+    def test_a_profile_saved_without_schemas_is_not_auto_detectable(self) -> None:
+        """build_profile is also used to pre-configure a profile before a
+        run has ever completed -- no schemas yet means nothing to fingerprint
+        against, so it correctly stays name-only until capture_from_state
+        (post-run) fills the fingerprint in."""
+        profile = build_profile(
+            "manual", user_request="r", origins=ORIGINS, destination=DESTINATION
+        )
+        save_profile(profile)
+        fp = overall_fingerprint(ORIGINS, _SCHEMAS, DESTINATION)
+        assert find_profile_by_fingerprint(fp) is None
+
+    def test_a_different_schema_does_not_match_the_saved_fingerprint(self) -> None:
+        profile = build_profile(
+            "nightly",
+            user_request="r",
+            origins=ORIGINS,
+            destination=DESTINATION,
+            state={**_state(), "schemas": _SCHEMAS},
+        )
+        save_profile(profile)
+
+        drifted_schemas = {
+            "pagila_pg": {
+                "tables": [
+                    {
+                        "name": "staff",
+                        "full_name": "public.staff",
+                        "columns": [{"name": "id", "type": "int"}],  # "email" column gone
+                    }
+                ]
+            }
+        }
+        fp = overall_fingerprint(ORIGINS, drifted_schemas, DESTINATION)
+        assert find_profile_by_fingerprint(fp) is None
+
+    def test_re_saving_the_same_shape_under_a_new_name_wins_auto_detection(self) -> None:
+        """Last-write-wins: the most recently saved profile for a shape is
+        what auto-detection offers, not whichever was created first."""
+        state = {**_state(), "schemas": _SCHEMAS}
+        save_profile(
+            build_profile(
+                "first", user_request="a", origins=ORIGINS, destination=DESTINATION, state=state
+            )
+        )
+        save_profile(
+            build_profile(
+                "second", user_request="b", origins=ORIGINS, destination=DESTINATION, state=state
+            )
+        )
+        fp = overall_fingerprint(ORIGINS, _SCHEMAS, DESTINATION)
+        assert find_profile_by_fingerprint(fp)["name"] == "second"
+
+    def test_deleting_the_indexed_profile_makes_lookup_miss_gracefully(self) -> None:
+        profile = build_profile(
+            "nightly",
+            user_request="r",
+            origins=ORIGINS,
+            destination=DESTINATION,
+            state={**_state(), "schemas": _SCHEMAS},
+        )
+        save_profile(profile)
+        delete_profile("nightly")
+
+        fp = overall_fingerprint(ORIGINS, _SCHEMAS, DESTINATION)
+        assert find_profile_by_fingerprint(fp) is None
+
+
+class TestStageCache:
+    """Per-stage fingerprint caching: reuse a stage's prior output only
+    when it was computed from exactly this input, never a guess."""
+
+    def test_get_on_a_fresh_profile_returns_none(self) -> None:
+        profile = build_profile("n", user_request="r", origins=[], destination={})
+        assert stage_cache_get(profile, "entity_tables", "fp-1") is None
+
+    def test_set_then_get_with_the_same_fingerprint_returns_the_artefact(self) -> None:
+        profile = build_profile("n", user_request="r", origins=[], destination={})
+        artefact = {"company": [{"origin_id": "o1", "table": "Company"}]}
+        stage_cache_set(profile, "entity_tables", "fp-1", artefact)
+        assert stage_cache_get(profile, "entity_tables", "fp-1") == artefact
+
+    def test_get_with_a_different_fingerprint_misses(self) -> None:
+        """The core guarantee: a schema drift (different fingerprint) must
+        never return the old artefact, even though one is cached."""
+        profile = build_profile("n", user_request="r", origins=[], destination={})
+        stage_cache_set(profile, "entity_tables", "fp-1", {"stale": "data"})
+        assert stage_cache_get(profile, "entity_tables", "fp-2") is None
+
+    def test_get_on_none_profile_returns_none(self) -> None:
+        assert stage_cache_get(None, "entity_tables", "fp-1") is None
+
+    def test_different_stages_do_not_collide(self) -> None:
+        profile = build_profile("n", user_request="r", origins=[], destination={})
+        stage_cache_set(profile, "entity_tables", "fp-1", {"a": 1})
+        stage_cache_set(profile, "join_graph", "fp-1", {"b": 2})
+        assert stage_cache_get(profile, "entity_tables", "fp-1") == {"a": 1}
+        assert stage_cache_get(profile, "join_graph", "fp-1") == {"b": 2}
+
+    def test_stage_cache_survives_a_save_and_load_round_trip(self) -> None:
+        profile = build_profile("n", user_request="r", origins=ORIGINS, destination=DESTINATION)
+        stage_cache_set(profile, "entity_tables", "fp-1", {"company": [{"table": "Company"}]})
+        save_profile(profile)
+
+        reloaded = load_profile("n")
+        assert reloaded is not None
+        assert stage_cache_get(reloaded, "entity_tables", "fp-1") == {
+            "company": [{"table": "Company"}]
+        }
+
+    def test_capture_from_state_stores_stage_artefacts_using_their_fingerprint(self) -> None:
+        """The convention every cache-writing node follows: a stage bundles
+        every MergeState key CACHEABLE_STAGES lists for it (entity_tables
+        ships with target_entities/merge_scope/etc, the same LLM call
+        decided them together), keyed by state["_<stage>_fingerprint"] --
+        capture_from_state packages the bundle and stores it under that
+        fingerprint."""
+        profile = build_profile("n", user_request="r", origins=[], destination={})
+        state = {
+            **_state(),
+            "entity_tables": {"company": [{"table": "Company"}]},
+            "target_entities": ["company"],
+            "merge_scope": {"active": False, "subject": "", "scope_type": "none"},
+            "_entity_tables_fingerprint": "fp-abc",
+        }
+        capture_from_state(profile, state)
+        cached = stage_cache_get(profile, "entity_tables", "fp-abc")
+        assert cached["entity_tables"] == {"company": [{"table": "Company"}]}
+        assert cached["target_entities"] == ["company"]
+        assert cached["merge_scope"] == {"active": False, "subject": "", "scope_type": "none"}
+        # A different fingerprint must still miss -- capture_from_state
+        # storing SOMETHING is not the same guarantee as storing it keyed
+        # correctly.
+        assert stage_cache_get(profile, "entity_tables", "fp-xyz") is None
+
+    def test_the_fingerprint_keys_nodes_return_are_declared_on_mergestate(self) -> None:
+        """capture_from_state's own logic is correct in isolation (proven
+        above), but that was never enough: LangGraph only carries a node's
+        return keys into the checkpointed state if the graph's TypedDict
+        schema declares them -- an undeclared key is silently dropped
+        before capture_from_state (called after the run, from the real
+        checkpointed state) ever sees it. parse_request.py and
+        nodes/plan_scope.py return `_entity_tables_fingerprint` /
+        `_join_graph_fingerprint` on every path, but neither key was ever
+        added to MergeState -- live-verified end-to-end (BP-A2, a real
+        ClickHouse-backed run against config/profiles/*.json) as a saved
+        profile with populated PINNED_KEYS but `"fingerprints": {}` and
+        `"artefacts": {}` -- proving the per-stage cache-write path was
+        dead code despite every unit test above passing."""
+        import typing
+
+        from src.orchestrator.graph import MergeState
+
+        hints = typing.get_type_hints(MergeState)
+        assert "_entity_tables_fingerprint" in hints
+        assert "_join_graph_fingerprint" in hints

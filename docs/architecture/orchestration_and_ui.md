@@ -52,12 +52,13 @@ it, so the topology below is exact, not aspirational:
 preflight -> discover_schemas -> parse_request -> analyze_dependencies
   -> human_review_deps -> map_fields -> [human_review_mappings if unmapped fields]
   -> plan_scope -> [human_review_scope if merge_scope.active and scope_plan.entities]
-  -> extract_data -> resolve_entities -> [human_review_matches if low-confidence]
+  -> extract_data -> validate_data -> resolve_entities -> [human_review_matches if low-confidence]
   -> unify_entities -> human_final_approval -> load_data -> update_extraction_state -> END
 ```
 
-Two things about this order are easy to get wrong from memory, because it
-changed twice and only one change was ever written down:
+Three things about this order are easy to get wrong from memory, because it
+changed three times and only two of those changes were ever written down
+before now:
 
 1. **`discover_schemas` runs before `parse_request`**, not after. This was a
    deliberate Phase 9 change (`docs/plans/CHANGE_NODE_ORDER_COVERAGE_MATRIX.md`)
@@ -72,8 +73,16 @@ changed twice and only one change was ever written down:
    `map_fields` no longer has `state["unified_entities"]` to work from at
    all; its field-mapping decisions are made against raw discovered columns,
    before a single row has been extracted.
+3. **`validate_data` runs between `extract_data` and `resolve_entities`**
+   (Phase 4.5, salvaged from the `B3-quality-lineage` branch). It is a thin,
+   non-fallible node — a hard `row_count >= 1` / uniqueness / not-null / date
+   check per entity, never Great Expectations despite an earlier draft of
+   its docstring claiming otherwise (`src/orchestrator/nodes/validate_data.py`,
+   `src/mcp_server/tools/data_quality.py`). It never auto-aborts the run; a
+   `fail`-severity result is surfaced at `human_final_approval` as
+   `quality_report`/`has_quality_failure` for a human to see and decide on.
 
-Both changes mean the mapping gate (`human_review_mappings`) now happens
+All three changes mean the mapping gate (`human_review_mappings`) now happens
 *before* the scope gate (`human_review_scope`) and long before any data
 exists — worth remembering before assuming gate order matches when each
 kind of information first becomes available.

@@ -507,6 +507,259 @@ class TestParseRequest:
         assert set(result["target_entities"]) == {"person", "company"}
         mock_llm_client.call_json.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_postcondition_failure_is_not_swallowed_as_llm_failure(
+        self, base_state: dict[str, Any], mock_llm_client: MagicMock
+    ) -> None:
+        """A ValueError from _finish's orphan post-condition must propagate
+        as a real exception -- never be caught by the `except Exception`
+        around the LLM call and misreported as "LLM call failed". That was
+        the original bug: `_finish` used to be called INSIDE that try, so
+        its AssertionError was swallowed, logged with a false diagnosis,
+        and then re-raised from a second `_finish` call inside the handler.
+        The LLM call here succeeds (the default mock), so the raised error
+        can only have come from _finish's post-condition, called after the
+        try/except -- proving it is no longer misdiagnosed."""
+        bad_groups = (
+            {
+                "company": [
+                    {"origin_id": "origin_1", "table": "DoesNotExist", "full_name": "DoesNotExist"}
+                ]
+            },
+            [],
+        )
+        with (
+            patch(
+                "src.orchestrator.nodes.parse_request.LLMClient",
+                return_value=mock_llm_client,
+            ),
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                self._prompts(),
+            ),
+            patch(
+                "src.orchestrator.nodes.parse_request.group_tables_into_entities",
+                return_value=bad_groups,
+            ),
+        ):
+            with pytest.raises(ValueError, match="Orphaned source tables"):
+                await parse_request(base_state)
+
+        mock_llm_client.call_json.assert_called_once()
+
+
+class TestProfileCaching:
+    """Phase A4: a profile-pinned entity_tables decision must actually be
+    consulted before parse_request does any work, not just seeded into
+    state and immediately overwritten (the "O.1 is inert" bug the audit
+    found: entity_tables was pinned by apply_profile, then parse_request
+    unconditionally rebuilt it from group_tables_into_entities + a fresh
+    LLM call every time, regardless of whether a pin existed)."""
+
+    @staticmethod
+    def _prompts() -> dict[str, dict[str, str]]:
+        return {
+            "request_parsing": {
+                "system": "Name entity groups. Return only JSON.",
+                "human": "Groups: {group_catalog}\nRequest: {user_request}",
+            }
+        }
+
+    @pytest.mark.asyncio
+    async def test_first_run_records_a_fingerprint_for_capture(self) -> None:
+        state: dict[str, Any] = {
+            "user_request": "Import all people and companies",
+            "schemas": _schema("Person", "Company"),
+            "llm_config": {"provider": "openai", "model": "gpt-4o", "api_key": "k"},
+            "errors": [],
+        }
+        client = MagicMock()
+        client.call_json = AsyncMock(
+            return_value={
+                "group_names": {"person": "person", "company": "company"},
+                "explicit_groups": [],
+                "subject": "",
+                "scope_type": "none",
+                "notes": "",
+            }
+        )
+        with (
+            patch("src.orchestrator.nodes.parse_request.LLMClient", return_value=client),
+            patch("src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES", self._prompts()),
+        ):
+            result = await parse_request(state)
+
+        client.call_json.assert_called_once()
+        assert result.get("_entity_tables_fingerprint")
+
+    @pytest.mark.asyncio
+    async def test_a_matching_cached_fingerprint_skips_the_llm_call_entirely(self) -> None:
+        """The actual point of the feature: zero LLM calls on a repeat run
+        against the same schema and request text."""
+        schemas = _schema("Person", "Company")
+        user_request = "Import all people and companies"
+        state: dict[str, Any] = {
+            "user_request": user_request,
+            "schemas": schemas,
+            "llm_config": {"provider": "openai", "model": "gpt-4o", "api_key": "k"},
+            "errors": [],
+        }
+        client = MagicMock()
+        client.call_json = AsyncMock(
+            return_value={
+                "group_names": {"person": "person", "company": "company"},
+                "explicit_groups": ["person"],
+                "subject": "",
+                "scope_type": "none",
+                "notes": "",
+            }
+        )
+        with (
+            patch("src.orchestrator.nodes.parse_request.LLMClient", return_value=client),
+            patch("src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES", self._prompts()),
+        ):
+            first = await parse_request(state)
+
+        # Simulate what apply_profile does with a captured profile: seed
+        # _profile_cache from the first run's own fingerprint + bundle.
+        second_state: dict[str, Any] = {
+            "user_request": user_request,
+            "schemas": schemas,
+            "llm_config": {"provider": "openai", "model": "gpt-4o", "api_key": "k"},
+            "errors": [],
+            "_profile_cache": {
+                "fingerprints": {"entity_tables": first["_entity_tables_fingerprint"]},
+                "artefacts": {
+                    "entity_tables": {
+                        "entity_tables": first["entity_tables"],
+                        "target_entities": first["target_entities"],
+                        "explicit_target_entities": first["explicit_target_entities"],
+                        "merge_scope": first["merge_scope"],
+                        "table_selection_notes": first["table_selection_notes"],
+                    }
+                },
+            },
+        }
+        client.call_json.reset_mock()
+        with (
+            patch("src.orchestrator.nodes.parse_request.LLMClient", return_value=client),
+            patch("src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES", self._prompts()),
+        ):
+            second = await parse_request(second_state)
+
+        client.call_json.assert_not_called()
+        assert second["entity_tables"] == first["entity_tables"]
+        assert set(second["target_entities"]) == set(first["target_entities"])
+        assert second["reused_stages"] == ["entity_tables"]
+
+    @pytest.mark.asyncio
+    async def test_a_different_request_text_misses_the_cache(self) -> None:
+        """explicit_target_entities/merge_scope depend on request text, not
+        just schema -- reusing a cached decision for a DIFFERENT request
+        would silently answer the wrong question, so a text change must
+        fall through to a real (LLM) computation."""
+        schemas = _schema("Person", "Company")
+        client = MagicMock()
+        client.call_json = AsyncMock(
+            return_value={
+                "group_names": {"person": "person", "company": "company"},
+                "explicit_groups": [],
+                "subject": "",
+                "scope_type": "none",
+                "notes": "",
+            }
+        )
+        state: dict[str, Any] = {
+            "user_request": "just companies please",
+            "schemas": schemas,
+            "llm_config": {"provider": "openai", "model": "gpt-4o", "api_key": "k"},
+            "errors": [],
+            "_profile_cache": {
+                "fingerprints": {"entity_tables": "fp-from-a-different-request"},
+                "artefacts": {
+                    "entity_tables": {
+                        "entity_tables": {"person": [], "company": []},
+                        "target_entities": ["person", "company"],
+                        "explicit_target_entities": [],
+                        "merge_scope": {"active": False, "subject": "", "scope_type": "none"},
+                        "table_selection_notes": "",
+                    }
+                },
+            },
+        }
+        with (
+            patch("src.orchestrator.nodes.parse_request.LLMClient", return_value=client),
+            patch("src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES", self._prompts()),
+        ):
+            result = await parse_request(state)
+
+        client.call_json.assert_called_once()
+        assert "reused_stages" not in result
+
+
+class TestPostgresqlOriginIdentity:
+    """Regression test for the bug that crashed parse_request on any
+    PostgreSQL origin: entity_grouping.py used to store `full_name` (e.g.
+    "public.Company") in the `table` key, which matched nothing downstream
+    -- including parse_request's own orphan post-condition, which compares
+    against discover_schemas' bare "name" field."""
+
+    @pytest.mark.asyncio
+    async def test_postgresql_origin_with_full_name_does_not_orphan(self) -> None:
+        schema = {
+            "origin_1": {
+                "origin_type": "postgres",
+                "tables": [
+                    {
+                        "name": "Company",
+                        "full_name": "public.Company",
+                        "columns": [{"name": "id"}, {"name": "name"}],
+                    },
+                    {
+                        "name": "Person",
+                        "full_name": "public.Person",
+                        "columns": [{"name": "id"}, {"name": "name"}],
+                    },
+                ],
+            }
+        }
+        state: dict[str, Any] = {
+            "user_request": "Bring over everything",
+            "target_entities": [],
+            "schemas": schema,
+            "llm_config": {"provider": "openai", "model": "gpt-4o", "api_key": "test_key"},
+            "errors": [],
+        }
+        mock_llm_client = MagicMock()
+        mock_llm_client.call_json = AsyncMock(
+            return_value={
+                "group_names": {"company": "company", "person": "person"},
+                "explicit_groups": [],
+                "subject": "",
+                "scope_type": "none",
+                "notes": "",
+            }
+        )
+        with (
+            patch(
+                "src.orchestrator.nodes.parse_request.LLMClient",
+                return_value=mock_llm_client,
+            ),
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                TestParseRequest._prompts(),
+            ),
+        ):
+            result = await parse_request(state)
+
+        assert set(result["target_entities"]) == {"company", "person"}
+        all_entries = [e for lst in result["entity_tables"].values() for e in lst]
+        assert {(e["origin_id"], e["table"]) for e in all_entries} == {
+            ("origin_1", "Company"),
+            ("origin_1", "Person"),
+        }
+        assert {e["full_name"] for e in all_entries} == {"public.Company", "public.Person"}
+
 
 class TestSubjectFirstMode:
     """Phase 3.3: get_initial_state sets an active merge_scope directly

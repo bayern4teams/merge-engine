@@ -293,6 +293,33 @@ class TestInterruptPayloadParity:
         assert payload["data"]["quality_report"] == fail_report
 
 
+def test_every_hitl_node_has_its_own_parity_test() -> None:
+    """This module hardcodes one test method per gate rather than a single
+    parametrized loop, so each gate's parity check can carry its own
+    tailored assertions (e.g. human_final_approval's documented superset).
+    That hardcoding is exactly what let a 7th gate go uncovered before --
+    this is the mechanical trip-wire: HITL_NODES growing beyond the six
+    gates this file has explicit tests for must fail loudly here, not
+    silently ship a gate with zero parity coverage."""
+    from src.orchestrator.graph import HITL_NODES
+
+    covered = {
+        "human_review_deps",
+        "human_review_mappings",
+        "human_review_scope",
+        "human_review_matches",
+        "handle_error",
+        "human_final_approval",
+    }
+    assert set(HITL_NODES) == covered, (
+        f"HITL_NODES changed ({set(HITL_NODES) - covered} added, "
+        f"{covered - set(HITL_NODES)} removed) but this file's per-gate "
+        "parity tests were not updated to match. Add a "
+        "test_<node>_exact_parity method for the new gate before updating "
+        "`covered` here."
+    )
+
+
 class TestPayloadVersion:
     """Phase 2.2: a stable content hash Gates.tsx can key a React effect on
     instead of the whole `data` object, which is a fresh reference on every

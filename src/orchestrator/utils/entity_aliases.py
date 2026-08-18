@@ -132,8 +132,19 @@ ALIAS_GROUPS: list[set[str]] = [
 
 
 def _norm(name: str) -> str:
-    """Normalize a table/concept name: lowercase, strip schema prefix."""
-    return name.lower().split(".")[-1].strip()
+    """Normalize a table/concept name: lowercase, strip schema prefix, strip
+    a trailing possessive apostrophe-s ("customer's" -> "customer") so a
+    possessive table-name variant matches its base concept like any other
+    plural variant does."""
+    n = name.lower().split(".")[-1].strip()
+    # Straight apostrophe and the Unicode "right single quotation mark"
+    # (U+2019, escaped rather than literal to avoid ruff's RUF001
+    # ambiguous-character warning) both show up in real-world table names.
+    for suffix in ("'s", "\u2019s"):
+        if n.endswith(suffix) and len(n) > len(suffix):
+            n = n[: -len(suffix)]
+            break
+    return n
 
 
 def _group_of(name: str) -> set[str] | None:

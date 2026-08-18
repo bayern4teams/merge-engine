@@ -147,11 +147,21 @@ def group_tables_into_entities(
     Returns
     -------
     (entity_tables, unassigned)
-        ``entity_tables`` is ``{group_key: [{"origin_id", "table"}, ...]}``.
-        ``unassigned`` is the list of "origin_id:table" strings that could
-        not be grouped — this must always be ``[]``; callers should treat a
-        non-empty list as a bug in this function, not a data problem, since
-        every table always falls back to its own singleton group.
+        ``entity_tables`` is ``{group_key: [{"origin_id", "table", "full_name"},
+        ...]}`` — ``table`` is the bare name (matching ``discover_schemas``'
+        own ``"name"`` field and every downstream consumer keyed on it);
+        ``full_name`` is the schema-qualified name, carried for consumers
+        that need to disambiguate (e.g. two PostgreSQL schemas each with
+        their own ``Company`` table). ``unassigned`` is always ``[]`` on a
+        successful return — this function raises ``ValueError`` rather than
+        returning a non-empty list, since an unassigned table is a genuine
+        data problem (an unnamed table, or a name that reduces to an empty
+        key), not something a caller can silently work around.
+
+    Raises
+    ------
+    ValueError
+        If any discovered table could not be assigned a group key.
     """
     # Two tables merge into the same group if their computed keys are
     # textually equal, OR both keys came from a successful owning-prefix
@@ -165,13 +175,22 @@ def group_tables_into_entities(
     unassigned: list[str] = []
 
     for origin_id, schema_data in sorted((schemas or {}).items()):
-        for table in (schema_data or {}).get("tables", []) or []:
+        for i, table in enumerate((schema_data or {}).get("tables", []) or []):
             table_name = (table or {}).get("name", "")
             if not table_name:
+                # The one case the invariant below exists to catch: record it
+                # rather than silently `continue`-ing past it. There is no
+                # table identity to key a fallback group on, so this table is
+                # genuinely unrecoverable — callers must treat it as a bug in
+                # discover_schemas, not something this function can group.
+                unassigned.append(f"{origin_id}:<unnamed table #{i}>")
                 continue
             full_name = (table or {}).get("full_name") or table_name
 
             key, eligible_for_alias_merge = _table_key(table_name)
+            if not key:
+                unassigned.append(f"{origin_id}:{table_name}")
+                continue
             group = _group_of(key) if eligible_for_alias_merge else None
             # ALIAS_GROUPS' sets aren't hashable themselves, but `id()` of
             # the same module-level set object is stable and unique across
@@ -184,14 +203,26 @@ def group_tables_into_entities(
                 group_key_by_canonical[canonical] = key
             resolved_key = group_key_by_canonical[canonical]
 
+            # `table` is deliberately the BARE name, matching discover_schemas'
+            # own "name" field and every downstream consumer that keys off it
+            # (extract_data._candidates_from_selection, analyze_dependencies.
+            # _build_coverage_matrix, map_fields_node._build_source_schema_
+            # from_discovered, human_nodes._build_field_provenance). A prior
+            # version of this function stored `full_name` here instead (e.g.
+            # "public.Company"), which matched nothing downstream and made
+            # parse_request's own orphan post-condition fire on every
+            # PostgreSQL-origin run. `full_name` is carried alongside for any
+            # consumer that specifically needs a schema-qualified name.
             entity_tables.setdefault(resolved_key, []).append(
-                {"origin_id": origin_id, "table": full_name}
+                {"origin_id": origin_id, "table": table_name, "full_name": full_name}
             )
 
     # The invariant this whole module exists to guarantee. If this ever
-    # fires, it is a bug in the loop above (every table is visited and
-    # _table_key always returns a non-empty string for a non-empty table
-    # name) — not a caller-fixable data issue.
-    assert unassigned == [], f"Orphaned tables in group_tables_into_entities: {unassigned}"
+    # fires, it is a genuine data problem (an unnamed table, or a table name
+    # that reduces to an empty key) — not a caller-fixable code path, so
+    # callers should raise rather than silently drop rows. Not an `assert`:
+    # this must still fire under `python -O`.
+    if unassigned:
+        raise ValueError(f"Orphaned tables in group_tables_into_entities: {unassigned}")
 
     return entity_tables, unassigned

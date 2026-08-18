@@ -357,6 +357,74 @@ class TestBuildJoinGraph:
         edges = graph.neighbors(("origin_2", "Experience"))
         assert edges == []
 
+    async def test_inclusion_check_is_column_pair_not_bag_of_values(self) -> None:
+        """B4's identity_profile.py flattened EVERY column of the parent
+        table into one set, so its overlap ratio only answered "does this
+        value appear ANYWHERE in the other table" -- not a real inclusion
+        dependency. It demonstrably promoted a child column to a verified
+        FK against a completely unrelated parent column just because the
+        values happened to coincide somewhere else in that table (a
+        `country_code` of {"BA","AIR","LMT"} against a `ticker` column, per
+        the fix-bugs plan's own account of the bug). This constructs the
+        same shape: CompanyRelation.companyID candidate-matches against
+        Company (by name), but its sampled values only overlap with
+        Company's UNRELATED foundedYear column, not with Company's real
+        primary key (companyID) that _verify_inclusion is supposed to
+        check. A column-pair-correct implementation must find zero overlap
+        against the real target column and discard the edge -- not go
+        looking elsewhere in the table for a coincidental match.
+        """
+        schemas = {
+            "origin_1": {
+                "tables": [
+                    {
+                        "name": "Company",
+                        "primary_key": ["companyID"],
+                        "columns": [{"name": "companyID"}, {"name": "foundedYear"}],
+                    },
+                    {
+                        "name": "CompanyRelation",
+                        "primary_key": ["id"],
+                        "columns": [{"name": "id"}, {"name": "companyID"}],
+                    },
+                ]
+            }
+        }
+
+        async def fake_sample(table_name, column, limit=500, filter_values=None):
+            # Company's real PK (companyID) and CompanyRelation's candidate
+            # FK column are disjoint -- the correct answer is "no verified
+            # edge". Company.foundedYear coincidentally holds the SAME
+            # values CompanyRelation.companyID does; a bag-of-values
+            # approach would wrongly "verify" against that instead.
+            table = {
+                ("Company", "companyID"): [1, 2, 3],
+                ("Company", "foundedYear"): [77, 88, 99],
+                ("CompanyRelation", "companyID"): [77, 88, 99],
+            }
+            values = table.get((table_name, column), [])
+            if filter_values is not None:
+                return [v for v in values if v in filter_values]
+            return values
+
+        fake_connector = AsyncMock()
+        fake_connector.sample_distinct_values = AsyncMock(side_effect=fake_sample)
+        fake_connector.close = AsyncMock()
+        with patch(
+            "src.mcp_server.tools.join_graph.create_connector",
+            return_value=fake_connector,
+        ):
+            graph = await build_join_graph(
+                schemas, [{"id": "origin_1", "type": "postgresql", "connection": {}}]
+            )
+
+        edges = [
+            e
+            for e in graph.neighbors(("origin_1", "CompanyRelation"))
+            if e.parent_table == "Company"
+        ]
+        assert edges == []
+
     async def test_filtered_parent_lookup_finds_real_overlap_independent_sampling_would_miss(
         self,
     ) -> None:

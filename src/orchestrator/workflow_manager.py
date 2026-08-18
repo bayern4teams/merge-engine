@@ -1383,7 +1383,7 @@ class WorkflowManager:
                     e: clusters_for(live_values, e)
                     for e in (live_values.get("entity_clusters") or {})
                 }
-                rebuilt, stats = apply_cluster_decisions(
+                rebuilt, stats, split_pairs = apply_cluster_decisions(
                     materialised,
                     feedback["cluster_decisions"],
                 )
@@ -1397,6 +1397,17 @@ class WorkflowManager:
                     )
                     for e, cs in rebuilt.items()
                 }
+                # Phase 7.2: preserved so a human split is queryable in
+                # merge_engine_merge_audit like any other merge decision,
+                # instead of the evidence vanishing with the torn-apart
+                # cluster. Set to just the NEW pairs, not a manual merge with
+                # the existing value -- human_split_pairs carries the same
+                # `Annotated[list[Any], operator.add]` reducer as errors/
+                # handled_failures, so graph.update_state() below appends
+                # this to the checkpoint's existing list on its own; manually
+                # concatenating here would double it.
+                if split_pairs:
+                    state_update["human_split_pairs"] = split_pairs
                 logger.info("Workflow %s: cluster decisions applied (%s)", thread_id, stats)
 
             # The error gate's bookkeeping. It has to happen here, not in the

@@ -125,7 +125,9 @@ def clusters() -> dict[str, list[dict[str, Any]]]:
 
 
 def test_split_breaks_a_cluster_into_singletons(clusters) -> None:
-    out, stats = apply_cluster_decisions(clusters, [{"cluster_id": "c1", "action": "split"}])
+    out, stats, _split_pairs = apply_cluster_decisions(
+        clusters, [{"cluster_id": "c1", "action": "split"}]
+    )
     assert [c["record_ids"] for c in out["person"]] == [
         ["pg:staff:1"],
         ["pg:staff:2"],
@@ -135,7 +137,7 @@ def test_split_breaks_a_cluster_into_singletons(clusters) -> None:
 
 
 def test_split_with_groups_honours_the_partition(clusters) -> None:
-    out, _ = apply_cluster_decisions(
+    out, _, _split_pairs = apply_cluster_decisions(
         clusters,
         [
             {
@@ -154,7 +156,9 @@ def test_split_with_groups_honours_the_partition(clusters) -> None:
 
 
 def test_keep_marks_the_cluster_reviewed(clusters) -> None:
-    out, stats = apply_cluster_decisions(clusters, [{"cluster_id": "c1", "action": "keep"}])
+    out, stats, _split_pairs = apply_cluster_decisions(
+        clusters, [{"cluster_id": "c1", "action": "keep"}]
+    )
     assert len(out["person"]) == 1
     assert out["person"][0]["required_human_review"] is False
     assert out["person"][0]["reviewed_by_human"] is True
@@ -163,15 +167,72 @@ def test_keep_marks_the_cluster_reviewed(clusters) -> None:
 
 def test_unknown_action_splits_rather_than_merges(clusters) -> None:
     """Over-merging is unrecoverable, so ambiguity resolves toward splitting."""
-    out, stats = apply_cluster_decisions(clusters, [{"cluster_id": "c1", "action": "banana"}])
+    out, stats, _split_pairs = apply_cluster_decisions(
+        clusters, [{"cluster_id": "c1", "action": "banana"}]
+    )
     assert len(out["person"]) == 3
     assert stats["unknown"] == 1
 
 
 def test_no_decisions_leaves_clusters_untouched(clusters) -> None:
-    out, stats = apply_cluster_decisions(clusters, [])
+    out, stats, split_pairs = apply_cluster_decisions(clusters, [])
     assert out is clusters
     assert stats == {"kept": 0, "split": 0, "unknown": 0}
+    assert split_pairs == []
+
+
+def test_split_preserves_the_original_clusters_match_evidence() -> None:
+    """Regression: a split used to destroy match_evidence outright -- the
+    new per-partition clusters carry none of their own, and nothing
+    captured the original cluster's pairs before it was torn apart. Now
+    apply_cluster_decisions returns them separately so the caller can
+    persist a human_override="split" audit row instead of losing the
+    evidence."""
+    clusters_with_evidence = {
+        "person": [
+            {
+                "cluster_id": "c1",
+                "record_ids": ["pg:staff:1", "pg:staff:2"],
+                "match_confidence": 0.8,
+                "required_human_review": True,
+                "match_evidence": {
+                    "pairs": [
+                        {
+                            "a": "pg:staff:1",
+                            "b": "pg:staff:2",
+                            "confidence": 0.8,
+                            "method": "fellegi_sunter",
+                            "matched_fields": [{"field": "name", "similarity": 0.9}],
+                            "mismatched_fields": [{"field": "email"}],
+                        }
+                    ]
+                },
+            },
+        ]
+    }
+    _out, stats, split_pairs = apply_cluster_decisions(
+        clusters_with_evidence, [{"cluster_id": "c1", "action": "split"}]
+    )
+    assert stats["split"] == 1
+    assert len(split_pairs) == 1
+    pair = split_pairs[0]
+    assert pair["entity_type"] == "person"
+    assert pair["cluster_id"] == "c1"
+    assert pair["record_a"] == "pg:staff:1"
+    assert pair["record_b"] == "pg:staff:2"
+    assert pair["confidence"] == 0.8
+    assert pair["method"] == "fellegi_sunter"
+    assert pair["matched_fields"] == [{"field": "name", "similarity": 0.9}]
+    assert pair["mismatched_fields"] == [{"field": "email"}]
+
+
+def test_kept_cluster_produces_no_split_pairs(clusters) -> None:
+    """A "keep" decision must not be misreported as a split -- no evidence
+    to preserve since nothing was torn apart."""
+    _out, _stats, split_pairs = apply_cluster_decisions(
+        clusters, [{"cluster_id": "c1", "action": "keep"}]
+    )
+    assert split_pairs == []
 
 
 # ── K.4: deterministic cluster ids ───────────────────────────────────

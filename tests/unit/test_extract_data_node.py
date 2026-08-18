@@ -898,6 +898,237 @@ class TestScopedExtraction:
         assert people_call["filter"] == {"person_id": {"op": "in", "value": [1, 2]}}
 
     @pytest.mark.asyncio
+    async def test_narrow_first_hop_filters_on_its_own_column_not_the_pk(self) -> None:
+        """Regression: a NARROW (child->parent) first hop -- e.g.
+        Company.locationID -> Location.locationID -- must filter the
+        linked table on the subject's `locationID` VALUES, not its `id`
+        (primary key) values. The two only coincide for a FAN-OUT
+        (parent->child) first hop like Company.id -> Experience.companyID.
+        Before the fix, the node always seeded the walk from the subject's
+        PK regardless of what the first hop's own `from_column` was, so
+        this exact shape produced `Location.locationID IN <Company ids>`
+        -- the wrong id space, near-certainly zero rows, reported as a
+        clean scoping outcome."""
+        state = {
+            "run_id": "narrow_hop_test",
+            "extraction_order": ["company", "location"],
+            "dependency_tree": {"company": [], "location": ["company"]},
+            "schemas": {
+                "crm": {
+                    "tables": [
+                        {
+                            "name": "companies",
+                            "full_name": "public.companies",
+                            "columns": [
+                                {"name": "id"},
+                                {"name": "name"},
+                                {"name": "locationID"},
+                            ],
+                            "primary_key": ["id"],
+                            "foreign_keys": [],
+                        },
+                        {
+                            "name": "locations",
+                            "full_name": "public.locations",
+                            "columns": [{"name": "locationID"}, {"name": "city"}],
+                            "primary_key": ["locationID"],
+                            "foreign_keys": [],
+                        },
+                    ],
+                },
+            },
+            "entity_tables": {
+                "company": [{"origin_id": "crm", "table": "public.companies"}],
+                "location": [{"origin_id": "crm", "table": "public.locations"}],
+            },
+            "origins": [{"id": "crm", "type": "postgres", "connection": {"host": "h"}}],
+            "destination": {"type": "postgresql"},
+            "extraction_config": {"default_batch_size": 100},
+            "merge_scope": {"active": True, "subject": "Nova", "scope_type": "company"},
+            "scope_plan": {
+                "subject": "Nova",
+                "subject_entity": "company",
+                "entities": {
+                    "company": [
+                        {
+                            "origin_id": "crm",
+                            "table": "public.companies",
+                            "mode": "match",
+                            "columns": ["name"],
+                        }
+                    ],
+                    "location": [
+                        {
+                            "origin_id": "crm",
+                            "table": "public.locations",
+                            "mode": "link_path",
+                            "path": [
+                                {
+                                    "from_table": "companies",
+                                    "from_column": "locationID",
+                                    "to_table": "locations",
+                                    "to_column": "locationID",
+                                }
+                            ],
+                            "hops": 1,
+                        }
+                    ],
+                },
+            },
+        }
+        calls: list[dict[str, Any]] = []
+
+        async def fake_extract(**kwargs):
+            calls.append({"table": kwargs["table_name"], "filter": kwargs.get("filter")})
+            if kwargs["table_name"] == "public.companies":
+                # id (the PK) is 10; locationID (the column the narrow hop
+                # actually needs) is a different value, 77.
+                return {
+                    "rows": [{"id": 10, "name": "Nova", "locationID": 77}],
+                    "next_cursor": None,
+                }
+            return {"rows": [{"locationID": 77, "city": "Springfield"}], "next_cursor": None}
+
+        with (
+            patch(
+                "src.orchestrator.nodes.extract_data._get_destination_connector",
+                return_value=MagicMock(get_extraction_state=MagicMock(return_value=None)),
+            ),
+            patch(
+                "src.orchestrator.nodes.extract_data.extract_data_impl",
+                side_effect=fake_extract,
+            ),
+        ):
+            result = await extract_data(state)
+
+        location_call = next(c for c in calls if c["table"] == "public.locations")
+        # Filtered on the subject's locationID values (77) -- NOT its id
+        # (primary key) values (10).
+        assert location_call["filter"] == {"locationID": {"op": "in", "value": [77]}}
+        assert result.get("failure", {}) == {}
+
+    @pytest.mark.asyncio
+    async def test_mixed_two_hop_path_seeds_from_the_narrow_first_hop_column(self) -> None:
+        """A 2-hop path whose FIRST hop is narrow (Company.locationID ->
+        Location.locationID) and whose second hop fans back out
+        (Location.locationID -> Address.locationID) must still seed the
+        walk from the subject's locationID values, not its PK."""
+        state = {
+            "run_id": "mixed_hop_test",
+            "extraction_order": ["company", "address"],
+            "dependency_tree": {"company": [], "address": ["company"]},
+            "schemas": {
+                "crm": {
+                    "tables": [
+                        {
+                            "name": "companies",
+                            "full_name": "public.companies",
+                            "columns": [
+                                {"name": "id"},
+                                {"name": "name"},
+                                {"name": "locationID"},
+                            ],
+                            "primary_key": ["id"],
+                            "foreign_keys": [],
+                        },
+                        {
+                            "name": "locations",
+                            "full_name": "public.locations",
+                            "columns": [{"name": "locationID"}, {"name": "city"}],
+                            "primary_key": ["locationID"],
+                            "foreign_keys": [],
+                        },
+                        {
+                            "name": "addresses",
+                            "full_name": "public.addresses",
+                            "columns": [{"name": "address_id"}, {"name": "locationID"}],
+                            "primary_key": ["address_id"],
+                            "foreign_keys": [],
+                        },
+                    ],
+                },
+            },
+            "entity_tables": {
+                "company": [{"origin_id": "crm", "table": "public.companies"}],
+                "address": [{"origin_id": "crm", "table": "public.addresses"}],
+            },
+            "origins": [{"id": "crm", "type": "postgres", "connection": {"host": "h"}}],
+            "destination": {"type": "postgresql"},
+            "extraction_config": {"default_batch_size": 100},
+            "merge_scope": {"active": True, "subject": "Nova", "scope_type": "company"},
+            "scope_plan": {
+                "subject": "Nova",
+                "subject_entity": "company",
+                "entities": {
+                    "company": [
+                        {
+                            "origin_id": "crm",
+                            "table": "public.companies",
+                            "mode": "match",
+                            "columns": ["name"],
+                        }
+                    ],
+                    "address": [
+                        {
+                            "origin_id": "crm",
+                            "table": "public.addresses",
+                            "mode": "link_path",
+                            "path": [
+                                {
+                                    "from_table": "companies",
+                                    "from_column": "locationID",
+                                    "to_table": "locations",
+                                    "to_column": "locationID",
+                                },
+                                {
+                                    "from_table": "locations",
+                                    "from_column": "locationID",
+                                    "to_table": "addresses",
+                                    "to_column": "locationID",
+                                },
+                            ],
+                            "hops": 2,
+                        }
+                    ],
+                },
+            },
+        }
+        calls: list[dict[str, Any]] = []
+
+        async def fake_extract(**kwargs):
+            calls.append({"table": kwargs["table_name"], "filter": kwargs.get("filter")})
+            if kwargs["table_name"] == "public.companies":
+                return {
+                    "rows": [{"id": 10, "name": "Nova", "locationID": 77}],
+                    "next_cursor": None,
+                }
+            if kwargs["table_name"] == "locations":
+                return {"rows": [{"locationID": 77}], "next_cursor": None}
+            return {
+                "rows": [{"address_id": 1, "locationID": 77}],
+                "next_cursor": None,
+            }
+
+        with (
+            patch(
+                "src.orchestrator.nodes.extract_data._get_destination_connector",
+                return_value=MagicMock(get_extraction_state=MagicMock(return_value=None)),
+            ),
+            patch(
+                "src.orchestrator.nodes.extract_data.extract_data_impl",
+                side_effect=fake_extract,
+            ),
+        ):
+            await extract_data(state)
+
+        locations_call = next(c for c in calls if c["table"] == "locations")
+        addresses_call = next(c for c in calls if c["table"] == "public.addresses")
+        # The intermediate hop was seeded from the subject's locationID
+        # values (77), not its id (primary key) values (10).
+        assert locations_call["filter"] == {"locationID": {"op": "in", "value": [77]}}
+        assert addresses_call["filter"] == {"locationID": {"op": "in", "value": [77]}}
+
+    @pytest.mark.asyncio
     async def test_no_subject_rows_means_dependents_are_skipped(self) -> None:
         calls: list[dict[str, Any]] = []
 

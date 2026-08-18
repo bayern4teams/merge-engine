@@ -706,6 +706,22 @@ textarea:focus {
   width: 100%;
 }
 
+/* Mapping gate (Gates.tsx MappingBody): with no explicit column widths, the
+   browser's table auto-layout squeezed Dest Column and Action down to a
+   handful of pixels once ~130 rows competed for space -- a select/input at
+   width:100% of a near-zero-width <td> renders unusable (live-observed:
+   ~40px, showing "con", "des", "sum", "typ", "web"). min-width on the CELL
+   forces the auto-layout algorithm to reserve real space for these two
+   columns specifically; .table-scroll's existing overflow:auto handles the
+   rest by scrolling rather than clipping further. */
+.mapping-action-col {
+  min-width: 120px;
+}
+
+.mapping-dest-col {
+  min-width: 220px;
+}
+
 /* ── Event log ───────────────────────────────────────────────────────── */
 
 .log-header {
