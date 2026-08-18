@@ -28,6 +28,12 @@ dependencies = [
     # Configuration & validation
     "pydantic>=2.0.0",
     "pyyaml>=6.0",
+    # .env loading (main.py, src/main.py, config_loader.py all import this;
+    # it was never actually declared here, so a from-scratch bootstrap left
+    # every ${ENV_VAR} placeholder in config.yaml silently unexpanded --
+    # discovered live 2026-08-10 chasing a spurious "invalid API key" error
+    # that was really "the key was never read from .env at all".
+    "python-dotenv>=1.0.0",
     # Utilities
     "tenacity>=8.2.0",
     "uuid-utils>=0.8.0",

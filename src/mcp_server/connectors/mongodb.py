@@ -301,6 +301,51 @@ class MongoDBConnector(BaseConnector):
             "origin_ids": origin_ids,
         }
 
+    # ── Join-graph support (Phase 4.1) ──────────────────────────────────
+
+    async def sample_distinct_values(
+        self,
+        table_name: str,
+        column: str,
+        limit: int = 500,
+        filter_values: list[Any] | None = None,
+    ) -> list[Any]:
+        """Bounded distinct sample via aggregation — never a full-collection
+        read. MongoDB never carries declared foreign keys, so this is the
+        only edge source that works here, same as ClickHouse.
+
+        ``filter_values``, when given, restricts to documents whose
+        ``column`` is one of these values instead of sampling
+        independently — see postgres.py's identical parameter for why:
+        two independent arbitrary samples of a large parent collection and
+        a small child collection essentially never coincidentally overlap
+        even for a 100%-intact reference relationship.
+        """
+        logger.debug(
+            "ENTER sample_distinct_values: table=%s, column=%s, limit=%d, filtered=%s",
+            table_name,
+            column,
+            limit,
+            bool(filter_values),
+        )
+        client = await self._ensure_client()
+        db = client[self._db_name]
+        collection = db[table_name]
+        match_stage: dict[str, Any] = (
+            {column: {"$in": filter_values}} if filter_values else {column: {"$ne": None}}
+        )
+        pipeline: list[dict[str, Any]] = [
+            {"$match": match_stage},
+            {"$group": {"_id": f"${column}"}},
+            {"$limit": limit},
+        ]
+        values = []
+        cursor = await collection.aggregate(pipeline)
+        async for doc in cursor:
+            values.append(doc["_id"])
+        logger.debug("EXIT sample_distinct_values: %d value(s)", len(values))
+        return values
+
     @staticmethod
     def _as_id(value: str) -> Any:
         """Turn a cursor string back into whatever `_id` type the collection uses."""

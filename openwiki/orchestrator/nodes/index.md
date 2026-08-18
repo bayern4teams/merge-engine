@@ -1,0 +1,14 @@
+# Files
+
+- [Analyze Dependencies Node](analyze_dependencies.md) - LLM-based entity dependency tree analysis from discovered schemas. Determines which source tables hold each entity, builds a topological extraction order, and detects column-level dependencies between entities.
+- [Discover Schemas Node](discover_schemas.md) - Concurrent schema discovery across all origin databases. Uses asyncio.gather to discover PostgreSQL, ClickHouse, and MongoDB schemas in parallel.
+- [Extract Data Node](extract_data.md) - Dependency-ordered data extraction with keyset pagination, scratch table filters for ClickHouse, and chunked IN filters for large scope plans. Stores results in the DuckDB spool.
+- [Human-in-the-Loop Interrupt Nodes](human_in_the_loop.md) - All five HITL interrupt nodes (human_review_deps, human_review_scope, human_review_mappings, human_review_matches, human_final_approval) plus the error handling gate (handle_error). These use LangGraph's interrupt_before mechanism to pause the graph and collect user decisions.
+- [Load Data Node](load_data.md) - Destination upsert with FK translation, value coercion, reconciliation reports, scoped merge guardrail, entity map persistence, and watermark update. Writes unified records to PostgreSQL, ClickHouse, or Databricks.
+- [Map Fields Node](map_fields.md) - Maps unified entity fields to destination columns using a hybrid approach with heuristic scoring at 0.85 confidence for straightforward mappings and LLM fallback for borderline cases.
+- [Parse Request Node](parse_request.md) - LLM-based extraction of target entity types from a natural language user request. Uses the request_parsing prompt template to map free-text instructions to a structured entity list.
+- [Plan Scope Node](plan_scope.md) - Plans scoped merges by identifying the subject entity's candidates and building per-entity extraction filters. Used for "merge all information about X" queries.
+- [Preflight Node](preflight.md) - Validates run prerequisites including database connectivity, LLM availability, and disk space before the pipeline begins. Produces warnings (non-blocking) and errors (blocking) that can escalate to human review.
+- [Resolve Entities Node](resolve_entities.md) - Clusters matching records across origins using blocking → heuristic → LLM → Union-Find. Runs in parallel via ProcessPoolExecutor (4 workers) with resolve cache support.
+- [Unify Entity Groups Node](unify_entities.md) - Merges matched entity clusters into unified records using conflict resolution policies (priority → completeness → recency). Reads clusters from the DuckDB spool and writes unified records back.
+- [Update Extraction State Node](update_extraction_state.md) - Persists extraction watermarks to the destination's merge_engine_extraction_state tracking table after successful load. Enables incremental extraction on future runs.

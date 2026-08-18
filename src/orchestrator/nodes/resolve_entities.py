@@ -291,6 +291,60 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
     logger.debug("Total errors: %d", len(errors))
     logger.debug("EXIT resolve_entities")
 
+    # Interim fix for a comparison-budget truncation being visible nowhere
+    # but a log line and a JSON field no UI ever rendered: duplicates among
+    # the unscanned pairs are a real, reportable risk, not something that
+    # should be invisible at the final gate. Folds into whatever
+    # validate_data already found — never overwrites it, since
+    # quality_report/has_quality_failure have no LangGraph reducer and a
+    # plain return here would silently discard validate_data's own findings
+    # from the node that ran immediately before this one.
+    budget_truncated = {
+        entity_type: stats["uncompared_pairs"]
+        for entity_type, stats in resolution_stats.items()
+        if stats.get("uncompared_pairs")
+    }
+    quality_update: dict[str, Any] = {}
+    if budget_truncated:
+        existing_report = dict(state.get("quality_report") or {})
+        entities_report = dict(existing_report.get("entities") or {})
+        overall_severity = existing_report.get("severity", "pass")
+        for entity_type, uncompared in budget_truncated.items():
+            prior = dict(entities_report.get(entity_type) or {})
+            checks = list(prior.get("checks") or [])
+            checks.append(
+                {
+                    "check": "comparison_budget",
+                    "severity": "warn",
+                    "success": False,
+                    "details": (
+                        f"{uncompared} candidate pair(s) exceeded the comparison "
+                        "budget and were never compared — duplicates among them "
+                        "would not have been detected."
+                    ),
+                }
+            )
+            # A "warn" here never downgrades an entity validate_data already
+            # marked "fail" — this adds risk information, it doesn't soften
+            # a harder finding.
+            entity_severity = "fail" if prior.get("severity") == "fail" else "warn"
+            entities_report[entity_type] = {**prior, "severity": entity_severity, "checks": checks}
+            if entity_severity == "warn" and overall_severity != "fail":
+                overall_severity = "warn"
+        quality_update = {
+            "quality_report": {
+                **existing_report,
+                "status": existing_report.get("status", "completed"),
+                "severity": overall_severity,
+                "entities": entities_report,
+            },
+            # Unchanged: a "warn" never forces has_quality_failure -- only
+            # validate_data's own hard "fail" findings do that, exactly as
+            # data_quality.run_data_quality_checks' own severity->has_failure
+            # rule already works.
+            "has_quality_failure": bool(state.get("has_quality_failure")),
+        }
+
     # Only the keys this node actually computes (Phase 0 Sec 0.8) - a key it
     # omits is left untouched by LangGraph's per-key TypedDict state update,
     # not cleared. extracted_data is kept explicit since
@@ -302,6 +356,7 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
         "errors": errors,
         "extracted_data": extracted_data,
         "interrupt_data": None,
+        **quality_update,
     }
 
 

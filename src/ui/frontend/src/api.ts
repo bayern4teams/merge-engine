@@ -47,15 +47,38 @@ export interface MappingRow {
   source_field: string;
   action: string;
   dest_column: string;
-  new_column_name: string;
-  new_column_type: string;
   confidence: number;
+  origin_id?: string;
+  table?: string;
+  is_coalesced?: boolean;
+  reason?: string;
+  // Phase 6.2: the destination table this field actually lands on. Usually
+  // the entity's own table, but map_fields_impl's widened family search
+  // can target a sibling table instead (e.g. Company.totalInvestment ->
+  // finance.amount) -- surfaced here so a cross-table mapping is visible,
+  // not indistinguishable from a same-table one.
+  dest_table?: string;
+}
+
+export interface ColumnDependency {
+  child_origin: string;
+  child_table: string;
+  child_column: string;
+  parent_origin: string;
+  parent_table: string;
+  parent_column: string;
+  rationale?: string;
 }
 
 export interface InterruptData {
   node: string;
   title: string;
   data: Record<string, any>;
+  // Content hash of `data`, set by WorkflowManager._build_interrupt_data.
+  // Changes only when the gate's actual content does, unlike `data` itself
+  // (a fresh object on every poll's JSON round-trip) — see MappingBody's
+  // sync effect for why that distinction matters.
+  payload_version?: string;
 }
 
 export interface WorkflowStatus {
@@ -182,6 +205,10 @@ export const GATE_LABELS: Record<string, string> = {
 
 export function startWorkflow(body: {
   request: string;
+  /** Subject-first mode (Phase 3.3): when set, the backend derives
+   * merge_scope directly from this name instead of asking the LLM to
+   * extract it from `request`'s free text. */
+  subject?: string;
   origins: OriginConfig[];
   destination: DestinationConfig;
   /** Replay a saved profile's pinned decisions instead of re-deriving them. */
@@ -203,11 +230,19 @@ export function startWorkflow(body: {
 
 // ── Config (Part 1.6.A Settings page) ──────────────────────────────────────
 
+export interface EnvDetail {
+  status: "set" | "overridden" | "not_set";
+  source: "env" | "session_override" | "not_set";
+  masked_value: string;
+  is_set: boolean;
+}
+
 export interface EffectiveConfig {
   effective: Record<string, any>;
   platform_overrides: Record<string, any>;
   sources: Record<string, Record<string, "override" | "env" | "file">>;
   env_present: Record<string, boolean>;
+  env_details?: Record<string, EnvDetail>;
 }
 
 export function getConfig(): Promise<EffectiveConfig> {
@@ -218,6 +253,19 @@ export function updatePlatformConfig(
   body: Record<string, any>
 ): Promise<{ platform_overrides: Record<string, any> }> {
   return put("/api/config/platform", body);
+}
+
+export function updateEnvOverrides(
+  overrides: Record<string, string>
+): Promise<{ env_details: Record<string, EnvDetail>; env_present: Record<string, boolean> }> {
+  return post("/api/config/env", { overrides });
+}
+
+export function resetEnvOverrides(): Promise<{
+  env_details: Record<string, EnvDetail>;
+  env_present: Record<string, boolean>;
+}> {
+  return post("/api/config/env/reset", {});
 }
 
 // ── Investigation tools (Part 1.6.B) ────────────────────────────────────────
@@ -269,6 +317,40 @@ export function sampleRows(body: {
   return post("/api/explore/sample", body);
 }
 
+export interface LineageRow {
+  run_id: string;
+  entity_type: string;
+  cluster_id: string;
+  record_a: string;
+  record_b: string;
+  confidence: number | null;
+  method: string | null;
+  evidence: Record<string, any> | null;
+  decided_by: string | null;
+  human_override: string | null;
+  created_at: string;
+}
+
+export interface LineageResult {
+  connected: boolean;
+  error: string | null;
+  rows: LineageRow[];
+}
+
+export function getLineage(body: {
+  host: string;
+  port: number;
+  user?: string;
+  password?: string;
+  database?: string;
+  schema_name?: string;
+  search: string;
+  entity_type?: string;
+  limit?: number;
+}): Promise<LineageResult> {
+  return post("/api/investigate/lineage", body);
+}
+
 export interface GoldenDiff {
   subject: string;
   totals: { golden_rows: number; app_rows: number; matched_rows: number; overall_parity_pct: number };
@@ -304,11 +386,15 @@ export function getStatus(threadId: string): Promise<WorkflowStatus> {
 export function sendFeedback(
   threadId: string,
   decision: "approve" | "reject",
-  mappingEdits?: MappingRow[]
+  mappingEdits?: MappingRow[],
+  columnDependencies?: ColumnDependency[],
+  scopePlan?: Record<string, any>
 ): Promise<WorkflowStatus> {
   return post(`/api/workflow/${threadId}/feedback`, {
     decision,
     mapping_edits: mappingEdits ?? null,
+    column_dependencies: columnDependencies ?? null,
+    scope_plan: scopePlan ?? null,
   });
 }
 

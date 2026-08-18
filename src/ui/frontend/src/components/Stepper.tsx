@@ -1,8 +1,8 @@
 const GATES: Array<[string, string]> = [
   ["human_review_deps", "Dependencies"],
+  ["human_review_mappings", "Field Mappings"],
   ["human_review_scope", "Scope"],
   ["human_review_matches", "Entity Matches"],
-  ["human_review_mappings", "Field Mappings"],
   ["human_final_approval", "Final Approval"],
 ];
 

@@ -41,7 +41,11 @@ from src.orchestrator.profiles import (
 )
 from src.orchestrator.workflow_manager import WorkflowManager
 from src.ui import connections
-from src.ui.components.db_discovery import sample_table_rows, test_and_discover_schemas
+from src.ui.components.db_discovery import (
+    query_merge_lineage,
+    sample_table_rows,
+    test_and_discover_schemas,
+)
 from src.utils.config_loader import (
     load_platform_overrides,
     load_raw_config_dict,
@@ -49,6 +53,36 @@ from src.utils.config_loader import (
 )
 
 logger = logging.getLogger("merge-engine.api")
+
+_ROOT_DIR = Path(__file__).resolve().parents[2]
+_ENV_FILE = _ROOT_DIR / ".env"
+
+
+def _init_env() -> None:
+    try:
+        from dotenv import load_dotenv
+
+        if _ENV_FILE.exists():
+            load_dotenv(dotenv_path=_ENV_FILE, override=True)
+        else:
+            load_dotenv(override=True)
+    except ImportError:
+        # A silent `pass` here once left every ${ENV_VAR} placeholder in
+        # config.yaml unexpanded with zero indication why — a live LLM key
+        # rotation looked like three consecutive "invalid API key" errors
+        # from the provider when the real fault was that .env was never
+        # read at all. This is a real, visible warning, not a raise: a
+        # deployment with real OS env vars already set (no .env file, no
+        # python-dotenv) is legitimate and must still start.
+        logger.warning(
+            "python-dotenv is not installed — .env will NOT be loaded. Any "
+            "${VAR} placeholder in config.yaml stays unexpanded unless the "
+            "real environment variable is already set. Run "
+            "`pip install python-dotenv` or `python scripts/bootstrap.py`."
+        )
+
+
+_init_env()
 
 # Single long-lived manager shared across requests (mirrors the one the
 # Gradio app held). Built lazily so importing this module is cheap.
@@ -119,6 +153,20 @@ class ExploreSampleRequest(BaseModel):
     limit: int = 20
 
 
+class LineageLookupRequest(BaseModel):
+    """Phase 7.3: merge-audit lookup by record id or cluster id."""
+
+    host: str
+    port: int
+    user: str = ""
+    password: str = ""
+    database: str = ""
+    schema_name: str = ""
+    search: str
+    entity_type: str = ""
+    limit: int = 50
+
+
 class RunConfig(BaseModel):
     """Part 1.6.A: run-by-run overrides, set in the UI's Advanced panel.
 
@@ -145,6 +193,13 @@ class RunConfig(BaseModel):
 
 class WorkflowStart(BaseModel):
     request: str
+    # Subject-first mode (Phase 3.3 of the fix-bugs follow-up plan): when
+    # set, merge_scope is derived directly from this name instead of asking
+    # the LLM to extract a subject from `request`'s free text. `request`
+    # still carries some text — parse_request's LLM call still needs it for
+    # entity-group naming and explicit-vs-inferred classification, which are
+    # independent of scope extraction.
+    subject: str | None = None
     origins: list[dict[str, Any]]
     destination: dict[str, Any]
     # Replay a saved profile's pinned decisions instead of re-deriving them.
@@ -199,6 +254,15 @@ class Feedback(BaseModel):
     mapping_edits: list[dict[str, Any]] | None = None
     cluster_decisions: list[dict[str, Any]] | None = None
     entity_tables: dict[str, list[dict[str, Any]]] | None = None
+    # Custom cross-table column dependencies added at the deps gate (Phase
+    # 2.4) — {child_origin, child_table, child_column, parent_origin,
+    # parent_table, parent_column, rationale}, one dict per link.
+    column_dependencies: list[dict[str, Any]] | None = None
+    # The edited scope plan from the scope gate (Phase 5.2) — same shape as
+    # scope_plan.entities, with each row's "enabled" possibly toggled off.
+    # human_review_scope's own node body replaces state["scope_plan"]
+    # wholesale with this on resume; no separate merge step needed here.
+    scope_plan: dict[str, Any] | None = None
 
 
 _DECISIONS = {"approve", "edit", "retry", "reject", "abort", "skip"}
@@ -227,6 +291,15 @@ class PlatformRetryOverride(BaseModel):
 class PlatformExtractionOverride(BaseModel):
     default_batch_size: int | None = None
     max_batch_size: int | None = None
+
+
+class EnvOverridesUpdate(BaseModel):
+    """Session-only environment variable overrides (not saved to .env)."""
+
+    overrides: dict[str, str]
+
+
+_SESSION_ENV_OVERRIDES: dict[str, str] = {}
 
 
 class PlatformConfigUpdate(BaseModel):
@@ -326,7 +399,42 @@ def create_api(config_path: str = "config/config.yaml") -> FastAPI:
     # touch a file, so a value here always describes the platform default a
     # run starts from, not what any particular run used.
 
-    _ENV_EXPECTED = ("LLM_API_KEY", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST")
+    _ENV_EXPECTED = (
+        "LLM_API_KEY",
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "LANGFUSE_HOST",
+    )
+
+    def _mask_env_val(val: str) -> str:
+        if not val:
+            return ""
+        if len(val) <= 8:
+            return "****"
+        return val[:3] + "..." + val[-4:]
+
+    def _build_env_details() -> dict[str, dict[str, Any]]:
+        details: dict[str, dict[str, Any]] = {}
+        for name in _ENV_EXPECTED:
+            val = os.environ.get(name, "")
+            is_override = name in _SESSION_ENV_OVERRIDES
+            is_present = bool(val)
+            if is_override:
+                status = "overridden"
+                source = "session_override"
+            elif is_present:
+                status = "set"
+                source = "env"
+            else:
+                status = "not_set"
+                source = "not_set"
+            details[name] = {
+                "status": status,
+                "source": source,
+                "masked_value": _mask_env_val(val),
+                "is_set": is_present,
+            }
+        return details
 
     @app.get("/api/config")
     def get_config() -> dict[str, Any]:
@@ -356,9 +464,8 @@ def create_api(config_path: str = "config/config.yaml") -> FastAPI:
             "effective": strip_secrets(effective),
             "platform_overrides": strip_secrets(overlay),
             "sources": sources,
-            # Presence only — never the value — so the Settings page can say
-            # "LLM_API_KEY is set" without ever seeing or leaking it.
             "env_present": {name: bool(os.environ.get(name)) for name in _ENV_EXPECTED},
+            "env_details": _build_env_details(),
         }
 
     @app.put("/api/config/platform")
@@ -374,6 +481,36 @@ def create_api(config_path: str = "config/config.yaml") -> FastAPI:
             overlay[section] = {**overlay.get(section, {}), **values}
         save_platform_overrides(overlay)
         return {"platform_overrides": strip_secrets(overlay)}
+
+    @app.post("/api/config/env")
+    def update_env_overrides(body: EnvOverridesUpdate) -> dict[str, Any]:
+        """Apply session-only environment overrides.
+
+        Takes effect immediately in runtime memory for all LLM and connection calls.
+        Does NOT alter the .env file on disk. When the process restarts (Ctrl+C),
+        overrides naturally reset back to .env defaults.
+        """
+        for k, v in body.overrides.items():
+            if v and v.strip():
+                clean_v = v.strip()
+                _SESSION_ENV_OVERRIDES[k] = clean_v
+                os.environ[k] = clean_v
+            elif k in _SESSION_ENV_OVERRIDES:
+                del _SESSION_ENV_OVERRIDES[k]
+        return {
+            "env_details": _build_env_details(),
+            "env_present": {name: bool(os.environ.get(name)) for name in _ENV_EXPECTED},
+        }
+
+    @app.post("/api/config/env/reset")
+    def reset_env_overrides() -> dict[str, Any]:
+        """Clear all session overrides and reload .env from disk."""
+        _SESSION_ENV_OVERRIDES.clear()
+        _init_env()
+        return {
+            "env_details": _build_env_details(),
+            "env_present": {name: bool(os.environ.get(name)) for name in _ENV_EXPECTED},
+        }
 
     # ── Workflow ─────────────────────────────────────────────────────────────
 
@@ -420,6 +557,7 @@ def create_api(config_path: str = "config/config.yaml") -> FastAPI:
                 conflict_policy=body.conflict_policy,
                 matching_rules=body.matching_rules,
                 run_config=body.run_config.model_dump() if body.run_config else None,
+                subject=body.subject,
             )
         except ValueError as exc:
             raise HTTPException(404, str(exc)) from exc
@@ -563,6 +701,10 @@ def create_api(config_path: str = "config/config.yaml") -> FastAPI:
             feedback["cluster_decisions"] = body.cluster_decisions
         if body.entity_tables is not None:
             feedback["entity_tables"] = body.entity_tables
+        if body.column_dependencies is not None:
+            feedback["column_dependencies"] = body.column_dependencies
+        if body.scope_plan is not None:
+            feedback["scope_plan"] = body.scope_plan
 
         manager.resume_workflow(thread_id, feedback)
         # Return the status right after resuming so the client can react
@@ -589,6 +731,25 @@ def create_api(config_path: str = "config/config.yaml") -> FastAPI:
             database=body.database,
             table=body.table,
             schema=body.schema_name,
+            limit=body.limit,
+        )
+
+    @app.post("/api/investigate/lineage")
+    def investigate_lineage(body: LineageLookupRequest) -> dict[str, Any]:
+        """Phase 7.3: merge lineage lookup over merge_engine_merge_audit —
+        every pair a canonical id or source record id ever appeared in,
+        with the field-level evidence that justified the merge. Survives
+        the run's own spool being cleaned up, unlike the checkpoint-backed
+        match inspector above."""
+        return query_merge_lineage(
+            host=body.host,
+            port=body.port,
+            user=body.user,
+            password=body.password,
+            database=body.database,
+            schema=body.schema_name,
+            search=body.search,
+            entity_type=body.entity_type,
             limit=body.limit,
         )
 

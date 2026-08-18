@@ -10,6 +10,23 @@ import pytest
 from src.llm import LLMClient
 
 
+@pytest.fixture(autouse=True)
+def _isolated_persistent_cache(tmp_path, monkeypatch):
+    """Phase A5: LLMClient.call() now also writes to the process-wide
+    PERSISTENT_CACHE singleton (config/.llm_cache.sqlite3 by default) on
+    every successfully-cached response. Without this, every test in this
+    file that exercises the real call()/call_json() path would pollute
+    that real on-disk file. Redirect it to an isolated, per-test path
+    instead -- the same isolation SEMANTIC_CACHE.clear() already gives the
+    in-memory layer."""
+    from src.llm.cache_store import PersistentLLMCache
+
+    isolated = PersistentLLMCache(tmp_path / "llm_cache_test.sqlite3")
+    monkeypatch.setattr("src.llm.client.PERSISTENT_CACHE", isolated)
+    yield isolated
+    isolated.close()
+
+
 class TestLLMClientInit:
     """Tests for LLMClient initialization."""
 
@@ -375,6 +392,173 @@ class TestLLMClientCallJsonCaching:
             )
             assert result == "plain text, not json"
             assert SEMANTIC_CACHE.size == 1
+
+
+class TestLLMClientPersistentCache:
+    """Phase A5: the SQLite-backed second cache layer that survives a
+    process restart. Distinguished from TestLLMClientCallJsonCaching above,
+    which only exercises the in-memory SEMANTIC_CACHE."""
+
+    @pytest.mark.asyncio
+    async def test_a_persistent_cache_hit_avoids_calling_the_model_at_all(
+        self, _isolated_persistent_cache
+    ) -> None:
+        from src.llm.cost import SEMANTIC_CACHE, cache_key
+
+        config = {"model": "gpt-4", "api_key": "test", "temperature": 0.0}
+        client = LLMClient(config)
+        SEMANTIC_CACHE.clear()
+
+        # Pre-populate the persistent layer directly, standing in for "an
+        # earlier process already answered this exact question".
+        key = cache_key(
+            model=client.model_name,
+            temperature=client.temperature,
+            system_prompt="Return JSON.",
+            user_prompt="a repeat question",
+            response_format=None,
+            json_mode=True,
+        )
+        _isolated_persistent_cache.put(key, '{"answer": "from disk"}', model="gpt-4")
+
+        with patch.object(client, "_get_model") as mock_get_model:
+            result = await client.call_json(
+                system_prompt="Return JSON.",
+                user_prompt="a repeat question",
+            )
+
+        mock_get_model.assert_not_called()
+        assert result == {"answer": "from disk"}
+
+    @pytest.mark.asyncio
+    async def test_a_persistent_hit_populates_the_in_memory_layer_too(
+        self, _isolated_persistent_cache
+    ) -> None:
+        """So the NEXT call in the same process hits L1 without another
+        disk round trip."""
+        from src.llm.cost import SEMANTIC_CACHE, cache_key
+
+        config = {"model": "gpt-4", "api_key": "test", "temperature": 0.0}
+        client = LLMClient(config)
+        SEMANTIC_CACHE.clear()
+
+        key = cache_key(
+            model=client.model_name,
+            temperature=client.temperature,
+            system_prompt="Return JSON.",
+            user_prompt="warm the L1 cache",
+            response_format=None,
+            json_mode=True,
+        )
+        _isolated_persistent_cache.put(key, '{"ok": true}', model="gpt-4")
+
+        with patch.object(client, "_get_model"):
+            await client.call_json(system_prompt="Return JSON.", user_prompt="warm the L1 cache")
+
+        found, _ = SEMANTIC_CACHE.get(key)
+        assert found is True
+
+    @pytest.mark.asyncio
+    async def test_a_real_call_writes_through_to_the_persistent_layer(
+        self, _isolated_persistent_cache
+    ) -> None:
+        from src.llm.cost import SEMANTIC_CACHE, cache_key
+
+        config = {"model": "gpt-4", "api_key": "test", "temperature": 0.0}
+        client = LLMClient(config)
+        SEMANTIC_CACHE.clear()
+
+        with patch.object(client, "_get_model") as mock_get_model:
+            mock_model = AsyncMock()
+            mock_model.ainvoke = AsyncMock(return_value=MagicMock(content='{"fresh": true}'))
+            mock_get_model.return_value = mock_model
+
+            await client.call_json(
+                system_prompt="Return JSON.",
+                user_prompt="a brand new question",
+            )
+
+        key = cache_key(
+            model=client.model_name,
+            temperature=client.temperature,
+            system_prompt="Return JSON.",
+            user_prompt="a brand new question",
+            response_format=None,
+            json_mode=True,
+        )
+        found, value = _isolated_persistent_cache.get(key)
+        assert found is True
+        assert value == '{"fresh": true}'
+
+    @pytest.mark.asyncio
+    async def test_a_malformed_response_is_not_written_to_the_persistent_layer(
+        self, _isolated_persistent_cache
+    ) -> None:
+        """Same guarantee as the in-memory layer's validate_before_cache
+        check: a response that fails to parse must never be replayed
+        forever, whether from memory or from disk."""
+        from src.llm.cost import SEMANTIC_CACHE, cache_key
+
+        config = {"model": "gpt-4", "api_key": "test", "temperature": 0.0}
+        client = LLMClient(config)
+        SEMANTIC_CACHE.clear()
+
+        with patch.object(client, "_get_model") as mock_get_model:
+            mock_model = AsyncMock()
+            mock_model.ainvoke = AsyncMock(return_value=MagicMock(content="not json"))
+            mock_get_model.return_value = mock_model
+
+            with pytest.raises(json.JSONDecodeError):
+                await client.call_json(
+                    system_prompt="Return JSON.",
+                    user_prompt="a request that always fails to parse",
+                )
+
+        key = cache_key(
+            model=client.model_name,
+            temperature=client.temperature,
+            system_prompt="Return JSON.",
+            user_prompt="a request that always fails to parse",
+            response_format=None,
+            json_mode=True,
+        )
+        assert _isolated_persistent_cache.get(key) == (False, None)
+
+    @pytest.mark.asyncio
+    async def test_persistent_cache_enabled_false_skips_both_read_and_write(
+        self, _isolated_persistent_cache
+    ) -> None:
+        from src.llm.cost import SEMANTIC_CACHE, cache_key
+
+        config = {
+            "model": "gpt-4",
+            "api_key": "test",
+            "temperature": 0.0,
+            "persistent_cache_enabled": False,
+        }
+        client = LLMClient(config)
+        SEMANTIC_CACHE.clear()
+
+        with patch.object(client, "_get_model") as mock_get_model:
+            mock_model = AsyncMock()
+            mock_model.ainvoke = AsyncMock(return_value=MagicMock(content='{"ok": true}'))
+            mock_get_model.return_value = mock_model
+
+            await client.call_json(
+                system_prompt="Return JSON.",
+                user_prompt="disabled persistent cache",
+            )
+
+        key = cache_key(
+            model=client.model_name,
+            temperature=client.temperature,
+            system_prompt="Return JSON.",
+            user_prompt="disabled persistent cache",
+            response_format=None,
+            json_mode=True,
+        )
+        # Never written to disk when the flag is off.
+        assert _isolated_persistent_cache.get(key) == (False, None)
 
 
 class TestLLMClientCallBatch:

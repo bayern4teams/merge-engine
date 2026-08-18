@@ -7,6 +7,7 @@ Cost model: mapping two different concepts onto the same column silently corrupt
 2. **Skip** when the field has no destination equivalent, is noise (internal IDs, timestamps, metadata with no analytical value), or duplicates information already captured by another mapped column.
 3. Use the sample values to judge intent, not just the field name -- a field named `flag` with values like "gold"/"silver"/"platinum" is a tier, not a boolean. `NULL`/missing and empty-string are different signals; don't let all-empty samples fool you into skipping a field that is simply sparse in this particular batch.
 4. Never propose a mapping whose target column collides with an existing column that already receives a different source field in this batch. One source field per destination column.
+5. The destination schema may include a "Related table" section for tables that share a foreign key with the primary one (e.g. `finance`, `contact_email` alongside a `company` primary table). Only use a related-table column when nothing on the primary table fits — answer with `dest_column` in `table.column` form (e.g. `"finance.amount"`) for those; a plain column name always means the primary table.
 
 ## Output contract
 Return ONLY a JSON object keyed by source field name, one entry per field given, each value one of:

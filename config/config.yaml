@@ -23,7 +23,7 @@ destination:
 # ── LLM Configuration ──────────────────────────────────────────────────────
 llm:
   provider: "openai"      # "openai" | "azure" | "anthropic"
-  model: "qwen3.5-27b"
+  model: "qwen3.5-122b-a10b"
   # Tried in this exact order (LLMClient.call) whenever the active model
   # hits a quota/billing error — a same-account retry can't recover from
   # that, so the client advances to the next entry instead of failing.
@@ -42,6 +42,14 @@ llm:
   structured_output: true         # Request JSON-object response_format (disable if endpoint rejects it)
   entity_resolution_enabled: true # LLM judgment for borderline entity pairs (0.70-0.95 band)
   field_mapping_enabled: true     # LLM mapping for fields the heuristic can't map confidently
+  # Phase A5: the in-memory cache (always on) dies with the process -- this
+  # is the durable second layer (config/.llm_cache.sqlite3, gitignored)
+  # underneath it, keyed on the exact same normalised-prompt hash. Disable
+  # only to compare a cold run against a warm one; disabling it never
+  # changes an answer, only whether one is reused.
+  persistent_cache_enabled: true
+  persistent_cache_ttl_days: 30    # 0 = never expire
+  persistent_cache_max_rows: 50000
 
 # ── Retry Configuration ───────────────────────────────────────────────────
 retry:
@@ -54,6 +62,15 @@ retry:
 extraction:
   default_batch_size: 1000
   max_batch_size: 10000
+
+# ── Scope Planning (scoped/"everything about X" merges) ────────────────────
+scope:
+  # Longest join-path the BFS path-finder will consider from the subject
+  # table to a dependent table.
+  max_hops: 6
+  # Distinct values sampled per column when verifying a candidate join
+  # edge's inclusion dependency.
+  join_graph_sample_size: 500
 
 # ── Tracing (self-hosted Langfuse) ─────────────────────────────────────────
 # Tracing is configured purely via environment variables in .env:

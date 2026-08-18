@@ -299,6 +299,14 @@ def _resolve_core(
 
     scored_pairs: list[tuple[str, str, float]] = []
     borderline: list[tuple[str, str, dict, dict, float]] = []
+    # Phase 7.1: per-pair evidence, keyed by the same canonical (id1, id2)
+    # order _build_clusters' edge_weight uses. Only built when a
+    # probabilistic model actually fit (match_model is not None) — a
+    # heuristic-only pair has no field-weight breakdown to give, only the
+    # single confidence number it already carries. Plain dicts only (str/
+    # float/None), so this stays picklable across the ProcessPoolExecutor
+    # boundary like every other value this function returns.
+    pair_evidence: dict[tuple[str, str], dict[str, Any]] = {}
     for pair_idx, (id1, id2, rec1, rec2) in enumerate(candidate_pairs):
         precomputed_vector = fitted_vectors[pair_idx] if fitted_vectors is not None else None
         conf = _score_pair(
@@ -315,6 +323,19 @@ def _resolve_core(
             borderline.append((id1, id2, rec1, rec2, conf))
         else:
             scored_pairs.append((id1, id2, conf))
+            if match_model is not None and precomputed_vector is not None:
+                matched, mismatched = _pair_field_evidence(
+                    rec1, rec2, precomputed_vector, match_model, record_cache
+                )
+                key = (id1, id2) if id1 < id2 else (id2, id1)
+                pair_evidence[key] = {
+                    "a": id1,
+                    "b": id2,
+                    "confidence": round(conf, 4),
+                    "method": "fellegi_sunter",
+                    "matched_fields": matched,
+                    "mismatched_fields": mismatched,
+                }
         # No periodic yield here (unlike the pre-B.3 inline loop): this
         # function is either dispatched to a worker process with no event
         # loop to yield to, or (below threshold) run inline where its cost
@@ -330,6 +351,7 @@ def _resolve_core(
         "blocking_stats": blocking_stats,
         "scored_pairs": scored_pairs,
         "borderline": borderline,
+        "pair_evidence": pair_evidence,
         "blocking_seconds": t_fit_start - t_blocking_start,
         "fit_model_seconds": t_scoring_start - t_fit_start,
         "scoring_seconds": t_end - t_scoring_start,
@@ -456,6 +478,26 @@ async def resolve_entities_impl(
     # behaviour it had before: auto-detected blocking, hint-derived unique
     # identifiers, and the standard thresholds.
     rules = matching_rules or {}
+    # Phase 7.4: an optional per-entity engine override. Splink replaces only
+    # scoring+clustering-input (steps 1-3 below); resolve_cache, the LLM
+    # borderline pass and _build_clusters are untouched. A clean, pure
+    # insertion — the rest of this function is not rewritten. On any Splink
+    # failure (untrainable model, no usable blocking rule, exception)
+    # resolve_with_splink returns None and execution falls through to the
+    # builtin path below exactly as if no engine were configured.
+    engine = rules.get("engine", "builtin")
+    if engine == "splink":
+        from src.mcp_server.tools.splink_matcher import resolve_with_splink
+
+        splink_res = await resolve_with_splink(
+            entity_type,
+            records,
+            matching_rules=rules,
+            known_cluster_ids=known_cluster_ids,
+            build_clusters_fn=_build_clusters,
+        )
+        if splink_res is not None:
+            return splink_res
     blocking_keys = blocking_keys or rules.get("blocking_keys") or None
     # auto_match/unique_ids here are for the log line below and the cache
     # key only — _resolve_core (Part 1.5 B.3) re-derives its own copies
@@ -547,6 +589,12 @@ async def resolve_entities_impl(
     blocking_stats = core["blocking_stats"]
     scored_pairs: list[tuple[str, str, float]] = list(core["scored_pairs"])
     borderline: list[tuple[str, str, dict, dict, float]] = list(core["borderline"])
+    # Phase 7.1: per-pair evidence keyed by canonical (id1, id2) order,
+    # covering every fellegi_sunter-scored pair so far. The LLM path below
+    # adds its own entries (and can overwrite a pair that started borderline
+    # once the LLM's judgment replaces the heuristic score) into this same
+    # dict before it reaches _build_clusters.
+    pair_evidence: dict[tuple[str, str], dict[str, Any]] = dict(core.get("pair_evidence") or {})
     logger.info(
         "Generated %d candidate pairs for entity '%s' (blocked from %d possible); "
         "scored=%d borderline=%d (dispatched=%s)",
@@ -583,7 +631,9 @@ async def resolve_entities_impl(
             len(borderline),
             entity_type,
         )
-        llm_results = await _judge_pairs_with_llm(entity_type, borderline, llm_config)
+        llm_results = await _judge_pairs_with_llm(
+            entity_type, borderline, llm_config, evidence_sink=pair_evidence
+        )
         llm_scored = len(llm_results)
         scored_pairs.extend(llm_results)
     else:
@@ -604,6 +654,7 @@ async def resolve_entities_impl(
             auto_match=auto_match,
             auto_exclude=auto_exclude,
             stats=clustering_stats,
+            pair_evidence=pair_evidence,
         )
         obs.update(
             output={
@@ -1557,6 +1608,53 @@ def _build_comparison_vector(
     }
 
 
+def _pair_field_evidence(
+    rec1: dict[str, Any],
+    rec2: dict[str, Any],
+    vector: dict[str, tuple[str, str | None]],
+    model: Any,
+    record_cache: RecordCache | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split one pair's comparison vector into matched vs mismatched fields.
+
+    The Splink-style waterfall breakdown Phase 7.1 asks for (issue 7): which
+    fields carried a match, not one opaque confidence number. Built entirely
+    from ``MatchModel.weight`` (fellegi_sunter.py) — the exact bits-of-evidence
+    figure the scorer itself already sums into one probability — so this is
+    the SAME number decomposed per field, not a second, possibly-diverging
+    calculation. ``model.explain()`` computes something similar but only as
+    formatted text with no callers anywhere in the codebase; this returns
+    structured dicts instead, for the cluster's ``match_evidence`` and
+    eventually the review gate/lineage view (Phase 7.3).
+
+    ``LEVEL_NULL`` fields (at least one side missing the field entirely)
+    contribute exactly 0 weight and are dropped — they are not evidence
+    either way, just absent data, and would only clutter the breakdown.
+    """
+    proj1, _, _ = _cached_projection(rec1, record_cache)
+    proj2, _, _ = _cached_projection(rec2, record_cache)
+    matched: list[dict[str, Any]] = []
+    mismatched: list[dict[str, Any]] = []
+    for field_name, (level, value) in vector.items():
+        if level == LEVEL_NULL:
+            continue
+        field_model = model.fields.get(field_name)
+        if field_model is None:
+            continue
+        weight = field_model.weight(level, value)
+        entry = {
+            "field": field_name,
+            "a": proj1.get(field_name),
+            "b": proj2.get(field_name),
+            "level": level,
+            "weight": round(weight, 3),
+        }
+        (matched if weight > 0 else mismatched).append(entry)
+    matched.sort(key=lambda e: -e["weight"])
+    mismatched.sort(key=lambda e: e["weight"])
+    return matched, mismatched
+
+
 def _unique_id_fields(records: list[dict[str, Any]]) -> set[str]:
     """Fields that uniquely identify an entity (email, tax_id, ...)."""
     found: set[str] = set()
@@ -1837,6 +1935,7 @@ async def _judge_pairs_with_llm(
     entity_type: str,
     borderline: list[tuple[str, str, dict, dict, float]],
     llm_config: dict[str, Any],
+    evidence_sink: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> list[tuple[str, str, float]]:
     """Judge borderline pairs in chunked batched LLM calls.
 
@@ -1846,6 +1945,15 @@ async def _judge_pairs_with_llm(
     confidence, non-match -> 1 - confidence capped below the union
     threshold). On any failure the affected chunk keeps its heuristic
     scores so the pipeline never blocks on the LLM.
+
+    ``evidence_sink`` (Phase 7.1), when given, is filled in place with one
+    entry per pair the LLM actually judged — ``{"method": "llm", "reason":
+    ...}`` alongside the match/confidence it returned. Previously the
+    model's rationale was logged (truncated to 120 chars) and then
+    discarded; this is the same string, kept for the cluster's
+    ``match_evidence`` instead of only ever reaching a log file. A pair the
+    LLM didn't judge (missing from its response, or the whole chunk failed)
+    gets no entry — its heuristic score has no LLM rationale to attach.
     """
     from src.llm import PROMPT_TEMPLATES, LLMClient
     from src.orchestrator.utils.retry_hints import apply_retry_hint
@@ -1913,6 +2021,7 @@ async def _judge_pairs_with_llm(
                     # "Not a match": push below the union threshold, more
                     # decisively the more confident the LLM is.
                     score = min(heuristic_conf, 1.0 - llm_conf, _AUTO_EXCLUDE)
+                reason = str(j.get("reason", ""))
                 logger.debug(
                     "LLM judgment pair %d (%s vs %s): match=%s conf=%.2f -> score=%.2f (%s)",
                     offset + n,
@@ -1921,8 +2030,20 @@ async def _judge_pairs_with_llm(
                     j.get("match"),
                     llm_conf,
                     score,
-                    str(j.get("reason", ""))[:120],
+                    reason[:120],
                 )
+                if evidence_sink is not None:
+                    key = (id1, id2) if id1 < id2 else (id2, id1)
+                    evidence_sink[key] = {
+                        "a": id1,
+                        "b": id2,
+                        "confidence": round(score, 4),
+                        "method": "llm",
+                        "matched_fields": [],
+                        "mismatched_fields": [],
+                        "reason": reason,
+                        "llm_match": bool(j.get("match")),
+                    }
                 chunk_results.append((id1, id2, round(score, 3)))
 
         except Exception as exc:
@@ -1990,6 +2111,7 @@ async def _build_clusters(
     auto_match: float = _AUTO_MATCH,
     auto_exclude: float = _AUTO_EXCLUDE,
     stats: dict[str, Any] | None = None,
+    pair_evidence: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], int, int]:
     """Build entity clusters from scored pairs.
 
@@ -2017,6 +2139,14 @@ async def _build_clusters(
     (``clustering_seconds``, ``largest_component_size``, ``large_components``,
     ``component_count``) — caller-owned for the same concurrency reason as
     ``_generate_candidate_pairs``' ``stats``.
+
+    ``pair_evidence`` (Phase 7.1), when given, is the per-pair breakdown
+    ``_resolve_core``/``_judge_pairs_with_llm`` built while scoring — every
+    multi-member cluster gets a ``match_evidence: {"pairs": [...]}`` key
+    covering its own internal edges (looked up from ``edge_weight``'s keys,
+    the same internal-edge enumeration ``_min_internal_confidence`` and
+    ``_average_linkage`` already use), instead of collapsing straight to
+    ``min()`` as ``match_confidence`` with everything else thrown away.
     """
     if stats is None:
         stats = {}
@@ -2112,18 +2242,21 @@ async def _build_clusters(
         for part in parts:
             part_ids = sorted(part)
             min_conf = _min_internal_confidence(part_ids, edge_weight)
-            clusters.append(
-                {
-                    # Stable across runs: a previously-assigned id is reused, and
-                    # only a genuinely new entity derives one from its members.
-                    # The id is the destination primary key, so instability here
-                    # means duplicate rows.
-                    "cluster_id": _assign_cluster_id(entity_type, part_ids, known_cluster_ids),
-                    "record_ids": part_ids,
-                    "match_confidence": round(min_conf, 3),
-                    "required_human_review": len(part_ids) > 1 and min_conf < 0.85,
-                }
-            )
+            cluster: dict[str, Any] = {
+                # Stable across runs: a previously-assigned id is reused, and
+                # only a genuinely new entity derives one from its members.
+                # The id is the destination primary key, so instability here
+                # means duplicate rows.
+                "cluster_id": _assign_cluster_id(entity_type, part_ids, known_cluster_ids),
+                "record_ids": part_ids,
+                "match_confidence": round(min_conf, 3),
+                "required_human_review": len(part_ids) > 1 and min_conf < 0.85,
+            }
+            if pair_evidence and len(part_ids) > 1:
+                pairs = _evidence_for_members(part_ids, edge_weight, pair_evidence)
+                if pairs:
+                    cluster["match_evidence"] = {"pairs": pairs}
+            clusters.append(cluster)
 
     if repaired or cut:
         logger.info(
@@ -2168,6 +2301,29 @@ def _min_internal_confidence(
         if ((a, b) if a < b else (b, a)) in edge_weight
     ]
     return min(weights) if weights else 1.0
+
+
+def _evidence_for_members(
+    members: list[str],
+    edge_weight: dict[tuple[str, str], float],
+    pair_evidence: dict[tuple[str, str], dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Every internal edge of a finished cluster with recorded evidence.
+
+    Same pairwise enumeration as ``_average_linkage``/``_min_internal_confidence``
+    (an edge exists here only when ``edge_weight`` has it — i.e. the pair was
+    actually scored, not merely co-members via a chain). A pair scored but with
+    no ``pair_evidence`` entry (heuristic-only, no probabilistic model fit) is
+    silently skipped rather than padded with an empty placeholder — nothing
+    false to show beats a confident-looking blank.
+    """
+    result: list[dict[str, Any]] = []
+    for i, a in enumerate(members):
+        for b in members[i + 1 :]:
+            key = (a, b) if a < b else (b, a)
+            if key in edge_weight and key in pair_evidence:
+                result.append(pair_evidence[key])
+    return result
 
 
 def _partition_component(

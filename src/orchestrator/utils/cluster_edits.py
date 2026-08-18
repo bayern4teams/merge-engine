@@ -25,7 +25,7 @@ _SPLIT = {"split", "reject", "separate", "no", "false"}
 def apply_cluster_decisions(
     entity_clusters: dict[str, list[dict[str, Any]]],
     decisions: list[dict[str, Any]],
-) -> tuple[dict[str, list[dict[str, Any]]], dict[str, int]]:
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, int], list[dict[str, Any]]]:
     """Rebuild ``entity_clusters`` from the reviewer's decisions.
 
     Each decision is ``{"cluster_id": str, "entity_type": str, "action": str}``
@@ -33,7 +33,17 @@ def apply_cluster_decisions(
     to partition the cluster. Without ``groups``, ``split`` breaks the cluster
     into one cluster per record.
 
-    Returns the updated clusters and a ``{kept, split, unknown}`` tally.
+    Returns ``(updated, stats, split_pairs)``:
+
+    - ``updated`` / ``stats``: the rebuilt clusters and a ``{kept, split,
+      unknown}`` tally, as before.
+    - ``split_pairs``: every pair from a SPLIT cluster's own ``match_evidence``
+      (Phase 7.1), tagged with the original ``cluster_id`` — the evidence a
+      split would otherwise destroy outright, since the new per-partition
+      clusters carry no ``match_evidence`` of their own. The caller persists
+      these as ``human_override: "split"`` merge-audit rows (Phase 7.2) so a
+      human's "these are NOT the same entity" decision is queryable exactly
+      like an auto/LLM merge decision is, instead of vanishing.
     """
     by_id: dict[str, dict[str, Any]] = {}
     for decision in decisions or []:
@@ -44,8 +54,9 @@ def apply_cluster_decisions(
             by_id[cid] = decision
 
     stats = {"kept": 0, "split": 0, "unknown": 0}
+    split_pairs: list[dict[str, Any]] = []
     if not by_id:
-        return entity_clusters, stats
+        return entity_clusters, stats, split_pairs
 
     updated: dict[str, list[dict[str, Any]]] = {}
     for entity_type, clusters in (entity_clusters or {}).items():
@@ -71,6 +82,29 @@ def apply_cluster_decisions(
                     cluster.get("cluster_id"),
                 )
                 stats["unknown"] += 1
+
+            # Capture the original cluster's per-pair evidence BEFORE it is
+            # torn apart below — the new per-partition clusters start with
+            # no match_evidence of their own, so this is the only chance to
+            # keep it.
+            original_cluster_id = str(cluster.get("cluster_id") or "")
+            for pair in (cluster.get("match_evidence") or {}).get("pairs", []):
+                record_a, record_b = pair.get("a"), pair.get("b")
+                if not record_a or not record_b:
+                    continue
+                split_pairs.append(
+                    {
+                        "entity_type": entity_type,
+                        "cluster_id": original_cluster_id,
+                        "record_a": record_a,
+                        "record_b": record_b,
+                        "confidence": pair.get("confidence"),
+                        "method": pair.get("method", ""),
+                        "matched_fields": pair.get("matched_fields", []),
+                        "mismatched_fields": pair.get("mismatched_fields", []),
+                        "reason": pair.get("reason"),
+                    }
+                )
 
             groups = decision.get("groups")
             if isinstance(groups, list) and groups:
@@ -104,10 +138,11 @@ def apply_cluster_decisions(
         updated[entity_type] = rebuilt
 
     logger.info(
-        "Applied %d cluster decisions: %d kept, %d split, %d unrecognised",
+        "Applied %d cluster decisions: %d kept, %d split, %d unrecognised (%d evidence pair(s) preserved)",
         len(by_id),
         stats["kept"],
         stats["split"],
         stats["unknown"],
+        len(split_pairs),
     )
-    return updated, stats
+    return updated, stats, split_pairs

@@ -119,6 +119,44 @@ def evaluate(
     return report
 
 
+def splink_scorer_from_records(
+    entity_type: str, records: list[dict[str, Any]]
+) -> Callable[[dict[str, Any], dict[str, Any]], float] | None:
+    """One Splink training run over ``records``, wrapped as a pairwise scorer.
+
+    ``evaluate()`` expects ``scorer(rec_a, rec_b) -> float`` called once per
+    labelled pair. Splink cannot work that way — training needs the whole
+    record set's value distribution — so this trains exactly once (via
+    ``score_pairs_with_splink``, Phase 7.4) and returns a scorer that looks
+    up each pair's prediction from that single run. A pair Splink's blocking
+    rules never grouped together (so it was never scored) reads as 0.0 —
+    the same "never compared" outcome the builtin engine's blocking produces
+    for an unblocked pair, which ``evaluate()`` already treats as excluded.
+
+    Returns ``None`` if Splink isn't installed or training failed on this
+    record set, mirroring ``resolve_with_splink``'s own fallback contract —
+    callers should skip the Splink report line rather than score zeros.
+    """
+    from src.mcp_server.tools.resolve_entities import _record_id
+    from src.mcp_server.tools.splink_matcher import score_pairs_with_splink
+
+    scored = asyncio.run(score_pairs_with_splink(entity_type, records))
+    if scored is None:
+        return None
+
+    lookup: dict[tuple[str, str], float] = {}
+    for id1, id2, prob in scored:
+        key = (id1, id2) if id1 < id2 else (id2, id1)
+        lookup[key] = prob
+
+    def scorer(rec_a: dict[str, Any], rec_b: dict[str, Any]) -> float:
+        id1, id2 = _record_id(rec_a), _record_id(rec_b)
+        key = (id1, id2) if id1 < id2 else (id2, id1)
+        return lookup.get(key, 0.0)
+
+    return scorer
+
+
 def _describe(rec: dict[str, Any]) -> str:
     name = " ".join(str(rec.get(k) or "") for k in ("first_name", "last_name")).strip()
     return f"{name} <{rec.get('email') or 'no email'}>"
@@ -245,6 +283,18 @@ def main() -> int:
             name="pairwise: Fellegi-Sunter + term frequency",
         ).render()
     )
+    print()
+
+    # Phase 7.4: the optional Splink engine, trained once over the same
+    # records the two scorers above used. Skipped (not failed) if the
+    # `splink` extra isn't installed, or if training itself couldn't
+    # converge on this record set.
+    splink_scorer = splink_scorer_from_records("person", records)
+    if splink_scorer is not None:
+        print(evaluate(splink_scorer, pairs, name="pairwise: Splink (DuckDB EM)").render())
+    else:
+        print("== pairwise: Splink (DuckDB EM) " + "=" * 24)
+        print("  skipped — Splink not installed or training failed on this record set")
     print()
 
     # Every Pagila staff row is a distinct person (1500 rows, 1500 distinct

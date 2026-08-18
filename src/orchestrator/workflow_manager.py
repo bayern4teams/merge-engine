@@ -8,6 +8,8 @@ checkpoints. Used by both the Gradio UI and programmatic API.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import sqlite3
 import threading
@@ -35,7 +37,6 @@ from src.orchestrator.spool import (
     cleanup_old_spools,
     clusters_for,
     collection_count,
-    entity_records_by_id,
     store_clusters,
     unified_for,
 )
@@ -150,6 +151,7 @@ class WorkflowManager:
         conflict_policy: dict[str, Any] | None = None,
         matching_rules: dict[str, Any] | None = None,
         run_config: dict[str, Any] | None = None,
+        subject: str | None = None,
     ) -> str:
         """Start a new merge workflow in a background thread.
 
@@ -178,6 +180,11 @@ class WorkflowManager:
             entity_resolution_enabled, field_mapping_enabled,
             auto_approve_gates) applied on top of config.yaml for this run
             only — no restart, config.yaml untouched.
+        subject : str, optional
+            Subject-first mode (Phase 3.3): when set, merge_scope is derived
+            directly from this name in get_initial_state, rather than left
+            for parse_request's LLM call to extract from user_request's
+            free text.
 
         Returns
         -------
@@ -211,6 +218,7 @@ class WorkflowManager:
             conflict_policy=conflict_policy,
             matching_rules=matching_rules,
             run_config=run_config,
+            subject=subject,
         )
 
         # A profile replays the decisions an earlier run made — which tables
@@ -396,7 +404,7 @@ class WorkflowManager:
                 node = pending[0]
                 wf["status"] = "interrupted"
                 wf["current_interrupt_node"] = node
-                wf["interrupt_data"] = self._build_interrupt_data(node, values)
+                wf["interrupt_data"] = self._build_interrupt_data(node, values, thread_id)
                 visited = wf.setdefault("visited_gates", [])
                 if node in HITL_NODES and node not in visited:
                     visited.append(node)
@@ -524,74 +532,44 @@ class WorkflowManager:
             logger.warning("Could not update profile %r: %s", name, exc)
 
     @staticmethod
-    def _mapping_rows_from_values(values: dict[str, Any]) -> list[dict[str, Any]]:
-        """Build the COMPLETE per-field mapping table from state values.
+    def _auto_match_stats(values: dict[str, Any]) -> dict[str, int]:
+        """Aggregate per-entity resolution stats into pipeline-wide counts.
 
-        Emits one row for every field in field_mappings (auto-mapped fields
-        included — the reviewer must see everything, not just the subset
-        needing attention) plus one skip-row per unmapped field.
+        Delegates to nodes/human_nodes.py's shared copy (Phase 2.1) — see
+        that module for why keeping this logic in two places is the mistake
+        that let the match gate's payload drift from the node's own.
         """
-        schema_changes = values.get("pending_schema_changes", []) or []
-        mapping_rows: list[dict[str, Any]] = []
-        for entity_type, mapping in (values.get("field_mappings") or {}).items():
-            for src_field, info in (mapping or {}).items():
-                if info.get("requires_schema_change"):
-                    col = info.get("dest_column", src_field)
-                    col_type = next(
-                        (
-                            c.get("data_type", "TEXT")
-                            for c in schema_changes
-                            if c.get("column") == col
-                        ),
-                        "TEXT",
-                    )
-                    mapping_rows.append(
-                        {
-                            "entity_type": entity_type,
-                            "source_field": src_field,
-                            "action": "new_column",
-                            "dest_column": "",
-                            "new_column_name": col,
-                            "new_column_type": col_type,
-                            "confidence": info.get("confidence", 0.0),
-                        }
-                    )
-                else:
-                    mapping_rows.append(
-                        {
-                            "entity_type": entity_type,
-                            "source_field": src_field,
-                            "action": "map",
-                            "dest_column": info.get("dest_column", ""),
-                            "new_column_name": "",
-                            "new_column_type": "",
-                            "confidence": info.get("confidence", 0.0),
-                        }
-                    )
-        for entity_type, fields in (values.get("unmapped_fields") or {}).items():
-            for item in fields or []:
-                mapping_rows.append(
-                    {
-                        "entity_type": entity_type,
-                        "source_field": item.get("field", ""),
-                        "action": "skip",
-                        "dest_column": item.get("suggested_column") or "",
-                        "new_column_name": "",
-                        "new_column_type": "",
-                        "confidence": item.get("confidence", 0.0),
-                    }
-                )
-        return mapping_rows
+        from src.orchestrator.nodes.human_nodes import _auto_match_stats
+
+        return _auto_match_stats(values)
 
     @staticmethod
-    def _auto_match_stats(values: dict[str, Any]) -> dict[str, int]:
-        """Aggregate per-entity resolution stats into pipeline-wide counts."""
-        stats = values.get("resolution_stats") or {}
-        return {
-            "auto_matched_pairs": sum(s.get("auto_matched", 0) for s in stats.values()),
-            "auto_excluded_pairs": sum(s.get("auto_excluded", 0) for s in stats.values()),
-            "llm_scored_pairs": sum(s.get("llm_scored", 0) for s in stats.values()),
-        }
+    def _clusters_by_entity(values: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+        """Every multi-member cluster's Phase 7.1 match_evidence, per entity.
+
+        Singletons are excluded — there is no pair to explain, and they would
+        just be noise in a lineage view. Only the fields the gate actually
+        renders are forwarded (not the whole cluster dict), so this payload
+        doesn't grow with whatever internal bookkeeping a cluster happens to
+        carry.
+        """
+        entity_clusters = values.get("entity_clusters") or {}
+        result: dict[str, list[dict[str, Any]]] = {}
+        for entity_type in entity_clusters:
+            multi = [
+                {
+                    "cluster_id": c.get("cluster_id", ""),
+                    "record_ids": c.get("record_ids", []),
+                    "match_confidence": c.get("match_confidence"),
+                    "required_human_review": bool(c.get("required_human_review")),
+                    "match_evidence": c.get("match_evidence"),
+                }
+                for c in clusters_for(values, entity_type)
+                if len(c.get("record_ids", [])) > 1
+            ]
+            if multi:
+                result[entity_type] = multi
+        return result
 
     @staticmethod
     def _derive_skipped_gates(
@@ -660,136 +638,72 @@ class WorkflowManager:
         return skipped
 
     @staticmethod
-    def _build_interrupt_data(node: str, values: dict[str, Any]) -> dict[str, Any]:
-        """Synthesize the interrupt payload a HITL node would produce.
+    def _build_interrupt_data(
+        node: str, values: dict[str, Any], thread_id: str = ""
+    ) -> dict[str, Any]:
+        """Synthesize the interrupt payload a HITL node would produce, plus
+        a stable payload_version the frontend can key a React effect on.
 
         Mirrors the interrupt_data structures in nodes/human_nodes.py, since
         with interrupt_before the node body never executes before the pause.
+
+        Every poll response is a fresh JSON round-trip, so on the frontend
+        `data` is a brand-new object on every tick even when nothing in it
+        changed — Gates.tsx's MappingBody used to reset its local edit state
+        off `[node, data]`, which meant a reviewer's in-progress edit got
+        wiped roughly every 2 seconds by the next poll (Phase 2.2 of the
+        fix-bugs follow-up plan). payload_version is a value (a string),
+        not an object, so it survives the JSON round-trip and only changes
+        when the underlying content actually does — the frontend can safely
+        depend on it instead of `data` itself.
         """
+        result = WorkflowManager._build_interrupt_data_inner(node, values)
+        result["payload_version"] = WorkflowManager._payload_version(
+            node, result.get("data", {}), thread_id
+        )
+        return result
+
+    @staticmethod
+    def _payload_version(node: str, data: dict[str, Any], thread_id: str = "") -> str:
+        """Content hash for a gate's data dict. Exposed separately from
+        _build_interrupt_data so a caller that mutates a cached payload
+        in place (e.g. attaching a rejection error) can recompute the
+        version afterward — a stale version would mean the frontend's
+        effect never fires for that mutation, since it depends on this
+        string rather than on `data` itself."""
+        content = json.dumps(data, sort_keys=True, default=str)
+        return hashlib.sha256(f"{thread_id}:{node}:{content}".encode()).hexdigest()[:16]
+
+    @staticmethod
+    def _build_interrupt_data_inner(node: str, values: dict[str, Any]) -> dict[str, Any]:
+        """The actual per-node payload construction — see _build_interrupt_data
+        for why this is wrapped rather than called directly."""
         if node == "handle_error":
             from src.orchestrator.nodes.human_nodes import build_error_interrupt
 
             return build_error_interrupt(values)
         if node == "human_review_deps":
-            data: dict[str, Any] = {
-                "dependency_tree": values.get("dependency_tree", {}),
-                "extraction_order": values.get("extraction_order", []),
-                # Reviewed BEFORE extraction: a source table missing from this
-                # list contributes nothing to the merge, and that used to be
-                # invisible until the destination came up short.
-                "entity_tables": values.get("entity_tables", {}) or {},
-                "table_selection_notes": values.get("table_selection_notes", ""),
-            }
-            warning = values.get("dependency_analysis_warning", "")
-            if warning:
-                data["warning"] = warning
-            return {
-                "node": node,
-                "title": "Review Dependency Tree",
-                "data": data,
-            }
+            from src.orchestrator.nodes.human_nodes import _build_deps_interrupt
+
+            return _build_deps_interrupt(values)
         if node == "human_review_scope":
             from src.orchestrator.nodes.human_nodes import _build_scope_interrupt
 
             return _build_scope_interrupt(values.get("scope_plan", {}) or {})
         if node == "human_review_matches":
-            low_conf: list[dict[str, Any]] = []
-            for entity_type in values.get("entity_clusters") or {}:
-                clusters = clusters_for(values, entity_type)
-                # Fetch only the records the gate actually shows. Building a
-                # lookup of every extracted row first is what made opening
-                # this gate cost as much as the extraction itself.
-                needed = [
-                    rid
-                    for cluster in clusters
-                    if cluster.get("required_human_review", False)
-                    for rid in cluster.get("record_ids", [])
-                ]
-                records_by_id = entity_records_by_id(values, entity_type, needed)
-                for cluster in clusters:
-                    if cluster.get("required_human_review", False):
-                        record_ids = cluster.get("record_ids", [])
-                        # Surface the actual field values (not just the opaque
-                        # internal record key) so a human reviewer can tell
-                        # WHY two records look alike instead of guessing from
-                        # an id like "origin_1:companies:42".
-                        records_preview = []
-                        for rid in record_ids:
-                            rec = records_by_id.get(rid, {})
-                            fields = {
-                                k: v
-                                for k, v in rec.items()
-                                if not k.startswith("_") and v not in (None, "")
-                            }
-                            records_preview.append({"record_id": rid, "fields": fields})
-                        low_conf.append(
-                            {
-                                "entity_type": entity_type,
-                                "cluster_id": cluster.get("cluster_id", ""),
-                                "record_ids": record_ids,
-                                "records": records_preview,
-                                "confidence": cluster.get("match_confidence", 0),
-                            }
-                        )
-            # Pairs scored in the uncertain band and therefore NOT merged.
-            # They form no cluster, so they would otherwise be invisible —
-            # the reviewer would never learn the system had hesitated.
-            pending: list[dict[str, Any]] = []
-            for entity_type, stats in (values.get("resolution_stats") or {}).items():
-                candidates = stats.get("pending_merge_candidates") or []
-                records_by_id = entity_records_by_id(
-                    values,
-                    entity_type,
-                    [rid for c in candidates for rid in c.get("record_ids", [])],
-                )
-                for candidate in candidates:
-                    preview = []
-                    for rid in candidate.get("record_ids", []):
-                        rec = records_by_id.get(rid, {})
-                        preview.append(
-                            {
-                                "record_id": rid,
-                                "fields": {
-                                    k: v
-                                    for k, v in rec.items()
-                                    if not k.startswith("_") and v not in (None, "")
-                                },
-                            }
-                        )
-                    pending.append(
-                        {
-                            "entity_type": entity_type,
-                            "record_ids": candidate.get("record_ids", []),
-                            "records": preview,
-                            "confidence": candidate.get("confidence", 0),
-                        }
-                    )
+            from src.orchestrator.nodes.human_nodes import _build_matches_interrupt
 
-            return {
-                "node": node,
-                "title": "Review Entity Matches",
-                "data": {
-                    "low_confidence_clusters": low_conf,
-                    "total_clustering_decisions": len(low_conf),
-                    "auto_match_stats": WorkflowManager._auto_match_stats(values),
-                    "pending_merge_candidates": pending,
-                    "pending_merge_note": (
-                        f"{len(pending)} pair(s) looked similar but not similar "
-                        "enough to merge automatically. They were left as "
-                        "separate records — approve to keep them separate."
-                    )
-                    if pending
-                    else "",
-                },
-            }
+            return _build_matches_interrupt(values)
         if node == "human_review_mappings":
+            from src.orchestrator.nodes.human_nodes import _build_mapping_rows
+
             schema_changes = values.get("pending_schema_changes", []) or []
-            mapping_rows = WorkflowManager._mapping_rows_from_values(values)
-            unmapped: list[dict[str, Any]] = [
-                {"entity_type": r["entity_type"], "source_field": r["source_field"]}
-                for r in mapping_rows
-                if r["action"] == "skip"
-            ]
+            # Delegates to the node's own builder, which already derives
+            # unmapped_fields with confidence/suggested_column/reason
+            # attached — a plain filter over mapping_rows (the previous
+            # approach here) can't reconstruct those, since a skip-row never
+            # carried them.
+            mapping_rows, unmapped = _build_mapping_rows(values)
             return {
                 "node": node,
                 "title": "Review Field Mappings",
@@ -800,6 +714,8 @@ class WorkflowManager:
                 },
             }
         if node == "human_final_approval":
+            from src.orchestrator.nodes.human_nodes import _build_mapping_rows
+
             unified = values.get("unified_entities") or {}
             pending_changes = values.get("pending_schema_changes", [])
             errors = values.get("errors", [])
@@ -823,6 +739,7 @@ class WorkflowManager:
             from src.orchestrator.nodes.load_data import build_reconciliation_report
 
             reconciliation = build_reconciliation_report(values, {}, list(errors))
+            field_mappings_rows, _unmapped = _build_mapping_rows(values)
             return {
                 "node": node,
                 "title": "Final Approval",
@@ -833,8 +750,23 @@ class WorkflowManager:
                     # The matches/mappings gates can legitimately auto-skip,
                     # so the final gate must show the full picture: every
                     # field mapping and the auto-decision counts.
-                    "field_mappings_rows": WorkflowManager._mapping_rows_from_values(values),
+                    "field_mappings_rows": field_mappings_rows,
                     "auto_match_stats": WorkflowManager._auto_match_stats(values),
+                    # Written by validate_data_node (Phase 4.5), a new gate
+                    # between extract_data and resolve_entities; rendered at
+                    # this same gate by Gates.tsx's SummaryBody. This is the
+                    # standing guard against issue 6 regressing: an entity
+                    # whose scope-plan join silently resolved to 0 rows now
+                    # surfaces here instead of reaching a yellow badge
+                    # unremarked.
+                    "quality_report": values.get("quality_report") or {},
+                    "has_quality_failure": bool(values.get("has_quality_failure", False)),
+                    # Phase 7.3: every multi-member cluster's Phase 7.1
+                    # match_evidence, surfaced here rather than only at the
+                    # matches gate (which shows just the sub-0.85 ones) —
+                    # the reviewer approving THIS gate is the one signing off
+                    # on every merge, not only the ambiguous ones.
+                    "clusters_by_entity": WorkflowManager._clusters_by_entity(values),
                 },
             }
         return {"node": node, "title": node, "data": {}}
@@ -918,7 +850,7 @@ class WorkflowManager:
             wf["current_interrupt_node"] = node
             if node in HITL_NODES:
                 wf["status"] = "interrupted"
-                wf["interrupt_data"] = self._build_interrupt_data(node, values)
+                wf["interrupt_data"] = self._build_interrupt_data(node, values, thread_id)
                 # visited_gates is lost on restart; predicate re-check alone
                 # still identifies gates the graph routed around.
                 wf["skipped_gates"] = self._derive_skipped_gates(node, values, [node])
@@ -1029,11 +961,13 @@ class WorkflowManager:
     ) -> tuple[bool, dict[str, Any] | str]:
         """Rebuild mapping state from human-edited mapping rows.
 
-        Each edit row: {entity_type, source_field, action, dest_column,
-        new_column_name, new_column_type}. Only ``map`` and ``skip`` are
-        accepted — the destination schema is a fixed contract, so a reviewer
-        cannot add a column here any more than a node can. Validates dest
-        columns against the live destination schema.
+        Each edit row: {entity_type, source_field, action, dest_column}.
+        Only ``map`` and ``skip`` are accepted — the destination schema is a
+        fixed contract, so a reviewer cannot add a column here any more than
+        a node can (the UI dropdown dropped "new_column" entirely in Phase
+        2.3; this branch stays as a defence-in-depth backstop for a direct
+        API call that still sends one). Validates dest columns against the
+        live destination schema.
 
         Returns
         -------
@@ -1047,8 +981,8 @@ class WorkflowManager:
 
         # Live destination schema for validation (best-effort: if the
         # destination is unreachable, validate names/identifiers only).
-        dest_columns_by_entity: dict[str, set[str]] = {}
         dest_table_by_entity: dict[str, str] = {}
+        table_columns_cache: dict[str, set[str]] = {}
         try:
             from src.mcp_server.tools.load_data import _get_destination_connector
 
@@ -1061,6 +995,21 @@ class WorkflowManager:
             dest_connector = None
             available_tables = []
 
+        def _columns_for(table: str) -> set[str]:
+            if table in table_columns_cache:
+                return table_columns_cache[table]
+            cols: set[str] = set()
+            if dest_connector is not None:
+                try:
+                    schema = dest_connector.get_table_schema(table)
+                    cols = {c["name"] for c in schema.get("columns", [])}
+                except Exception as exc:
+                    logger.warning(
+                        "Mapping validation: could not read schema for '%s': %s", table, exc
+                    )
+            table_columns_cache[table] = cols
+            return cols
+
         entity_types = {str(row.get("entity_type", "")) for row in edits}
         for entity_type in entity_types:
             dest_table = entity_type
@@ -1069,18 +1018,6 @@ class WorkflowManager:
                 if resolved:
                     dest_table = resolved
             dest_table_by_entity[entity_type] = dest_table
-            cols: set[str] = set()
-            if dest_connector is not None:
-                try:
-                    schema = dest_connector.get_table_schema(dest_table)
-                    cols = {c["name"] for c in schema.get("columns", [])}
-                except Exception as exc:
-                    logger.warning(
-                        "Mapping validation: could not read schema for '%s': %s",
-                        dest_table,
-                        exc,
-                    )
-            dest_columns_by_entity[entity_type] = cols
 
         errors: list[str] = []
         field_mappings: dict[str, dict[str, Any]] = {et: {} for et in entity_types}
@@ -1095,21 +1032,36 @@ class WorkflowManager:
 
             if action == "map":
                 dest_col = str(row.get("dest_column", "")).strip()
-                known = dest_columns_by_entity.get(entity_type, set())
+                # Phase 6.2/6.3: a row round-tripped from the gate carries its
+                # own dest_table when map_fields_impl's widened family search
+                # cross-mapped it (Company.totalInvestment -> finance.amount).
+                # Approving the gate resends EVERY row, not just edited ones
+                # (GateButtons' onApprove sends the full table), so without
+                # this a cross-table mapping's tag would be silently dropped
+                # back to the entity's own table on every approval, and
+                # validation below would then reject it outright for
+                # targeting a column that table doesn't have.
+                target_table = str(row.get("dest_table") or "").strip() or dest_table_by_entity.get(
+                    entity_type, entity_type
+                )
+                known = _columns_for(target_table)
                 if not dest_col:
                     errors.append(f"{entity_type}.{src_field}: action=map requires dest_column")
                     continue
                 if known and dest_col not in known:
                     errors.append(
                         f"{entity_type}.{src_field}: dest_column '{dest_col}' does not exist "
-                        f"in table '{dest_table_by_entity.get(entity_type)}'"
+                        f"in table '{target_table}'"
                     )
                     continue
-                field_mappings[entity_type][src_field] = {
+                entry: dict[str, Any] = {
                     "dest_column": dest_col,
                     "confidence": 1.0,
                     "mapped_by": "human",
                 }
+                if target_table != dest_table_by_entity.get(entity_type, entity_type):
+                    entry["dest_table"] = target_table
+                field_mappings[entity_type][src_field] = entry
             elif action == "new_column":
                 errors.append(
                     f"{entity_type}.{src_field}: the destination schema is a fixed "
@@ -1195,6 +1147,66 @@ class WorkflowManager:
             out[str(entity)] = kept
         return out
 
+    @staticmethod
+    def _sanitise_column_dependencies(edited: Any, values: dict[str, Any]) -> list[dict[str, Any]]:
+        """Keep only custom dependency links whose origin/table/column all
+        exist in the discovered schema — same reasoning as
+        _sanitise_entity_tables: a typo in the "Add Custom Dependency Link"
+        form must not become a silently-broken FK edge in the coverage
+        matrix (Phase 2.4 of the fix-bugs follow-up plan)."""
+        schemas = values.get("schemas", {}) or {}
+        known_columns: dict[tuple[str, str], set[str]] = {}
+        for origin_id, schema_data in schemas.items():
+            for table in schema_data.get("tables", []) or []:
+                name = table.get("name")
+                full = table.get("full_name") or name
+                cols = {c.get("name") for c in table.get("columns", []) or [] if c.get("name")}
+                for tname in (n for n in (name, full) if n):
+                    known_columns[(origin_id, tname)] = cols
+
+        def _valid(origin: str, table: str, column: str) -> bool:
+            return column in known_columns.get((origin, table), set())
+
+        out: list[dict[str, Any]] = []
+        for item in edited or []:
+            if not isinstance(item, dict):
+                continue
+            child_origin = str(item.get("child_origin") or "")
+            child_table = str(item.get("child_table") or "")
+            child_column = str(item.get("child_column") or "")
+            parent_origin = str(item.get("parent_origin") or "")
+            parent_table = str(item.get("parent_table") or "")
+            parent_column = str(item.get("parent_column") or "")
+            if not _valid(child_origin, child_table, child_column):
+                logger.warning(
+                    "Ignoring custom dependency link with unknown child column: %s.%s.%s",
+                    child_origin,
+                    child_table,
+                    child_column,
+                )
+                continue
+            if not _valid(parent_origin, parent_table, parent_column):
+                logger.warning(
+                    "Ignoring custom dependency link with unknown parent column: %s.%s.%s",
+                    parent_origin,
+                    parent_table,
+                    parent_column,
+                )
+                continue
+            out.append(
+                {
+                    "child_origin": child_origin,
+                    "child_table": child_table,
+                    "child_column": child_column,
+                    "parent_origin": parent_origin,
+                    "parent_table": parent_table,
+                    "parent_column": parent_column,
+                    "rationale": str(item.get("rationale", "") or "")[:200]
+                    or "Custom user-defined dependency link",
+                }
+            )
+        return out
+
     def resume_workflow(
         self,
         thread_id: str,
@@ -1239,9 +1251,17 @@ class WorkflowManager:
                     if wf:
                         wf["status"] = "interrupted"
                         interrupt_data = wf.get("interrupt_data") or self._build_interrupt_data(
-                            interrupt_node, self._safe_state_values(config)
+                            interrupt_node, self._safe_state_values(config), thread_id
                         )
                         interrupt_data.setdefault("data", {})["error"] = str(result)
+                        # The mutation above changes visible content without
+                        # going through _build_interrupt_data, so the cached
+                        # payload_version must be recomputed here — otherwise
+                        # the frontend's effect (keyed on payload_version, not
+                        # on `data` itself) would never notice the new error.
+                        interrupt_data["payload_version"] = self._payload_version(
+                            interrupt_node, interrupt_data["data"], thread_id
+                        )
                         wf["interrupt_data"] = interrupt_data
                 return
             mapping_update = result
@@ -1282,6 +1302,55 @@ class WorkflowManager:
             if interrupt_node == "human_final_approval":
                 state_update["load_approval"] = decision in ("approve", "edit")
 
+            # Same reason as the table-selection edit above: colDeps added
+            # in the "Add Custom Dependency Link" form lived only in the
+            # DependencyBody component's own React state and were never sent
+            # anywhere — GateButtons called onApprove(undefined), dropping
+            # them silently (Phase 2.4). Appended to whatever
+            # analyze_dependencies already computed (declared FKs + coverage
+            # matrix + LLM rationale), not replacing it — column_dependencies
+            # has no accumulating reducer in MergeState, so a plain overwrite
+            # here would wipe those out.
+            if (
+                interrupt_node == "human_review_deps"
+                and feedback.get("column_dependencies") is not None
+            ):
+                live_values = self._safe_state_values(config)
+                added = self._sanitise_column_dependencies(
+                    feedback["column_dependencies"], live_values
+                )
+                existing = list(live_values.get("column_dependencies") or [])
+                seen = {
+                    (
+                        d.get("child_origin"),
+                        d.get("child_table"),
+                        d.get("child_column"),
+                        d.get("parent_origin"),
+                        d.get("parent_table"),
+                        d.get("parent_column"),
+                    )
+                    for d in existing
+                    if isinstance(d, dict)
+                }
+                for link in added:
+                    key = (
+                        link["child_origin"],
+                        link["child_table"],
+                        link["child_column"],
+                        link["parent_origin"],
+                        link["parent_table"],
+                        link["parent_column"],
+                    )
+                    if key not in seen:
+                        seen.add(key)
+                        existing.append(link)
+                state_update["column_dependencies"] = existing
+                logger.info(
+                    "Workflow %s: %d custom column dependency link(s) added by user",
+                    thread_id,
+                    len(added),
+                )
+
             # Same reason as the cluster decisions below: the deps gate's node
             # body never runs, so an edited table selection is merged here.
             if interrupt_node == "human_review_deps" and feedback.get("entity_tables") is not None:
@@ -1314,7 +1383,7 @@ class WorkflowManager:
                     e: clusters_for(live_values, e)
                     for e in (live_values.get("entity_clusters") or {})
                 }
-                rebuilt, stats = apply_cluster_decisions(
+                rebuilt, stats, split_pairs = apply_cluster_decisions(
                     materialised,
                     feedback["cluster_decisions"],
                 )
@@ -1328,6 +1397,17 @@ class WorkflowManager:
                     )
                     for e, cs in rebuilt.items()
                 }
+                # Phase 7.2: preserved so a human split is queryable in
+                # merge_engine_merge_audit like any other merge decision,
+                # instead of the evidence vanishing with the torn-apart
+                # cluster. Set to just the NEW pairs, not a manual merge with
+                # the existing value -- human_split_pairs carries the same
+                # `Annotated[list[Any], operator.add]` reducer as errors/
+                # handled_failures, so graph.update_state() below appends
+                # this to the checkpoint's existing list on its own; manually
+                # concatenating here would double it.
+                if split_pairs:
+                    state_update["human_split_pairs"] = split_pairs
                 logger.info("Workflow %s: cluster decisions applied (%s)", thread_id, stats)
 
             # The error gate's bookkeeping. It has to happen here, not in the

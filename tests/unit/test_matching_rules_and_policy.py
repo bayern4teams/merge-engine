@@ -233,6 +233,7 @@ class TestGetInitialStateLegacyConfigPath:
             destination=base_config.destination,
             llm=base_config.llm,
             extraction=base_config.extraction,
+            scope=base_config.scope,
         )
 
     def test_conflict_policy_override_reaches_state_via_the_legacy_path(

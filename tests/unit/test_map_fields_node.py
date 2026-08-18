@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -197,6 +197,53 @@ class TestMapFields:
         assert result["field_mappings"]["company"] == {}
         assert len(result["errors"]) == 1
         assert "Field mapping failed" in result["errors"][0]
+
+    @pytest.mark.asyncio
+    async def test_map_fields_passes_family_schemas_to_map_fields_impl(
+        self, base_state: dict[str, Any], mock_map_fields_impl: AsyncMock
+    ) -> None:
+        """Phase 6.2: when the destination connector exposes real FKs, the
+        node must build the sibling-table schema list and forward it, not
+        just the entity's own table."""
+        connector = MagicMock()
+        connector.list_tables.return_value = ["merged_companies", "finance"]
+        connector.get_foreign_keys.side_effect = lambda t: (
+            {"company_id": "merged_companies"} if t == "finance" else {}
+        )
+
+        def get_table_schema(table: str) -> dict[str, Any]:
+            if table == "merged_companies":
+                return {
+                    "columns": [{"name": "id", "type": "TEXT"}, {"name": "name", "type": "TEXT"}]
+                }
+            if table == "finance":
+                return {
+                    "columns": [
+                        {"name": "id", "type": "TEXT"},
+                        {"name": "company_id", "type": "TEXT"},
+                        {"name": "amount", "type": "DOUBLE PRECISION"},
+                    ]
+                }
+            return {"columns": []}
+
+        connector.get_table_schema.side_effect = get_table_schema
+
+        with (
+            patch(
+                "src.mcp_server.tools.load_data._get_destination_connector",
+                return_value=connector,
+            ),
+            patch(
+                "src.orchestrator.nodes.map_fields_node.map_fields_impl",
+                mock_map_fields_impl,
+            ),
+        ):
+            await map_fields(base_state)
+
+        call_kwargs = mock_map_fields_impl.call_args.kwargs
+        family_schemas = call_kwargs["family_schemas"]
+        assert [f["table"] for f in family_schemas] == ["finance"]
+        assert {c["name"] for c in family_schemas[0]["columns"]} == {"id", "company_id", "amount"}
 
     @pytest.mark.asyncio
     async def test_map_fields_preserves_existing_errors(

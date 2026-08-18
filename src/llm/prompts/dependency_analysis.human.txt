@@ -1,11 +1,16 @@
 ## Worked example
 
-Target entities: company, person, order
+Target entities: ["company", "person", "order"]
 
 Schema summary:
 companies: id, name, industry
 persons: id, full_name, company_id -> companies.id
 orders: id, person_id -> persons.id, company_id -> companies.id, total
+
+Coverage Matrix:
+- persons.company_id -> companies.id (person depends on company)
+- orders.person_id -> persons.id (order depends on person)
+- orders.company_id -> companies.id (order depends on company)
 
 Output:
 {
@@ -17,27 +22,13 @@ Output:
   "notes": ""
 }
 
-## Second example (no clear relationships)
-
-Target entities: product, country
-
-Schema summary:
-products: id, sku, name
-countries: id, iso_code, name
-
-Output:
-{
-  "dependency_tree": {
-    "product": [],
-    "country": []
-  },
-  "notes": "No foreign-key relationship found between product and country; order between them doesn't matter."
-}
-
 ---
 Target entities: {target_entities}
 
 Schema summary:
 {schema_info}
+
+Coverage Matrix:
+{coverage_matrix}
 
 Output:

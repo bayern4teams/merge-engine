@@ -465,4 +465,55 @@ class ClickHouseConnector(BaseConnector):
             "origin_ids": origin_ids,
         }
 
+    # ── Join-graph support (Phase 4.1) ──────────────────────────────────
+
+    async def sample_distinct_values(
+        self,
+        table_name: str,
+        column: str,
+        limit: int = 500,
+        filter_values: list[Any] | None = None,
+    ) -> list[Any]:
+        """Bounded DISTINCT sample, pushed down — never a full-table read.
+
+        ClickHouse origins never carry declared foreign keys (system.tables
+        exposes none), so the join graph's inclusion-dependency tier is the
+        only edge source that actually works here; this is what it queries.
+
+        ``filter_values``, when given, restricts to rows whose ``column``
+        is one of these values instead of sampling independently — see
+        postgres.py's identical parameter for why: two independent
+        arbitrary samples of a large parent table and a small child table
+        essentially never coincidentally overlap even for a 100%-intact
+        FK relationship. Values are cast to string for ClickHouse's
+        Array(String) parameter type, which this method's only caller
+        (join-graph inclusion verification) always deals in — every
+        column it samples is an id-shaped key column.
+        """
+        logger.debug(
+            "ENTER sample_distinct_values: table=%s, column=%s, limit=%d, filtered=%s",
+            table_name,
+            column,
+            limit,
+            bool(filter_values),
+        )
+        client = await self._ensure_client()
+        if filter_values:
+            sql = (
+                f"SELECT DISTINCT `{column}` FROM `{self._database}`.`{table_name}` "
+                f"WHERE `{column}` IN {{values:Array(String)}} LIMIT {{limit:UInt64}}"
+            )
+            result = client.query(
+                sql, parameters={"values": [str(v) for v in filter_values], "limit": limit}
+            )
+        else:
+            sql = (
+                f"SELECT DISTINCT `{column}` FROM `{self._database}`.`{table_name}` "
+                f"WHERE `{column}` IS NOT NULL LIMIT {{limit:UInt64}}"
+            )
+            result = client.query(sql, parameters={"limit": limit})
+        values = [row[0] for row in result.result_rows]
+        logger.debug("EXIT sample_distinct_values: %d value(s)", len(values))
+        return values
+
     # ── Helpers ───────────────────────────────────────────────────────

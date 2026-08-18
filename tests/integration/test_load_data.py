@@ -63,6 +63,64 @@ class TestLoadDataNodeIntegration:
         assert "errors" in result
 
     @pytest.mark.asyncio
+    async def test_load_data_node_surfaces_dropped_cross_table_fields(
+        self,
+        dependency_state: dict[str, Any],
+    ) -> None:
+        """Regression: a cross-table mapping (Phase 6.2) with no reverse FK
+        at load time used to be visible nowhere but a log line -- a mapping
+        approved at the gate, silently unwritable, invisible to anyone
+        reviewing the run. It must now land in the node's own errors list,
+        which the final-approval report renders."""
+        from src.orchestrator.nodes.load_data import load_data_node
+
+        dependency_state["target_entities"] = ["company"]
+        dependency_state["unified_entities"] = {
+            "company": [{"id": 1, "name": "Acme Corp", "totalInvestment": 4_200_000}],
+        }
+        dependency_state["field_mappings"] = {
+            "company": {
+                "name": {"dest_column": "name", "confidence": 0.98},
+                "totalInvestment": {
+                    "dest_column": "amount",
+                    "dest_table": "finance",
+                    "confidence": 0.9,
+                },
+            },
+        }
+        dependency_state["extraction_order"] = ["company"]
+        dependency_state["load_approval"] = True
+        dependency_state["destination"] = {
+            "type": "postgresql",
+            "host": "localhost",
+            "port": 5432,
+            "user": "test",
+            "password": "test",
+            "database": "test_db",
+            "schema": "public",
+        }
+
+        mock_connector = MagicMock()
+        # load_data_impl / _write_child_rows call load_batch synchronously
+        # (never awaited) -- must be a plain MagicMock, not an AsyncMock,
+        # or `result.get(...)` on the coroutine it returns raises instead.
+        mock_connector.load_batch = MagicMock(return_value={"inserted": 1, "updated": 0})
+        mock_connector.close = AsyncMock()
+        # "finance" has no FK back to "company" at all -- the cross-table
+        # field cannot be written, and must not be guessed at.
+        mock_connector.get_foreign_keys = MagicMock(return_value={})
+        mock_connector.ensure_table = MagicMock(return_value=False)
+
+        with patch("src.mcp_server.tools.load_data._get_destination_connector") as mock_create:
+            mock_create.return_value = mock_connector
+            result = await load_data_node(dependency_state)
+
+        assert any(
+            "finance" in e and "totalInvestment" in e and "no foreign key" in e
+            for e in result.get("errors", [])
+        )
+
+    @pytest.mark.asyncio
     async def test_load_data_node_no_unified_data(
         self,
         dependency_state: dict[str, Any],

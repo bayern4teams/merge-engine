@@ -45,6 +45,7 @@ async def map_fields_impl(
     unified_schema: dict[str, Any],
     destination_schema: dict[str, Any],
     llm_config: dict[str, Any] | None = None,
+    family_schemas: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Map unified fields to destination columns.
 
@@ -58,11 +59,23 @@ async def map_fields_impl(
         Field names and sample values from unified records.
     destination_schema : dict
         {table: str, columns: [{"name": str, "type": str, ...}, ...]}
-        Destination table column definitions.
+        The entity's own (primary) destination table.
     llm_config : dict, optional
         LLM configuration. When present (and ``field_mapping_enabled``
         is not False), fields the heuristic can't confidently place are
         decided by the LLM.
+    family_schemas : list[dict], optional
+        Sibling destination tables (same shape as ``destination_schema``)
+        reachable from the primary table via a real FK — e.g. ``finance``
+        or ``contact_email`` for a ``company`` entity, from
+        ``dest_family.build_family_map``. A source field with no home on
+        the primary table but a genuine home on a family table (Company
+        ``totalInvestment`` -> ``finance.amount``) is mapped there instead
+        of being dropped. Every phase below scores candidates from the
+        primary table AND every family table, with the primary table's
+        columns inserted first so an exact tie always prefers staying on
+        the entity's own table — cross-table is the fallback, not the
+        default.
 
     Returns
     -------
@@ -70,31 +83,56 @@ async def map_fields_impl(
         {
             "entity_type": str,
             "field_mapping": {
-                "source_field": {"dest_column": str, "confidence": float}
+                "source_field": {"dest_column": str, "dest_table": str,
+                                  "confidence": float}
             },
             "unmapped_fields": [{"field": str, "reason": str}],
             "schema_changes": [{"column": str, "data_type": str, "table": str}],
         }
     """
     logger.debug(
-        "ENTER map_fields_impl: entity_type=%s, source_fields=%d, dest_columns=%d",
+        "ENTER map_fields_impl: entity_type=%s, source_fields=%d, dest_columns=%d, family_tables=%d",
         entity_type,
         len(unified_schema),
         len(destination_schema.get("columns", [])),
+        len(family_schemas or []),
     )
 
     source_fields = list(unified_schema.keys())
-    dest_columns = {
-        col["name"]: col
-        for col in destination_schema.get("columns", [])
-        if col["name"] not in _RESERVED_DEST_COLUMNS
-    }
-    dest_table = destination_schema.get("table", entity_type)
+    primary_table = destination_schema.get("table", entity_type)
+
+    # Candidate destination columns, keyed by (table, column_name) and
+    # ordered with the primary table first. Dict insertion order is what
+    # makes every `score > best_score` (strict greater-than) comparison
+    # below prefer the primary table on a tie, without any extra
+    # tie-breaking logic — the first candidate seen at the top score wins.
+    dest_candidates: dict[tuple[str, str], Any] = {}
+    for col in destination_schema.get("columns", []):
+        name = col.get("name")
+        if not name or name in _RESERVED_DEST_COLUMNS:
+            continue
+        dest_candidates.setdefault((primary_table, name), col)
+    for fam in family_schemas or []:
+        fam_table = fam.get("table")
+        if not fam_table or fam_table == primary_table:
+            continue
+        for col in fam.get("columns", []) or []:
+            name = col.get("name")
+            if not name or name in _RESERVED_DEST_COLUMNS:
+                continue
+            dest_candidates.setdefault((fam_table, name), col)
+
+    # Name -> first (primary-preferred) candidate key, for the O(1) exact
+    # match phase below.
+    by_name: dict[str, tuple[str, str]] = {}
+    for candidate_key in dest_candidates:
+        by_name.setdefault(candidate_key[1], candidate_key)
+
     logger.debug(
-        "Source fields: %d, Destination columns: %d, Dest table: %s",
+        "Source fields: %d, Destination candidates: %d (primary table: %s)",
         len(source_fields),
-        len(dest_columns),
-        dest_table,
+        len(dest_candidates),
+        primary_table,
     )
 
     field_mapping: dict[str, dict[str, Any]] = {}
@@ -105,15 +143,17 @@ async def map_fields_impl(
     logger.debug("Phase 1: Exact name matching")
     exact_matches = 0
     for field in source_fields:
-        if field in dest_columns:
+        key = by_name.get(field)
+        if key is not None:
             incompatible, reason = _incompatible_with_column(
-                field, field, dest_columns, unified_schema
+                field, dest_candidates[key], unified_schema
             )
             if incompatible:
                 _refuse_incompatible(field, reason, unmapped_fields)
                 continue
             field_mapping[field] = {
-                "dest_column": field,
+                "dest_column": key[1],
+                "dest_table": key[0],
                 "confidence": 1.0,
             }
             exact_matches += 1
@@ -121,43 +161,46 @@ async def map_fields_impl(
 
     # ── Phase 2: Confident heuristic matching (>= _HEURISTIC_ACCEPT) ──
     remaining_fields = [f for f in source_fields if f not in field_mapping]
-    taken_columns = {m["dest_column"] for m in field_mapping.values()}
-    heuristic_scores: dict[str, tuple[str | None, float]] = {}
-    # Best match ignoring `taken_columns` — feeds the Phase 3 coalesce check
-    # below (a field whose only strong candidate is a column another field
+    taken: set[tuple[str, str]] = {
+        (m["dest_table"], m["dest_column"]) for m in field_mapping.values()
+    }
+    heuristic_scores: dict[str, tuple[tuple[str, str] | None, float]] = {}
+    # Best match ignoring `taken` — feeds the Phase 3 coalesce check below
+    # (a field whose only strong candidate is a column another field
     # already claimed, e.g. `entityName` once `name` is taken).
-    heuristic_scores_any: dict[str, tuple[str | None, float]] = {}
+    heuristic_scores_any: dict[str, tuple[tuple[str, str] | None, float]] = {}
 
     heuristic_matches = 0
     for field in remaining_fields:
-        best_match = None
+        best_key: tuple[str, str] | None = None
         best_score = 0.0
-        best_match_any = None
+        best_key_any: tuple[str, str] | None = None
         best_score_any = 0.0
-        for dest_col in dest_columns:
-            score = _heuristic_match(field, dest_col)
+        for key in dest_candidates:
+            score = _heuristic_match(field, key[1])
             if score > best_score_any:
                 best_score_any = score
-                best_match_any = dest_col
-            if dest_col in taken_columns:
+                best_key_any = key
+            if key in taken:
                 continue
             if score > best_score:
                 best_score = score
-                best_match = dest_col
-        heuristic_scores[field] = (best_match, best_score)
-        heuristic_scores_any[field] = (best_match_any, best_score_any)
-        if best_match and best_score >= _HEURISTIC_ACCEPT:
+                best_key = key
+        heuristic_scores[field] = (best_key, best_score)
+        heuristic_scores_any[field] = (best_key_any, best_score_any)
+        if best_key and best_score >= _HEURISTIC_ACCEPT:
             incompatible, reason = _incompatible_with_column(
-                field, best_match, dest_columns, unified_schema
+                field, dest_candidates[best_key], unified_schema
             )
             if incompatible:
                 _refuse_incompatible(field, reason, unmapped_fields)
                 continue
             field_mapping[field] = {
-                "dest_column": best_match,
+                "dest_column": best_key[1],
+                "dest_table": best_key[0],
                 "confidence": best_score,
             }
-            taken_columns.add(best_match)
+            taken.add(best_key)
             heuristic_matches += 1
     logger.debug("Phase 2 complete: %d confident heuristic matches", heuristic_matches)
 
@@ -175,7 +218,8 @@ async def map_fields_impl(
             entity_type=entity_type,
             fields=undecided,
             unified_schema=unified_schema,
-            destination_schema={"table": dest_table, "columns": list(dest_columns.values())},
+            dest_candidates=dest_candidates,
+            primary_table=primary_table,
             llm_config=llm_config,
         )
     elif undecided:
@@ -191,8 +235,8 @@ async def map_fields_impl(
             applied = _apply_llm_decision(
                 field,
                 decision,
-                dest_columns,
-                taken_columns,
+                dest_candidates,
+                taken,
                 unified_schema,
                 field_mapping,
                 unmapped_fields,
@@ -208,9 +252,40 @@ async def map_fields_impl(
             unified_schema,
             field_mapping,
             unmapped_fields,
-            taken_columns,
-            dest_columns,
+            taken,
+            dest_candidates,
         )
+
+    # Enrich mapping results with origin metadata and coalesced flag
+    dest_counts: dict[tuple[str, str], int] = {}
+    for entry in field_mapping.values():
+        dcol = entry.get("dest_column")
+        dtable = entry.get("dest_table")
+        if dcol and dtable:
+            key = (dtable, dcol)
+            dest_counts[key] = dest_counts.get(key, 0) + 1
+
+    for field, entry in field_mapping.items():
+        meta = unified_schema.get(field, {})
+        if meta.get("origin_id"):
+            entry["origin_id"] = meta.get("origin_id")
+        if meta.get("table"):
+            entry["table"] = meta.get("table")
+        if meta.get("source_field"):
+            entry["source_field"] = meta.get("source_field")
+        dcol = entry.get("dest_column")
+        dtable = entry.get("dest_table")
+        entry["is_coalesced"] = bool(dcol and dtable and dest_counts.get((dtable, dcol), 0) > 1)
+
+    for item in unmapped_fields:
+        field = item.get("field", "")
+        meta = unified_schema.get(field, {})
+        if meta.get("origin_id"):
+            item["origin_id"] = meta.get("origin_id")
+        if meta.get("table"):
+            item["table"] = meta.get("table")
+        if meta.get("source_field"):
+            item["source_field"] = meta.get("source_field")
 
     logger.debug(
         "Phase 3 complete: llm_decided=%d, unmapped=%d, schema_changes=%d",
@@ -234,11 +309,10 @@ async def map_fields_impl(
 
 def _incompatible_with_column(
     field: str,
-    dest_col: str,
-    dest_columns: dict[str, Any],
+    col_info: dict[str, Any] | None,
     unified_schema: dict[str, Any],
 ) -> tuple[bool, str]:
-    """Would mapping ``field`` onto ``dest_col`` crash the load?
+    """Would mapping ``field`` onto this destination column crash the load?
 
     Checked before EVERY existing-column mapping is accepted (exact-name,
     confident-heuristic, low-confidence-heuristic, and LLM "map") — the
@@ -247,7 +321,7 @@ def _incompatible_with_column(
     """
     from src.utils.value_coercion import is_compatible
 
-    col_type = str((dest_columns.get(dest_col) or {}).get("type", ""))
+    col_type = str((col_info or {}).get("type", ""))
     if not col_type:
         return False, ""
     info = unified_schema.get(field, {})
@@ -285,11 +359,37 @@ def _refuse_incompatible(
     )
 
 
+def _resolve_candidate_key(
+    raw: str,
+    dest_candidates: dict[tuple[str, str], Any],
+) -> tuple[str, str] | None:
+    """Resolve an LLM-returned ``dest_column`` to a ``(table, name)`` key.
+
+    Accepts either a bare column name (resolved against the primary table
+    first, since that is the first-inserted match in ``dest_candidates``)
+    or a ``table.column`` qualified name for a family-table candidate the
+    prompt offered under that exact label.
+    """
+    raw = raw.strip()
+    if not raw:
+        return None
+    if "." in raw:
+        table, _, name = raw.rpartition(".")
+        key = (table, name)
+        if key in dest_candidates:
+            return key
+        raw = name  # fall back to bare-name resolution below
+    for key in dest_candidates:
+        if key[1] == raw:
+            return key
+    return None
+
+
 def _apply_llm_decision(
     field: str,
     decision: dict[str, Any],
-    dest_columns: dict[str, Any],
-    taken_columns: set[str],
+    dest_candidates: dict[tuple[str, str], Any],
+    taken: set[tuple[str, str]],
     unified_schema: dict[str, Any],
     field_mapping: dict[str, dict[str, Any]],
     unmapped_fields: list[dict[str, Any]],
@@ -298,16 +398,17 @@ def _apply_llm_decision(
     action = decision.get("action")
 
     if action == "map":
-        dest_col = decision.get("dest_column")
-        if dest_col not in dest_columns:
+        raw = decision.get("dest_column")
+        key = _resolve_candidate_key(str(raw), dest_candidates) if raw else None
+        if key is None:
             logger.warning(
                 "LLM mapped '%s' to nonexistent column '%s'; ignoring",
                 field,
-                dest_col,
+                raw,
             )
             return False
         incompatible, reason = _incompatible_with_column(
-            field, dest_col, dest_columns, unified_schema
+            field, dest_candidates[key], unified_schema
         )
         if incompatible:
             logger.warning(
@@ -315,18 +416,19 @@ def _apply_llm_decision(
                 "incompatible with that column's type (%s); leaving it "
                 "unmapped instead of letting the load crash on it.",
                 field,
-                dest_col,
+                key[1],
                 reason,
             )
             _refuse_incompatible(field, reason, unmapped_fields)
             return True
         field_mapping[field] = {
-            "dest_column": dest_col,
+            "dest_column": key[1],
+            "dest_table": key[0],
             "confidence": 0.9,
             "mapped_by": "llm",
         }
-        taken_columns.add(dest_col)
-        logger.info("LLM mapped field '%s' -> existing column '%s'", field, dest_col)
+        taken.add(key)
+        logger.info("LLM mapped field '%s' -> %s.%s", field, key[0], key[1])
         return True
 
     if action == "new_column":
@@ -358,31 +460,33 @@ def _apply_llm_decision(
 
 def _apply_heuristic_tier(
     field: str,
-    best: tuple[str | None, float],
-    best_any: tuple[str | None, float],
+    best: tuple[tuple[str, str] | None, float],
+    best_any: tuple[tuple[str, str] | None, float],
     unified_schema: dict[str, Any],
     field_mapping: dict[str, dict[str, Any]],
     unmapped_fields: list[dict[str, Any]],
-    taken_columns: set[str],
-    dest_columns: dict[str, Any] | None = None,
+    taken: set[tuple[str, str]],
+    dest_candidates: dict[tuple[str, str], Any] | None = None,
 ) -> None:
     """Original heuristic fallback tiers for a single field."""
-    best_match, best_score = best
-    if best_match and best_match in taken_columns:
-        best_match, best_score = None, 0.0
+    dest_candidates = dest_candidates or {}
+    best_key, best_score = best
+    if best_key and best_key in taken:
+        best_key, best_score = None, 0.0
 
-    if best_match and best_score >= 0.5:
+    if best_key and best_score >= 0.5:
         incompatible, reason = _incompatible_with_column(
-            field, best_match, dest_columns or {}, unified_schema
+            field, dest_candidates.get(best_key), unified_schema
         )
         if incompatible:
             _refuse_incompatible(field, reason, unmapped_fields)
             return
         field_mapping[field] = {
-            "dest_column": best_match,
+            "dest_column": best_key[1],
+            "dest_table": best_key[0],
             "confidence": best_score,
         }
-        taken_columns.add(best_match)
+        taken.add(best_key)
         return
 
     # Coalesce: this field's strongest candidate is a column a different
@@ -401,14 +505,15 @@ def _apply_heuristic_tier(
     # tried and reproduced exactly this corruption live: `fullName`'s legal
     # name silently overwrote the correct `name` value. The qualifier
     # allowlist only trusts unambiguous scope-narrowing prefixes.
-    any_match, any_score = best_any
-    if any_match and any_match in taken_columns and _safe_coalesce_target(field, any_match):
+    any_key, any_score = best_any
+    if any_key and any_key in taken and _safe_coalesce_target(field, any_key[1]):
         incompatible, reason = _incompatible_with_column(
-            field, any_match, dest_columns or {}, unified_schema
+            field, dest_candidates.get(any_key), unified_schema
         )
         if not incompatible:
             field_mapping[field] = {
-                "dest_column": any_match,
+                "dest_column": any_key[1],
+                "dest_table": any_key[0],
                 "confidence": any_score,
                 "mapped_by": "coalesce",
             }
@@ -420,7 +525,7 @@ def _apply_heuristic_tier(
             {
                 "field": field,
                 "confidence": best_score,
-                "suggested_column": best_match,
+                "suggested_column": best_key[1] if best_key else None,
                 "reason": "Low confidence match; requires human review",
             }
         )
@@ -464,10 +569,16 @@ async def _decide_fields_with_llm(
     entity_type: str,
     fields: list[str],
     unified_schema: dict[str, Any],
-    destination_schema: dict[str, Any],
+    dest_candidates: dict[tuple[str, str], Any],
+    primary_table: str,
     llm_config: dict[str, Any],
 ) -> dict[str, dict[str, Any]] | None:
     """One batched LLM call deciding all undecided fields.
+
+    ``dest_candidates`` carries the primary table's columns plus every
+    family table's, already de-duplicated and reserved-column-filtered by
+    the caller — the single source of truth, so the prompt never offers a
+    column the resolver in ``_apply_llm_decision`` wouldn't recognise.
 
     Returns {field: decision} or None on failure (caller falls back to
     heuristic tiers — the run never blocks on the LLM).
@@ -482,11 +593,30 @@ async def _decide_fields_with_llm(
             logger.warning("field_mapping prompts missing; using heuristic tiers")
             return None
 
-        dest_table = destination_schema.get("table", entity_type)
-        dest_cols_str = "\n".join(
-            f"- {col['name']} ({col.get('type', 'unknown')})"
-            for col in destination_schema.get("columns", [])
-        )
+        dest_table = primary_table
+        primary_lines = [
+            f"- {name} ({(col or {}).get('type', 'unknown')})"
+            for (table, name), col in dest_candidates.items()
+            if table == primary_table
+        ]
+        family_by_table: dict[str, list[str]] = {}
+        for (table, name), col in dest_candidates.items():
+            if table == primary_table:
+                continue
+            family_by_table.setdefault(table, []).append(
+                f"- {table}.{name} ({(col or {}).get('type', 'unknown')})"
+            )
+
+        dest_cols_str = "\n".join(primary_lines)
+        if family_by_table:
+            blocks = [dest_cols_str]
+            for fam_table, lines in family_by_table.items():
+                blocks.append(
+                    f"\n### Related table: {fam_table} (only if no column above "
+                    f'fits; answer with dest_column="{fam_table}.<column>")'
+                )
+                blocks.extend(lines)
+            dest_cols_str = "\n".join(blocks)
 
         user_prompt = (
             human_template.replace("{entity_type}", entity_type)
@@ -497,10 +627,11 @@ async def _decide_fields_with_llm(
         # Set when a reviewer sent the mappings gate back for rework.
         hint = str((llm_config or {}).get("retry_hint") or "").strip()
         if hint:
-            from src.orchestrator.utils.retry_hints import apply_retry_hint
-
-            user_prompt = apply_retry_hint(
-                user_prompt, {"retry_hints": {"map_fields": hint}}, "map_fields"
+            user_prompt = (
+                f"{user_prompt}\n\n--- REVIEWER FEEDBACK ON YOUR PREVIOUS ANSWER ---\n"
+                f"A human reviewed your previous output for this exact task and rejected "
+                f"it for the reason below. Produce a different answer that addresses it "
+                f"directly. Do not repeat the previous answer.\n\nReason: {hint}\n"
             )
 
         client = LLMClient(llm_config)

@@ -4,10 +4,12 @@ import {
   getTimeline,
   sampleRows,
   getGoldenDiff,
+  getLineage,
   MatchInspection,
   RunTimeline,
   SampleResult,
   GoldenDiff,
+  LineageResult,
 } from "../api";
 
 // Part 1.6.B: four read-only investigation tools. None of these can mutate a
@@ -19,6 +21,7 @@ export default function InvestigateScreen() {
     <div>
       <TimelineCard />
       <MatchInspectorCard />
+      <LineageCard />
       <DataExplorerCard />
       <GoldenDiffCard />
     </div>
@@ -210,6 +213,148 @@ function MatchInspectorCard() {
               )}
             </>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Phase 7.3: merge lineage lookup ──────────────────────────────────────────
+// Unlike the match inspector above (checkpoint-backed, gone once the run's
+// scratch spool is cleaned up), this queries the destination's own
+// merge_engine_merge_audit table (Phase 7.2) directly -- durable, and
+// searchable by either a canonical (merged) record id or a raw source
+// record id, since both appear as record_a/record_b/cluster_id.
+
+function LineageCard() {
+  const [v, setV] = useState({
+    host: "",
+    port: "5432",
+    user: "",
+    password: "",
+    database: "",
+    schema_name: "public",
+    entity_type: "",
+    limit: "50",
+  });
+  const [search, setSearch] = useState("");
+  const [result, setResult] = useState<LineageResult | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function run() {
+    if (!v.host || !search.trim()) return;
+    setLoading(true);
+    try {
+      setResult(
+        await getLineage({
+          host: v.host,
+          port: Number(v.port) || 5432,
+          user: v.user,
+          password: v.password,
+          database: v.database,
+          schema_name: v.schema_name,
+          search: search.trim(),
+          entity_type: v.entity_type || undefined,
+          limit: Number(v.limit) || 50,
+        }),
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <h3 className="card-title">Merge lineage lookup</h3>
+      <p className="card-hint">
+        Search merge_engine_merge_audit (PostgreSQL destinations only) by a
+        canonical record id or a raw source record id — every pair it ever
+        appeared in, with the evidence that justified the merge. Survives the
+        run's own spool being cleaned up.
+      </p>
+      <div className="form-grid">
+        <div className="field">
+          <label>Host</label>
+          <input value={v.host} onChange={(e) => setV({ ...v, host: e.target.value })} placeholder="localhost" />
+        </div>
+        <div className="field">
+          <label>Port</label>
+          <input value={v.port} onChange={(e) => setV({ ...v, port: e.target.value })} />
+        </div>
+        <div className="field">
+          <label>Database</label>
+          <input value={v.database} onChange={(e) => setV({ ...v, database: e.target.value })} />
+        </div>
+        <div className="field">
+          <label>Username</label>
+          <input value={v.user} onChange={(e) => setV({ ...v, user: e.target.value })} />
+        </div>
+        <div className="field">
+          <label>Password</label>
+          <input
+            type="password"
+            value={v.password}
+            onChange={(e) => setV({ ...v, password: e.target.value })}
+          />
+        </div>
+        <div className="field">
+          <label>Schema</label>
+          <input
+            value={v.schema_name}
+            onChange={(e) => setV({ ...v, schema_name: e.target.value })}
+          />
+        </div>
+        <div className="field">
+          <label>Entity type (optional)</label>
+          <input
+            value={v.entity_type}
+            onChange={(e) => setV({ ...v, entity_type: e.target.value })}
+            placeholder="company"
+          />
+        </div>
+        <div className="field">
+          <label>Record id or cluster id</label>
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && run()}
+            placeholder="o1:t:123 or a cluster id"
+          />
+        </div>
+      </div>
+      <div className="btn-row" style={{ marginTop: 14 }}>
+        <button className="btn btn-primary" onClick={run} disabled={loading || !v.host || !search.trim()}>
+          {loading ? "Searching…" : "Search"}
+        </button>
+      </div>
+      {result && !result.connected && (
+        <div className="banner banner-error" style={{ marginTop: 12 }}>{result.error}</div>
+      )}
+      {result && result.connected && result.rows.length === 0 && (
+        <div className="banner banner-warn" style={{ marginTop: 12 }}>
+          No merge-audit rows found for that id.
+        </div>
+      )}
+      {result && result.connected && result.rows.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          {result.rows.map((row, i) => (
+            <div key={i} className="cluster" style={{ marginBottom: 10 }}>
+              <div className="cluster-head">
+                {row.record_a} ↔ {row.record_b} — {row.method || "?"} (
+                {typeof row.confidence === "number" ? row.confidence.toFixed(2) : "?"})
+              </div>
+              <div className="muted mono" style={{ fontSize: 12 }}>
+                entity: {row.entity_type} · cluster: {row.cluster_id} · run: {row.run_id} · decided
+                by: {row.decided_by || "?"}
+                {row.human_override ? ` (human: ${row.human_override})` : ""}
+              </div>
+              {row.evidence && (
+                <pre className="code-block" style={{ marginTop: 6, fontSize: 11 }}>
+                  {JSON.stringify(row.evidence, null, 2)}
+                </pre>
+              )}
+            </div>
+          ))}
         </div>
       )}
     </div>

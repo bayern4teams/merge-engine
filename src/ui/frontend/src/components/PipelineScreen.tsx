@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   abortWorkflow,
+  ColumnDependency,
   getStatus,
   MappingRow,
   OriginConfig,
@@ -50,7 +51,14 @@ export default function PipelineScreen({ origins, destination }: Props) {
   const [saveAs, setSaveAs] = useState("");
   const [fullRemerge, setFullRemerge] = useState(false);
   const [advanced, setAdvanced] = useState<AdvancedState>(ADVANCED_DEFAULT);
-  const [presetCompany, setPresetCompany] = useState("");
+  // Phase 3.3: the company-name box is the default, primary way to start a
+  // run — the pipeline discovers every related table structurally (Phase
+  // 3.1/3.2's deterministic entity grouping), so there is no need to coax
+  // the LLM with a hand-written list of dimensions any more. The free-text
+  // textarea (`request`) becomes an opt-in "Advanced" path for a request
+  // this box can't express, not the default.
+  const [companyName, setCompanyName] = useState("");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [status, setStatus] = useState<WorkflowStatus | null>(null);
   const [log, setLog] = useState<LogLine[]>([]);
@@ -135,15 +143,23 @@ export default function PipelineScreen({ origins, destination }: Props) {
 
   // ── Actions ────────────────────────────────────────────────────────────
   async function onStart() {
-    if (!destination || origins.length === 0 || !request.trim()) return;
+    if (!destination || origins.length === 0) return;
+    const subject = companyName.trim();
+    if (advancedOpen ? !request.trim() : !subject) return;
     setBusy(true);
     setLog([]);
     lastStatusKey.current = "";
     lastGateKey.current = "";
     try {
       const overrides = buildRunOverrides(advanced);
+      // Subject mode: the backend sets merge_scope directly from `subject`
+      // rather than asking the LLM to extract it from free text (Phase
+      // 3.3) — `request` still needs some text, since it's what parse_request
+      // shows the LLM for group naming/explicit-vs-inferred classification.
+      const requestText = advancedOpen ? request : `Merge all information about ${subject}.`;
       const { thread_id } = await startWorkflow({
-        request,
+        request: requestText,
+        subject: advancedOpen ? undefined : subject,
         origins,
         destination,
         profile_name: profile || undefined,
@@ -177,12 +193,22 @@ export default function PipelineScreen({ origins, destination }: Props) {
     }
   }
 
-  async function onApprove(mappingEdits?: MappingRow[]) {
+  async function onApprove(
+    mappingEdits?: MappingRow[],
+    columnDependencies?: ColumnDependency[],
+    scopePlan?: Record<string, any>
+  ) {
     if (!threadId) return;
     setBusy(true);
     try {
       const node = status?.interrupt_data?.node;
-      const s = await sendFeedback(threadId, "approve", node === "human_review_mappings" ? mappingEdits : undefined);
+      const s = await sendFeedback(
+        threadId,
+        "approve",
+        node === "human_review_mappings" ? mappingEdits : undefined,
+        node === "human_review_deps" ? columnDependencies : undefined,
+        node === "human_review_scope" ? scopePlan : undefined,
+      );
       addLog("success", "Approved.");
       setStatus(s);
       lastStatusKey.current = ""; // allow the next status line through
@@ -216,68 +242,54 @@ export default function PipelineScreen({ origins, destination }: Props) {
     setStatus({ status: "aborted" });
   }
 
-  // One-click "everything about a company": fill the request with a scoped
-  // prompt and force a full re-merge so a re-run after a manual delete brings
-  // the rows back. The user still reviews every gate before anything is written.
-  function applyCompanyPreset() {
-    const name = presetCompany.trim();
-    if (!name) return;
-    setRequest(
-      `Merge all information about ${name}: every person, every product, ` +
-        `and the company's own record.`,
-    );
-    setFullRemerge(true);
-  }
 
   // ── Derived UI state ───────────────────────────────────────────────────
   const wfStatus = status?.status ?? "idle";
   const interrupt = status?.interrupt_data ?? null;
   const activeGate = wfStatus === "interrupted" ? interrupt?.node ?? null : null;
   const skipped = status?.skipped_gates || {};
-  const canStart = origins.length > 0 && !!destination && request.trim().length > 0;
+  const canStart =
+    origins.length > 0 &&
+    !!destination &&
+    (advancedOpen ? request.trim().length > 0 : companyName.trim().length > 0);
   const running = ["running", "interrupted"].includes(wfStatus);
 
   return (
     <div>
-      <div className="card preset-card">
-        <h3 className="card-title">Everything about one company</h3>
-        <p className="card-hint">
-          Type a company name and the pipeline finds every person, product, and
-          record tied to it across all origins, deduplicates against what the
-          destination already has, and merges only that — reviewed at every gate.
-        </p>
-        <div className="preset-row">
-          <input
-            type="text"
-            value={presetCompany}
-            disabled={running}
-            onChange={(e) => setPresetCompany(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && applyCompanyPreset()}
-            placeholder="e.g. Nova"
-          />
-          <button
-            className="btn btn-ghost"
-            onClick={applyCompanyPreset}
-            disabled={running || !presetCompany.trim()}
-          >
-            Build request
-          </button>
-        </div>
-      </div>
-
       <div className="card">
         <h3 className="card-title">Merge request</h3>
         <p className="card-hint">
-          Describe what to merge in plain language. The pipeline will pause at
-          review gates and show you exactly what it found before doing anything.
+          Type a company name — the pipeline discovers every related table across all origins
+          structurally, so there's nothing else to describe. Need something this box can't
+          express? Use Advanced below instead.
         </p>
-        <textarea
-          rows={3}
-          value={request}
-          disabled={running}
-          onChange={(e) => setRequest(e.target.value)}
-          placeholder="e.g. Merge all companies and their people from both origins into the destination."
+        <input
+          type="text"
+          value={companyName}
+          disabled={running || advancedOpen}
+          onChange={(e) => setCompanyName(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && !advancedOpen && canStart && onStart()}
+          placeholder="e.g. Airbus"
         />
+
+        <details
+          className="advanced-request"
+          open={advancedOpen}
+          onToggle={(e) => setAdvancedOpen((e.target as HTMLDetailsElement).open)}
+        >
+          <summary>Advanced — custom request</summary>
+          <p className="card-hint">
+            Describe what to merge in plain language instead. The pipeline will pause at
+            review gates and show you exactly what it found before doing anything.
+          </p>
+          <textarea
+            rows={3}
+            value={request}
+            disabled={running}
+            onChange={(e) => setRequest(e.target.value)}
+            placeholder="e.g. Merge all companies and their people from both origins into the destination."
+          />
+        </details>
 
         <div className="profile-row">
           <label>
@@ -414,11 +426,33 @@ function StatusLine({
 // actually landed. Renders once the run has stopped (completed or failed);
 // there is nothing to show mid-run since the report is only built at the
 // load step.
+//
+// Bug #8 / Bug #1: the scorecard also flags entity families that loaded
+// ZERO rows and inferred entity types that were dropped for having no
+// source table — a run that "succeeded" while silently writing nothing
+// for half the requested entities must not look like a clean success.
 function RunScorecard({ report }: { report?: Record<string, any> }) {
+  const [showExplanation, setShowExplanation] = useState(false);
   if (!report) return null;
   const dq = report.data_quality || {};
   const grade: string = dq.grade || "A";
   const redFlags: string[] = dq.red_flags || [];
+
+  // Bug #8: requested families that ended with no rows at all.
+  const entities: Record<string, any> = report.entities || {};
+  const loadedEntities = Object.entries(entities).filter(([, e]) => {
+    const inserted = Number(e.rows_inserted ?? 0);
+    const updated = Number(e.rows_updated ?? 0);
+    return inserted + updated > 0;
+  });
+  const loadedNames = new Set(loadedEntities.map(([name]) => name));
+  const zeroRowEntities = Object.keys(entities).filter(
+    (name) => !loadedNames.has(name),
+  );
+
+  // Bug #1: inferred entity types that had no source table anywhere and
+  // were dropped before extraction.
+  const droppedInferred: string[] = report.dropped_inferred_entities || [];
 
   return (
     <div style={{ marginTop: 14 }}>
@@ -431,10 +465,106 @@ function RunScorecard({ report }: { report?: Record<string, any> }) {
         <Stat label="Families requested" value={report.families_requested ?? 0} />
         <Stat label="Families loaded" value={report.families_loaded ?? 0} />
         <Stat label="Completeness" value={`${report.completeness_pct ?? 0}%`} />
+        <Stat label="Zero-row entities" value={zeroRowEntities.length} />
+        <Stat label="Dropped inferred" value={droppedInferred.length} />
       </div>
-      {redFlags.length > 0 && redFlags.map((flag, i) => (
-        <div key={i} className="banner banner-warn">⚠ {flag}</div>
-      ))}
+
+      <div style={{ marginTop: 10, marginBottom: 10 }}>
+        <button
+          className="btn btn-ghost"
+          style={{ fontSize: 12, padding: "4px 10px" }}
+          onClick={() => setShowExplanation((prev) => !prev)}
+        >
+          {showExplanation ? "▾ Hide score breakdown" : "📊 Why this score?"}
+        </button>
+      </div>
+
+      {showExplanation && (
+        <div
+          style={{
+            background: "var(--card-bg, #f8f9fa)",
+            border: "1px solid var(--border-color, #e0e0e0)",
+            borderRadius: 6,
+            padding: 14,
+            marginBottom: 14,
+            fontSize: 13,
+            lineHeight: 1.5,
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 14 }}>
+            Data Quality Score Breakdown
+          </div>
+          
+          <div style={{ marginBottom: 10 }}>
+            <strong>Grade Assessment (Grade {grade}):</strong>
+            <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
+              <li><strong>Grade A</strong>: No red flags. All target entity families extracted and loaded cleanly.</li>
+              <li><strong>Grade B</strong>: Minor issues (e.g. inferred entity types with no matching source table).</li>
+              <li><strong>Grade C</strong>: Type coercion errors or skipped field mappings.</li>
+              <li><strong>Grade F</strong>: Transaction rollback or zero auto-merges across all entities.</li>
+            </ul>
+            {redFlags.length > 0 && (
+              <div style={{ marginTop: 6, color: "#c62828" }}>
+                <strong>Active Red Flags:</strong>
+                <ul style={{ margin: "2px 0 0 18px", padding: 0 }}>
+                  {redFlags.map((flag, idx) => (
+                    <li key={idx}>{flag}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+
+          <div style={{ marginBottom: 10 }}>
+            <strong>Completeness Calculation:</strong>
+            <p style={{ margin: "4px 0 0 0" }}>
+              <code>Completeness = Families Loaded ({report.families_loaded ?? 0}) / Families Requested ({report.families_requested ?? 0}) × 100 = {report.completeness_pct ?? 0}%</code>
+            </p>
+            <p style={{ margin: "4px 0 0 0", color: "var(--muted-color, #6c757d)", fontSize: 12 }}>
+              <em>Families Requested</em> represents target entities identified from schemas. <em>Families Loaded</em> represents entities with ≥1 row inserted/updated into destination.
+            </p>
+            <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
+              <li>Loaded entities: {Array.from(loadedNames).join(", ") || "None"}</li>
+              {zeroRowEntities.length > 0 && (
+                <li>Zero-row entities: {zeroRowEntities.join(", ")}</li>
+              )}
+            </ul>
+          </div>
+
+          {droppedInferred.length > 0 && (
+            <div>
+              <strong>Dropped Inferred Entities ({droppedInferred.length}):</strong>
+              <p style={{ margin: "4px 0 0 0" }}>
+                The following inferred entity types had no matching source table in any connected origin database and were dropped prior to extraction:
+              </p>
+              <code style={{ display: "block", marginTop: 4, background: "rgba(0,0,0,0.04)", padding: 6, borderRadius: 4 }}>
+                {droppedInferred.join(", ")}
+              </code>
+            </div>
+          )}
+        </div>
+      )}
+
+      {zeroRowEntities.length > 0 && (
+        <div className="banner banner-warn">
+          ⚠ {zeroRowEntities.length} entity family(ies) loaded zero rows:{" "}
+          {zeroRowEntities.join(", ")}
+        </div>
+      )}
+
+      {droppedInferred.length > 0 && (
+        <div className="banner banner-warn">
+          ⚠ {droppedInferred.length} inferred entity type(s) had no source
+          table and were dropped: {droppedInferred.join(", ")}
+        </div>
+      )}
+
+      {redFlags.length > 0 &&
+        redFlags.map((flag, i) => (
+          <div key={i} className="banner banner-warn">
+            ⚠ {flag}
+          </div>
+        ))}
     </div>
   );
 }

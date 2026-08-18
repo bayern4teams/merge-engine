@@ -11,6 +11,7 @@ from src.orchestrator.nodes.extract_data import (
     _MAX_IN_FILTER_VALUES,
     _chunked_filters,
     _find_entity_tables,
+    _resolve_link_path,
     _scratch_filter,
     _table_matches_entity,
     extract_data,
@@ -737,8 +738,16 @@ class TestScopedExtraction:
                         {
                             "origin_id": "crm",
                             "table": "public.employees",
-                            "mode": "link",
-                            "columns": ["company_id"],
+                            "mode": "link_path",
+                            "path": [
+                                {
+                                    "from_table": "companies",
+                                    "from_column": "id",
+                                    "to_table": "employees",
+                                    "to_column": "company_id",
+                                }
+                            ],
+                            "hops": 1,
                             "link_entity": "company",
                         }
                     ],
@@ -780,19 +789,63 @@ class TestScopedExtraction:
         assert result.get("failure", {}) == {}
 
     @pytest.mark.asyncio
-    async def test_link_via_junction_two_hop(self) -> None:
-        """A link_via plan reads the junction, then the entity by its keys."""
+    async def test_unchecked_scope_row_is_skipped_entirely(self) -> None:
+        """A row a human unchecked at the scope gate (Phase 5.1/5.2) --
+        enabled: False -- must contribute zero rows and zero extract calls,
+        the same as a table absent from the plan entirely."""
+        state = self._state()
+        state["scope_plan"]["entities"]["person"][0]["enabled"] = False
+        calls: list[dict[str, Any]] = []
+
+        async def fake_extract(**kwargs):
+            calls.append({"table": kwargs["table_name"]})
+            if kwargs["table_name"] == "public.companies":
+                return {"rows": [{"id": 10, "name": "Nova"}], "next_cursor": None}
+            return {"rows": [{"id": 1, "full_name": "A", "company_id": 10}], "next_cursor": None}
+
+        with (
+            patch(
+                "src.orchestrator.nodes.extract_data._get_destination_connector",
+                return_value=MagicMock(get_extraction_state=MagicMock(return_value=None)),
+            ),
+            patch(
+                "src.orchestrator.nodes.extract_data.extract_data_impl",
+                side_effect=fake_extract,
+            ),
+        ):
+            result = await extract_data(state)
+
+        assert not any(c["table"] == "public.employees" for c in calls)
+        assert result["extracted_data"]["person"]["row_count"] == 0
+        assert result.get("failure", {}) == {}
+
+    @pytest.mark.asyncio
+    async def test_two_hop_link_path_reads_the_junction_then_the_entity(self) -> None:
+        """A 2-hop link_path plan reads the junction, then the entity by its
+        keys -- what "link_via" used to be, now just a shorter case of the
+        same N-hop walk."""
         state = self._state()
         state["dependency_tree"] = {"company": [], "person": ["company"]}
         state["scope_plan"]["entities"]["person"] = [
             {
                 "origin_id": "crm",
                 "table": "public.people",
-                "mode": "link_via",
-                "columns": ["person_id"],
-                "via_table": "public.jobs",
-                "via_from_column": "company_id",
-                "via_to_column": "person_id",
+                "mode": "link_path",
+                "path": [
+                    {
+                        "from_table": "companies",
+                        "from_column": "id",
+                        "to_table": "jobs",
+                        "to_column": "company_id",
+                    },
+                    {
+                        "from_table": "jobs",
+                        "from_column": "person_id",
+                        "to_table": "people",
+                        "to_column": "person_id",
+                    },
+                ],
+                "hops": 2,
             }
         ]
         state["entity_tables"]["person"] = [{"origin_id": "crm", "table": "public.people"}]
@@ -815,8 +868,13 @@ class TestScopedExtraction:
             calls.append({"table": kwargs["table_name"], "filter": kwargs.get("filter")})
             if kwargs["table_name"] == "public.companies":
                 return {"rows": [{"id": 10, "name": "Nova"}], "next_cursor": None}
-            if kwargs["table_name"] == "public.jobs":
-                # jobs for company 10 point at person 1 and 2
+            if kwargs["table_name"] == "jobs":
+                # jobs for company 10 point at person 1 and 2. The hop's
+                # to_table is the join graph's bare name ("jobs"), not the
+                # entity table's own full_name ("public.people") -- the two
+                # conventions coexist deliberately (plan_scope.py's
+                # _bare_table_name docstring), and postgres.py's real
+                # connector already defaults a bare name to "public.<name>".
                 return {"rows": [{"person_id": 1}, {"person_id": 2}], "next_cursor": None}
             return {"rows": [{"person_id": 1, "full_name": "A"}], "next_cursor": None}
 
@@ -832,12 +890,243 @@ class TestScopedExtraction:
         ):
             await extract_data(state)
 
-        jobs_call = next(c for c in calls if c["table"] == "public.jobs")
+        jobs_call = next(c for c in calls if c["table"] == "jobs")
         people_call = next(c for c in calls if c["table"] == "public.people")
         # The junction was filtered by the company id...
         assert jobs_call["filter"] == {"company_id": {"op": "in", "value": [10]}}
         # ...and people by the person ids the junction yielded.
         assert people_call["filter"] == {"person_id": {"op": "in", "value": [1, 2]}}
+
+    @pytest.mark.asyncio
+    async def test_narrow_first_hop_filters_on_its_own_column_not_the_pk(self) -> None:
+        """Regression: a NARROW (child->parent) first hop -- e.g.
+        Company.locationID -> Location.locationID -- must filter the
+        linked table on the subject's `locationID` VALUES, not its `id`
+        (primary key) values. The two only coincide for a FAN-OUT
+        (parent->child) first hop like Company.id -> Experience.companyID.
+        Before the fix, the node always seeded the walk from the subject's
+        PK regardless of what the first hop's own `from_column` was, so
+        this exact shape produced `Location.locationID IN <Company ids>`
+        -- the wrong id space, near-certainly zero rows, reported as a
+        clean scoping outcome."""
+        state = {
+            "run_id": "narrow_hop_test",
+            "extraction_order": ["company", "location"],
+            "dependency_tree": {"company": [], "location": ["company"]},
+            "schemas": {
+                "crm": {
+                    "tables": [
+                        {
+                            "name": "companies",
+                            "full_name": "public.companies",
+                            "columns": [
+                                {"name": "id"},
+                                {"name": "name"},
+                                {"name": "locationID"},
+                            ],
+                            "primary_key": ["id"],
+                            "foreign_keys": [],
+                        },
+                        {
+                            "name": "locations",
+                            "full_name": "public.locations",
+                            "columns": [{"name": "locationID"}, {"name": "city"}],
+                            "primary_key": ["locationID"],
+                            "foreign_keys": [],
+                        },
+                    ],
+                },
+            },
+            "entity_tables": {
+                "company": [{"origin_id": "crm", "table": "public.companies"}],
+                "location": [{"origin_id": "crm", "table": "public.locations"}],
+            },
+            "origins": [{"id": "crm", "type": "postgres", "connection": {"host": "h"}}],
+            "destination": {"type": "postgresql"},
+            "extraction_config": {"default_batch_size": 100},
+            "merge_scope": {"active": True, "subject": "Nova", "scope_type": "company"},
+            "scope_plan": {
+                "subject": "Nova",
+                "subject_entity": "company",
+                "entities": {
+                    "company": [
+                        {
+                            "origin_id": "crm",
+                            "table": "public.companies",
+                            "mode": "match",
+                            "columns": ["name"],
+                        }
+                    ],
+                    "location": [
+                        {
+                            "origin_id": "crm",
+                            "table": "public.locations",
+                            "mode": "link_path",
+                            "path": [
+                                {
+                                    "from_table": "companies",
+                                    "from_column": "locationID",
+                                    "to_table": "locations",
+                                    "to_column": "locationID",
+                                }
+                            ],
+                            "hops": 1,
+                        }
+                    ],
+                },
+            },
+        }
+        calls: list[dict[str, Any]] = []
+
+        async def fake_extract(**kwargs):
+            calls.append({"table": kwargs["table_name"], "filter": kwargs.get("filter")})
+            if kwargs["table_name"] == "public.companies":
+                # id (the PK) is 10; locationID (the column the narrow hop
+                # actually needs) is a different value, 77.
+                return {
+                    "rows": [{"id": 10, "name": "Nova", "locationID": 77}],
+                    "next_cursor": None,
+                }
+            return {"rows": [{"locationID": 77, "city": "Springfield"}], "next_cursor": None}
+
+        with (
+            patch(
+                "src.orchestrator.nodes.extract_data._get_destination_connector",
+                return_value=MagicMock(get_extraction_state=MagicMock(return_value=None)),
+            ),
+            patch(
+                "src.orchestrator.nodes.extract_data.extract_data_impl",
+                side_effect=fake_extract,
+            ),
+        ):
+            result = await extract_data(state)
+
+        location_call = next(c for c in calls if c["table"] == "public.locations")
+        # Filtered on the subject's locationID values (77) -- NOT its id
+        # (primary key) values (10).
+        assert location_call["filter"] == {"locationID": {"op": "in", "value": [77]}}
+        assert result.get("failure", {}) == {}
+
+    @pytest.mark.asyncio
+    async def test_mixed_two_hop_path_seeds_from_the_narrow_first_hop_column(self) -> None:
+        """A 2-hop path whose FIRST hop is narrow (Company.locationID ->
+        Location.locationID) and whose second hop fans back out
+        (Location.locationID -> Address.locationID) must still seed the
+        walk from the subject's locationID values, not its PK."""
+        state = {
+            "run_id": "mixed_hop_test",
+            "extraction_order": ["company", "address"],
+            "dependency_tree": {"company": [], "address": ["company"]},
+            "schemas": {
+                "crm": {
+                    "tables": [
+                        {
+                            "name": "companies",
+                            "full_name": "public.companies",
+                            "columns": [
+                                {"name": "id"},
+                                {"name": "name"},
+                                {"name": "locationID"},
+                            ],
+                            "primary_key": ["id"],
+                            "foreign_keys": [],
+                        },
+                        {
+                            "name": "locations",
+                            "full_name": "public.locations",
+                            "columns": [{"name": "locationID"}, {"name": "city"}],
+                            "primary_key": ["locationID"],
+                            "foreign_keys": [],
+                        },
+                        {
+                            "name": "addresses",
+                            "full_name": "public.addresses",
+                            "columns": [{"name": "address_id"}, {"name": "locationID"}],
+                            "primary_key": ["address_id"],
+                            "foreign_keys": [],
+                        },
+                    ],
+                },
+            },
+            "entity_tables": {
+                "company": [{"origin_id": "crm", "table": "public.companies"}],
+                "address": [{"origin_id": "crm", "table": "public.addresses"}],
+            },
+            "origins": [{"id": "crm", "type": "postgres", "connection": {"host": "h"}}],
+            "destination": {"type": "postgresql"},
+            "extraction_config": {"default_batch_size": 100},
+            "merge_scope": {"active": True, "subject": "Nova", "scope_type": "company"},
+            "scope_plan": {
+                "subject": "Nova",
+                "subject_entity": "company",
+                "entities": {
+                    "company": [
+                        {
+                            "origin_id": "crm",
+                            "table": "public.companies",
+                            "mode": "match",
+                            "columns": ["name"],
+                        }
+                    ],
+                    "address": [
+                        {
+                            "origin_id": "crm",
+                            "table": "public.addresses",
+                            "mode": "link_path",
+                            "path": [
+                                {
+                                    "from_table": "companies",
+                                    "from_column": "locationID",
+                                    "to_table": "locations",
+                                    "to_column": "locationID",
+                                },
+                                {
+                                    "from_table": "locations",
+                                    "from_column": "locationID",
+                                    "to_table": "addresses",
+                                    "to_column": "locationID",
+                                },
+                            ],
+                            "hops": 2,
+                        }
+                    ],
+                },
+            },
+        }
+        calls: list[dict[str, Any]] = []
+
+        async def fake_extract(**kwargs):
+            calls.append({"table": kwargs["table_name"], "filter": kwargs.get("filter")})
+            if kwargs["table_name"] == "public.companies":
+                return {
+                    "rows": [{"id": 10, "name": "Nova", "locationID": 77}],
+                    "next_cursor": None,
+                }
+            if kwargs["table_name"] == "locations":
+                return {"rows": [{"locationID": 77}], "next_cursor": None}
+            return {
+                "rows": [{"address_id": 1, "locationID": 77}],
+                "next_cursor": None,
+            }
+
+        with (
+            patch(
+                "src.orchestrator.nodes.extract_data._get_destination_connector",
+                return_value=MagicMock(get_extraction_state=MagicMock(return_value=None)),
+            ),
+            patch(
+                "src.orchestrator.nodes.extract_data.extract_data_impl",
+                side_effect=fake_extract,
+            ),
+        ):
+            await extract_data(state)
+
+        locations_call = next(c for c in calls if c["table"] == "locations")
+        addresses_call = next(c for c in calls if c["table"] == "public.addresses")
+        # The intermediate hop was seeded from the subject's locationID
+        # values (77), not its id (primary key) values (10).
+        assert locations_call["filter"] == {"locationID": {"op": "in", "value": [77]}}
+        assert addresses_call["filter"] == {"locationID": {"op": "in", "value": [77]}}
 
     @pytest.mark.asyncio
     async def test_no_subject_rows_means_dependents_are_skipped(self) -> None:
@@ -910,6 +1199,271 @@ class TestScopedExtraction:
         all_queried_ids = {v for c in employee_calls for v in c["filter"]["company_id"]["value"]}
         assert all_queried_ids == set(many_ids)
         assert result.get("failure", {}) == {}
+
+    @pytest.mark.asyncio
+    async def test_three_hop_link_path_walks_every_intermediate_hop(self) -> None:
+        """The exact issue-6 chain the old link/link_via shapes could never
+        express: Company -> Experience -> Person -> PersonContact, 3 hops.
+        Only the middle two hops (Company->Experience, Experience->Person)
+        are queried by _resolve_link_path; the final hop's to_table
+        (PersonContact) is the entity table itself, extracted separately by
+        the outer loop with the resolved key set."""
+        state = self._state()
+        state["extraction_order"] = ["company", "person", "contact"]
+        state["dependency_tree"] = {
+            "company": [],
+            "person": ["company"],
+            "contact": ["person"],
+        }
+        state["schemas"]["crm"]["tables"] = [
+            t
+            for t in state["schemas"]["crm"]["tables"]
+            if t["full_name"] not in ("public.employees",)
+        ] + [
+            {
+                "name": "experience",
+                "full_name": "public.experience",
+                "columns": [
+                    {"name": "experience_id"},
+                    {"name": "company_id"},
+                    {"name": "person_id"},
+                ],
+                "primary_key": ["experience_id"],
+                "foreign_keys": [],
+            },
+            {
+                "name": "people",
+                "full_name": "public.people",
+                "columns": [{"name": "person_id"}, {"name": "full_name"}],
+                "primary_key": ["person_id"],
+                "foreign_keys": [],
+            },
+            {
+                "name": "contacts",
+                "full_name": "public.contacts",
+                "columns": [{"name": "contact_id"}, {"name": "person_id"}, {"name": "email"}],
+                "primary_key": ["contact_id"],
+                "foreign_keys": [],
+            },
+        ]
+        state["entity_tables"] = {
+            "company": [{"origin_id": "crm", "table": "public.companies"}],
+            "person": [{"origin_id": "crm", "table": "public.people"}],
+            "contact": [{"origin_id": "crm", "table": "public.contacts"}],
+        }
+        state["scope_plan"]["entities"] = {
+            "company": state["scope_plan"]["entities"]["company"],
+            "person": [
+                {
+                    "origin_id": "crm",
+                    "table": "public.people",
+                    "mode": "link_path",
+                    "path": [
+                        {
+                            "from_table": "companies",
+                            "from_column": "id",
+                            "to_table": "experience",
+                            "to_column": "company_id",
+                        },
+                        {
+                            "from_table": "experience",
+                            "from_column": "person_id",
+                            "to_table": "people",
+                            "to_column": "person_id",
+                        },
+                    ],
+                    "hops": 2,
+                }
+            ],
+            "contact": [
+                {
+                    "origin_id": "crm",
+                    "table": "public.contacts",
+                    "mode": "link_path",
+                    "path": [
+                        {
+                            "from_table": "companies",
+                            "from_column": "id",
+                            "to_table": "experience",
+                            "to_column": "company_id",
+                        },
+                        {
+                            "from_table": "experience",
+                            "from_column": "person_id",
+                            "to_table": "people",
+                            "to_column": "person_id",
+                        },
+                        {
+                            "from_table": "people",
+                            "from_column": "person_id",
+                            "to_table": "contacts",
+                            "to_column": "person_id",
+                        },
+                    ],
+                    "hops": 3,
+                }
+            ],
+        }
+
+        calls: list[dict[str, Any]] = []
+
+        async def fake_extract(**kwargs):
+            calls.append({"table": kwargs["table_name"], "filter": kwargs.get("filter")})
+            table = kwargs["table_name"]
+            if table == "public.companies":
+                return {"rows": [{"id": 10, "name": "Nova"}], "next_cursor": None}
+            if table == "experience":
+                # company 10 -> two experience rows -> person 1 and 2.
+                return {
+                    "rows": [{"person_id": 1}, {"person_id": 2}],
+                    "next_cursor": None,
+                }
+            if table == "people":
+                # Intermediate hop for the "contact" chain (experience ->
+                # people -> contacts): projects people's own key back out,
+                # distinct from "public.people" below, which is the real
+                # entity extraction for the "person" entity itself.
+                return {
+                    "rows": [{"person_id": 1}, {"person_id": 2}],
+                    "next_cursor": None,
+                }
+            if table == "public.people":
+                return {"rows": [{"person_id": 1, "full_name": "A"}], "next_cursor": None}
+            if table == "public.contacts":
+                return {
+                    "rows": [{"contact_id": 100, "person_id": 1, "email": "a@x.com"}],
+                    "next_cursor": None,
+                }
+            raise AssertionError(f"unexpected table queried: {table}")
+
+        with (
+            patch(
+                "src.orchestrator.nodes.extract_data._get_destination_connector",
+                return_value=MagicMock(get_extraction_state=MagicMock(return_value=None)),
+            ),
+            patch(
+                "src.orchestrator.nodes.extract_data.extract_data_impl",
+                side_effect=fake_extract,
+            ),
+        ):
+            result = await extract_data(state)
+
+        experience_calls = [c for c in calls if c["table"] == "experience"]
+        assert len(experience_calls) == 2  # once for person, once for contact
+        for c in experience_calls:
+            assert c["filter"] == {"company_id": {"op": "in", "value": [10]}}
+
+        people_call = next(c for c in calls if c["table"] == "public.people")
+        assert people_call["filter"] == {"person_id": {"op": "in", "value": [1, 2]}}
+
+        contacts_call = next(c for c in calls if c["table"] == "public.contacts")
+        assert contacts_call["filter"] == {"person_id": {"op": "in", "value": [1, 2]}}
+        assert result.get("failure", {}) == {}
+
+    @pytest.mark.asyncio
+    async def test_resolve_link_path_1hop_never_queries_anything(self) -> None:
+        """A 1-hop path (what "link" used to be) is subject_ids itself --
+        _resolve_link_path must not make any extraction call at all."""
+        path = [
+            {
+                "from_table": "companies",
+                "from_column": "id",
+                "to_table": "employees",
+                "to_column": "company_id",
+            }
+        ]
+        with patch(
+            "src.orchestrator.nodes.extract_data.extract_data_impl",
+            side_effect=AssertionError("should never be called for a 1-hop path"),
+        ):
+            result = await _resolve_link_path({"type": "postgres"}, path, [10, 11])
+        assert result == [10, 11]
+
+    @pytest.mark.asyncio
+    async def test_resolve_link_path_empty_hop_result_returns_empty(self) -> None:
+        path = [
+            {
+                "from_table": "companies",
+                "from_column": "id",
+                "to_table": "jobs",
+                "to_column": "company_id",
+            },
+            {
+                "from_table": "jobs",
+                "from_column": "person_id",
+                "to_table": "people",
+                "to_column": "person_id",
+            },
+        ]
+
+        async def fake_extract(**kwargs):
+            return {"rows": [], "next_cursor": None}
+
+        with patch(
+            "src.orchestrator.nodes.extract_data.extract_data_impl", side_effect=fake_extract
+        ):
+            result = await _resolve_link_path({"type": "postgres"}, path, [10])
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_scoped_merge_with_no_plan_entities_fails_loudly(self) -> None:
+        """The full-extract-leak fix: merge_scope.active=True but the scope
+        plan produced no entities means nothing tells the loop how to
+        restrict any table, so silently reading everything unscoped would
+        report a scoped merge that pulled in every organisation's data. This
+        must stop the run, not degrade into an unscoped extraction."""
+        state = self._state()
+        state["scope_plan"]["entities"] = {}
+
+        with (
+            patch(
+                "src.orchestrator.nodes.extract_data._get_destination_connector",
+                return_value=MagicMock(get_extraction_state=MagicMock(return_value=None)),
+            ),
+            patch(
+                "src.orchestrator.nodes.extract_data.extract_data_impl",
+                side_effect=AssertionError(
+                    "no extraction call should be made when the scope plan is empty"
+                ),
+            ),
+        ):
+            result = await extract_data(state)
+
+        assert result["failure"] != {}
+        assert result["failure"]["error_class"] == "DataQualityError"
+        assert "no entities to restrict" in result["failure"]["error"]
+        assert result["extracted_data"] == {}
+
+    @pytest.mark.asyncio
+    async def test_scoped_out_entity_recorded_separately_from_missing_or_failed(self) -> None:
+        """An entity with a real candidate table that the scope plan simply
+        never reaches (no plan entry for that table) ends with 0 rows for a
+        reason worth surfacing -- distinct from missing_entities (no table
+        existed anywhere) and from failed_tables (a real extraction error)."""
+        state = self._state()
+        # The plan has no entry at all for public.employees under "person".
+        state["scope_plan"]["entities"]["person"] = []
+
+        async def fake_extract(**kwargs):
+            if kwargs["table_name"] == "public.companies":
+                return {"rows": [{"id": 10, "name": "Nova"}], "next_cursor": None}
+            raise AssertionError("public.employees must not be queried at all")
+
+        with (
+            patch(
+                "src.orchestrator.nodes.extract_data._get_destination_connector",
+                return_value=MagicMock(get_extraction_state=MagicMock(return_value=None)),
+            ),
+            patch(
+                "src.orchestrator.nodes.extract_data.extract_data_impl",
+                side_effect=fake_extract,
+            ),
+        ):
+            result = await extract_data(state)
+
+        assert result["scoped_out_entities"] == ["person"]
+        assert result["dropped_inferred_entities"] == []
+        assert result["failure"] == {}
 
 
 class TestChunkedFilters:

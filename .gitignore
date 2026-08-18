@@ -118,3 +118,6 @@ node_modules/
 # diagnosis files
 *.png
 V3/
+
+# diagnosis
+Bugs/

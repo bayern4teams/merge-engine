@@ -26,8 +26,10 @@
       },
       "expected": {
         "company": [{"origin_id": "crm", "table": "public.companies", "mode": "match", "columns": ["name"]}],
-        "person": [{"origin_id": "crm", "table": "public.employees", "mode": "link", "columns": ["company_id"]}],
-        "product": [{"origin_id": "crm", "table": "public.products", "mode": "link", "columns": ["company_id"]}]
+        "person": [{"origin_id": "crm", "table": "public.employees", "mode": "link_path",
+                    "path": [{"from_table": "companies", "from_column": "id", "to_table": "employees", "to_column": "company_id"}]}],
+        "product": [{"origin_id": "crm", "table": "public.products", "mode": "link_path",
+                     "path": [{"from_table": "companies", "from_column": "id", "to_table": "products", "to_column": "company_id"}]}]
       }
     },
     {
@@ -50,7 +52,8 @@
       },
       "expected": {
         "company": [{"origin_id": "hr", "table": "organizations", "mode": "match", "columns": ["org_name"]}],
-        "person": [{"origin_id": "hr", "table": "people", "mode": "link", "columns": ["org_id"]}]
+        "person": [{"origin_id": "hr", "table": "people", "mode": "link_path",
+                    "path": [{"from_table": "organizations", "from_column": "org_id", "to_table": "people", "to_column": "org_id"}]}]
       }
     },
     {
@@ -89,8 +92,10 @@
           {"origin_id": "hr", "table": "organizations", "mode": "match", "columns": ["org_name"]}
         ],
         "person": [
-          {"origin_id": "crm", "table": "public.employees", "mode": "link", "columns": ["company_id"]},
-          {"origin_id": "hr", "table": "people", "mode": "link", "columns": ["org_id"]}
+          {"origin_id": "crm", "table": "public.employees", "mode": "link_path",
+           "path": [{"from_table": "companies", "from_column": "id", "to_table": "employees", "to_column": "company_id"}]},
+          {"origin_id": "hr", "table": "people", "mode": "link_path",
+           "path": [{"from_table": "organizations", "from_column": "org_id", "to_table": "people", "to_column": "org_id"}]}
         ]
       }
     },
@@ -114,7 +119,8 @@
       },
       "expected": {
         "company": [{"origin_id": "mongo_origin", "table": "mongo_origin.businesses", "mode": "match", "columns": ["name"]}],
-        "person": [{"origin_id": "mongo_origin", "table": "mongo_origin.persons", "mode": "link", "columns": ["company_id"]}]
+        "person": [{"origin_id": "mongo_origin", "table": "mongo_origin.persons", "mode": "link_path",
+                    "path": [{"from_table": "businesses", "from_column": "_id", "to_table": "persons", "to_column": "company_id"}]}]
       }
     }
   ]

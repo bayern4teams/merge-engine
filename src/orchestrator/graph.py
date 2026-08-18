@@ -40,6 +40,7 @@ from src.orchestrator.nodes import (
     resolve_entities,
     unify_entity_groups,
     update_extraction_state_node,
+    validate_data_node,
 )
 from src.orchestrator.nodes.preflight import preflight
 from src.orchestrator.utils.retry import TransientError, classify_exception
@@ -51,9 +52,9 @@ logger = logging.getLogger("merge-engine.orchestrator.graph")
 # not a step in the normal review sequence.
 HITL_NODES = [
     "human_review_deps",
+    "human_review_mappings",
     "human_review_scope",
     "human_review_matches",
-    "human_review_mappings",
     "human_final_approval",
     "handle_error",
 ]
@@ -90,14 +91,25 @@ NETWORK_RETRY = RetryPolicy(
 # to offer "skip": continue from the failure as if that node had produced
 # nothing, rather than forcing the whole run to be abandoned.
 NODE_SUCCESSOR = {
-    "preflight": "parse_request",
-    "parse_request": "discover_schemas",
-    "discover_schemas": "analyze_dependencies",
+    "preflight": "discover_schemas",
+    "discover_schemas": "parse_request",
+    "parse_request": "analyze_dependencies",
     "analyze_dependencies": "human_review_deps",
-    "extract_data": "resolve_entities",
+    "map_fields": "plan_scope",
+    # plan_scope_impl currently catches every exception itself and falls back
+    # to a heuristic plan (never raises, never sets state["failure"]) — but
+    # _error_gate_destinations() must cover every node that COULD reach the
+    # error gate, not just the ones that do today. Without this entry, a
+    # future hard failure in plan_scope would hit `if decision == "skip" and
+    # failed_node in NODE_SUCCESSOR` (false), silently downgrading "skip" to
+    # "abort" with no warning. Skipping a failed plan_scope means treating
+    # the merge as unscoped, same as _scope_router's own "continue" path
+    # when there is no plan.
+    "plan_scope": "extract_data",
+    "extract_data": "validate_data",
+    "validate_data": "resolve_entities",
     "resolve_entities": "unify_entities",
-    "unify_entities": "map_fields",
-    "map_fields": "human_final_approval",
+    "unify_entities": "human_final_approval",
     "load_data": "update_extraction_state",
 }
 
@@ -105,9 +117,9 @@ NODE_SUCCESSOR = {
 # node with the user's written reason injected into its prompt.
 GATE_PRODUCER = {
     "human_review_deps": "analyze_dependencies",
+    "human_review_mappings": "map_fields",
     "human_review_scope": "plan_scope",
     "human_review_matches": "resolve_entities",
-    "human_review_mappings": "map_fields",
 }
 
 # A user can send the same gate back this many times before the graph moves on
@@ -362,6 +374,11 @@ def _build_builder() -> StateGraph:
     builder.add_node(
         "extract_data", _timed("extract_data", extract_data), retry_policy=NETWORK_RETRY
     )
+    # Data quality gate (Phase 4.5): never sets state["failure"] itself --
+    # a hard `fail` severity is surfaced at human_final_approval for a human
+    # to decide, not auto-aborted here -- so it needs no retry policy or
+    # error-gate routing of its own, just a plain edge to resolve_entities.
+    builder.add_node("validate_data", _timed("validate_data", validate_data_node))
     builder.add_node(
         "resolve_entities", _timed("resolve_entities", resolve_entities), retry_policy=NETWORK_RETRY
     )
@@ -404,6 +421,13 @@ def _build_builder() -> StateGraph:
             {"continue": forward, "error": "handle_error", "abort": END},
         )
 
+    # validate_data never sets state["failure"] itself (a hard `fail`
+    # severity is surfaced at human_final_approval for a human to decide,
+    # never auto-aborted), so it needs no _fallible_router error routing --
+    # a plain edge is the honest representation of "this step cannot fail
+    # the run by itself".
+    builder.add_edge("validate_data", "resolve_entities")
+
     # Conditional: low-confidence entity matches -> human review
     builder.add_conditional_edges(
         "resolve_entities",
@@ -424,7 +448,7 @@ def _build_builder() -> StateGraph:
             "error": "handle_error",
             "abort": END,
             "review": "human_review_mappings",
-            "continue": "human_final_approval",
+            "continue": "plan_scope",
         },
     )
 
@@ -432,13 +456,17 @@ def _build_builder() -> StateGraph:
     # Every HITL gate is a real decision point: approve/edit continues,
     # retry sends the work back to the node that produced it, and
     # reject ends the run without writing anything.
-    # Dependency review forwards into scope planning rather than straight to
-    # extraction. For an unscoped merge, plan_scope is a no-op and its router
-    # sends the run on to extraction, so the added hop costs nothing.
+    # Dependency review forwards into field mapping rather than scope planning.
     builder.add_conditional_edges(
         "human_review_deps",
-        _gate_router("human_review_deps", "plan_scope"),
-        {"forward": "plan_scope", "retry": "analyze_dependencies", "abort": END},
+        _gate_router("human_review_deps", "map_fields"),
+        {"forward": "map_fields", "retry": "analyze_dependencies", "abort": END},
+    )
+    # Field mapping review forwards into scope planning.
+    builder.add_conditional_edges(
+        "human_review_mappings",
+        _gate_router("human_review_mappings", "plan_scope"),
+        {"forward": "plan_scope", "retry": "map_fields", "abort": END},
     )
     # After planning, a scoped merge stops at the scope-confirmation gate; an
     # unscoped one skips straight to extraction (the gate is never entered, so
@@ -457,11 +485,6 @@ def _build_builder() -> StateGraph:
         "human_review_matches",
         _gate_router("human_review_matches", "unify_entities"),
         {"forward": "unify_entities", "retry": "resolve_entities", "abort": END},
-    )
-    builder.add_conditional_edges(
-        "human_review_mappings",
-        _gate_router("human_review_mappings", "human_final_approval"),
-        {"forward": "human_final_approval", "retry": "map_fields", "abort": END},
     )
     # Final approval has no producer to retry — it either loads or it doesn't.
     # load_data_node independently refuses to write unless load_approval is
@@ -502,6 +525,14 @@ class MergeState(TypedDict):
     # were dropped without escalating -- set by extract_data.py, surfaced in the
     # reconciliation report / data-quality scorecard (remediation #6).
     dropped_inferred_entities: list[Any]
+    # Entities the scope plan named (real candidate tables existed) that ended
+    # up with 0 rows purely because every candidate was scoped out (no plan
+    # entry, no subject ids, or an empty join-path result) -- distinct from
+    # dropped_inferred_entities (no table existed at all) and from a real
+    # extraction failure (failed_tables, in the failure context). Set by
+    # extract_data.py (Phase 4.4 of the fix-bugs follow-up plan); before this
+    # such an entity was invisible beyond an unexplained "extracted_total: 0".
+    scoped_out_entities: list[Any]
     # Set by parse_request when the request targets one named organisation
     # ("all information about Nova"): {active, subject, scope_type}. When
     # active, scope planning, extraction and dedup all restrict to the subject.
@@ -511,9 +542,11 @@ class MergeState(TypedDict):
 
     llm_config: dict[str, Any]
     extraction_config: dict[str, Any]
+    scope_config: dict[str, Any]
 
     schemas: dict[str, Any]
     dependency_tree: dict[str, Any]
+    column_dependencies: list[Any]
     # Set by analyze_dependencies when the LLM call fails and it falls back
     # to a flat (unordered) dependency tree, so a human sees the tree is
     # unverified rather than mistaking it for a real analysis.
@@ -526,12 +559,27 @@ class MergeState(TypedDict):
     # extraction falls back to the alias-name heuristic.
     entity_tables: dict[str, Any]
     table_selection_notes: str
+    # Phase A4: the input fingerprint entity_tables was computed (or reused)
+    # from -- capture_from_state reads this to decide whether to cache the
+    # result into the profile. Undeclared here, it is silently dropped by
+    # LangGraph before the run ends (only schema-declared keys survive a
+    # node's return dict), which is exactly what made stage caching a no-op
+    # end-to-end despite parse_request.py setting it on every return path.
+    _entity_tables_fingerprint: str
 
     # Built by plan_scope for a scoped merge: how to restrict each entity's
     # tables to the subject — {subject, subject_entity, entities: {entity:
     # [{origin_id, table, mode: match|link, columns, ...}]}}. Empty for an
     # unscoped merge, in which case extraction reads whole tables as before.
     scope_plan: dict[str, Any]
+    # The JoinGraph plan_scope built (or reused) while producing scope_plan
+    # -- cached so a node retry within the same run, or a profile-matched
+    # repeat run (fingerprint.py), can skip re-sampling every candidate
+    # edge's inclusion dependency. None for an unscoped merge.
+    join_graph: Any
+    # Phase A4: the input fingerprint join_graph was computed (or reused)
+    # from -- same rationale as _entity_tables_fingerprint above.
+    _join_graph_fingerprint: str
 
     # Phase O — decisions a saved profile pins so a re-run is a re-run.
     # {entity: {blocking_keys, unique_id_fields, deterministic_id_fields,
@@ -543,6 +591,20 @@ class MergeState(TypedDict):
     conflict_policy: dict[str, Any]
     # Name of the profile this run was started from, "" when ad-hoc (O.4)
     profile_name: str
+    # Phase A4: the applied profile's per-stage fingerprints/artefacts
+    # ({"fingerprints": {stage: fp}, "artefacts": {stage: value}}) --
+    # separate from the PINNED_KEYS values above, which apply_profile seeds
+    # unconditionally. A node consults this via profiles.stage_cache_get to
+    # decide whether ITS OWN cached artefact still matches the current
+    # run's input shape, never trusting a pin blindly. Set once by
+    # apply_profile before the graph starts; no node ever returns this key,
+    # so it needs no reducer.
+    _profile_cache: dict[str, Any]
+    # Which cacheable stages this run actually reused (Phase A4) -- surfaced
+    # at the gates so a human sees "reused from profile X" rather than a
+    # silent skip. operator.add for the same reason errors/handled_failures
+    # is: more than one node may report a reuse across the run.
+    reused_stages: Annotated[list[Any], operator.add]
     # Part 1.6.A: gate names (from REVIEW_GATES) this run should resume
     # through automatically instead of pausing for a human. Opt-in per run
     # via the Advanced panel; empty means every gate pauses as before.
@@ -563,9 +625,25 @@ class MergeState(TypedDict):
     # last_value, rows_extracted}. Written to merge_engine_extraction_state
     # by update_extraction_state_node after a successful load.
     extraction_watermarks: Annotated[dict[str, Any], operator.or_]
+    # Set by validate_data_node (Phase 4.5 of the fix-bugs follow-up plan):
+    # {status, severity, entities: {entity: {severity, row_count,
+    # sample_size, sampled, checks}}}. Never used to auto-abort the run --
+    # surfaced at human_final_approval so a human decides. workflow_manager.py
+    # plumbed the read side of these two keys ahead of this node existing
+    # (Phase 2.1); this is what actually populates them.
+    quality_report: dict[str, Any]
+    has_quality_failure: bool
 
     # ⚠️ IMPORTANT: these must be merge-safe
     entity_clusters: Annotated[dict[str, Any], operator.or_]
+    # Phase 7.2: per-pair match_evidence salvaged from a cluster at the
+    # moment a human splits it (cluster_edits.apply_cluster_decisions) --
+    # the new per-partition clusters carry no evidence of their own, so this
+    # is the only record of "a human looked at this specific pair and said
+    # these are NOT the same entity". load_data._persist_merge_audit writes
+    # these with human_override="split". Same accumulate-across-resumes
+    # shape as errors/handled_failures below.
+    human_split_pairs: Annotated[list[Any], operator.add]
     # Per-entity resolution audit numbers ({entity: {auto_matched,
     # auto_excluded, llm_scored, total_records, clusters_formed}}) so the
     # HITL gates can show what the system decided without review.
@@ -709,6 +787,7 @@ def get_initial_state(
     conflict_policy: dict[str, Any] | None = None,
     matching_rules: dict[str, Any] | None = None,
     run_config: dict[str, Any] | None = None,
+    subject: str | None = None,
 ) -> dict[str, Any]:
     """Create the initial state dict for a new workflow.
 
@@ -746,6 +825,11 @@ def get_initial_state(
         ``entity_resolution_enabled``, ``field_mapping_enabled``,
         ``batch_size``, ``auto_approve_gates``. Only keys actually present
         override the file-loaded config; everything else is left alone.
+    subject : str, optional
+        Subject-first mode (Phase 3.3): when set (UI-originated workflows
+        only), ``merge_scope`` is set directly to an active company-scoped
+        merge for this name, rather than left inactive for parse_request's
+        LLM call to derive from ``user_request``'s free text.
 
     Returns
     -------
@@ -757,33 +841,48 @@ def get_initial_state(
         llm_config = _load_llm_config(config_path)
         extraction_config: dict[str, Any] = {"default_batch_size": 1000}
         _apply_run_config_overrides(llm_config, extraction_config, run_config)
+        scope_config = _load_scope_config(config_path)
+        subject_clean = (subject or "").strip()
+        merge_scope = (
+            {"active": True, "subject": subject_clean, "scope_type": "company"}
+            if subject_clean
+            else {"active": False, "subject": "", "scope_type": "none"}
+        )
         return {
             "user_request": user_request,
             "run_id": run_id,
             "target_entities": [],
             "explicit_target_entities": [],
-            "merge_scope": {"active": False, "subject": "", "scope_type": "none"},
+            "merge_scope": merge_scope,
             "origins": origins,
             "destination": destination,
             # run_id rides along so every LLM call can be attributed to this
             # run in the cost ledger (O.5) — without it every run reports zero.
             "llm_config": {**llm_config, "run_id": run_id},
             "extraction_config": extraction_config,
+            "scope_config": scope_config,
             "schemas": {},
             "dependency_tree": {},
+            "column_dependencies": [],
             "dependency_analysis_warning": "",
             "extraction_order": [],
             "entity_tables": {},
             "table_selection_notes": "",
+            "_entity_tables_fingerprint": "",
             "scope_plan": {},
+            "join_graph": None,
+            "_join_graph_fingerprint": "",
             "matching_rules": matching_rules or {},
             "conflict_policy": conflict_policy or {},
             "profile_name": "",
+            "_profile_cache": {},
+            "reused_stages": [],
             "auto_approve_gates": list((run_config or {}).get("auto_approve_gates") or []),
             "force_full_extraction": False,
             "extracted_data": {},
             "extraction_watermarks": {},
             "entity_clusters": {},
+            "human_split_pairs": [],
             "resolution_stats": {},
             "unified_entities": {},
             "field_mappings": {},
@@ -838,6 +937,9 @@ def get_initial_state(
             "structured_output": config.llm.structured_output,
             "entity_resolution_enabled": config.llm.entity_resolution_enabled,
             "field_mapping_enabled": config.llm.field_mapping_enabled,
+            "persistent_cache_enabled": config.llm.persistent_cache_enabled,
+            "persistent_cache_ttl_days": config.llm.persistent_cache_ttl_days,
+            "persistent_cache_max_rows": config.llm.persistent_cache_max_rows,
         }
 
         return {
@@ -852,13 +954,21 @@ def get_initial_state(
             "extraction_config": {
                 "default_batch_size": config.extraction.default_batch_size,
             },
+            "scope_config": {
+                "max_hops": config.scope.max_hops,
+                "join_graph_sample_size": config.scope.join_graph_sample_size,
+            },
             "schemas": {},
             "dependency_tree": {},
+            "column_dependencies": [],
             "dependency_analysis_warning": "",
             "extraction_order": [],
             "entity_tables": {},
             "table_selection_notes": "",
+            "_entity_tables_fingerprint": "",
             "scope_plan": {},
+            "join_graph": None,
+            "_join_graph_fingerprint": "",
             "matching_rules": matching_rules or {},
             # Was hardcoded to {}, silently ignoring the caller's
             # conflict_policy parameter entirely - the UI path (above)
@@ -867,10 +977,13 @@ def get_initial_state(
             "conflict_policy": conflict_policy or {},
             "auto_approve_gates": list((run_config or {}).get("auto_approve_gates") or []),
             "profile_name": "",
+            "_profile_cache": {},
+            "reused_stages": [],
             "force_full_extraction": False,
             "extracted_data": {},
             "extraction_watermarks": {},
             "entity_clusters": {},
+            "human_split_pairs": [],
             "resolution_stats": {},
             "unified_entities": {},
             "field_mappings": {},
@@ -918,6 +1031,9 @@ def _load_llm_config(config_path: str | None) -> dict[str, Any]:
             "structured_output": cfg.llm.structured_output,
             "entity_resolution_enabled": cfg.llm.entity_resolution_enabled,
             "field_mapping_enabled": cfg.llm.field_mapping_enabled,
+            "persistent_cache_enabled": cfg.llm.persistent_cache_enabled,
+            "persistent_cache_ttl_days": cfg.llm.persistent_cache_ttl_days,
+            "persistent_cache_max_rows": cfg.llm.persistent_cache_max_rows,
         }
     except Exception:
         # Return placeholder -- LLM will be configured via env vars
@@ -930,7 +1046,29 @@ def _load_llm_config(config_path: str | None) -> dict[str, Any]:
             "structured_output": True,
             "entity_resolution_enabled": True,
             "field_mapping_enabled": True,
+            "persistent_cache_enabled": True,
+            "persistent_cache_ttl_days": 30,
+            "persistent_cache_max_rows": 50_000,
         }
+
+
+def _load_scope_config(config_path: str | None) -> dict[str, Any]:
+    """Load scope-planning defaults (join-graph BFS max_hops etc.) from
+    config file. Falls back to join_graph.py's own module-level defaults
+    (_DEFAULT_MAX_HOPS / the sample-size default already baked into
+    build_join_graph) so a config-load failure degrades to the same
+    behaviour the tool already had before this was made configurable.
+    """
+    try:
+        from src.utils.config_loader import load_config
+
+        cfg = load_config(config_path)
+        return {
+            "max_hops": cfg.scope.max_hops,
+            "join_graph_sample_size": cfg.scope.join_graph_sample_size,
+        }
+    except Exception:
+        return {"max_hops": 6, "join_graph_sample_size": 500}
 
 
 # ── Server Mode Export ──────────────────────────────────────────────

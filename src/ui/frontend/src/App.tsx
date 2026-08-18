@@ -4,14 +4,24 @@ import SetupScreen from "./components/SetupScreen";
 import PipelineScreen from "./components/PipelineScreen";
 import SettingsScreen from "./components/SettingsScreen";
 import InvestigateScreen from "./components/InvestigateScreen";
+import {
+  loadOriginsFromStorage,
+  saveOriginsToStorage,
+  loadDestinationFromStorage,
+  saveDestinationToStorage,
+  loadActiveTabFromStorage,
+  saveActiveTabToStorage,
+} from "./store";
 
 type Tab = "setup" | "pipeline" | "settings" | "investigate";
 type Theme = "light" | "dark";
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>("setup");
-  const [origins, setOrigins] = useState<OriginConfig[]>([]);
-  const [destination, setDestination] = useState<DestinationConfig | null>(null);
+  const [tab, setTabState] = useState<Tab>(() => (loadActiveTabFromStorage() as Tab) || "setup");
+  const [origins, setOriginsState] = useState<OriginConfig[]>(() => loadOriginsFromStorage());
+  const [destination, setDestinationState] = useState<DestinationConfig | null>(() =>
+    loadDestinationFromStorage(),
+  );
   const [theme, setTheme] = useState<Theme>(
     () => (localStorage.getItem("me-theme") as Theme) || "light",
   );
@@ -20,6 +30,21 @@ export default function App() {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem("me-theme", theme);
   }, [theme]);
+
+  function setTab(t: Tab) {
+    setTabState(t);
+    saveActiveTabToStorage(t);
+  }
+
+  function setOrigins(o: OriginConfig[]) {
+    setOriginsState(o);
+    saveOriginsToStorage(o);
+  }
+
+  function setDestination(d: DestinationConfig | null) {
+    setDestinationState(d);
+    saveDestinationToStorage(d);
+  }
 
   const ready = origins.length > 0 && !!destination;
 
@@ -72,17 +97,23 @@ export default function App() {
         </button>
       </div>
 
-      {tab === "setup" && (
+      <div style={{ display: tab === "setup" ? "block" : "none" }}>
         <SetupScreen
           origins={origins}
           destination={destination}
           onOriginsChange={setOrigins}
           onDestinationChange={setDestination}
         />
-      )}
-      {tab === "pipeline" && <PipelineScreen origins={origins} destination={destination} />}
-      {tab === "settings" && <SettingsScreen />}
-      {tab === "investigate" && <InvestigateScreen />}
+      </div>
+      <div style={{ display: tab === "pipeline" ? "block" : "none" }}>
+        <PipelineScreen origins={origins} destination={destination} />
+      </div>
+      <div style={{ display: tab === "settings" ? "block" : "none" }}>
+        <SettingsScreen />
+      </div>
+      <div style={{ display: tab === "investigate" ? "block" : "none" }}>
+        <InvestigateScreen />
+      </div>
     </div>
   );
 }

@@ -41,6 +41,54 @@ concurrent request needs to read workflow status.
 
 ---
 
+## 13.5 Graph node order, and the undocumented `map_fields` move
+
+`src/orchestrator/graph.py`'s `NODE_SUCCESSOR` dict is the single source of
+truth for pipeline order; `HITL_NODES`, `GATE_PRODUCER`, `REVIEW_GATES`
+(derived as `HITL_NODES[:-1]`) and every conditional edge are all driven from
+it, so the topology below is exact, not aspirational:
+
+```
+preflight -> discover_schemas -> parse_request -> analyze_dependencies
+  -> human_review_deps -> map_fields -> [human_review_mappings if unmapped fields]
+  -> plan_scope -> [human_review_scope if merge_scope.active and scope_plan.entities]
+  -> extract_data -> validate_data -> resolve_entities -> [human_review_matches if low-confidence]
+  -> unify_entities -> human_final_approval -> load_data -> update_extraction_state -> END
+```
+
+Three things about this order are easy to get wrong from memory, because it
+changed three times and only two of those changes were ever written down
+before now:
+
+1. **`discover_schemas` runs before `parse_request`**, not after. This was a
+   deliberate Phase 9 change (`docs/plans/CHANGE_NODE_ORDER_COVERAGE_MATRIX.md`)
+   so entity selection can be grounded in the schemas that actually exist
+   rather than an LLM guessing blind.
+2. **`map_fields` runs before `extract_data`**, not after `unify_entities`.
+   This shipped in the same commit as (1) but was never called out in that
+   plan document — it rode along undocumented. It is supported by
+   `map_fields_node.py`'s `_build_source_schema_from_discovered`, an
+   explicitly "run before extraction, from discovered schemas rather than
+   unified records" code path — so it is not a bug, but it does mean
+   `map_fields` no longer has `state["unified_entities"]` to work from at
+   all; its field-mapping decisions are made against raw discovered columns,
+   before a single row has been extracted.
+3. **`validate_data` runs between `extract_data` and `resolve_entities`**
+   (Phase 4.5, salvaged from the `B3-quality-lineage` branch). It is a thin,
+   non-fallible node — a hard `row_count >= 1` / uniqueness / not-null / date
+   check per entity, never Great Expectations despite an earlier draft of
+   its docstring claiming otherwise (`src/orchestrator/nodes/validate_data.py`,
+   `src/mcp_server/tools/data_quality.py`). It never auto-aborts the run; a
+   `fail`-severity result is surfaced at `human_final_approval` as
+   `quality_report`/`has_quality_failure` for a human to see and decide on.
+
+All three changes mean the mapping gate (`human_review_mappings`) now happens
+*before* the scope gate (`human_review_scope`) and long before any data
+exists — worth remembering before assuming gate order matches when each
+kind of information first becomes available.
+
+---
+
 ## 14. The FastAPI + React surface
 
 `src/api/main.py` (backend), `src/ui/frontend/` (React + TypeScript + Vite,

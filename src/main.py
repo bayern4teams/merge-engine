@@ -20,10 +20,31 @@ import argparse
 import asyncio
 import logging
 import sys
+from pathlib import Path
 from typing import Any
 
 from src.utils.config_loader import load_config
 from src.utils.logging_config import setup_logging
+
+try:
+    from dotenv import load_dotenv
+
+    # Resolve .env relative to the project root (src/main.py is one level inside src/),
+    # so defaults load regardless of the CWD the app was launched from.
+    _ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+    load_dotenv(_ENV_FILE, override=True)
+except ImportError:
+    # A silent `pass` here once left every ${ENV_VAR} placeholder in
+    # config.yaml unexpanded with zero indication why. setup_logging()
+    # hasn't run yet at this point in startup, but Python's own "handler
+    # of last resort" still prints a WARNING+ to stderr with no handlers
+    # configured, so this is not actually silent.
+    logging.getLogger(__name__).warning(
+        "python-dotenv is not installed — .env will NOT be loaded. Any "
+        "${VAR} placeholder in config.yaml stays unexpanded unless the "
+        "real environment variable is already set. Run "
+        "`pip install python-dotenv` or `python scripts/bootstrap.py`."
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -80,7 +101,7 @@ async def run_mcp_server(config: Any, port: int = 8000) -> None:
     """
 
     try:
-        from mcp.server.fastmcp import FastMCP
+        from mcp.server.fastmcp import FastMCP  # type: ignore[import-not-found]
 
         mcp = FastMCP(
             "merge-engine",
@@ -91,14 +112,14 @@ async def run_mcp_server(config: Any, port: int = 8000) -> None:
         from src.mcp_server.server import _TOOL_HANDLERS
 
         # Register tool list
-        @mcp.tool()
+        @mcp.tool()  # type: ignore[untyped-decorator]
         async def discover_schema(origin_id: str) -> str:
             result = await _TOOL_HANDLERS["discover_schema"]({"origin_id": origin_id})
             import json
 
             return json.dumps(result, default=str)
 
-        @mcp.tool()
+        @mcp.tool()  # type: ignore[untyped-decorator]
         async def extract_data(
             origin_id: str,
             table_name: str,

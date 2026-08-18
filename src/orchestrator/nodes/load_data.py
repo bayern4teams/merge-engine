@@ -216,16 +216,52 @@ def build_reconciliation_report(
             f"{', '.join(dropped_inferred_entities)}"
         )
 
-    if rolled_back or any("zero auto-merges" in f for f in red_flags):
+    families_requested = len(state.get("target_entities") or entity_names)
+    # Regression guard: a target entity family that loaded zero rows used
+    # to be invisible to this grading function entirely -- Grade A could
+    # print ("no red flags. All target entity families extracted and
+    # loaded cleanly") in the same run where the final-approval gate's own
+    # zero-row-families banner and validate_data's "fail" severity were
+    # both showing, because neither fed into red_flags or the grade rule
+    # table below. Live-observed: 3 zero-row families, Grade A.
+    zero_row_families = sorted(
+        e
+        for e in entity_names
+        if entities[e].get("rows_inserted", 0) + entities[e].get("rows_updated", 0) == 0
+    )
+    if zero_row_families:
+        red_flags.append(
+            f"{len(zero_row_families)} entity famil{'y' if len(zero_row_families) == 1 else 'ies'} "
+            f"loaded zero rows: {', '.join(zero_row_families)}"
+        )
+    # validate_data's own severity (Phase 4.5) -- computed independently of
+    # everything above, and previously never consulted by the grade at all.
+    # quality_report's shape is {status, severity, entities: {entity: {...}}}
+    # (data_quality.run_data_quality_checks) -- per-entity severities live
+    # under "entities", not at the top level.
+    quality_report: dict[str, Any] = state.get("quality_report") or {}
+    has_quality_failure = bool(state.get("has_quality_failure"))
+    if has_quality_failure:
+        failing = sorted(
+            e
+            for e, r in (quality_report.get("entities") or {}).items()
+            if isinstance(r, dict) and r.get("severity") == "fail"
+        )
+        red_flags.append(
+            "data-quality check failed for: "
+            + (", ".join(failing) if failing else "one or more entities")
+        )
+
+    if rolled_back or has_quality_failure or any("zero auto-merges" in f for f in red_flags):
         grade = "F"
-    elif any("could not be coerced" in f or "dropped from mapping" in f for f in red_flags):
+    elif zero_row_families or any(
+        "could not be coerced" in f or "dropped from mapping" in f for f in red_flags
+    ):
         grade = "C"
     elif red_flags:
         grade = "B"
     else:
         grade = "A"
-
-    families_requested = len(state.get("target_entities") or entity_names)
 
     return {
         "run_id": state.get("run_id", ""),
@@ -439,6 +475,13 @@ async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
             # never written and silently duplicates them.
             if not failed_entities:
                 _persist_entity_map(state, destination, set(load_results), connector=load_connector)
+                # Phase 7.2: durable per-pair merge lineage, same transaction
+                # for the same reason as the entity map above -- a rolled
+                # back load must not leave audit rows for a merge that never
+                # actually landed.
+                _persist_merge_audit(
+                    state, destination, set(load_results), connector=load_connector
+                )
             else:
                 # Raising is what triggers the rollback: everything written
                 # in this transaction, including earlier entities, is undone.
@@ -652,6 +695,7 @@ async def _load_all_entities(
                 connector=connector,
                 foreign_keys=foreign_keys,
                 cluster_lookup_by_table=cluster_lookup_by_table,
+                other_primary_tables=set(entity_type_by_dest_table) - {dest_table},
             )
             logger.debug("load_data_impl result: %s", json.dumps(result, default=str)[:300])
 
@@ -669,6 +713,19 @@ async def _load_all_entities(
                 result.get("inserted", 0),
                 result.get("updated", 0),
             )
+            # Surfaced beyond the log line: a cross-table mapping approved
+            # at the gate that then had no reverse FK to write through at
+            # load time used to be visible nowhere a human reviewing the
+            # run would look. errors is already rendered in the final
+            # report a reviewer sees.
+            for child_table, child_result in (result.get("child_tables") or {}).items():
+                dropped = child_result.get("dropped_fields")
+                if dropped:
+                    errors.append(
+                        f"Entity '{entity_type}': cross-table mapping into '{child_table}' "
+                        f"had no foreign key back to its parent table — {len(dropped)} "
+                        f"field(s) did not reach the destination: {', '.join(dropped)}"
+                    )
 
         except Exception as exc:
             msg = f"Load failed for entity '{entity_type}': {exc}"
@@ -737,6 +794,118 @@ def _persist_entity_map(
             "Could not persist the entity map (%s). The load is already "
             "committed, so it stands — but a re-run may insert duplicate "
             "rows instead of updating.",
+            exc,
+        )
+
+
+def _persist_merge_audit(
+    state: dict[str, Any],
+    destination: Any,
+    entity_types: set[str],
+    connector: Any = None,
+) -> None:
+    """Persist durable per-pair merge evidence (Phase 7.1's ``match_evidence``).
+
+    One row per matched pair, covering every multi-member cluster's internal
+    edges — the field-level breakdown or LLM rationale that justified the
+    merge, queryable long after the run's own spool is cleaned up. Best
+    effort and non-fatal: unlike ``_persist_entity_map``, losing an audit
+    row does not corrupt a future run (no duplicate destination rows result
+    from it) — it only means that one merge's "why" is missing from the
+    audit table, which is a real but recoverable loss, not one worth
+    rolling an otherwise-successful load back over.
+    """
+    if not entity_types or not isinstance(destination, dict):
+        return
+    try:
+        owns_connector = connector is None
+        if connector is None:
+            connector = _get_destination_connector(destination)
+        if not hasattr(connector, "save_merge_audit"):
+            return
+        run_id = str(state.get("run_id", ""))
+        saved = 0
+        for entity_type in entity_types:
+            rows: list[dict[str, Any]] = []
+            for cluster in clusters_for(state, entity_type):
+                evidence = cluster.get("match_evidence")
+                if not evidence:
+                    continue
+                cluster_id = cluster.get("cluster_id", "")
+                # A human who confirmed this cluster at the matches gate
+                # (cluster_edits.apply_cluster_decisions' "keep" path) leaves
+                # match_evidence untouched but sets reviewed_by_human -- that
+                # explicit confirmation outranks the original auto/llm
+                # decision as the audit trail's "decided_by".
+                human_confirmed = bool(cluster.get("reviewed_by_human"))
+                for pair in evidence.get("pairs", []):
+                    record_a = pair.get("a")
+                    record_b = pair.get("b")
+                    if not record_a or not record_b:
+                        continue
+                    method = pair.get("method", "")
+                    rows.append(
+                        {
+                            "cluster_id": cluster_id,
+                            "record_a": record_a,
+                            "record_b": record_b,
+                            "confidence": pair.get("confidence"),
+                            "method": method,
+                            "evidence": {
+                                "matched_fields": pair.get("matched_fields", []),
+                                "mismatched_fields": pair.get("mismatched_fields", []),
+                                "reason": pair.get("reason"),
+                            },
+                            "decided_by": "human"
+                            if human_confirmed
+                            else ("llm" if method == "llm" else "auto"),
+                            "human_override": "merge" if human_confirmed else None,
+                        }
+                    )
+            if rows:
+                saved += connector.save_merge_audit(entity_type, run_id, rows)
+
+        # Phase 7.2: pairs a human split apart (cluster_edits.
+        # apply_cluster_decisions, via workflow_manager's resume handler).
+        # These never appear in the per-cluster loop above -- the new
+        # per-partition clusters carry no match_evidence of their own -- so
+        # without this, a human's "these are NOT the same entity" decision
+        # would be applied to entity_clusters but leave no audit trail at
+        # all, unlike every other decided_by value.
+        split_by_entity: dict[str, list[dict[str, Any]]] = {}
+        for pair in state.get("human_split_pairs") or []:
+            entity_type = pair.get("entity_type")
+            record_a, record_b = pair.get("record_a"), pair.get("record_b")
+            if not entity_type or entity_type not in entity_types or not record_a or not record_b:
+                continue
+            split_by_entity.setdefault(entity_type, []).append(
+                {
+                    "cluster_id": pair.get("cluster_id", ""),
+                    "record_a": record_a,
+                    "record_b": record_b,
+                    "confidence": pair.get("confidence"),
+                    "method": pair.get("method", ""),
+                    "evidence": {
+                        "matched_fields": pair.get("matched_fields", []),
+                        "mismatched_fields": pair.get("mismatched_fields", []),
+                        "reason": pair.get("reason"),
+                    },
+                    "decided_by": "human",
+                    "human_override": "split",
+                }
+            )
+        for entity_type, rows in split_by_entity.items():
+            saved += connector.save_merge_audit(entity_type, run_id, rows)
+
+        if saved:
+            logger.info("Persisted %d merge-audit row(s)", saved)
+        if owns_connector and hasattr(connector, "close"):
+            connector.close()
+    except Exception as exc:
+        logger.warning(
+            "Could not persist merge audit rows (%s) — the load itself is "
+            "unaffected, but this merge's per-pair evidence will not be "
+            "queryable afterward.",
             exc,
         )
 

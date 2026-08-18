@@ -11,6 +11,7 @@ import asyncio
 import logging
 from typing import Any
 
+from src.mcp_server.tools.dest_family import build_family_map
 from src.mcp_server.tools.map_fields import map_fields_impl
 from src.orchestrator.spool import unified_for
 from src.orchestrator.utils.retry_hints import with_retry_hint
@@ -27,6 +28,62 @@ from src.orchestrator.utils.entity_aliases import resolve_dest_table  # noqa: E4
 # from the first NON-null value fixes both (Fix #3, Phase 4.3).
 _MAX_SAMPLE_RECORDS = 500
 _MAX_SAMPLE_VALUES = 10
+
+
+def _build_source_schema_from_discovered(state: dict[str, Any], entity_type: str) -> dict[str, Any]:
+    """Collect source fields across origins for entity_type when run before extraction."""
+    schemas = state.get("schemas", {})
+    entity_tables = (state.get("entity_tables") or {}).get(entity_type, [])
+    source_schema: dict[str, Any] = {}
+
+    target_tables_by_origin: dict[str, set[str]] = {}
+    if entity_tables:
+        for et in entity_tables:
+            oid = str(et.get("origin_id", "")).strip()
+            tbl = str(et.get("table", "")).strip()
+            if oid and tbl:
+                target_tables_by_origin.setdefault(oid, set()).add(tbl.lower())
+
+    for origin_id, schema_data in schemas.items():
+        matched_tables = target_tables_by_origin.get(origin_id)
+        for table in schema_data.get("tables", []):
+            table_name = str(table.get("name", "")).strip()
+            full_name = str(table.get("full_name") or table_name).strip()
+
+            if matched_tables is not None:
+                if (
+                    table_name.lower() not in matched_tables
+                    and full_name.lower() not in matched_tables
+                ):
+                    continue
+            else:
+                from src.orchestrator.utils.entity_aliases import concept_matches
+
+                if not (
+                    concept_matches(entity_type, table_name)
+                    or concept_matches(entity_type, full_name)
+                ):
+                    continue
+
+            sample_row = table.get("sample_row", {})
+            for col in table.get("columns", []):
+                cname = str(col.get("name", "")).strip()
+                if not cname or cname.startswith("_"):
+                    continue
+                col_type = str(col.get("type", "STRING"))
+                sample_val = sample_row.get(cname)
+
+                info = {
+                    "type": col_type,
+                    "sample_value": sample_val,
+                    "sample_values": [sample_val] if sample_val is not None else [],
+                    "origin_id": origin_id,
+                    "table": full_name or table_name,
+                    "source_field": cname,
+                }
+                source_schema[cname] = info
+
+    return source_schema
 
 
 async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
@@ -47,9 +104,6 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
     unified_entities: dict[str, list[dict]] = state.get("unified_entities", {})
     destination = state.get("destination")
     target_entities: list[str] = state.get("target_entities", [])
-    # Only THIS call's own errors (Phase 0 Sec 0.8) - see load_data_node's
-    # identical fix for why seeding with the existing history double-counted
-    # it through operator.add's reducer.
     errors: list[str] = []
     field_mappings: dict[str, dict] = dict(state.get("field_mappings", {}))
     pending_schema_changes: list[dict] = list(state.get("pending_schema_changes", []))
@@ -57,9 +111,6 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
 
     logger.debug("target_entities: %s", target_entities)
     logger.debug("unified_entities keys: %s", list(unified_entities.keys()))
-    for ue in unified_entities:
-        recs = unified_for(state, ue)
-        logger.debug("  Entity '%s': %d unified records", ue, len(recs))
 
     # Get destination type (handles both dict and Config object)
     if isinstance(destination, dict):
@@ -89,21 +140,38 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         logger.warning("Could not discover destination tables: %s", exc)
 
-    # ── Phase 1: sequential prep (Part 1.5 B.1) ────────────────────────
-    # Everything here is either pure CPU (the unified-schema scan) or the
-    # ONE shared resource that must not be touched concurrently:
-    # dest_connector.get_table_schema(). A psycopg2/databricks connection
-    # is not safe for concurrent use, so every schema read happens here,
-    # up front, before any `await map_fields_impl(...)`. Once this loop
-    # finishes, nothing below touches dest_connector again.
-    llm_tasks: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+    # Phase 6.2: the real destination FK graph, so a source field with no
+    # home on an entity's own table (Company.totalInvestment) can still be
+    # offered `finance.amount` instead of being dropped. Empty for a
+    # connector without FK introspection (ClickHouse) or if this fails --
+    # mapping still works, just scoped to one table per entity as before.
+    family_map: dict[str, set[str]] = {}
+    if dest_connector is not None:
+        try:
+            family_map = build_family_map(dest_connector)
+        except Exception as exc:
+            logger.warning("Could not build destination family map: %s", exc)
+    # Schema lookups are cached across entities -- several entities can
+    # share the same family table (e.g. both `company` and `person` may
+    # each border `location`), and get_table_schema is a real DB call.
+    dest_schema_cache: dict[str, list[dict[str, Any]]] = {}
+
+    def _schema_for_table(table: str) -> list[dict[str, Any]]:
+        if table in dest_schema_cache:
+            return dest_schema_cache[table]
+        cols: list[dict[str, Any]] = []
+        if dest_connector is not None:
+            try:
+                cols = dest_connector.get_table_schema(table).get("columns", [])
+            except Exception as exc:
+                logger.warning("Could not read schema for family table '%s': %s", table, exc)
+        dest_schema_cache[table] = cols
+        return cols
+
+    llm_tasks: list[tuple[str, dict[str, Any], dict[str, Any], list[dict[str, Any]]]] = []
     for entity_type in target_entities:
         records = unified_for(state, entity_type)
         logger.debug("Processing entity '%s': %d unified records", entity_type, len(records))
-        if not records:
-            logger.info("No unified records for entity '%s', skipping field mapping.", entity_type)
-            field_mappings[entity_type] = {}
-            continue
 
         # Get destination table schema
         dest_table = (
@@ -118,12 +186,7 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
         logger.debug("Destination table: %s", dest_table)
 
         # Build destination schema info from the real table when possible
-        dest_columns: list[dict[str, Any]] = []
-        if dest_connector is not None:
-            try:
-                dest_columns = dest_connector.get_table_schema(dest_table).get("columns", [])
-            except Exception as exc:
-                logger.warning("Could not read schema for dest table '%s': %s", dest_table, exc)
+        dest_columns: list[dict[str, Any]] = _schema_for_table(dest_table)
         if not dest_columns:
             dest_columns = [
                 {"name": "id", "type": "STRING"},
@@ -134,36 +197,51 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
             "columns": dest_columns,
         }
 
-        # Build unified schema by scanning up to _MAX_SAMPLE_RECORDS records,
-        # collecting up to _MAX_SAMPLE_VALUES distinct non-null sample values
-        # per field. Every record's keys are unioned in, not just the first
-        # few, and a field's "type" is set from the first NON-null value it
-        # has — a field whose first-seen record happened to be null used to
-        # get stuck typed as NoneType forever, even once real values showed up.
+        # Phase 6.2: sibling tables this entity's own table has a real FK
+        # relationship with, so map_fields_impl can widen its candidate
+        # search past a single table when nothing on the primary table fits.
+        family_schemas: list[dict[str, Any]] = [
+            {"table": fam_table, "columns": cols}
+            for fam_table in sorted(family_map.get(dest_table, set()))
+            if (cols := _schema_for_table(fam_table))
+        ]
+
         unified_schema: dict[str, Any] = {}
-        for rec in records[:_MAX_SAMPLE_RECORDS]:
-            for key, value in rec.items():
-                if key.startswith("_"):
-                    continue
-                info = unified_schema.setdefault(
-                    key,
-                    {
-                        "type": "NoneType",
-                        "sample_value": None,
-                        "sample_values": [],
-                    },
-                )
-                if value is None:
-                    continue
-                if info["type"] == "NoneType":
-                    info["type"] = type(value).__name__
-                    info["sample_value"] = value
-                if (
-                    len(info["sample_values"]) < _MAX_SAMPLE_VALUES
-                    and value not in info["sample_values"]
-                ):
-                    info["sample_values"].append(value)
-        logger.debug("Unified schema fields: %d", len(unified_schema))
+        if records:
+            for rec in records[:_MAX_SAMPLE_RECORDS]:
+                for key, value in rec.items():
+                    if key.startswith("_"):
+                        continue
+                    info = unified_schema.setdefault(
+                        key,
+                        {
+                            "type": "NoneType",
+                            "sample_value": None,
+                            "sample_values": [],
+                        },
+                    )
+                    if value is None:
+                        continue
+                    if info["type"] == "NoneType":
+                        info["type"] = type(value).__name__
+                        info["sample_value"] = value
+                    if (
+                        len(info["sample_values"]) < _MAX_SAMPLE_VALUES
+                        and value not in info["sample_values"]
+                    ):
+                        info["sample_values"].append(value)
+        else:
+            # Build schema from discovered origin schemas (upfront mapping before extraction)
+            unified_schema = _build_source_schema_from_discovered(state, entity_type)
+
+        if not unified_schema:
+            logger.info(
+                "No fields discovered for entity '%s', skipping field mapping.", entity_type
+            )
+            field_mappings[entity_type] = {}
+            continue
+
+        logger.debug("Unified/source schema fields: %d", len(unified_schema))
         for fname, finfo in unified_schema.items():
             logger.debug("  Field '%s': type=%s", fname, finfo.get("type"))
 
@@ -179,12 +257,22 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
             # is not there is dropped to unmapped rather than created — a
             # profile pinned before that rule existed must not smuggle columns
             # back in.
-            existing = {str(c.get("name", "")).lower() for c in dest_columns}
+            existing = {(dest_table.lower(), str(c.get("name", "")).lower()) for c in dest_columns}
+            for fam in family_schemas:
+                fam_table = str(fam.get("table", "")).lower()
+                existing |= {
+                    (fam_table, str(c.get("name", "")).lower()) for c in fam.get("columns", [])
+                }
             reconciled: dict[str, Any] = {}
             dropped: list[dict[str, Any]] = []
             for source_field, target in pinned_mapping.items():
                 column = target.get("dest_column") if isinstance(target, dict) else target
-                if column and str(column).lower() in existing:
+                target_table = (
+                    (target.get("dest_table") or dest_table)
+                    if isinstance(target, dict)
+                    else dest_table
+                )
+                if column and (str(target_table).lower(), str(column).lower()) in existing:
                     reconciled[source_field] = target
                     continue
                 dropped.append(
@@ -211,7 +299,7 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
             )
             continue
 
-        llm_tasks.append((entity_type, unified_schema, dest_schema_info))
+        llm_tasks.append((entity_type, unified_schema, dest_schema_info, family_schemas))
 
     # ── Phase 2: the actual LLM round-trips, concurrent (Part 1.5 B.1) ─
     # These are independent per-entity LLM calls with no shared state left
@@ -228,8 +316,9 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
                 unified_schema=unified_schema,
                 destination_schema=dest_schema_info,
                 llm_config=with_retry_hint(state.get("llm_config") or None, state, "map_fields"),
+                family_schemas=task_family_schemas,
             )
-            for entity_type, unified_schema, dest_schema_info in llm_tasks
+            for entity_type, unified_schema, dest_schema_info, task_family_schemas in llm_tasks
         ),
         return_exceptions=True,
     )
@@ -240,7 +329,7 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
     # 1:1 with llm_tasks. Merging here — not inside the gather — keeps
     # pending_schema_changes/errors ordering deterministic across runs,
     # exactly as it was when this loop ran strictly sequentially.
-    for (entity_type, _unified_schema, _dest_schema_info), outcome in zip(
+    for (entity_type, _unified_schema, _dest_schema_info, _family_schemas), outcome in zip(
         llm_tasks, llm_results, strict=True
     ):
         # isinstance(..., Exception), not BaseException: matches the original

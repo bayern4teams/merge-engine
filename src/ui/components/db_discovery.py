@@ -498,3 +498,67 @@ def sample_table_rows(
         )
         result["error"] = str(exc)
     return result
+
+
+# ── Phase 7.3: merge lineage lookup over merge_engine_merge_audit ──────────
+
+_MAX_LINEAGE_LIMIT = 200
+
+
+def query_merge_lineage(
+    host: str,
+    port: int,
+    user: str,
+    password: str,
+    database: str,
+    search: str,
+    schema: str = "",
+    entity_type: str = "",
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Look up merge-audit rows touching ``search`` (a record id or cluster id).
+
+    PostgreSQL only — ``merge_engine_merge_audit`` (Phase 7.2) is written
+    only by ``PostgreSQLDestinationConnector``, the same scope
+    ``merge_engine_entity_map`` has always had. Never used by the merge
+    pipeline itself — investigation only, and read-only: a missing table
+    (a destination this ran against before Phase 7.2 existed) degrades to
+    an empty result with an explanatory ``error``, not a crash.
+    """
+    limit = max(1, min(int(limit), _MAX_LINEAGE_LIMIT))
+    result: dict[str, Any] = {"connected": False, "error": None, "rows": []}
+    search = (search or "").strip()
+    if not search:
+        result["error"] = "search is required"
+        return result
+    try:
+        import psycopg2
+        import psycopg2.extras
+
+        schema_name = _safe_identifier(schema or "public")
+        conn = psycopg2.connect(
+            host=host, port=port, user=user, password=password, dbname=database, connect_timeout=10
+        )
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            query = f"""
+                SELECT run_id, entity_type, cluster_id, record_a, record_b,
+                       confidence, method, evidence, decided_by, human_override, created_at
+                FROM "{schema_name}"."merge_engine_merge_audit"
+                WHERE (record_a = %(search)s OR record_b = %(search)s OR cluster_id = %(search)s)
+            """
+            params: dict[str, Any] = {"search": search}
+            if entity_type:
+                query += " AND entity_type = %(entity_type)s"
+                params["entity_type"] = entity_type
+            query += " ORDER BY created_at DESC LIMIT %(limit)s"
+            params["limit"] = limit
+            cur.execute(query, params)
+            result["rows"] = [dict(r) for r in cur.fetchall()]
+            result["connected"] = True
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning("Merge lineage lookup failed for search=%r: %s", search, exc)
+        result["error"] = str(exc)
+    return result
