@@ -142,6 +142,227 @@ def setup_databases(client, fresh: bool = False):
     log("Databases origin1 and origin2 ready.")
 
 
+def create_origin1_schemas(client):
+    log("Creating origin1 schemas...")
+    # دستورات CREATE TABLE مربوط به origin1 (بر اساس اسکریپت SQL ارسالی)
+    client.command("""
+    CREATE TABLE IF NOT EXISTS origin1.Company (
+        companyID String,
+        entityName String,
+        fullName String,
+        sourceCategory String,
+        description String,
+        summary String,
+        allDescriptions String,
+        types String,
+        motto String,
+        website String,
+        logo String,
+        descriptors String,
+        foundingDate String,
+        totalInvestment UInt64,
+        totalInvestmentCurrency String,
+        isPublic String,
+        isNonProfit String,
+        isAcquired String,
+        isDissolved String,
+        ceoName String,
+        founderName String,
+        metadata_confidence String,
+        explicit_origins String,
+        created_at DateTime DEFAULT now(),
+        _version UInt32 DEFAULT 1
+    )
+    ENGINE = ReplacingMergeTree(_version)
+    ORDER BY (companyID);
+    """)
+
+    client.command("""
+    CREATE TABLE IF NOT EXISTS origin1.CompanyContact (
+        contactID String,
+        contactString String,
+        contactType String,
+        confidence String,
+        companyID String,
+        created_at DateTime DEFAULT now(),
+        _version UInt32 DEFAULT 1
+    )
+    ENGINE = ReplacingMergeTree(_version)
+    ORDER BY (companyID, contactID);
+    """)
+
+    client.command("""
+    CREATE TABLE IF NOT EXISTS origin1.CompanyEmployeeCategory (
+        empCatID String,
+        category String,
+        firstHireDate String,
+        confidence String,
+        companyID String,
+        created_at DateTime DEFAULT now(),
+        _version UInt32 DEFAULT 1
+    )
+    ENGINE = ReplacingMergeTree(_version)
+    ORDER BY (companyID, empCatID);
+    """)
+
+    client.command("""
+    CREATE TABLE IF NOT EXISTS origin1.CompanyExperience (
+        companyID String,
+        personID String,
+        personName String,
+        role String,
+        confidence String,
+        types String,
+        created_at DateTime DEFAULT now(),
+        _version UInt32 DEFAULT 1
+    )
+    ENGINE = ReplacingMergeTree(_version)
+    ORDER BY (companyID, personID);
+    """)
+
+    client.command("""
+    CREATE TABLE IF NOT EXISTS origin1.CompanyFinancials (
+        financialID String,
+        year Int32,
+        amount Int64,
+        currency String,
+        isCurrent String,
+        confidence String,
+        companyID String,
+        created_at DateTime DEFAULT now(),
+        _version UInt32 DEFAULT 1
+    )
+    ENGINE = ReplacingMergeTree(_version)
+    ORDER BY (companyID, year);
+    """)
+
+    client.command("""
+    CREATE TABLE IF NOT EXISTS origin1.CompanyIndustry (
+        companyID String,
+        classificationID String,
+        created_at DateTime DEFAULT now(),
+        _version UInt32 DEFAULT 1
+    )
+    ENGINE = ReplacingMergeTree(_version)
+    ORDER BY (companyID, classificationID);
+    """)
+
+    client.command("""
+    CREATE TABLE IF NOT EXISTS origin1.CompanyInvestmentRound (
+        investmentID String,
+        date String,
+        amount Int64,
+        currency String,
+        confidence String,
+        explicit_origin String,
+        companyID String,
+        created_at DateTime DEFAULT now(),
+        _version UInt32 DEFAULT 1
+    )
+    ENGINE = ReplacingMergeTree(_version)
+    ORDER BY (companyID, investmentID);
+    """)
+
+    client.command("""
+    CREATE TABLE IF NOT EXISTS origin1.CompanyInvestor (
+        investmentID String,
+        investorCompanyID String,
+        surfaceForm String,
+        summary String,
+        types String,
+        confidence String,
+        created_at DateTime DEFAULT now(),
+        _version UInt32 DEFAULT 1
+    )
+    ENGINE = ReplacingMergeTree(_version)
+    ORDER BY (investmentID, investorCompanyID);
+    """)
+
+    client.command("""
+    CREATE TABLE IF NOT EXISTS origin1.CompanyRelation (
+        companyID String,
+        relatedCompanyID String,
+        surfaceForm String,
+        summary String,
+        types String,
+        confidence String,
+        explicit_origin String,
+        relationType String DEFAULT 'unknown',
+        created_at DateTime DEFAULT now(),
+        _version UInt32 DEFAULT 1
+    )
+    ENGINE = ReplacingMergeTree(_version)
+    ORDER BY (companyID, relatedCompanyID, relationType);
+    """)
+
+    client.command("""
+    CREATE TABLE IF NOT EXISTS origin1.CompanyTechnographics (
+        techID String,
+        technologyName String,
+        technologyType String,
+        categories String,
+        confidence String,
+        companyID String,
+        created_at DateTime DEFAULT now(),
+        _version UInt32 DEFAULT 1
+    )
+    ENGINE = ReplacingMergeTree(_version)
+    ORDER BY (companyID, techID);
+    """)
+
+    client.command("""
+    CREATE TABLE IF NOT EXISTS origin1.IndustryClassification (
+        classificationID String,
+        name String,
+        isPrimary String,
+        confidence String,
+        created_at DateTime DEFAULT now(),
+        _version UInt32 DEFAULT 1
+    )
+    ENGINE = ReplacingMergeTree(_version)
+    ORDER BY (classificationID);
+    """)
+
+    client.command("""
+    CREATE TABLE IF NOT EXISTS origin1.Location (
+        locationID String,
+        street String,
+        addressFull String,
+        city String,
+        region String,
+        postalCode String,
+        country String,
+        latitude String,
+        longitude String,
+        precision String,
+        isPrimary String,
+        isCurrent String,
+        companyID String,
+        created_at DateTime DEFAULT now(),
+        _version UInt32 DEFAULT 1
+    )
+    ENGINE = ReplacingMergeTree(_version)
+    ORDER BY (companyID, locationID);
+    """)
+
+    client.command("""
+    CREATE TABLE IF NOT EXISTS origin1.Person (
+        personID String,
+        name String,
+        summary String,
+        role String,
+        types String,
+        confidence String,
+        created_at DateTime DEFAULT now(),
+        _version UInt32 DEFAULT 1
+    )
+    ENGINE = ReplacingMergeTree(_version)
+    ORDER BY (personID, name);
+    """)
+
+    log("origin1 schemas ready.")
+    
+
 def create_origin2_schemas(client):
     log("Creating origin2 schemas...")
     client.command("""
@@ -224,74 +445,6 @@ def create_origin2_schemas(client):
     ) ENGINE = ReplacingMergeTree() ORDER BY personID;
     """)
     log("origin2 schemas ready.")
-
-
-def parse_origin1_by_starters(filepath):
-    statements = []
-    current_buffer = []
-    starters = (
-        "CREATE TABLE",
-        "INSERT INTO",
-        "DROP TABLE",
-        "ALTER TABLE",
-        "USE ",
-        "CREATE DATABASE",
-    )
-
-    with open(filepath, encoding="utf-8", errors="replace") as f:
-        for line in f:
-            stripped = line.strip()
-            if not stripped or stripped.startswith("--"):
-                continue
-
-            is_starter = False
-            for st in starters:
-                if stripped.upper().startswith(st):
-                    is_starter = True
-                    break
-
-            if is_starter and current_buffer:
-                stmt_text = "".join(current_buffer).strip()
-                if stmt_text:
-                    statements.append(fix_quotes(stmt_text))
-                current_buffer = []
-
-            current_buffer.append(line)
-
-        if current_buffer:
-            stmt_text = "".join(current_buffer).strip()
-            if stmt_text:
-                statements.append(fix_quotes(stmt_text))
-
-    return statements
-
-
-def import_origin1(client, filepath, force_fresh=False):
-    filename = os.path.basename(filepath)
-    if not force_fresh and is_file_completed(filename):
-        log(f"Skipping already completed origin1 file: {filename}")
-        return
-
-    log(f"\nImporting origin1 dump ({filename})...")
-    client.command("USE origin1")
-    statements = parse_origin1_by_starters(filepath)
-    log(f"Parsed {len(statements)} statements for origin1.")
-
-    errors = 0
-    with tqdm(total=len(statements), desc="Importing origin1 statements") as pbar:
-        for i, stmt in enumerate(statements, 1):
-            try:
-                client.command(stmt)
-            except Exception as e:
-                errors += 1
-                log(f"\nError in statement {i}: {e}")
-            pbar.update(1)
-
-    if errors == 0:
-        mark_file_completed(filename)
-        log("Finished origin1 import cleanly with 0 errors.")
-    else:
-        log(f"Completed origin1 import with {errors} errors.")
 
 
 def stream_import_sql_file(
@@ -438,6 +591,8 @@ def main():
         setup_databases(client, fresh=args.fresh)
 
     create_origin2_schemas(client)
+    create_origin1_schemas(client)
+
 
     # 1. Import origin1 first if selected
     if args.database in ["origin1", "all"]:
