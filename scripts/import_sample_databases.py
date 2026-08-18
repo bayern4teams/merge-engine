@@ -144,7 +144,6 @@ def setup_databases(client, fresh: bool = False):
 
 def create_origin1_schemas(client):
     log("Creating origin1 schemas...")
-    # دستورات CREATE TABLE مربوط به origin1 (بر اساس اسکریپت SQL ارسالی)
     client.command("""
     CREATE TABLE IF NOT EXISTS origin1.Company (
         companyID String,
@@ -361,7 +360,7 @@ def create_origin1_schemas(client):
     """)
 
     log("origin1 schemas ready.")
-    
+
 
 def create_origin2_schemas(client):
     log("Creating origin2 schemas...")
@@ -592,7 +591,6 @@ def main():
 
     create_origin2_schemas(client)
     create_origin1_schemas(client)
-
 
     # 1. Import origin1 first if selected
     if args.database in ["origin1", "all"]:
