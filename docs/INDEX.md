@@ -21,6 +21,17 @@ Split from the old root `TECHNICAL_README.md`, by subsystem, in reading order:
 ## decisions/ — ADRs, one per locked decision
 
 - [0003-server-ci-unreachable.md](decisions/0003-server-ci-unreachable.md) — why server-side CI is undone (`git.n4t.com` unreachable) and the revisit trigger
+- [0004-adopt-splink-matcher.md](decisions/0004-adopt-splink-matcher.md) — Splink 4.0.16 as a second matching engine, gated behind BP-B4's measured A/B comparison
+- [0005-adopt-valentine-schema-matching.md](decisions/0005-adopt-valentine-schema-matching.md) — Valentine as the first-pass schema matcher ahead of the LLM
+- [0006-adopt-desbordante-optional-agpl-isolated.md](decisions/0006-adopt-desbordante-optional-agpl-isolated.md) — Desbordante for deep profiling, optional extra, AGPL isolated to one module
+- [0007-adopt-datasketch-containment-queries.md](decisions/0007-adopt-datasketch-containment-queries.md) — `MinHashLSHEnsemble` as a candidate-pruning accelerator ahead of the exact SQL check
+- [0008-adopt-great-expectations-optional-format-checks.md](decisions/0008-adopt-great-expectations-optional-format-checks.md) — Great Expectations for format-level checks `data_quality.py` didn't have
+- [0009-adopt-networkx-sqlglot-jailer-model.md](decisions/0009-adopt-networkx-sqlglot-jailer-model.md) — networkx + sqlglot + the Jailer subject/association model for graph traversal, lineage, extraction
+- [0010-reject-openmetadata.md](decisions/0010-reject-openmetadata.md) — rejected: four new services for a catalog UI this project would still have to wrap
+- [0011-reject-datahub-adopt-its-model.md](decisions/0011-reject-datahub-adopt-its-model.md) — rejected as infrastructure, its source/dataset/column metadata model adopted into PostgreSQL
+- [0012-reject-neo4j.md](decisions/0012-reject-neo4j.md) — rejected: PostgreSQL + networkx covers every traversal at this graph's actual size
+- [0013-informatica-benchmark-only.md](decisions/0013-informatica-benchmark-only.md) — capability benchmark only, never a dependency
+- [0014-replace-budget-truncation-with-blocking-analysis.md](decisions/0014-replace-budget-truncation-with-blocking-analysis.md) — costed blocking before pair generation, replacing after-the-fact truncation
 
 ## plans/ — the plans this repo is executing against
 
