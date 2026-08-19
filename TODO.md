@@ -135,8 +135,21 @@ memory) -> update this file with independent evidence, never the app's own succe
     `md_semantic_type` table), `insert_semantic_type`, then independently confirmed via
     `psql`: `SELECT semantic_type, confidence, origin FROM md_semantic_type` returned
     `PERSON_NAME | 0.75 | ALGORITHMIC`, matching what was computed.
-- [ ] **P-5** Candidate & composite keys (declared PK/unique first, then inferred, then pruned
-  composite search, optional Desbordante UCC pass).
+- [x] **P-5** Candidate & composite keys — `src/mcp_server/tools/candidate_keys.py`. Three
+  tiers: declared (relabels P-2's `discover_indexes()`, `AUTO_ACCEPTED`), single-column
+  inference (from P-3's `unique_ratio`/`null_ratio`, `NEEDS_REVIEW`), pruned composite search
+  (only identifier-like low-null columns, 2-column pairs only, each pair verified against a
+  real bounded query before being reported — never stored on a guess). Never labels an
+  inferred candidate a primary key. Desbordante UCC pass **not done** — tracked as an explicit
+  follow-up, not silently dropped (the pruned SQL-verified path is the primary mechanism per
+  `Branch_Plan.md`'s own P-5 text; Desbordante was always the *optional* accelerator).
+  - *Evidence (unit):* `tests/unit/test_candidate_keys.py`, 22/22 passed.
+  - *Evidence (live, independent SQL):* real ClickHouse `origin2.Company` → `companyID`
+    correctly found as `DECLARED_PRIMARY_KEY` (via its ORDER BY key); real PostgreSQL
+    `global_warehouse.company` → `id` correctly found as `DECLARED_PRIMARY_KEY` (via
+    `pg_index`). Full store round-trip: `psql SELECT columns, key_type, confidence,
+    review_status FROM md_candidate_key` independently confirms `["id"] |
+    DECLARED_PRIMARY_KEY | 1 | AUTO_ACCEPTED`.
 - [ ] **P-6** Relationship discovery & scoring (extends `join_graph.py`, ten signals, no opaque
   score).
 
