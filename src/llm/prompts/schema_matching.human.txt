@@ -1,0 +1,6 @@
+Source column: {source_column}
+
+## Candidate canonical fields (algorithmic tiers could not confidently decide)
+{candidates_block}
+
+Output:

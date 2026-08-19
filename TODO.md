@@ -241,8 +241,58 @@ memory) -> update this file with independent evidence, never the app's own succe
 > New regression tests (red-then-green confirmed for all three): unit tests, all passing.
 > `scripts/check.py all`: 10/10 passed.
 
-- [ ] **P-7** Schema matching & canonical schema (Valentine first, deterministic pass merges in,
-  LLM sees only what remains ambiguous).
+- [x] **P-7** Schema matching & canonical schema — `src/mcp_server/tools/schema_matching.py`
+  (ADR 0005). Three tiers: Valentine (`Coma`+`DistributionBased`+`JaccardDistanceMatcher`, merged
+  by max score across matchers, each matcher's own vote kept as evidence — `pip install
+  valentine`, added as pyproject.toml's new `schema_matching` optional group), the deterministic
+  heuristic pass (reuses `map_fields.py`'s own `_heuristic_match` rather than a second copy), the
+  LLM (new `schema_matching` stage/prompt pair) for what remains ambiguous after both. The
+  canonical schema is *discovered*, not preset like V2's fixed destination contract: the first
+  table for an entity type seeds canonical fields 1:1; later tables match against that seed;
+  no-match becomes a NEW canonical field.
+  - *Evidence (unit):* `tests/unit/test_schema_matching.py`, 18/18 passed.
+  - *Live-caught bug #1 (in V2's already-shipped `map_fields.py`, not new code):*
+    `_heuristic_match("ceoName", "name")` returned 0.8 (auto-accept under `_apply_heuristic_tier`'s
+    own `>= 0.5` bar) via the blanket `s in d or d in s` substring shortcut, silently contradicting
+    that very function's own adjacent comment ("`ceoName` and `founderName` ... must NOT be mapped
+    onto it") — the token-overlap check the comment describes was never reached because the
+    substring shortcut returns first. Fixed with a narrow, precedented gate
+    (`_has_unsafe_role_prefix`, mirroring the existing `_safe_coalesce_target`/
+    `_SAFE_COALESCE_QUALIFIERS` pattern already in the file) blocking only role-qualifier prefixes
+    (ceo/founder/cofounder/owner/manager/contact) that name a DIFFERENT entity — confirmed it does
+    NOT affect the existing, intentionally-passing `email_address<->email`, `full_name<->name`
+    cases (158 tests across every `map_fields`-adjacent suite still pass). Red-then-green
+    confirmed via a new regression test in `test_map_fields_detail.py`.
+  - *Live-caught bug #2 (new, in this module):* real `origin2.Person`'s `firstName`/`lastName`/
+    `middleName` each independently scored 0.8 against a bare `name` seed column (all contain
+    "name" as a substring) — without a guard, all three would silently "accept" onto the SAME
+    canonical field, with whichever is stored last winning in any consumer that treats a
+    canonical field as single-valued. Fixed with a "one winner per target column" rule: only the
+    first (highest-scoring, here `fullName`) source column may accept a given target; later
+    claims on an already-taken target (below 1.0) are marked `ambiguous` instead. Red-then-green
+    confirmed.
+  - *Evidence (live, independent — real ClickHouse `origin1`/`origin2`):* seeded canonical
+    `company` schema from `origin1.Company` (24 real columns), matched real `origin2.Company` (14
+    columns) against it: `companyID`/`description`/`website`/`created_at` exact Valentine matches
+    (1.0); `name` -> `entityName` (0.8, heuristic); `type` -> `types` (1.0, Valentine); 8 genuinely
+    new concepts (`domain`, `employeeCount`, `phone`, `revenue`, `rank`, `alexaRank`,
+    `revenueRange`, `ticker`) correctly became new canonical fields, zero ambiguous. Separately,
+    `origin1.Person`/`origin2.Person` exercised the one-winner-per-target fix live (`fullName`
+    accepted onto `name`, `firstName`/`lastName`/`middleName` correctly `ambiguous`).
+  - *Evidence (live, independent SQL — real PostgreSQL `global_warehouse`):* full storage
+    round-trip via `MetadataStore` — `store_mappings` wrote 25 seed canonical fields + 8 new ones
+    from origin2 (33 total, `psql SELECT entity_type, field_name FROM md_canonical_field`
+    independently confirms the count and exact field names) and 14 `md_field_mapping` rows for
+    `origin2.Company` (`psql` join across `md_field_mapping`/`md_column`/`md_canonical_field`
+    independently confirms every source_column/canonical_field/confidence/origin/review_status
+    pair matches what the script printed).
+  - *Gap, honestly noted:* the LLM tier (3) could not be live-verified end-to-end — no
+    `LLM_API_KEY` is configured in this environment (no `.env`, only `.env.example`) — covered
+    instead by mocked unit tests exercising both the LLM-accept and LLM-failure paths. In the two
+    live pairs tested, tiers 1+2 alone resolved everything with zero ambiguous columns reaching
+    tier 3 for Company, and the Person pair's ambiguous columns correctly fell back to
+    `NEEDS_REVIEW` per the tested no-LLM-configured path.
+  - *Full suite:* `scripts/check.py all` — 10/10 passed.
 - [ ] **P-8** Metadata graph + graph UI (networkx over P-1 tables, metadata graph vs entity
   graph kept strictly separate).
 - [ ] **P-9** Entity anchors, subgraph, coverage, extraction (never auto-merges on name

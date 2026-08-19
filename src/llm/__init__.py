@@ -27,6 +27,7 @@ _STAGE_NAMES = (
     "entity_resolution",
     "field_mapping",
     "semantic_type_inference",
+    "schema_matching",
 )
 
 

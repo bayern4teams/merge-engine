@@ -754,6 +754,21 @@ def _safe_coalesce_target(field: str, dest_col: str) -> bool:
     return len(extra) == 1 and extra[0] in _SAFE_COALESCE_QUALIFIERS
 
 
+_ROLE_QUALIFIER_PREFIXES = frozenset({"ceo", "founder", "cofounder", "owner", "manager", "contact"})
+
+
+def _has_unsafe_role_prefix(shorter: str, longer: str) -> bool:
+    """True when ``longer`` is ``shorter`` prefixed by a role qualifier that
+    names a DIFFERENT entity, not a scoped variant of the same one --
+    ``ceoName`` and ``founderName`` hold a different person's name than a
+    bare ``name`` column would. Checked both ways by the caller since either
+    argument may be the longer string."""
+    if longer == shorter or not longer.endswith(shorter):
+        return False
+    prefix = longer[: -len(shorter)].rstrip("_")
+    return prefix in _ROLE_QUALIFIER_PREFIXES
+
+
 def _heuristic_match(source: str, dest: str) -> float:
     """Compute a heuristic match score between a source field and dest column.
 
@@ -764,7 +779,15 @@ def _heuristic_match(source: str, dest: str) -> float:
 
     if s == d:
         return 1.0
-    if s in d or d in s:
+    if (s in d or d in s) and not (_has_unsafe_role_prefix(d, s) or _has_unsafe_role_prefix(s, d)):
+        # Live-caught while building P-7's schema_matching.py (BP-B,
+        # 2026-08-19; reuses this function): _heuristic_match("ceoName",
+        # "name") returned 0.8 here -- an auto-accept under
+        # _apply_heuristic_tier's own >= 0.5 bar -- silently contradicting
+        # this very function's own worked example a few lines below
+        # ("ceoName and founderName ... must NOT be mapped onto it"), which
+        # the token_overlap check further down was written to guarantee but
+        # never reached, because this substring shortcut returned first.
         return 0.8
     if s.replace("_", "") == d.replace("_", ""):
         return 0.85

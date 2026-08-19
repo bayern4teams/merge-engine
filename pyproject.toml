@@ -75,6 +75,10 @@ dq = ["great-expectations>=1.0.0"]
 lineage = ["sqlglot>=25.0.0"]
 swarm = ["langgraph-swarm>=0.0.11"]
 perf = ["numpy>=1.26", "pandas>=2.2"]
+# ADR 0005 (docs/decisions/0005-adopt-valentine-schema-matching.md): P-7's
+# first-pass schema matcher, ahead of the deterministic heuristic pass and
+# the LLM.
+schema_matching = ["valentine>=0.2", "pandas>=2.2"]
 
 [project.scripts]
 merge-engine = "src.main:main"

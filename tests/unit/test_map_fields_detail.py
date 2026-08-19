@@ -28,6 +28,20 @@ class TestHeuristicMatch:
         score = _heuristic_match("first name", "first_name")
         assert score >= 0.8
 
+    def test_role_qualified_name_does_not_falsely_match_bare_name(self) -> None:
+        """Live-caught (BP-B, P-7 schema_matching.py, 2026-08-19): `ceoName`
+        and `founderName` both contain `name` as a plain substring, so the
+        `s in d or d in s` shortcut returned 0.8 for both -- an auto-accept
+        under map_fields.py's own >= 0.5 tier -- silently contradicting this
+        module's own worked example ("ceoName and founderName ... must NOT
+        be mapped onto it") a few lines below in the source, since that
+        protection (the token_overlap check) was never reached. A bare
+        `full_name` -> `name` match (no role qualifier) must still work."""
+        assert _heuristic_match("ceoName", "name") == 0.0
+        assert _heuristic_match("founderName", "name") == 0.0
+        assert _heuristic_match("full_name", "name") == 0.8
+        assert _heuristic_match("name", "full_name") == 0.8
+
     def test_contains_match(self) -> None:
         """One field containing the other should return 0.8."""
         assert _heuristic_match("email_address", "email") >= 0.8
