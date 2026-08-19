@@ -405,3 +405,51 @@ export function abortWorkflow(threadId: string): Promise<{ ok: boolean }> {
 export function getActive(): Promise<{ active: Array<{ thread_id: string; status: string }> }> {
   return get("/api/workflow/active");
 }
+
+// ── Part B P-8: metadata graph view ─────────────────────────────────────
+
+export type GraphNodeType = "source" | "database" | "schema" | "table" | "column" | "canonical_field";
+export type GraphEdgeType = "contains" | "relationship" | "field_mapping";
+
+export interface GraphNode {
+  id: string;
+  type: GraphNodeType;
+  label: string;
+  data: Record<string, any>;
+}
+
+export interface GraphEdge {
+  source: string;
+  target: string;
+  edge_type: GraphEdgeType;
+  relationship_type: string | null;
+  confidence: number | null;
+  coverage: number | null;
+  origin: string | null;
+  review_status: string | null;
+  evidence: Record<string, any> | null;
+}
+
+export interface MetadataGraphResult {
+  connected: boolean;
+  error: string | null;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export function getMetadataGraph(body: {
+  host: string;
+  port: number;
+  user?: string;
+  password?: string;
+  database?: string;
+  schema_name?: string;
+  run_id?: string;
+  min_confidence?: number;
+  node_types?: string[];
+  source_ids?: string[];
+  focus_node_id?: string;
+  max_depth?: number;
+}): Promise<MetadataGraphResult> {
+  return post("/api/metadata-graph", body);
+}

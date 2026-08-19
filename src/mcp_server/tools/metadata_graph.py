@@ -648,6 +648,84 @@ class MetadataStore:
         finally:
             cursor.close()
 
+    # ── Bulk readers (P-8's metadata_graph_view.py builds a networkx graph
+    # from these -- one query per table, never row-by-row) ─────────────────
+
+    def _list_all(self, table: str, columns: str, order_by: str = "id") -> list[dict[str, Any]]:
+        conn = self._ensure_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            cursor.execute(f'SELECT {columns} FROM "{self._schema}"."{table}" ORDER BY {order_by}')
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            cursor.close()
+
+    def list_sources(self) -> list[dict[str, Any]]:
+        return self._list_all("md_source", "id, name, type, host, port")
+
+    def list_databases(self) -> list[dict[str, Any]]:
+        return self._list_all("md_database", "id, source_id, name")
+
+    def list_schemas(self) -> list[dict[str, Any]]:
+        return self._list_all("md_schema", "id, database_id, name")
+
+    def list_tables(self) -> list[dict[str, Any]]:
+        return self._list_all("md_table", "id, schema_id, name, row_count_estimate")
+
+    def list_columns(self) -> list[dict[str, Any]]:
+        return self._list_all(
+            "md_column", "id, table_id, name, data_type, ordinal_position, nullable"
+        )
+
+    def list_canonical_fields(self) -> list[dict[str, Any]]:
+        return self._list_all(
+            "md_canonical_field", "id, entity_type, field_name, data_type, description"
+        )
+
+    def list_relationships(self, *, run_id: str | None = None) -> list[dict[str, Any]]:
+        conn = self._ensure_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            columns = (
+                "id, from_column_id, to_column_id, relationship_type, coverage, signals, "
+                "confidence, evidence, origin, review_status, run_id"
+            )
+            if run_id is not None:
+                cursor.execute(
+                    f'SELECT {columns} FROM "{self._schema}"."md_relationship" WHERE run_id = %s'
+                    " ORDER BY id",
+                    (run_id,),
+                )
+            else:
+                cursor.execute(
+                    f'SELECT {columns} FROM "{self._schema}"."md_relationship" ORDER BY id'
+                )
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            cursor.close()
+
+    def list_field_mappings(self, *, run_id: str | None = None) -> list[dict[str, Any]]:
+        conn = self._ensure_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            columns = (
+                "id, source_column_id, canonical_field_id, confidence, evidence, "
+                "origin, review_status, run_id"
+            )
+            if run_id is not None:
+                cursor.execute(
+                    f'SELECT {columns} FROM "{self._schema}"."md_field_mapping" WHERE run_id = %s'
+                    " ORDER BY id",
+                    (run_id,),
+                )
+            else:
+                cursor.execute(
+                    f'SELECT {columns} FROM "{self._schema}"."md_field_mapping" ORDER BY id'
+                )
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            cursor.close()
+
     # ── Evidence-carrying discovery rows (P-5/P-6/P-7 write through these) ─
 
     def _insert_evidence_row(

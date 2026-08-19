@@ -52,6 +52,11 @@ dependencies = [
     "structlog>=24.0.0",
     # Per-run extraction spool: rows live here instead of in graph state.
     "duckdb>=1.0.0",
+    # ADR 0009: in-process traversal over P-1's metadata tables (P-8 graph
+    # view, P-9 entity subgraph traversal) -- core V3 discovery
+    # functionality, not an optional accelerator like the Valentine/
+    # Desbordante/datasketch/Great Expectations extras above.
+    "networkx>=3.0",
 ]
 
 [project.optional-dependencies]

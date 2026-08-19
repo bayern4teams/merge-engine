@@ -341,8 +341,47 @@ memory) -> update this file with independent evidence, never the app's own succe
     tier 3 for Company, and the Person pair's ambiguous columns correctly fell back to
     `NEEDS_REVIEW` per the tested no-LLM-configured path.
   - *Full suite:* `scripts/check.py all` — 10/10 passed.
-- [ ] **P-8** Metadata graph + graph UI (networkx over P-1 tables, metadata graph vs entity
-  graph kept strictly separate).
+- [x] **P-8** Metadata graph + graph UI (ADR 0009) — `src/mcp_server/tools/metadata_graph_view.py`
+  (backend) + `src/ui/frontend/src/components/MetadataGraphScreen.tsx` (frontend), wired through
+  a new `POST /api/metadata-graph` endpoint (`query_metadata_graph` in `db_discovery.py`, same
+  connect-and-catch pattern as the existing lineage lookup). `build_metadata_graph()` reads every
+  P-1 table via 8 new `MetadataStore.list_*` bulk readers and builds one `networkx.DiGraph`:
+  containment edges (source→database→schema→table→column, confidence 1.0) plus P-6
+  `relationship` and P-7 `field_mapping` semantic edges. Strictly the METADATA graph — no code
+  path here can produce an entity node (P-9's job, a different graph object per ADR 0009's own
+  consequence). Four filters (`filter_by_min_confidence`/`_node_type`/`_source`/`_depth`), all
+  server-side and reused by the frontend's confidence slider / type checkboxes / focus feature.
+  UI: SVG lane layout (one lane per node type), pan (drag) + zoom (wheel/buttons), search
+  (highlights matching labels), type/confidence filters, per-node expand/collapse (hides
+  `contains` descendants), click node → metadata panel, click edge → evidence panel, double-click
+  node → server-side depth-bounded focus.
+  - *Evidence (unit):* `tests/unit/test_metadata_graph_view.py` (12 tests) +
+    `tests/unit/test_metadata_graph.py`'s new `TestBulkReaders` (5 tests) — 41/41 passed.
+    Frontend: `npm run typecheck` clean, `npm run build` clean.
+  - *Evidence (live, independent SQL — real PostgreSQL `global_warehouse`):* `build_metadata_graph`
+    against the metadata accumulated by every earlier P-1–P-7 live-verification run in this
+    session produced 104 nodes / 101 edges (10 sources, 5 databases, 6 schemas, 7 tables, 43
+    columns, 33 canonical fields, 61 `contains` + 39 `field_mapping` + 1 `relationship` edges).
+    Independently confirmed via a direct `psql` count across all 8 tables: `10 | 5 | 6 | 7 | 43 |
+    33 | 1 | 39` — exact match, no silent drops or duplicates.
+  - *Evidence (live, real browser — full interactive verification, not just the API):* found and
+    fixed a real environment issue first — `preview_start` was launching the dev server from the
+    wrong git worktree (`fix-bugs`, this session's original directory) rather than
+    `v3-discovery-er`, so the new endpoint 404/405'd against completely unrelated code; fixed by
+    starting the server directly in the correct worktree and attaching the Browser pane via
+    `url`. With that fixed: `POST /api/metadata-graph` against the real destination returned the
+    same 104/101 verified above. In the actual rendered UI: node click shows the real `Company`
+    table's metadata (id/schema_id/name/row_count_estimate); edge click shows the real
+    `FOREIGN_KEY` relationship stored during P-6's follow-up (confidence 0.91, coverage 1,
+    `AUTO_ACCEPTED`) — exact match to what was persisted. Search for "companyID" highlighted
+    exactly 3 matching nodes. Unchecking the "column" type filter dropped 104→61 nodes, 101→18
+    edges (only non-column containment survives, as expected). Raising the confidence slider to
+    0.85 dropped 101→49 edges without touching node count (confidence filters edges only, never
+    nodes, by design). Collapsing the `Company` table node hid its columns (104→79 nodes,
+    101→50 edges) and showed "Company (collapsed)". Double-clicking `Company` and using "Focus
+    here" narrowed the graph via the real depth-2 server-side traversal (104→55 nodes/edges), and
+    "Clear focus" correctly restored the full 104/101.
+  - *Full suite:* `scripts/check.py all` — 10/10 passed.
 - [ ] **P-9** Entity anchors, subgraph, coverage, extraction (never auto-merges on name
   equality; traversal policy with depth/node/edge/record caps; preview before any expensive
   run).

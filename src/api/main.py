@@ -43,6 +43,7 @@ from src.orchestrator.workflow_manager import WorkflowManager
 from src.ui import connections
 from src.ui.components.db_discovery import (
     query_merge_lineage,
+    query_metadata_graph,
     sample_table_rows,
     test_and_discover_schemas,
 )
@@ -165,6 +166,24 @@ class LineageLookupRequest(BaseModel):
     search: str
     entity_type: str = ""
     limit: int = 50
+
+
+class MetadataGraphRequest(BaseModel):
+    """Part B P-8: metadata graph view request -- connection plus whichever
+    filters the UI has active."""
+
+    host: str
+    port: int
+    user: str = ""
+    password: str = ""
+    database: str = ""
+    schema_name: str = ""
+    run_id: str | None = None
+    min_confidence: float | None = None
+    node_types: list[str] | None = None
+    source_ids: list[str] | None = None
+    focus_node_id: str | None = None
+    max_depth: int | None = None
 
 
 class RunConfig(BaseModel):
@@ -751,6 +770,26 @@ def create_api(config_path: str = "config/config.yaml") -> FastAPI:
             search=body.search,
             entity_type=body.entity_type,
             limit=body.limit,
+        )
+
+    @app.post("/api/metadata-graph")
+    def metadata_graph(body: MetadataGraphRequest) -> dict[str, Any]:
+        """Part B P-8: the V3 discovery metadata graph (source/database/
+        schema/table/column containment, plus P-6 relationship and P-7
+        field_mapping edges) as JSON for the interactive graph UI."""
+        return query_metadata_graph(
+            host=body.host,
+            port=body.port,
+            user=body.user,
+            password=body.password,
+            database=body.database,
+            schema=body.schema_name,
+            run_id=body.run_id,
+            min_confidence=body.min_confidence,
+            node_types=body.node_types,
+            source_ids=body.source_ids,
+            focus_node_id=body.focus_node_id,
+            max_depth=body.max_depth,
         )
 
     @app.get("/api/runs/diff/golden/{subject}")

@@ -217,6 +217,52 @@ class TestOverridesAreAdditive:
         assert "ORDER BY created_at ASC" in sql
 
 
+class TestBulkReaders:
+    """P-8's metadata_graph_view.py builds a networkx graph from these --
+    one query per table, so each must return every row unfiltered by
+    default (run_id filtering is opt-in, only on relationship/field_mapping
+    which are the only two run-scoped facts here)."""
+
+    def test_list_sources_queries_md_source(self, store: MetadataStore) -> None:
+        cursor = _cursor(store)
+        cursor.fetchall.return_value = [{"id": "s1", "name": "origin1"}]
+        result = store.list_sources()
+        assert result == [{"id": "s1", "name": "origin1"}]
+        assert '"md_source"' in cursor.execute.call_args.args[0]
+
+    def test_list_columns_queries_md_column(self, store: MetadataStore) -> None:
+        cursor = _cursor(store)
+        cursor.fetchall.return_value = []
+        store.list_columns()
+        assert '"md_column"' in cursor.execute.call_args.args[0]
+
+    def test_list_relationships_without_run_id_has_no_where_clause(
+        self, store: MetadataStore
+    ) -> None:
+        cursor = _cursor(store)
+        cursor.fetchall.return_value = []
+        store.list_relationships()
+        call = cursor.execute.call_args
+        assert "WHERE" not in call.args[0]
+        assert len(call.args) == 1
+
+    def test_list_relationships_with_run_id_filters_by_it(self, store: MetadataStore) -> None:
+        cursor = _cursor(store)
+        cursor.fetchall.return_value = []
+        store.list_relationships(run_id="run-1")
+        call = cursor.execute.call_args
+        assert "WHERE run_id = %s" in call.args[0]
+        assert call.args[1] == ("run-1",)
+
+    def test_list_field_mappings_with_run_id_filters_by_it(self, store: MetadataStore) -> None:
+        cursor = _cursor(store)
+        cursor.fetchall.return_value = []
+        store.list_field_mappings(run_id="run-2")
+        call = cursor.execute.call_args
+        assert "WHERE run_id = %s" in call.args[0]
+        assert call.args[1] == ("run-2",)
+
+
 class TestEvidenceCarryingInserts:
     def test_insert_candidate_key_rejects_an_unknown_key_type(self, store: MetadataStore) -> None:
         with pytest.raises(ValueError, match="key_type must be one of"):
