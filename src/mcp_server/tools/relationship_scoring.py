@@ -331,3 +331,52 @@ def score_relationship(signals: dict[str, dict[str, Any]]) -> dict[str, Any]:
         "relationship_type": _classify_relationship_type(signals, overall),
         "signals": signals,
     }
+
+
+# A relationship classified FOREIGN_KEY already requires overall >= 0.7 (see
+# _classify_relationship_type) -- reused here as the auto-accept bar so a
+# stored relationship is never marked AUTO_ACCEPTED at a confidence lower
+# than what earns the FOREIGN_KEY label in the first place.
+_AUTO_ACCEPT_THRESHOLD = 0.7
+
+
+def store_relationship(
+    store: Any,
+    from_column_id: str,
+    to_column_id: str,
+    signals: dict[str, dict[str, Any]],
+    *,
+    run_id: str | None = None,
+    algorithm_version: str = "v1",
+) -> str | None:
+    """Persist one scored relationship via ``MetadataStore.insert_relationship``
+    (PreSplink §21: "each stored as evidence with the coverage formula").
+
+    Returns ``None`` (stores nothing) for ``UNRELATED`` -- a non-relationship
+    is not evidence worth keeping in the metadata graph. ``coverage`` is
+    taken straight from the ``inclusion_coverage`` signal's own score, since
+    that signal computes exactly the ``coverage(A->B) = |distinct(A) ∩
+    distinct(B)| / |distinct(A)|`` formula PreSplink specifies.
+    """
+    result = score_relationship(signals)
+    if result["relationship_type"] == "UNRELATED":
+        return None
+
+    coverage = signals.get("inclusion_coverage", {}).get("score")
+    review_status = (
+        "AUTO_ACCEPTED" if result["confidence"] >= _AUTO_ACCEPT_THRESHOLD else "NEEDS_REVIEW"
+    )
+    relationship_id: str = store.insert_relationship(
+        from_column_id,
+        to_column_id,
+        result["relationship_type"],
+        coverage=coverage,
+        signals=signals,
+        confidence=result["confidence"],
+        evidence={"aggregation": "average of non-null signal scores"},
+        algorithm_version=algorithm_version,
+        origin="ALGORITHMIC",
+        review_status=review_status,
+        run_id=run_id,
+    )
+    return relationship_id

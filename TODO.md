@@ -190,6 +190,36 @@ memory) -> update this file with independent evidence, never the app's own succe
     the parent query by the child's own sampled values instead of independent sampling).
   - *Full suite:* `scripts/check.py all` — 10/10 passed (one `ruff format` violation caught and
     fixed in the new test file before this pass).
+  - **Follow-up fix (found while starting P-8, 2026-08-19):** re-reading `Branch_Plan.md`'s own
+    P-6 text ("each stored as evidence with the coverage formula") while building P-8's graph
+    reader surfaced that P-6, as originally committed, computed all ten signals but **never
+    persisted them** — no call to `store.insert_relationship()` anywhere in
+    `relationship_scoring.py`. This is a real completeness gap, not optional (unlike this same
+    module's already-documented, correctly-deferred `datasketch MinHashLSHEnsemble` pruning
+    step, which ADR 0007 itself calls "optional accelerator" and notes "a schema small enough
+    that exhaustive exact checking is already fast does not need this path exercised" — true at
+    this project's current real scale, so still not implemented, and still fine not to be).
+    Added `store_relationship()`: persists via `insert_relationship`, skips storage entirely for
+    `UNRELATED` (a non-relationship is not evidence worth keeping), `AUTO_ACCEPTED` at
+    `confidence >= 0.7` (the same bar `_classify_relationship_type` already uses for
+    `FOREIGN_KEY`) else `NEEDS_REVIEW`.
+    - *Evidence (unit):* 3 new tests in `test_relationship_scoring.py`, 35/35 passed for the file.
+    - *Evidence (live, independent SQL — real ClickHouse `origin1` + real PostgreSQL
+      `global_warehouse`):* computed all ten real signals for `origin1.CompanyExperience.companyID
+      -> origin1.Company.companyID` (1230 rows/482 distinct child, 3940/3940 distinct parent, 0
+      nulls — all real numbers from direct SQL, not fabricated) — `FOREIGN_KEY` at confidence
+      0.91. Stored via `store_relationship`; independently confirmed via `psql` join across
+      `md_relationship`/`md_column`: `companyID | companyID | FOREIGN_KEY | coverage=1 |
+      confidence=0.91 | ALGORITHMIC | AUTO_ACCEPTED` — matches the script's own output exactly.
+    - *mypy fix alongside:* `store_relationship` returning `Any` from a `str | None`-annotated
+      function (`store` is typed `Any`, matching every other `store_*` function in this
+      codebase) — fixed with an explicit `relationship_id: str = store.insert_relationship(...)`
+      before the return, same pattern `metadata_graph.py`'s own `upsert_canonical_field` already
+      uses. Also fixed two pre-existing mypy errors in P-7's `schema_matching.py` surfaced by the
+      same `scripts/check.py types` run (pandas has no stubs — added the same
+      `# type: ignore[import-untyped]` `splink_matcher.py` already uses for the identical import;
+      an unannotated list-comprehension made mypy infer `object` instead of `float` for a sort
+      key). `scripts/check.py all`: 10/10 passed after the fix.
 
 > **BP-B2** (plan's own text: "🚩 Commit to main if clean") — **do not commit to main** per the
 > scope override above. Live-check both ClickHouse origins per the plan's own definition, note
@@ -240,6 +270,24 @@ memory) -> update this file with independent evidence, never the app's own succe
 >
 > New regression tests (red-then-green confirmed for all three): unit tests, all passing.
 > `scripts/check.py all`: 10/10 passed.
+>
+> **Honest finding on the plan's own worked example (checked 2026-08-19, while completing P-6's
+> persistence follow-up above):** the plan text names `Company↔Experience↔Person↔PersonContact`
+> as a chain that should be "present with measured coverage." Checked directly against the real
+> schema: `origin2.Experience` has NO `personID` column at all (`experienceID`, `companyID`,
+> `tags`, `title`, `role`, `created_at` only — confirmed via `DESCRIBE TABLE`), so this exact
+> 4-node chain cannot be formed from `origin2` alone. `origin1` has `CompanyExperience` WITH a
+> real `personID` column (linking to `Person`), but `origin1` has no `PersonContact` table at
+> all. Since `join_graph.py`'s edges are strictly intra-origin by design (cross-origin "same
+> entity" links are Phase 3's `entity_grouping` job, not a join-graph edge — see the module's own
+> docstring), no single origin in the real seed data can produce this literal 4-node chain today.
+> What DOES exist and IS verified: `origin1.CompanyExperience.personID -> Person.personID`
+> (98%+ overlap, part of the 10 real edges above) and, separately in `origin2`,
+> `PersonContact.personID -> Person.personID` (a real but weak ~25% relationship, correctly not
+> asserted as a strong edge per the sampling-bias fix above) — two genuine but disconnected
+> fragments, not the single connected chain the plan's text describes. Recorded here rather than
+> fabricated or silently ignored, per this project's own standing rule that a plan's worked
+> examples are verification targets, not automatic truths.
 
 - [x] **P-7** Schema matching & canonical schema — `src/mcp_server/tools/schema_matching.py`
   (ADR 0005). Three tiers: Valentine (`Coma`+`DistributionBased`+`JaccardDistanceMatcher`, merged

@@ -8,6 +8,7 @@ confidence and relationship_type.
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -26,6 +27,7 @@ from src.mcp_server.tools.relationship_scoring import (
     score_table_semantics,
     score_target_uniqueness,
     score_value_overlap,
+    store_relationship,
 )
 
 
@@ -233,3 +235,54 @@ class TestScoreRelationship:
         signals["cardinality"]["evidence"] = {"inferred_cardinality": "many_to_one"}
         result = score_relationship(signals)
         assert result["relationship_type"] in VALID_RELATIONSHIP_TYPES
+
+
+class TestStoreRelationship:
+    """PreSplink §21: 'each stored as evidence with the coverage formula' --
+    live-caught (BP-B, 2026-08-19) that P-6 computed signals but never
+    actually persisted them via MetadataStore.insert_relationship."""
+
+    def _strong_foreign_key_signals(self) -> dict[str, dict[str, Any]]:
+        return {
+            "datatype": {"score": 1.0, "evidence": {}},
+            "semantic_type": {"score": 1.0, "evidence": {}},
+            "name_similarity": {"score": 1.0, "evidence": {}},
+            "value_overlap": {"score": 0.95, "evidence": {}},
+            "inclusion_coverage": {"score": 0.98, "evidence": {}},
+            "target_uniqueness": {"score": 1.0, "evidence": {}},
+            "cardinality": {"score": 1.0, "evidence": {"inferred_cardinality": "many_to_one"}},
+            "null_behaviour": {"score": 0.95, "evidence": {}},
+            "table_semantics": {"score": 1.0, "evidence": {}},
+            "identifier_likelihood": {"score": 1.0, "evidence": {}},
+        }
+
+    def test_a_strong_relationship_is_stored_auto_accepted_with_coverage(self) -> None:
+        store = MagicMock()
+        store.insert_relationship.return_value = "rel-1"
+        signals = self._strong_foreign_key_signals()
+        result = store_relationship(store, "col-a", "col-b", signals, run_id="run-1")
+        assert result == "rel-1"
+        kwargs = store.insert_relationship.call_args.kwargs
+        assert kwargs["coverage"] == 0.98
+        assert kwargs["review_status"] == "AUTO_ACCEPTED"
+        assert kwargs["signals"] == signals
+        assert store.insert_relationship.call_args.args[:2] == ("col-a", "col-b")
+
+    def test_unrelated_columns_are_not_stored_at_all(self) -> None:
+        store = MagicMock()
+        signals = {name: {"score": 0.05, "evidence": {}} for name in SIGNAL_NAMES}
+        signals["cardinality"] = {
+            "score": 0.1,
+            "evidence": {"inferred_cardinality": "many_to_many_or_unclear"},
+        }
+        result = store_relationship(store, "col-a", "col-b", signals)
+        assert result is None
+        store.insert_relationship.assert_not_called()
+
+    def test_a_weak_but_real_relationship_is_stored_needs_review(self) -> None:
+        store = MagicMock()
+        store.insert_relationship.return_value = "rel-2"
+        signals = {name: {"score": 0.5, "evidence": {}} for name in SIGNAL_NAMES}
+        signals["cardinality"]["evidence"] = {"inferred_cardinality": "many_to_one"}
+        store_relationship(store, "col-a", "col-b", signals)
+        assert store.insert_relationship.call_args.kwargs["review_status"] == "NEEDS_REVIEW"

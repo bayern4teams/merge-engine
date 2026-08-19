@@ -29,7 +29,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import pandas as pd
+import pandas as pd  # type: ignore[import-untyped]
 from valentine import valentine_match
 from valentine.algorithms import Coma, DistributionBased, JaccardDistanceMatcher
 
@@ -107,7 +107,7 @@ def heuristic_candidates_for_column(
 ) -> list[dict[str, Any]]:
     """The deterministic exact/heuristic pass, reusing map_fields.py's own
     ``_heuristic_match`` -- ranked, non-zero candidates only."""
-    scored = [
+    scored: list[dict[str, Any]] = [
         {"target_column": t, "score": _heuristic_match(source_column, t)} for t in target_columns
     ]
     scored = [c for c in scored if c["score"] > 0.0]
