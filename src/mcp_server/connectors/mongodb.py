@@ -334,11 +334,27 @@ class MongoDBConnector(BaseConnector):
         match_stage: dict[str, Any] = (
             {column: {"$in": filter_values}} if filter_values else {column: {"$ne": None}}
         )
-        pipeline: list[dict[str, Any]] = [
-            {"$match": match_stage},
-            {"$group": {"_id": f"${column}"}},
-            {"$limit": limit},
-        ]
+        if filter_values:
+            pipeline: list[dict[str, Any]] = [
+                {"$match": match_stage},
+                {"$group": {"_id": f"${column}"}},
+                {"$limit": limit},
+            ]
+        else:
+            # $sample for a genuine random sample of documents before
+            # grouping to distinct values -- see clickhouse.py/postgres.py's
+            # identical fix (BP-B2, live-caught 2026-08-19): grouping
+            # straight off an unordered $match/$limit returns MongoDB's
+            # natural scan order, not a random sample, and silently biases
+            # inclusion-coverage estimates. Oversample documents (20x the
+            # requested distinct-value limit) since duplicate column values
+            # within the sampled docs collapse under $group.
+            pipeline = [
+                {"$match": match_stage},
+                {"$sample": {"size": limit * 20}},
+                {"$group": {"_id": f"${column}"}},
+                {"$limit": limit},
+            ]
         values = []
         cursor = await collection.aggregate(pipeline)
         async for doc in cursor:

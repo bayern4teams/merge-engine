@@ -507,9 +507,20 @@ class ClickHouseConnector(BaseConnector):
                 sql, parameters={"values": [str(v) for v in filter_values], "limit": limit}
             )
         else:
+            # ORDER BY rand() is required here, not cosmetic: a plain
+            # `LIMIT` with no ordering returns ClickHouse's first N distinct
+            # values in whatever order the MergeTree parts happen to yield
+            # them (close to insertion order in practice) -- NOT a random
+            # sample. Live-caught 2026-08-19 (BP-B2, real ClickHouse
+            # origin2.CompanyIndustry, 2.66M distinct companyID values):
+            # the unordered sample put inclusion coverage at 0.646 against
+            # origin2.Company, while the true full-table ratio (verified by
+            # a direct SQL aggregate) is 0.254 -- a false "probable" edge
+            # (>_PROBABLE_THRESHOLD) that a genuinely random sample does not
+            # produce.
             sql = (
                 f"SELECT DISTINCT `{column}` FROM `{self._database}`.`{table_name}` "
-                f"WHERE `{column}` IS NOT NULL LIMIT {{limit:UInt64}}"
+                f"WHERE `{column}` IS NOT NULL ORDER BY rand() LIMIT {{limit:UInt64}}"
             )
             result = client.query(sql, parameters={"limit": limit})
         values = [row[0] for row in result.result_rows]

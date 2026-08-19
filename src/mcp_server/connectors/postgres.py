@@ -524,8 +524,20 @@ class PostgresConnector(BaseConnector):
             ).bindparams(bindparam("values", expanding=True))
             params: dict[str, Any] = {"values": filter_values, "limit": limit}
         else:
+            # ORDER BY random() is required here, not cosmetic -- see
+            # clickhouse.py's identical fix (BP-B2, live-caught 2026-08-19):
+            # a plain LIMIT with no ordering is the planner's arbitrary scan
+            # order, not a random sample, and silently biases inclusion-
+            # coverage estimates. PostgreSQL rejects `SELECT DISTINCT col
+            # ... ORDER BY random()` directly ("ORDER BY expressions must
+            # appear in select list" -- live-caught against the real
+            # global_warehouse destination DB), so the DISTINCT has to be
+            # computed in a subquery before randomizing its order.
             sql = text(
-                f'SELECT DISTINCT "{column}" FROM {resolved} WHERE "{column}" IS NOT NULL LIMIT :limit'
+                f'SELECT "{column}" FROM ('
+                f'SELECT DISTINCT "{column}" FROM {resolved} WHERE "{column}" IS NOT NULL'
+                f") AS distinct_vals "
+                "ORDER BY random() LIMIT :limit"
             )
             params = {"limit": limit}
         async with engine.connect() as conn:

@@ -768,9 +768,13 @@ class TestSampleDistinctValues:
 
         assert values == ["a", "b"]
         pipeline = coll.aggregate.call_args.args[0]
+        # $sample (not a plain $group off an unordered $match) is required
+        # for a genuine random sample -- see the fix's own comment in
+        # mongodb.py (BP-B2, live-caught 2026-08-19).
         assert pipeline[0] == {"$match": {"website": {"$ne": None}}}
-        assert pipeline[1] == {"$group": {"_id": "$website"}}
-        assert pipeline[2] == {"$limit": 500}
+        assert pipeline[1] == {"$sample": {"size": 500 * 20}}
+        assert pipeline[2] == {"$group": {"_id": "$website"}}
+        assert pipeline[3] == {"$limit": 500}
 
     @pytest.mark.asyncio
     async def test_filter_values_pushes_an_in_match_instead_of_arbitrary_sampling(

@@ -910,3 +910,31 @@ class TestSampleDistinctValues:
         params = conn.execute.call_args.args[1]
         assert " IN " in sql_text
         assert params["values"] == ["c1", "c2", "c3"]
+
+    async def test_unfiltered_sample_randomizes_order_via_a_subquery(self) -> None:
+        """Live-caught (BP-B2, 2026-08-19): an unfiltered LIMIT with no
+        ordering returns the planner's arbitrary scan order, not a random
+        sample, biasing inclusion-coverage estimates the same way the
+        identical ClickHouse bug did. PostgreSQL also rejects `SELECT
+        DISTINCT col ... ORDER BY random()` directly ("ORDER BY expressions
+        must appear in select list" -- confirmed against the real
+        global_warehouse destination DB), so the DISTINCT must be computed
+        in a subquery before randomizing its order."""
+        from src.mcp_server.connectors.postgres import PostgresConnector
+
+        connector = PostgresConnector({"connection": {"database": "d"}})
+        engine = MagicMock()
+        conn = AsyncMock()
+        result = MagicMock()
+        result.fetchall.return_value = [("a",), ("b",)]
+        conn.execute = AsyncMock(return_value=result)
+        conn.commit = AsyncMock()
+        engine.connect = MagicMock(return_value=make_async_cm(conn))
+        connector._engine = engine
+
+        await connector.sample_distinct_values("companies", "id", limit=500)
+
+        sql_text = str(conn.execute.call_args.args[0])
+        assert "ORDER BY random()" in sql_text
+        assert sql_text.index("DISTINCT") < sql_text.index("ORDER BY random()")
+        assert sql_text.index("ORDER BY random()") < sql_text.index("LIMIT")

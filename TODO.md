@@ -194,6 +194,52 @@ memory) -> update this file with independent evidence, never the app's own succe
 > **BP-B2** (plan's own text: "🚩 Commit to main if clean") — **do not commit to main** per the
 > scope override above. Live-check both ClickHouse origins per the plan's own definition, note
 > the result here, and continue straight into P-7.
+>
+> **Done, live-verified, not committed to main.** Ran `join_graph.py`'s real `build_join_graph()`
+> against both real ClickHouse origins (`origin1`: 13 tables, `origin2`: 7 tables). Before the
+> fix below: 11 edges found, 10 real (origin1, all `overlap=1.0`) + 1 false positive
+> (`origin2.CompanyIndustry.companyID -> Company.companyID`, claimed `probable` at
+> `overlap=0.646`).
+>
+> **Live-caught bug (out-of-plan, fixed now — not deferred, since it directly fails BP-B2's own
+> bar):** `sample_distinct_values()`'s unfiltered branch — shared by `join_graph.py`'s V2
+> inclusion-dependency check AND P-6's brand-new `score_inclusion_coverage` — issued
+> `SELECT DISTINCT col ... LIMIT N` with no ordering. ClickHouse returns the first N distinct
+> values in MergeTree scan order (not a random sample), which silently biased confidence
+> numbers. Independently confirmed via direct SQL aggregate:
+> `SELECT count() FROM origin2.CompanyIndustry WHERE companyID IN (SELECT companyID FROM
+> origin2.Company)` → 673,855 / 2,656,247 = **0.254** true ratio, vs. the biased sample's 0.646 —
+> a false `probable` edge (>`_PROBABLE_THRESHOLD`=0.5) that a genuine random sample does not
+> produce. Fixed in all three connectors for consistency (same shared interface method):
+> - `clickhouse.py`: added `ORDER BY rand()` before `LIMIT`.
+> - `postgres.py`: PostgreSQL rejects `SELECT DISTINCT col ... ORDER BY random()` directly
+>   (`ORDER BY expressions must appear in select list` — live-caught against the real
+>   `global_warehouse` destination DB), so the fix wraps the `DISTINCT` in a subquery before
+>   randomizing order.
+> - `mongodb.py`: added a `$sample` stage (20x oversampled) before `$group`, for a genuine
+>   random sample of documents instead of natural scan order.
+>
+> Post-fix, re-ran the exact same live check: `CompanyIndustry.companyID -> Company.companyID`
+> sampled overlap dropped to 0.216 (close to the 0.254 ground truth, within `n=500` sampling
+> noise) — correctly below the `probable` threshold and no longer asserted.
+> `build_join_graph()` re-run: **10 edges, all origin1, all real, all still found** — independently
+> spot-confirmed two more via direct SQL (`CompanyFinancials.companyID`: 29/29 matched;
+> `origin2.PersonContact.personID -> Person.personID`, correctly NOT asserted: true ratio
+> 1,082,811/4,321,730 = 0.250, consistent with `origin2`'s other ~25%-overlap columns, none of
+> which cross the `probable` bar). **Bar met exactly: every relationship V2 found is still found
+> (10/10), and no relationship is now asserted that hand-written SQL cannot confirm.**
+>
+> ClickHouse fix live-verified against real `origin2` data (above). PostgreSQL fix live-verified
+> as a functional smoke test against the real `global_warehouse` destination DB (`company.id`
+> sample returns valid rows post-fix; table too small — 2 rows — to reproduce the bias
+> dramatically, but confirms the subquery-wrapped SQL is syntactically correct against real
+> PostgreSQL). MongoDB fix could not be live-verified — no mflix-style Mongo container is
+> currently running in this environment (best-effort, consistent with BP-A2's own precedent) —
+> covered by a unit-test regression instead (`test_mongodb_connector.py`, pipeline shape
+> assertion).
+>
+> New regression tests (red-then-green confirmed for all three): unit tests, all passing.
+> `scripts/check.py all`: 10/10 passed.
 
 - [ ] **P-7** Schema matching & canonical schema (Valentine first, deterministic pass merges in,
   LLM sees only what remains ambiguous).

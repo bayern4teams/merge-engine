@@ -253,3 +253,43 @@ class TestClickHouseDiscoverIndexes:
         assert indexes[0]["kind"] == "order_by"
         assert indexes[0]["columns"] == ["companyID"]
         assert indexes[0]["is_primary"] is True
+
+
+class TestClickHouseSampleDistinctValuesIsRandom:
+    """Live-caught (BP-B2, 2026-08-19): an unfiltered `LIMIT` with no
+    ordering returns ClickHouse's first N distinct values in scan order,
+    not a random sample -- real origin2.CompanyIndustry.companyID (2.66M
+    distinct values) scored 0.646 inclusion coverage against Company under
+    the unordered sample, vs. a true full-table ratio of 0.254 confirmed
+    by direct SQL. `ORDER BY rand()` is required before `LIMIT`."""
+
+    @pytest.mark.asyncio
+    async def test_unfiltered_sample_orders_by_rand_before_limiting(self) -> None:
+        connector = ClickHouseConnector({})
+        connector._database = "origin2"
+        client = MagicMock()
+        client.query.return_value = MagicMock(result_rows=[("a",), ("b",)])
+        connector._client = client
+
+        await connector.sample_distinct_values("CompanyIndustry", "companyID", limit=500)
+
+        sql_text = client.query.call_args.args[0]
+        assert "ORDER BY rand()" in sql_text
+        assert sql_text.index("ORDER BY rand()") < sql_text.index("LIMIT")
+
+    @pytest.mark.asyncio
+    async def test_filtered_sample_does_not_need_randomizing(self) -> None:
+        """A filter_values query targets specific values directly -- it is
+        not a sample subject to ordering bias, so no ORDER BY is added."""
+        connector = ClickHouseConnector({})
+        connector._database = "origin2"
+        client = MagicMock()
+        client.query.return_value = MagicMock(result_rows=[("a",)])
+        connector._client = client
+
+        await connector.sample_distinct_values(
+            "Company", "companyID", limit=500, filter_values=["a", "b"]
+        )
+
+        sql_text = client.query.call_args.args[0]
+        assert "ORDER BY rand()" not in sql_text
