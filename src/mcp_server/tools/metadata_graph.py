@@ -366,6 +366,26 @@ class MetadataStore:
                     ON "{s}"."md_override" (target_table, target_id)
             """)
 
+            # md_semantic_type: P-4. One row per inference attempt (not a
+            # single mutable label on md_column) so a later, better
+            # algorithm re-classifying the same column is a visible new
+            # row, not a silent overwrite -- get_latest_semantic_type
+            # reads the most recent one back.
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS "{s}"."md_semantic_type" (
+                    id TEXT PRIMARY KEY,
+                    column_id TEXT NOT NULL REFERENCES "{s}"."md_column"(id),
+                    semantic_type TEXT NOT NULL,
+                    run_id TEXT REFERENCES "{s}"."md_run"(id),
+                    {self._EVIDENCE_COLUMNS},
+                    created_at TIMESTAMPTZ DEFAULT now()
+                )
+            """)
+            cursor.execute(f"""
+                CREATE INDEX IF NOT EXISTS md_semantic_type_column_idx
+                    ON "{s}"."md_semantic_type" (column_id, created_at DESC)
+            """)
+
             conn.commit()
         except Exception:
             conn.rollback()
@@ -887,6 +907,49 @@ class MetadataStore:
                 SELECT * FROM "{self._schema}"."md_profile"
                 WHERE column_id = %s
                 ORDER BY computed_at DESC
+                LIMIT 1
+                """,
+                (column_id,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            cursor.close()
+
+    def insert_semantic_type(
+        self,
+        column_id: str,
+        semantic_type: str,
+        *,
+        confidence: float | None = None,
+        evidence: dict[str, Any] | None = None,
+        algorithm_version: str = "",
+        origin: str = "ALGORITHMIC",
+        review_status: str = "NEEDS_REVIEW",
+        run_id: str | None = None,
+    ) -> str:
+        return self._insert_evidence_row(
+            "md_semantic_type",
+            {"column_id": column_id, "semantic_type": semantic_type},
+            confidence=confidence,
+            evidence=evidence,
+            algorithm_version=algorithm_version,
+            origin=origin,
+            review_status=review_status,
+            run_id=run_id,
+        )
+
+    def get_latest_semantic_type(self, column_id: str) -> dict[str, Any] | None:
+        """The most recent semantic-type inference for one column, or None
+        if it has never been classified."""
+        conn = self._ensure_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            cursor.execute(
+                f"""
+                SELECT * FROM "{self._schema}"."md_semantic_type"
+                WHERE column_id = %s
+                ORDER BY created_at DESC
                 LIMIT 1
                 """,
                 (column_id,),

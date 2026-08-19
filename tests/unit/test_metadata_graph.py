@@ -72,7 +72,7 @@ class TestValidators:
 
 
 class TestEnsureSchema:
-    def test_creates_all_thirteen_tables(self, store: MetadataStore) -> None:
+    def test_creates_every_md_table(self, store: MetadataStore) -> None:
         store.ensure_schema()
         cursor = _cursor(store)
         executed_sql = " ".join(call.args[0] for call in cursor.execute.call_args_list)
@@ -90,6 +90,7 @@ class TestEnsureSchema:
             "md_field_mapping",
             "md_edge",
             "md_override",
+            "md_semantic_type",
         ):
             assert f'"{table}"' in executed_sql, f"{table} was never created"
 

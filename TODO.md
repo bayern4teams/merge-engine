@@ -111,7 +111,30 @@ memory) -> update this file with independent evidence, never the app's own succe
     registered real source/database/schema/table/column rows, called `profile_and_store`,
     then independently read the row back via `get_latest_profile` — matches what was computed
     (`top_values: [{'value': 'Lockheed Martin', 'count': 1}, ...]`).
-- [ ] **P-4** Semantic type inference (evidence-carrying, no LLM in the first pass).
+- [x] **P-4** Semantic type inference — `src/mcp_server/tools/semantic_type_inference.py`.
+  Heuristic pass (no LLM) uses column NAME (normalized across camelCase/PascalCase/
+  snake_case) plus P-3's measured `pattern_distribution` to corroborate or contradict the
+  name's implied type; 22-type taxonomy (`SEMANTIC_TYPES`). LLM fallback only when the
+  heuristic confidence is below 0.6, tagged `LLM_ASSISTED`, via a new
+  `semantic_type_inference` prompt pair — new `md_semantic_type` table added to P-1's store
+  (one row per inference, not a mutable label, so a later re-classification is a visible new
+  row).
+  - *Evidence (unit):* `tests/unit/test_semantic_type_inference.py`, 22/22 passed.
+  - *Real bug found and fixed during live verification:* a bare `name` column measured as
+    ~98% alpha-shaped text was boosted to 0.93 confidence for `PERSON_NAME` — but
+    `PERSON_NAME` and `ORGANIZATION_NAME` both corroborate on the identical `alpha` pattern
+    bucket, so that measurement cannot actually discriminate between them; the confidence
+    boost was overclaiming. Fixed by identifying pattern buckets more than one semantic type
+    shares (`_AMBIGUOUS_PATTERNS`) and suppressing the corroboration boost for those — the
+    ambiguous pattern can still rule a name match OUT (near-zero corroboration) but never rule
+    one IN over an equally-plausible sibling. Two new regression tests cover both directions.
+  - *Evidence (live, independent — real ClickHouse `origin2.Company`):* `name` → `PERSON_NAME`
+    at 0.75 (post-fix, no longer overclaiming); `companyID`/`domain` → `UNKNOWN` (correctly no
+    strong signal); `website` → `URL` at 0.75. Full store round-trip against the real
+    PostgreSQL `global_warehouse`: `store.ensure_schema()` (picked up the new
+    `md_semantic_type` table), `insert_semantic_type`, then independently confirmed via
+    `psql`: `SELECT semantic_type, confidence, origin FROM md_semantic_type` returned
+    `PERSON_NAME | 0.75 | ALGORITHMIC`, matching what was computed.
 - [ ] **P-5** Candidate & composite keys (declared PK/unique first, then inferred, then pruned
   composite search, optional Desbordante UCC pass).
 - [ ] **P-6** Relationship discovery & scoring (extends `join_graph.py`, ten signals, no opaque
