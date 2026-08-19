@@ -96,6 +96,19 @@ class TestProposeCompositeCandidatePairs:
         pairs = propose_composite_candidate_pairs(profiles)
         assert pairs == [("company_id", "person_id")]
 
+    def test_camelcase_identifier_columns_are_recognized_too(self) -> None:
+        """Live-caught (BP-B, real ClickHouse origin2.Company): the
+        identifier-shape regex only matched snake_case (`_id$`) -- a
+        camelCase column like `companyID` lowercases to `companyid`, which
+        has no underscore before `id` and was silently excluded from
+        composite-key consideration entirely."""
+        profiles = {
+            "companyID": {"null_ratio": 0.0},
+            "personID": {"null_ratio": 0.0},
+        }
+        pairs = propose_composite_candidate_pairs(profiles)
+        assert pairs == [("companyID", "personID")]
+
     def test_a_high_null_identifier_like_column_is_excluded(self) -> None:
         profiles = {
             "company_id": {"null_ratio": 0.0},

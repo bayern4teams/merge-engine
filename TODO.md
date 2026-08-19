@@ -150,8 +150,46 @@ memory) -> update this file with independent evidence, never the app's own succe
     `pg_index`). Full store round-trip: `psql SELECT columns, key_type, confidence,
     review_status FROM md_candidate_key` independently confirms `["id"] |
     DECLARED_PRIMARY_KEY | 1 | AUTO_ACCEPTED`.
-- [ ] **P-6** Relationship discovery & scoring (extends `join_graph.py`, ten signals, no opaque
-  score).
+- [x] **P-6** Relationship discovery & scoring — `src/mcp_server/tools/relationship_scoring.py`.
+  All ten PreSplink §21 signals implemented independently and kept visible (§22 "no opaque
+  score"): `datatype`, `semantic_type`, `name_similarity`, `value_overlap`,
+  `inclusion_coverage` (exact, database-verified via targeted `filter_values` query — mirrors
+  `join_graph.py`'s `_verify_inclusion`), `target_uniqueness`, `cardinality`, `null_behaviour`,
+  `table_semantics`, `identifier_likelihood`. `score_relationship()` aggregates by averaging
+  only the non-`None` scores (a sampling failure on one signal never drags the average toward
+  zero) and classifies into `FOREIGN_KEY`/`SHARED_LOOKUP`/`POSSIBLE_JOIN`/`UNRELATED`.
+  - *Evidence (unit):* `tests/unit/test_relationship_scoring.py`, 32/32 passed (includes the
+    camelCase regression test below).
+  - *Live-caught bug, cross-phase:* `score_identifier_likelihood()`'s name-shape fallback regex
+    (`_id$` etc.) only matches snake_case — real ClickHouse `origin2.Location.companyID`
+    scored 0.1 ("no signal") instead of the expected 0.7, because `"companyID".lower()` =
+    `"companyid"` has no underscore before `id`. Investigating found the **identical bug
+    pattern already in P-5's already-committed `candidate_keys.py`** (`_IDENTIFIER_LIKE` regex,
+    same blind spot — confirmed via direct test that `_IDENTIFIER_LIKE.search("companyid")` is
+    `None`), meaning composite-key pruning was silently excluding every camelCase-named ID
+    column. Fixed by extracting P-4's existing camelCase-aware normalizer into a new shared
+    `src/utils/column_naming.py` (placed below `src/mcp_server/tools/` per CLAUDE.md's layering,
+    since P-4/P-5/P-6 can't import sideways from each other) and updating all three modules to
+    call it. Red-then-green confirmed: mutating the normalizer back to plain `.lower()` made
+    both new regression tests (`test_camelcase_identifier_columns_are_recognized_too` in P-5,
+    `test_camelcase_id_columns_get_the_name_shape_signal_too` in P-6) fail as expected;
+    restoring the fix made all 77 tests across P-4/P-5/P-6 pass again.
+  - *Evidence (live, independent SQL — real ClickHouse `origin2`):* `discover_indexes("Company")`
+    confirms real `companyID` primary key; `Location` table genuinely has camelCase
+    `companyID`/`locationID` columns. Post-fix, `score_identifier_likelihood(None, "companyID")`
+    returns `{"score": 0.7, "source": "name_shape"}` (was 0.1 pre-fix). Full end-to-end
+    `Location.companyID → Company.companyID` scoring: `name_similarity=1.0` (exact match),
+    `inclusion_coverage=0.258` (sampled). Independently verified against ground truth via direct
+    SQL aggregate (not the app's own numbers): `SELECT count() FROM origin2.Location WHERE
+    companyID IN (SELECT companyID FROM origin2.Company)` = 472,898 / 1,861,119 total Location
+    rows = 0.254 — matches the sampled 0.258 within sampling noise, confirming the
+    `filter_values`-based exact-coverage technique is correct (a naive independent "sample both
+    sides and intersect" check was tried first and wrongly reported 0.0, because ClickHouse's
+    string-sorted `Company.companyID` sample of the first ~100K distinct values out of 1.27M
+    total is not representative — this is exactly why P-6's implementation deliberately filters
+    the parent query by the child's own sampled values instead of independent sampling).
+  - *Full suite:* `scripts/check.py all` — 10/10 passed (one `ruff format` violation caught and
+    fixed in the new test file before this pass).
 
 > **BP-B2** (plan's own text: "🚩 Commit to main if clean") — **do not commit to main** per the
 > scope override above. Live-check both ClickHouse origins per the plan's own definition, note

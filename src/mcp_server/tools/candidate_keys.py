@@ -28,6 +28,8 @@ import re
 from itertools import combinations
 from typing import Any
 
+from src.utils.column_naming import normalize_column_name
+
 logger = logging.getLogger("merge-engine.tools.candidate_keys")
 
 # Single-column inference thresholds (PreSplink §18: measured, not guessed).
@@ -113,7 +115,7 @@ def propose_composite_candidate_pairs(
     eligible = [
         column
         for column, profile in column_profiles.items()
-        if _IDENTIFIER_LIKE.search(column.lower())
+        if _IDENTIFIER_LIKE.search(normalize_column_name(column))
         and (profile.get("null_ratio") or 0.0) <= max_null_ratio
     ]
     return list(combinations(sorted(eligible), 2))

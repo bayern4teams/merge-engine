@@ -15,6 +15,8 @@ import logging
 import re
 from typing import Any
 
+from src.utils.column_naming import normalize_column_name as _normalize_column_name
+
 logger = logging.getLogger("merge-engine.tools.semantic_type_inference")
 
 SEMANTIC_TYPES = frozenset(
@@ -128,14 +130,6 @@ _AMBIGUOUS_PATTERNS = frozenset(
     for pattern in set(_PATTERN_CORROBORATION.values())
     if list(_PATTERN_CORROBORATION.values()).count(pattern) > 1
 )
-
-
-def _normalize_column_name(name: str) -> str:
-    """camelCase / PascalCase / already-snake_case -> lowercase snake_case,
-    so `companyID`, `company_id`, and `CompanyId` all match the same rule."""
-    s1 = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
-    s2 = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1)
-    return s2.lower()
 
 
 def infer_semantic_type_heuristic(
