@@ -816,3 +816,82 @@ class MetadataStore:
             return str(result_id)
         finally:
             cursor.close()
+
+    def insert_profile(
+        self,
+        column_id: str,
+        mode: str,
+        *,
+        run_id: str | None = None,
+        null_count: int | None = None,
+        null_ratio: float | None = None,
+        distinct_count: int | None = None,
+        distinct_ratio: float | None = None,
+        unique_ratio: float | None = None,
+        min_value: str | None = None,
+        max_value: str | None = None,
+        length_distribution: dict[str, Any] | None = None,
+        top_values: list[Any] | None = None,
+        pattern_distribution: dict[str, Any] | None = None,
+        type_distribution: dict[str, Any] | None = None,
+    ) -> str:
+        """Store one P-3 profiling result. Not evidence-carrying in the
+        confidence/origin/review_status sense (a profile is a measurement,
+        not an inference a human would confirm or reject) -- its own
+        columns instead, per PreSplink §16, with ``mode`` always present so
+        a reader never has to guess whether a number is exact (PreSplink
+        §46)."""
+        conn = self._ensure_connection()
+        cursor = conn.cursor()
+        try:
+            profile_id = generate_uuid()
+            cursor.execute(
+                f"""
+                INSERT INTO "{self._schema}"."md_profile"
+                    (id, column_id, run_id, mode, null_count, null_ratio,
+                     distinct_count, distinct_ratio, unique_ratio, min_value, max_value,
+                     length_distribution, top_values, pattern_distribution, type_distribution)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    profile_id,
+                    column_id,
+                    run_id,
+                    mode,
+                    null_count,
+                    null_ratio,
+                    distinct_count,
+                    distinct_ratio,
+                    unique_ratio,
+                    min_value,
+                    max_value,
+                    json.dumps(length_distribution) if length_distribution is not None else None,
+                    json.dumps(top_values) if top_values is not None else None,
+                    json.dumps(pattern_distribution) if pattern_distribution is not None else None,
+                    json.dumps(type_distribution) if type_distribution is not None else None,
+                ),
+            )
+            conn.commit()
+            return profile_id
+        finally:
+            cursor.close()
+
+    def get_latest_profile(self, column_id: str) -> dict[str, Any] | None:
+        """The most recently computed profile for one column, or None if
+        it has never been profiled."""
+        conn = self._ensure_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            cursor.execute(
+                f"""
+                SELECT * FROM "{self._schema}"."md_profile"
+                WHERE column_id = %s
+                ORDER BY computed_at DESC
+                LIMIT 1
+                """,
+                (column_id,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            cursor.close()

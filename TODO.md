@@ -95,7 +95,22 @@ memory) -> update this file with independent evidence, never the app's own succe
     autovacuum's stats collector lags), and post-`ANALYZE` (correctly reports the real count,
     2, with `last_analyzed` populated) — confirmed by running `ANALYZE company;` on the real
     container and re-querying.
-- [ ] **P-3** Profiling engine (FULL/SAMPLED/APPROXIMATE, database-native per connector).
+- [x] **P-3** Profiling engine — `src/mcp_server/tools/profiling.py`. Scale-sensitive metrics
+  (null/distinct counts) via P-2's `connector.profile_column()` (database-native); per-value
+  shape metrics (length distribution, top values by frequency, pattern distribution, type
+  distribution) computed in Python over a bounded raw sample pulled via `connector.extract()`
+  (deliberate: `sample_distinct_values` already de-duplicates, which breaks frequency counting
+  for top_values). `profile_and_store()` glues this to P-1's `MetadataStore.insert_profile`
+  (added — P-1 had the DDL but no insert helper yet) / `get_latest_profile`. `mode` always
+  recorded (PreSplink §46).
+  - *Evidence (unit):* `tests/unit/test_profiling.py`, 18/18 passed.
+  - *Evidence (live, independent — real ClickHouse `origin2.Company` 2000-row sample, real
+    PostgreSQL `global_warehouse.company` full scan):* ClickHouse `name` column profiled
+    correctly (1998/2000 distinct, realistic length/pattern buckets, e.g. `{'alpha': 1733,
+    'other': 261, 'alphanumeric': 6}`). Full store round-trip against the real destination:
+    registered real source/database/schema/table/column rows, called `profile_and_store`,
+    then independently read the row back via `get_latest_profile` — matches what was computed
+    (`top_values: [{'value': 'Lockheed Martin', 'count': 1}, ...]`).
 - [ ] **P-4** Semantic type inference (evidence-carrying, no LLM in the first pass).
 - [ ] **P-5** Candidate & composite keys (declared PK/unique first, then inferred, then pruned
   composite search, optional Desbordante UCC pass).
