@@ -32,6 +32,7 @@ Split from the old root `TECHNICAL_README.md`, by subsystem, in reading order:
 - [0012-reject-neo4j.md](decisions/0012-reject-neo4j.md) — rejected: PostgreSQL + networkx covers every traversal at this graph's actual size
 - [0013-informatica-benchmark-only.md](decisions/0013-informatica-benchmark-only.md) — capability benchmark only, never a dependency
 - [0014-replace-budget-truncation-with-blocking-analysis.md](decisions/0014-replace-budget-truncation-with-blocking-analysis.md) — costed blocking before pair generation, replacing after-the-fact truncation
+- [0015-v3-discovery-engine-flag.md](decisions/0015-v3-discovery-engine-flag.md) — P-9's engine wired into `plan_scope_impl` as a `scope_config.engine` flag, scoped to planning only (not extraction execution)
 
 ## plans/ — the plans this repo is executing against
 

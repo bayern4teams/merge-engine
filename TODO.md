@@ -382,9 +382,67 @@ memory) -> update this file with independent evidence, never the app's own succe
     here" narrowed the graph via the real depth-2 server-side traversal (104→55 nodes/edges), and
     "Clear focus" correctly restored the full 104/101.
   - *Full suite:* `scripts/check.py all` — 10/10 passed.
-- [ ] **P-9** Entity anchors, subgraph, coverage, extraction (never auto-merges on name
-  equality; traversal policy with depth/node/edge/record caps; preview before any expensive
-  run).
+- [x] **P-9** Entity anchors, subgraph, coverage, extraction — `src/mcp_server/tools/entity_extraction_v3.py`
+  (ADR 0015). `discover_anchors()`: ranked candidates with evidence, never auto-picks a winner
+  on name equality (§31). `TraversalPolicy` + `traverse_subgraph()`: policy-capped BFS
+  (`max_depth`/`max_nodes`/`max_edges`/`min_edge_confidence`/`allowed_edge_types`/
+  `blocked_edge_types`/`allowed_sources`) over the real `JoinGraph`, cycle-preventing by
+  construction, per-path provenance via direction-aware `PathHop`s (the same type
+  `join_graph.find_paths` already returns). `compute_context_score()` (§33): confidence-tier
+  product, decayed by hop count. `build_coverage_matrix()` (§34): table- and field-level.
+  `plan_extraction()`/`execute_extraction()` (§35, §55, §56): cost-estimate preview via each
+  connector's real `estimate_query_cost` (P-2), then a fixpoint hop-walk extraction mirroring
+  `extract_data.py`'s own `_resolve_link_path` shape. Wired into `plan_scope_impl` as an
+  in-function `scope_config.engine == "v3_discovery"` branch (ADR 0015), following the
+  `resolve_entities.py` Splink-flag precedent exactly: falls through silently to the V2
+  heuristic floor on any failure or empty result. `extract_data.py` needs zero changes, since
+  the new engine's output is adapted into the identical wire shape.
+  - *Evidence (unit):* `tests/unit/test_entity_extraction_v3.py` (25 tests) +
+    `tests/unit/test_plan_scope.py`'s new `TestV3DiscoveryPlan`/`TestPlanScopeImplV3EngineFlag`
+    (7 tests) — 64/64 passed for the two files together, zero regressions in the other 32
+    pre-existing `plan_scope` tests.
+  - *Live-caught bug #1:* `execute_extraction` called `connector.extract(table, [], ...)` —
+    `[]` isn't this codebase's "all columns" convention (confirmed: `clickhouse.py` only
+    special-cases `columns == ["*"]`), producing a malformed query with no SELECT list — a real
+    ClickHouse syntax error on the very first live call against `origin1.Company`. Fixed by
+    passing `["*"]`.
+  - *Live-caught bug #2 (found after fixing #1 — every downstream hop still returned 0 rows):*
+    propagated join-column values were being run through `join_graph.normalize_val()`
+    (lowercases + strips URL prefixes — correct for its actual job, cross-column equality
+    *comparison* during inclusion-dependency verification) before being used as real query
+    filter values. A genuine case-sensitive id like `E-xSjHM5bMJmwwRfrYLwwkw` filtered on its
+    lowercased form matched zero rows in the real, case-sensitive database. Fixed by using seed
+    values verbatim. Red-then-green confirmed via a new regression test
+    (`test_propagated_filter_values_keep_their_original_case`).
+  - *Evidence (live, independent — real ClickHouse `origin1`/`origin2`):* `discover_anchors`
+    for "Boeing" against real `origin1.Company` found 36 ranked candidates, including **three
+    separate rows literally named "Boeing" exactly** — concrete confirmation of why §31 matters
+    (not theoretical). `traverse_subgraph` from `(origin1,Company)`+`(origin2,Company)` with
+    `min_edge_confidence="verified"` reached exactly the 10 real edges / 12 nodes BP-B2 already
+    established, `Person` correctly reached at depth 2 with `context_score=0.7671`.
+    `plan_extraction`'s real cost estimate for `origin2.Company` (1,270,564 rows) exactly
+    matches the direct SQL count BP-B2 already confirmed independently.
+  - *Evidence (live, cross-checked against the golden baseline):* `execute_extraction` seeded
+    with `entityName ILIKE '%Boeing%'`/`'%Airbus%'` against real `origin1` pulled real rows
+    across all 10-11 reached tables. **Financials matched the golden baseline exactly both
+    times** — 20/20 for Boeing, 28/28 for Airbus (the cleanest apples-to-apples number
+    available: one source table, no dedup/entity-resolution step in between). `Person` count
+    (39, origin1-only) is consistent with golden's combined total (539 = ~500 from origin2 + 39
+    from origin1). The flagged `plan_scope_impl` (`scope_config={"engine": "v3_discovery"}`)
+    produced a valid, wire-compatible `scope_plan` for a real Boeing run against real schemas:
+    `company` matched in both origins, `person` linked via a real 2-hop `origin1` path,
+    `origin2`'s `Person` correctly excluded (no edge there clears the `verified` bar,
+    consistent with BP-B2's finding that `origin2`'s relationships are mostly weak ~25%
+    overlap).
+  - *Scope decision, honestly narrower than the plan's literal text (see ADR 0015):* the flag
+    replaces V2's **planning** step only; `extract_data.py`'s actual row-pulling execution
+    (watermarks, incremental extraction, chunked/scratch-table `IN` filters — 1000+ lines,
+    heavily battle-tested) is untouched. `entity_extraction_v3.execute_extraction` is proven,
+    directly-callable, and live-verified on its own (above) but not wired into the live
+    pipeline's extraction step; its single-batch-per-hop fetch doesn't paginate the way
+    `extract_data.py` does, a real gap if it were wired in directly — exactly why that wiring
+    is deferred to a future ADR rather than done partially now.
+  - *Full suite:* `scripts/check.py all` — 10/10 passed.
 - [ ] **P-10** Canonical matching dataset (the Splink handoff artefact, materialised in DuckDB,
   registered directly as a Splink input).
 

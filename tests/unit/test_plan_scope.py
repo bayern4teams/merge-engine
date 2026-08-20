@@ -8,7 +8,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.mcp_server.tools.join_graph import build_join_graph
-from src.mcp_server.tools.plan_scope import _heuristic_plan, _sanitize_plan, plan_scope_impl
+from src.mcp_server.tools.plan_scope import (
+    _heuristic_plan,
+    _sanitize_plan,
+    _v3_discovery_plan,
+    plan_scope_impl,
+)
 from src.orchestrator.nodes.plan_scope import plan_scope
 
 
@@ -235,6 +240,118 @@ class TestHeuristicPlan:
         # unreachable, so "person" degrades to a not_found row rather than
         # silently including the 2-hop entry a wider search would find.
         assert all(e["mode"] == "not_found" for e in person)
+
+
+class TestV3DiscoveryPlan:
+    """P-9's engine (Part B): same wire shape as _heuristic_plan, built via
+    entity_extraction_v3's policy-capped traversal instead of a separate
+    find_paths call per (subject-table, dependent-table) pair."""
+
+    @pytest.mark.asyncio
+    async def test_subject_entity_matches_on_name(self) -> None:
+        schemas = _schemas()
+        graph = await build_join_graph(schemas, origins=[])
+        plan = _v3_discovery_plan("company", ["company", "person", "product"], schemas, graph)
+        crm = next(t for t in plan["company"] if t["origin_id"] == "crm_origin")
+        assert crm["mode"] == "match"
+        assert "name" in crm["columns"]
+
+    @pytest.mark.asyncio
+    async def test_dependent_links_via_declared_fk(self) -> None:
+        schemas = _schemas()
+        graph = await build_join_graph(schemas, origins=[])
+        plan = _v3_discovery_plan("company", ["company", "person", "product"], schemas, graph)
+        emp = next(t for t in plan["person"] if t["origin_id"] == "crm_origin")
+        assert emp["mode"] == "link_path"
+        assert emp["hops"] == 1
+        assert emp["path"] == [_hop("companies", "id", "employees", "company_id")]
+        assert emp["confidence"] == "declared"
+
+    @pytest.mark.asyncio
+    async def test_max_hops_bounds_the_traversal(self) -> None:
+        schemas = _schemas()
+        graph = await build_join_graph(schemas, origins=[])
+        # person is 1 hop away in this schema; a max_hops=0 policy should
+        # find nothing beyond the subject's own tables.
+        plan = _v3_discovery_plan("company", ["company", "person"], schemas, graph, max_hops=0)
+        assert plan["person"] == []
+
+    @pytest.mark.asyncio
+    async def test_min_edge_confidence_excludes_weaker_links(self) -> None:
+        schemas = _schemas()
+        graph = await build_join_graph(schemas, origins=[])
+        # hr_origin.people links via an unverified name-heuristic edge
+        # ("heuristic" tier) -- requiring "verified" must exclude it.
+        plan = _v3_discovery_plan(
+            "company",
+            ["company", "person"],
+            schemas,
+            graph,
+            min_edge_confidence="verified",
+        )
+        hr_entries = [e for e in plan["person"] if e["origin_id"] == "hr_origin"]
+        assert hr_entries == []
+        # crm_origin's declared-FK link should still survive.
+        crm_entries = [e for e in plan["person"] if e["origin_id"] == "crm_origin"]
+        assert len(crm_entries) == 1
+
+
+class TestPlanScopeImplV3EngineFlag:
+    @pytest.mark.asyncio
+    async def test_v3_discovery_engine_is_used_when_flagged(self) -> None:
+        schemas = _schemas()
+        out = await plan_scope_impl(
+            subject="Nova",
+            subject_entity="company",
+            target_entities=["company", "person"],
+            schemas=schemas,
+            llm_config=None,
+            origins=None,
+            scope_config={"engine": "v3_discovery"},
+        )
+        person = out["scope_plan"]["entities"]["person"]
+        crm = next(e for e in person if e["origin_id"] == "crm_origin")
+        assert crm["mode"] == "link_path"
+        assert "v3_discovery" in crm["reason"]
+
+    @pytest.mark.asyncio
+    async def test_default_engine_is_unchanged_v2_behavior(self) -> None:
+        schemas = _schemas()
+        out = await plan_scope_impl(
+            subject="Nova",
+            subject_entity="company",
+            target_entities=["company", "person"],
+            schemas=schemas,
+            llm_config=None,
+            origins=None,
+            scope_config={},
+        )
+        person = out["scope_plan"]["entities"]["person"]
+        crm = next(e for e in person if e["origin_id"] == "crm_origin")
+        assert "v3_discovery" not in crm["reason"]
+
+    @pytest.mark.asyncio
+    async def test_v3_engine_failure_falls_through_to_the_v2_heuristic_floor(self) -> None:
+        schemas = _schemas()
+        with patch(
+            "src.mcp_server.tools.plan_scope._v3_discovery_plan",
+            side_effect=RuntimeError("boom"),
+        ):
+            out = await plan_scope_impl(
+                subject="Nova",
+                subject_entity="company",
+                target_entities=["company", "person"],
+                schemas=schemas,
+                llm_config=None,
+                origins=None,
+                scope_config={"engine": "v3_discovery"},
+            )
+        person = out["scope_plan"]["entities"]["person"]
+        # The V2 heuristic floor must still have produced a real plan --
+        # the whole point of the fall-through is that a broken new engine
+        # never blocks a scoped merge from running.
+        crm = next(e for e in person if e["origin_id"] == "crm_origin")
+        assert crm["mode"] == "link_path"
 
 
 class TestSanitizePlan:
