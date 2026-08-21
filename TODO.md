@@ -489,3 +489,34 @@ memory) -> update this file with independent evidence, never the app's own succe
 > **BP-B3** — the handoff contract is provable: for a given Airbus run, every canonical record
 > answers "where did this come from?" by SQL alone. Live-verify, report back, **stop here** —
 > do not proceed into B.4 (Splink phases) or touch `main` without explicit go-ahead.
+>
+> **Done, live-verified 2026-08-22, not committed to main.** Ran the full P-9 -> P-10 pipeline
+> end to end for a real Airbus run against real ClickHouse `origin1`: `discover_anchors` +
+> `traverse_subgraph` (policy: `max_depth=3`, `min_edge_confidence="verified"`) reached 10 real
+> tables from the `Company` anchor; `execute_extraction` pulled 2840 real rows scoped to
+> `entityName ILIKE '%Airbus%'`; `build_dataset_rows` + `materialize` assembled them (with P-7's
+> real, already-stored field mappings) into a real DuckDB `canonical_matching_dataset` table.
+>
+> Independently confirmed via direct SQL against the materialized file (not the script's own
+> printed output): `SELECT count(*), count(DISTINCT record_id)` = `(2840, 2840)` — zero
+> collisions, zero silent loss (the exact failure mode P-10's own live-caught bug #1 could have
+> produced, now guarded against). Per-table row counts match P-9's own extraction exactly
+> (`Company` 7, `CompanyContact` 16, `CompanyEmployeeCategory` 138, `CompanyExperience` 33,
+> `CompanyFinancials` 28, `CompanyIndustry` 7, `CompanyRelation` 572, `CompanyTechnographics`
+> 2000, `Location` 7, `Person` 32).
+>
+> The bar itself, checked directly: the real `Company` record for "Airbus" (`full_name` "Airbus
+> SAS") has every real column correctly mapped to its canonical field (24 columns, each with its
+> own `discovery_evidence` entry naming the source column, canonical field, confidence, and
+> origin — `ALGORITHMIC`, from P-7's real live-verified mapping run). A real `Person` record two
+> hops from the anchor (Bernard Lathière, "French politician & former Airbus CEO") answers
+> "where did this come from" with nothing but its own row: `graph_path` shows the exact join
+> chain (`Company.companyID -> CompanyExperience.companyID`, then
+> `CompanyExperience.personID -> Person.personID`, each hop's real confidence tier and
+> verification rationale intact), `provenance` names the origin/table/key-column, and
+> `original_fields` preserves the untouched raw row. All of this is one `SELECT` against real,
+> materialized columns — never a JSON blob requiring app code to interpret, never something
+> requiring the pipeline to be re-run.
+>
+> **Handoff contract: provable.** Continuing into B.4 (Splink) or committing this branch to
+> `main` both require the user's explicit go-ahead, per the standing scope for this work.
