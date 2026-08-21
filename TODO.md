@@ -443,8 +443,48 @@ memory) -> update this file with independent evidence, never the app's own succe
     `extract_data.py` does, a real gap if it were wired in directly — exactly why that wiring
     is deferred to a future ADR rather than done partially now.
   - *Full suite:* `scripts/check.py all` — 10/10 passed.
-- [ ] **P-10** Canonical matching dataset (the Splink handoff artefact, materialised in DuckDB,
-  registered directly as a Splink input).
+- [x] **P-10** Canonical matching dataset — `src/mcp_server/tools/canonical_matching_dataset.py`.
+  The Splink handoff artefact: `build_dataset_rows()` assembles P-9's raw extraction output plus
+  P-7's real field mappings into one row per source record — `record_id`, `source_id`,
+  `entity_type`, `entity_anchor_id`, `canonical_entity_id` (deliberately `NULL` — Splink's own
+  job in B.4, not yet reached), `source_table`, `source_record_id`, `canonical_fields`,
+  `original_fields`, `context_score`, `graph_path`, `provenance`, `discovery_evidence`,
+  `quality_diagnostics`. `materialize()` writes it into the run's own DuckDB spool file as a real
+  typed table (never one opaque JSON blob) via an `ON CONFLICT (record_id) DO UPDATE` upsert.
+  Never imports `src/orchestrator/spool.py` directly (layering) — the caller passes the spool's
+  own file path in, same pattern P-9's modules already use.
+  - *Evidence (unit):* `tests/unit/test_canonical_matching_dataset.py`, 10/10 passed.
+  - *Live-caught bug #1:* the very first real `materialize()` call against real Boeing data hit
+    silent data loss — 2447 rows built, but only 144 landed. Root cause: my live-verification
+    script supplied `"companyID"` (a foreign key) as `CompanyExperience`'s own `record_id_column`;
+    every experience row for the same company collapsed onto the same `record_id`, and the
+    upsert silently overwrote all but the last one. Fixed in the **module itself**, not just the
+    script: `build_dataset_rows()` now verifies the supplied `pk_column`'s values are actually
+    unique across the batch per table, and falls back to positional record ids (already the
+    established fallback for "no pk_column given") the moment they aren't — logging a warning
+    rather than silently colliding. Red-then-green confirmed via
+    `test_a_non_unique_pk_column_falls_back_to_positional_ids_not_a_collision`.
+  - *Live-caught bug #2 (found immediately after fixing #1):* the DuckDB schema declared
+    `source_record_id TEXT NOT NULL`, but the module's own docstring already documented that a
+    table with no known PK column legitimately produces `source_record_id=NULL` — the fallback
+    from bug #1 triggered exactly that path and hit the constraint on the very next real
+    `materialize()` call. Fixed by making the column nullable. Red-then-green confirmed via
+    `test_a_row_with_no_source_record_id_is_still_materialized`.
+  - *Evidence (live, independent SQL — real Boeing extraction, real P-7 field mappings from the
+    metadata store):* 2447 rows built and materialized (matching P-9's own extraction row counts
+    exactly, table by table: `Company` 18, `CompanyContact` 39, `CompanyEmployeeCategory` 188,
+    `CompanyExperience` 39, `CompanyFinancials` 20, `CompanyIndustry` 18, `CompanyInvestmentRound`
+    6, `CompanyRelation` 559, `CompanyTechnographics` 1503, `Location` 18, `Person` 39).
+    Independently confirmed via `duckdb` CLI-style queries against the materialized file:
+    `SELECT count(*), count(DISTINCT record_id)` = `(2447, 2447)` — zero collisions, zero loss.
+    A `Company` record's `canonical_fields` shows the real P-7 mapping applied correctly
+    (`entity_name`, `full_name`, `website`, ... populated from the real ClickHouse row). A
+    `CompanyExperience` record (the table that exposed bug #1) has `source_record_id=NULL`
+    (honest — it has no genuine single-column key) but its full `original_fields` and
+    `provenance` are intact, so "where did this come from" is still answerable by SQL alone —
+    just not addressable by a single id column, which is a true fact about that table, not a gap
+    in the dataset.
+  - *Full suite:* `scripts/check.py all` — 10/10 passed.
 
 > **BP-B3** — the handoff contract is provable: for a given Airbus run, every canonical record
 > answers "where did this come from?" by SQL alone. Live-verify, report back, **stop here** —
