@@ -674,3 +674,29 @@ the app's own success message.
 > entity's actual matching engine is a separate, not-yet-scoped piece of future work.
 >
 > Never committed to `main` — this branch's own discipline applies throughout, same as B.0-B.3.
+
+## Repo publish: GitHub mirror + CI (2026-08-27)
+
+- [x] **Published to GitHub.** `git.n4t.com` (`origin`) remains unreachable for both push/pull
+  and any server-side CI (ADR 0003). Added a second remote, `github`, pointing at the user's own
+  private repo (`https://github.com/Reza-Sh83/merge-engine.git`), and pushed all 8 local branches
+  as-is: `main`, `feat/v3-discovery-er`, `fix-bugs`, `fix-bugs-backup`, `chore/harness-ratchet`,
+  `feat/dspy-prompt-layer`, `feat/matching-precision`, `feat/planner-swarm`,
+  `feat/quality-lineage`. *Evidence:* each `git push github <branch>` returned `[new branch]`;
+  `git ls-remote github` round-tripped cleanly beforehand to confirm the stored credential helper
+  authenticates non-interactively.
+- [x] **Added `.github/workflows/ci.yml`**, invoking exactly `python scripts/check.py all` on
+  `push`/`pull_request`/`workflow_dispatch` — per ADR 0003's own revisit guidance ("whichever CI
+  config eventually gets added should invoke exactly that command and nothing else"). Landed on
+  `feat/v3-discovery-er` only in this pass, since every other branch is already checked out in a
+  sibling worktree (`D:\transfer\merging` for `main`; `.worktrees\B1-B5`/`fix-bugs` for the rest)
+  and this session's hard constraint is to work only inside its own worktree root — never check
+  out or commit to a branch live in another worktree. Propagating the same file to the other 7
+  branches is a small follow-up left for the user (or a future session working in that specific
+  worktree) to pick up; the identical file is ready to copy from this branch.
+- [ ] **CI run outcome on GitHub Actions not yet independently confirmed.** No `gh` CLI, GitHub
+  MCP connector, or authenticated browser session was available in this session to check the
+  Actions tab (a private repo returns "Page not found" to an unauthenticated request, which was
+  confirmed live — not a guess). The push to `feat/v3-discovery-er` should have triggered a run;
+  the user needs to check `https://github.com/Reza-Sh83/merge-engine/actions` directly and report
+  back, or authenticate `gh`/a browser session so a future pass can verify it independently.
