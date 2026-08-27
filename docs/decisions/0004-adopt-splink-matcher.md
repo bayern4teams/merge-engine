@@ -45,3 +45,40 @@ Key properties that made this the only realistic candidate:
   only when it beats the builtin on **both** precision and recall, and the Airbus run's golden
   parity improves on the measured 12.0% Boeing figure. `tests/eval/test_matcher_recall.py` is
   the mechanism, not a written assertion.
+
+## Addendum — BP-B4 gate, first measured outcome (2026-08-23)
+
+`tests/eval/test_matcher_recall.py` (slow legs, `-m slow`) ran the A/B over the canonical 560
+golden pairs (200 match + 200 shared-first + 60 shared-surname + 100 random, from
+`tests/eval/pagila_staff.csv`), scoring each engine through `tests/eval/score.evaluate` at the
+same decision bands (auto-match ≥ 0.95, auto-exclude ≤ 0.70):
+
+| engine  | precision | recall  | FP | FN  | review-same |
+|---------|-----------|---------|----|-----|-------------|
+| builtin | 1.0000    | 0.9950  | 0  | 0   | 1           |
+| splink  | 1.0000    | 0.1350  | 0  | 103 | 70          |
+
+**Gate: not met** (`last_gate.json`: `a_measurable: true, a_met: false, gate_passed: false`).
+Splink ties precision (zero false positives) but does not beat builtin on recall, so per BP-B4
+it is **not** promoted to the default engine on this evidence. The parity leg recorded
+`b_measurable: false` — the app DB's `public` schema holds a *Lockheed Martin* run, and the
+leg gates an *Airbus* run against the 12.0% Boeing baseline, so it skipped; it re-measures
+automatically once an Airbus run lands in `global_warehouse.public`.
+
+Root cause (from the EM run's own log): the production Splink path blocks on the exact rule
+`l."name" = r."name"`, so `name` is never *scored* — pairs whose names differ in any way
+(typo, nickname, casing: the 200 + 60 golden match variants) are never compared, and
+`Missing estimates for: name` follows. The B.4 branch's costed blocking (S-E) and
+label-derived thresholds (S-L) exist to fix exactly this; when they are wired into the
+engine path the gate is re-run here — the verdict above is the state of the *incumbent*
+production path, which is what `engine: splink` selects today.
+
+The promotion invariant is enforced in the fast suite by
+`tests/unit/test_splink_default_invariant.py`: the default engine may be `splink` only after a
+measured `gate_passed: true` in `tests/eval/last_gate.json`. It passed on 2026-08-23 (default
+is builtin, gate not met).
+
+Also found and fixed while writing this branch's unit tests:
+`splink_recommender.recommended_thresholds` iterated the candidate-threshold list in the wrong
+direction for both bars, returning a match bar below the exclude bar (inverted decision
+bands). Guarded by `tests/unit/test_splink_workbench_helpers.py::TestRecommendedThresholds`.

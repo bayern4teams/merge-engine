@@ -102,6 +102,12 @@ graphify-out/cost.json         # local token tracking, not useful to share
 logs/spool/
 logs/scale/
 
+# BP-B4 gate outcome: a timestamped measurement from one specific slow-test
+# run (tests/eval/test_matcher_recall.py -m slow), not a fixture — the
+# measured result it records is already written up in prose in ADR 0004's
+# addendum, which is the durable source of truth. Regenerate, don't commit.
+tests/eval/last_gate.json
+
 # Saved run profiles hold no secrets (passwords are stripped on save), but
 # they name a specific person's databases, so they stay local by default.
 config/profiles/

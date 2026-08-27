@@ -33,6 +33,7 @@ Split from the old root `TECHNICAL_README.md`, by subsystem, in reading order:
 - [0013-informatica-benchmark-only.md](decisions/0013-informatica-benchmark-only.md) — capability benchmark only, never a dependency
 - [0014-replace-budget-truncation-with-blocking-analysis.md](decisions/0014-replace-budget-truncation-with-blocking-analysis.md) — costed blocking before pair generation, replacing after-the-fact truncation
 - [0015-v3-discovery-engine-flag.md](decisions/0015-v3-discovery-engine-flag.md) — P-9's engine wired into `plan_scope_impl` as a `scope_config.engine` flag, scoped to planning only (not extraction execution)
+- [0016-splink-model-versioning-file-store.md](decisions/0016-splink-model-versioning-file-store.md) — B.4 S-N: trained Splink models as immutable file-store versions, activation as a pointer, round-trip-verify gating activation
 
 ## plans/ — the plans this repo is executing against
 

@@ -72,6 +72,30 @@ scope:
   # edge's inclusion dependency.
   join_graph_sample_size: 500
 
+# ── Entity Resolution: Splink engine (B.4) ──────────────────────────────────
+# The default engine is NOT declared here. The promotion surface is the
+# per-entity `matching_rules` (currently none), and the code falls back to
+# "builtin" when an entity declares no engine — so the effective default is
+# builtin until a BP-B4 measured gate pass is recorded in
+# tests/eval/last_gate.json. tests/unit/test_splink_default_invariant.py
+# enforces that: setting default_engine: splink here while the last measured
+# gate outcome is not a pass fails the suite. See ADR 0004 addendum.
+splink:
+  # Workbench model versions live under this root:
+  # <model_store>/<model_name>/v<N>/{model.json,metadata.json}
+  model_store: logs/splink_models
+  # A prediction-blocking rule that would generate more candidate pairs than
+  # this is flagged "⚠ Too broad" by splink_blocking.recommend_prediction_
+  # blocking (S-E). 600,000 ≈ a quarter of the 2.4M figure that silently
+  # truncated a real run before costed blocking existed (ADR 0014).
+  pair_budget: 600000
+  # S-P review-band defaults (a *view* over the predictions, not the model's
+  # output; the UI can override per request).
+  predict:
+    match_threshold: 0.5    # score >= this → auto-match band
+    exclude_threshold: 0.2  # score <= this → auto-keep-apart band
+    review_limit: 200       # review queue rows returned (counts are whole-band)
+
 # ── Tracing (self-hosted Langfuse) ─────────────────────────────────────────
 # Tracing is configured purely via environment variables in .env:
 #   LANGFUSE_PUBLIC_KEY=<project public key>

@@ -318,6 +318,68 @@ class EnvOverridesUpdate(BaseModel):
     overrides: dict[str, str]
 
 
+class SplinkRecommendRequest(BaseModel):
+    """B.4 workbench: S-A/B/C/D over inline (sampled/profiled) records."""
+
+    records: list[dict[str, Any]]
+    semantic_types: dict[str, str] | None = None
+    pair_budget: int = 600_000
+
+
+class SplinkTrainRequest(BaseModel):
+    """B.4 workbench: S-G/H/I + S-N save. ``config`` is the (possibly
+    AUTO-recommended) model description — comparisons, blocking rules,
+    seed. See ``splink_workbench.train`` for the shape."""
+
+    model_name: str
+    records: list[dict[str, Any]]
+    config: dict[str, Any]
+    parent_version: int | None = None
+
+
+class SplinkPredictRequest(BaseModel):
+    model_name: str
+    version: int
+    records: list[dict[str, Any]]
+    match_threshold: float = 0.5
+    exclude_threshold: float = 0.2
+    review_limit: int = 200
+
+
+class SplinkExplainRequest(BaseModel):
+    model_name: str
+    version: int
+    records: list[dict[str, Any]]
+    record_a: dict[str, Any]
+    record_b: dict[str, Any]
+
+
+class SplinkClusterRequest(BaseModel):
+    model_name: str
+    version: int
+    records: list[dict[str, Any]]
+    match_probability_threshold: float = 0.5
+
+
+class SplinkEvaluateRequest(BaseModel):
+    model_name: str
+    version: int
+    records: list[dict[str, Any]]
+    labelled_pairs: list[list[Any]]
+    current_threshold: float = 0.5
+    recall_floor: float = 0.8
+    precision_floor: float = 0.8
+
+
+class SplinkActivateRequest(BaseModel):
+    version: int
+
+
+class SplinkCompareRequest(BaseModel):
+    version_a: int
+    version_b: int
+
+
 _SESSION_ENV_OVERRIDES: dict[str, str] = {}
 
 
@@ -827,6 +889,166 @@ def create_api(config_path: str = "config/config.yaml") -> FastAPI:
                 500, f"compare_to_golden.py produced non-JSON output: {exc}"
             ) from exc
         return diff if isinstance(diff, dict) else {"result": diff}
+
+    # ── Splink workbench (B.4) ───────────────────────────────────────────────
+    # Thin delegators over `splink_workbench` (which sequences the per-phase
+    # modules and owns the request-scoped Linker). `main.py` holds no
+    # business logic — the same rule as every other section above. The
+    # store root defaults to `logs/splink_models` (the workbench's own
+    # default); a future settings page can point it elsewhere.
+    from src.mcp_server.tools import splink_workbench
+    from src.mcp_server.tools.splink_compat import SplinkVersionError
+
+    _WB_STORE = str(_RUN_REPORTS_DIR.parent / "splink_models")
+
+    def _wb_store() -> str:
+        return _WB_STORE
+
+    @app.get("/api/splink/status")
+    def splink_status() -> dict[str, Any]:
+        """S0 gate, as the UI's workbench-availability banner reads it."""
+        return splink_workbench.status()
+
+    @app.post("/api/splink/recommend")
+    def splink_recommend(body: SplinkRecommendRequest) -> dict[str, Any]:
+        """S-A/B/C/D (+S-E cost) — read-only, no training."""
+        try:
+            return splink_workbench.recommend(
+                body.records,
+                body.semantic_types,
+                pair_budget=body.pair_budget,
+            )
+        except (ValueError, SplinkVersionError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.post("/api/splink/train")
+    def splink_train(body: SplinkTrainRequest) -> dict[str, Any]:
+        """S-G/H/I + S-N — the only step that writes a model version."""
+        try:
+            return splink_workbench.train(
+                body.model_name,
+                body.records,
+                body.config,
+                store_root=_wb_store(),
+                parent_version=body.parent_version,
+            )
+        except (ValueError, KeyError, SplinkVersionError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except Exception as exc:
+            logger.error("splink train failed: %s", exc, exc_info=True)
+            raise HTTPException(500, f"Training failed: {exc}") from exc
+
+    @app.post("/api/splink/predict")
+    def splink_predict(body: SplinkPredictRequest) -> dict[str, Any]:
+        """S-J predict + S-P banding/review queue from a saved version."""
+        try:
+            return splink_workbench.predict(
+                body.model_name,
+                body.version,
+                body.records,
+                store_root=_wb_store(),
+                match_threshold=body.match_threshold,
+                exclude_threshold=body.exclude_threshold,
+                review_limit=body.review_limit,
+            )
+        except (ValueError, FileNotFoundError, SplinkVersionError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.post("/api/splink/explain")
+    def splink_explain(body: SplinkExplainRequest) -> dict[str, Any]:
+        """S-J/§33: per-field Bayes-factor decomposition of one pair."""
+        try:
+            return splink_workbench.explain(
+                body.model_name,
+                body.version,
+                body.records,
+                body.record_a,
+                body.record_b,
+                store_root=_wb_store(),
+            )
+        except (ValueError, FileNotFoundError, SplinkVersionError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.post("/api/splink/cluster")
+    def splink_cluster(body: SplinkClusterRequest) -> dict[str, Any]:
+        """S-O: cluster the saved model's predictions at a threshold."""
+        try:
+            return splink_workbench.cluster(
+                body.model_name,
+                body.version,
+                body.records,
+                store_root=_wb_store(),
+                match_probability_threshold=body.match_probability_threshold,
+            )
+        except (ValueError, FileNotFoundError, SplinkVersionError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.post("/api/splink/evaluate")
+    def splink_evaluate(body: SplinkEvaluateRequest) -> dict[str, Any]:
+        """S-K (register labels) + S-L (accuracy/thresholds) + S-M (FP/FN)."""
+        try:
+            return splink_workbench.evaluate(
+                body.model_name,
+                body.version,
+                body.records,
+                body.labelled_pairs,
+                store_root=_wb_store(),
+                current_threshold=body.current_threshold,
+                recall_floor=body.recall_floor,
+                precision_floor=body.precision_floor,
+            )
+        except (ValueError, FileNotFoundError, SplinkVersionError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.get("/api/splink/models")
+    def splink_models() -> dict[str, Any]:
+        """S-N: every model and its versions."""
+        return splink_workbench.list_models(_wb_store())
+
+    @app.get("/api/splink/models/{name}/versions/{version}")
+    def splink_model_version(name: str, version: int) -> dict[str, Any]:
+        """S-N: one version's payload + metadata."""
+        try:
+            return splink_workbench.get_model(_wb_store(), name, version)
+        except FileNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.get("/api/splink/models/{name}/active")
+    def splink_model_active(name: str) -> dict[str, Any]:
+        """[View Generated Splink Configuration]: the active version's
+        settings dict — the real save_model_to_json() payload."""
+        try:
+            return splink_workbench.get_active_config(_wb_store(), name)
+        except FileNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.post("/api/splink/models/{name}/activate")
+    def splink_model_activate(name: str, body: SplinkActivateRequest) -> dict[str, Any]:
+        try:
+            return splink_workbench.activate(_wb_store(), name, body.version)
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.post("/api/splink/models/{name}/rollback")
+    def splink_model_rollback(name: str) -> dict[str, Any]:
+        try:
+            return splink_workbench.rollback(_wb_store(), name)
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.post("/api/splink/models/{name}/versions/{version}/archive")
+    def splink_model_archive(name: str, version: int) -> dict[str, Any]:
+        try:
+            return splink_workbench.archive(_wb_store(), name, version)
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.post("/api/splink/models/{name}/compare")
+    def splink_model_compare(name: str, body: SplinkCompareRequest) -> dict[str, Any]:
+        try:
+            return splink_workbench.compare(_wb_store(), name, body.version_a, body.version_b)
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(422, str(exc)) from exc
 
     # ── Static frontend ──────────────────────────────────────────────────────
     # Mounted last so it doesn't shadow /api routes. html=True serves

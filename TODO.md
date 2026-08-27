@@ -520,3 +520,157 @@ memory) -> update this file with independent evidence, never the app's own succe
 >
 > **Handoff contract: provable.** Continuing into B.4 (Splink) or committing this branch to
 > `main` both require the user's explicit go-ahead, per the standing scope for this work.
+
+## B.4 — Splink workbench (S-A..S-P): user-authored, then remediated
+
+The B.4 workbench (`splink_common/compat/blocking/recommender/training/inference/evaluation/
+model/workbench.py`, ~4,350 lines, plus `src/api/main.py`'s `/api/splink/*` delegators and
+`src/ui/frontend/src/components/SplinkWorkbenchScreen.tsx`) was written by the user directly,
+picking up exactly where an earlier agent session stopped at BP-B3. A senior-review pass
+(same conversation, before this remediation) found the design sound — layering clean, no module
+state, no bare except, comparator catalog verified against the installed 4.0.16 API surface —
+but flagged 2 live-reproduced bugs, 20 mechanical lint/type gate failures, and a handful of
+design/doc gaps. This section is that remediation, itself entirely live-verified, never taken on
+the app's own success message.
+
+- [x] **Bug 1** `splink_recommender.field_stats` crashed (`AttributeError: 'Counter' object has
+  no attribute 'head'`) on any all-empty column — the ternary `values.value_counts() if
+  non_null else Counter()` then unconditional `.head(5)`; `Counter` has no `.head()`.
+  - *Fix:* drop the ternary — `value_counts()` on an empty Series still returns a Series.
+  - *Evidence (live):* a standalone script with a genuinely all-empty column reproduced the
+    crash pre-fix, then confirmed `completeness=0.0, top_values=[]` with no exception post-fix.
+- [x] **Bug 2** `splink_inference.explain_candidate` hardcoded `row.get("id_l")`/`row.get("id_r")`,
+  but installed 4.0.16's `compare_two_records` actually names those columns
+  `{unique_id_column_name}_l/_r` — every caller got `id_l=None, id_r=None`.
+  - *Fix:* read the real column names via `splink_common.unique_id_column_of(linker)`, the same
+    helper 3 other call sites already used correctly.
+  - *Evidence (live):* a hand-built linker + `compare_two_records` call returned real ids
+    (`pg:t:1`/`pg:t:2`) post-fix, confirmed twice (isolated script, then the full workbench
+    `train`→`explain` path).
+- [x] **Bug 3 (found during this remediation's own live verification, not on the original list)**
+  `splink_workbench.explain()` passed the caller's *raw* `record_a`/`record_b` (original field
+  names, `_origin_*` lineage keys, no unique-id column) straight into `compare_two_records` — the
+  exact same visible symptom as Bug 2 (unusable ids) but one layer up: Splink didn't see the
+  configured unique-id column on either dict at all, and silently substituted its own internal
+  `_left`/`_right` placeholders instead of raising.
+  - *Fix:* run `record_a`/`record_b` through the same `records_to_dataframe` transform the
+    training records already went through before calling `infer.explain_candidate`.
+  - *Evidence (live):* an end-to-end script through `wb.train()` → `wb.explain()` with realistic
+    (raw, lineage-keyed) records returned `id_l="_left", id_r="_right"` before the fix and real
+    ids (`pg:t:1`/`pg:t:2`) after — confirmed again independently through the live browser UI
+    and against real ClickHouse data (see below).
+- [x] **Lint gate** `scripts/check.py lint` — 19 ruff errors (RUF002 en-dashes in docstrings,
+  I001 unsorted imports, B905 `zip()` without `strict=`, RUF046 redundant `int()` cast, F401
+  unused imports) across 8 files, all fixed (`strict=True` chosen deliberately — every flagged
+  `zip()` pairs same-length sequences derived from the same source).
+  - *Evidence:* `scripts/check.py lint` — 1/1 passed.
+- [x] **Types gate** `scripts/check.py types` — 20 new mypy errors against the ratchet baseline
+  (zero pre-existing baseline noise touched). Notable ones: a shared `LinkType = Literal[
+  "link_only", "link_and_dedupe", "dedupe_only"]` alias added to `splink_common.py` (previously
+  four separate `link_type: str` parameters across `splink_common`/`splink_blocking`); the
+  `splink_training._session_to_record` trajectory dict's key type corrected from a wrong-arity
+  `tuple[str, str, int]` to the real `tuple[str, str, Any, str]` (4 elements, not 3 — an
+  undetected type-checking gap, not a runtime bug, since Python itself never enforced the
+  declared type); a `val`/`param_val` rename to resolve a "Name already defined" redefinition
+  mypy caught between two independent loops in the same function; `# type: ignore[import-
+  untyped]`/`[no-untyped-call]` applied at the same call sites `splink_matcher.py` (the existing,
+  pre-B.4 engine) already uses for the identical Splink-internals pattern.
+  - *Evidence:* `scripts/check.py types` — 1/1 passed.
+- [x] **Format gate** `scripts/check.py format` — genuinely a hard gate (its own docstring:
+  "a real, enforced gate from here on... not a warning"), not report-only as an earlier
+  assumption in this session's carried-over context had it. `ruff format` reformatted 12 files
+  (all of B.4's own new modules/tests plus one pre-existing eval test it touched).
+  - *Evidence:* `scripts/check.py format` — 1/1 passed.
+- [x] **Design gap: duplicated comparator-building logic.** `splink_recommender.
+  comparison_to_settings_hit` (semantic-type-driven, S-B) and `splink_workbench.
+  _config_comparison`'s explicit-comparator branch each independently mapped comparator *name*
+  to a Splink comparison object — two if-chains that had already started to diverge (the
+  workbench's used `getattr`-based dispatch reaching the whole installed `comparison_library`;
+  S-B's used a fixed list of direct `cl.XComparison` references). Extracted the single
+  `splink_recommender.build_comparator(name, field, *, extra_fields, thresholds)` both now
+  delegate to — `getattr`-based (superset of what either had), so a hand-picked comparator and
+  an AUTO-recommended one can never construct differently again.
+  - *Evidence:* all 84 pre-existing B.4 unit tests still pass unchanged post-refactor, including
+    `test_settings_hit_builds_real_comparators` / `test_settings_hit_refuses_mismatched_columns`;
+    re-verified live via the full `train()` path using the explicit `{comparator, field}` shape.
+- [x] **Doc gap: `run_prediction`'s docstring** claimed a fixed `id_l`/`id_r` naming; corrected to
+  name the real `{unique_id_column}_l/_r` convention (the same fact Bug 2/3 were about).
+- [x] **Doc gap: "Splink.txt" spec source.** Every new module cites `Splink.txt §NN` by section
+  number; confirmed via repo-wide search that no such file exists in this repository. Not a gap
+  to fix — `Branch_Plan.md`'s own B.1 table already reproduces the section-to-verified-API
+  mapping in full (`| Spec need (Splink.txt §) | Verified API |`), so the content those citations
+  point to is already in-repo; `Splink.txt` itself is external planning input, never meant to be
+  committed.
+- [x] **Doc gap: no ADR for S-N's model-versioning design.** Added
+  [0016-splink-model-versioning-file-store.md](docs/decisions/0016-splink-model-versioning-file-store.md)
+  (file-store-per-version, immutability, activation-as-pointer, round-trip-verify gating
+  activation) and indexed it in `docs/INDEX.md`.
+  - *Evidence:* `scripts/check.py docs` — 1/1 passed (every citation resolves).
+- [x] **Second KNOWN LIMITATION documented (found during this remediation's live verification,
+  not on the original list).** `splink_inference.run_clustering`'s `compute_graph_metrics` call
+  always raises `TypeError: 'numpy.float64' object cannot be interpreted as an integer` against
+  the installed splink 4.0.16 + igraph 1.0.0 pair — reproduced with a plain Python `float`
+  threshold and a `numpy.float64` alike (ruling out our call site), traced to
+  `edge_metrics.compute_igraph_metrics` → `igraph.Graph.DataFrame` → `igraph.Graph.__init__`
+  receiving a numpy-typed vertex count where installed `igraph` requires a native `int`. Already
+  gracefully handled (caught, surfaced as `graph_metrics: {"error": ...}`, does not fail
+  clustering) — documented in the module docstring next to the existing `cluster_using_
+  single_best_links` limitation so the next Splink/igraph upgrade re-tests both instead of
+  rediscovering either.
+- [x] **Frontend built** — `src/ui/frontend/src/components/SplinkWorkbenchScreen.tsx` (new,
+  ~700 lines) wired to all 14 `/api/splink/*` endpoints (status/recommend/train/predict/explain/
+  cluster/evaluate/models list/get-version/get-active-config/activate/rollback/archive/compare),
+  a new "Splink" tab in `App.tsx`, matching this project's existing card-per-concern component
+  style (`InvestigateScreen.tsx`'s pattern) and CSS classes (no new styling introduced).
+  - *Live-caught bug (frontend) #1:* the field-roles table read `f.matching_stars`/
+    `f.blocking_stars`/`f.tf_stars` — the real API response nests them as `f.matching.stars`/
+    `f.blocking.stars`/`f.tf.stars`. Fixed; live-reverified showing real star ratings
+    (`★★★★★`) instead of blank cells.
+  - *Live-caught bug (frontend) #2:* the predict summary read `result.review`/`result.queue` for
+    the review-queue count; the real field is `result.review_count`. Fixed.
+  - *Evidence (live, `scripts/check.py frontend` + real browser session against the app served
+    from this worktree, not the stale build a misconfigured preview server had briefly served
+    from a different checkout):* every one of the 14 endpoints exercised through actual UI
+    clicks/inputs, each confirmed via `read_network_requests` showing its real HTTP call and
+    status code — `train` → "Saved version 1 (round-trip verified: true)", `predict` →
+    561/2/34-shaped real numbers depending on dataset, `explain` → real ids end to end,
+    `cluster` → the known-limitation warning rendering correctly instead of crashing the screen,
+    `evaluate` → a real accuracy report, `activate` → independently confirmed by reading
+    `logs/splink_models/<model>/active.json` directly off disk (never the app's own success
+    banner), `rollback` on a model with only one activation → a clean 422 surfaced as a banner,
+    not a crash (correct: "nothing to roll back to" is the documented behavior for that case).
+- [x] **Live-verified against real Docker databases** (`Sample_Database` ClickHouse, port 8190,
+  per this file's own standing rule — never synthetic seed data for a final check). Pulled 36 raw
+  `Company` rows matching `%boeing%` from real `origin1`+`origin2` (18 each); the live pull itself
+  surfaced a real data-quality fact worth noting, not a bug: `origin2.Company` has genuine
+  duplicate `companyID`s (3 rows sharing one id) — `records_to_dataframe`'s existing "duplicate
+  unique id" refusal caught it correctly, exactly as designed; the 2 duplicates were dropped
+  before building the test set, same as a real caller's own dedup pass would.
+  - Ran `recommend` → `train` (`NameComparison` + `ExactMatch` on `website`, no blocking — N=34
+    is small enough for a full 561-pair pairwise EM pass) → `predict` (561 pairs scored, matching
+    `34×33/2` exactly) → `explain` the top-scored real pair (`'Boeing' <-> 'Boeing'`, two distinct
+    origin1 rows, `match_probability=0.191`, real per-field Bayes factors) → `cluster` (the known
+    igraph limitation degraded gracefully again) → `evaluate` (a real accuracy report) →
+    `list_models`/`activate`, all against this real external data, all round-trip-verified
+    (`round_trip_verified: True`), with a regression assertion that `explain`'s returned ids
+    exactly match the `predict` table's own id columns for the same pair.
+  - *Evidence:* full script output in this session's scratch directory; independently confirmed
+    the trained model files exist on disk under `logs/splink_models/clickhouse_boeing_company/`.
+- [x] **Full suite:** `scripts/check.py all` — 10/10 passed (lint, format, arch, docs,
+  portability, types, frontend, test, eval, prompts) after every fix above; the pre-existing
+  `tests/eval/test_matcher_recall.py` BP-B4 promotion gate (which measures the *old*
+  `splink_matcher.py` engine, untouched by this remediation) was unaffected and still records
+  the same `gate_passed: false` outcome ADR 0004's addendum already documents — promoting Splink
+  to the default engine remains blocked on that separate, pre-existing gate, not on anything
+  fixed here.
+
+> **What this remediation did not do, on purpose:** it did not touch `tests/eval/
+> test_matcher_recall.py`'s A/B gate or attempt to make Splink win it — that gate tests the old
+> Phase-7.4 engine (`splink_matcher.py`), a different code path from the B.4 workbench entirely,
+> and closing that particular recall gap (the exact-match blocking rule on `name` never scoring
+> near-miss variants, per ADR 0004's addendum) was never on this remediation's list. It also did
+> not wire the workbench's trained models into the production `matching_rules` promotion surface
+> — the workbench today is a standalone tuning/training tool; making its output selectable as an
+> entity's actual matching engine is a separate, not-yet-scoped piece of future work.
+>
+> Never committed to `main` — this branch's own discipline applies throughout, same as B.0-B.3.
