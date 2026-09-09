@@ -1,8 +1,0 @@
-{
-  "updatedAt": "2026-08-08T08:45:27.989Z",
-  "command": "init",
-  "gitHead": "19cf9575a1a0cb815802ef11a271024015a4d911",
-  "model": "Qwen/Qwen3.6-35B-A3B-FP8",
-  "status": "complete",
-  "language": "en"
-}
