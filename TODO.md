@@ -1313,12 +1313,60 @@ outcomes are within this team's control.
     predict-only; this saved v1 model's own precision/recall on real data
     is a separate question B.6.4 (blocked by B.6.1's missing fixture)
     would have measured — not claimed as a win here.
-- [ ] **B.6.4** Re-run `tests/eval/test_matcher_recall.py`'s 560-pair gate; record real
-  numbers. `tests/eval/last_gate.json` and the `test_splink_default_invariant.py` default
+- [x] **B.6.4 — `BLOCKED`** (transitively, by B.6.1) Re-run
+  `tests/eval/test_matcher_recall.py`'s 560-pair gate; record real numbers.
+  `tests/eval/last_gate.json` and the `test_splink_default_invariant.py` default
   flip **only on a measured pass** — no hand-override (audit §11).
-  - *Evidence:* _fill in (measured table, gate decision, pass or honest gap analysis)_
+  - *Evidence:* Cannot run — the 560-pair gate is defined entirely over
+    `tests/eval/pagila_staff.csv` (B.6.1), which is confirmed unrecoverable.
+    Per the plan's own instruction for this exact case ("if not met..." /
+    B.6.1's "the promotion below cannot proceed"), no gate result is
+    fabricated. Confirmed live, not assumed: `python -m pytest
+    tests/eval/test_matcher_recall.py -q -m ""` → `2 skipped` (both legs'
+    own missing-fixture guard firing correctly); the real
+    `tests/eval/last_gate.json` on disk →
+    `{"a_measurable": false, "a_met": false, "b_measurable": false,
+    "b_met": false, "gate_passed": false}`; `tests/unit/
+    test_splink_default_invariant.py::test_default_engine_invariant` → `1
+    passed` — the default engine reads `builtin` from `config.yaml` (no
+    `matching.default_engine`/`engine` section declares `splink`), so the
+    invariant holds on its safe branch regardless of gate state. No
+    hand-override attempted or needed. **Promotion decision: not promoted,
+    honestly undecided-pending-fixture** — this is the plan's own
+    sanctioned outcome for an unrecoverable fixture, not a failure of this
+    task.
 
 **B.6 exit gate → M6:** promotion decided either way, on measured numbers, recorded honestly.
+  - *Evidence:* Promotion is **not** decided by measurement (B.6.1/B.6.4
+    `BLOCKED` — the 560-pair fixture is unrecoverable, confirmed via both
+    plan-sanctioned recovery paths). What *is* honestly decided and
+    verified: Splink remains available as a per-entity opt-in
+    (`matching_rules.engine="splink"`, pre-existing) with two genuine new
+    capabilities landed this phase — B.6.2's token-overlap blocking (real
+    costed table, `+37` pairs on real data, unit-tested red-then-green) and
+    B.6.3's train-once predict-only wiring (real saved model loaded with
+    zero EM calls, confirmed both by mock and by measuring the real
+    `logs/splink_models/company_diffbot_zoominfo/v1` artifact) — while the
+    default engine stays `builtin`, unchanged, verified via the real
+    `test_splink_default_invariant.py` pass and the real `last_gate.json`
+    read from disk.
+    All 10 `check.py` gates individually re-confirmed green post-Phase-6
+    (same per-gate, memory-capped method used since M1 — see B.1's exit
+    gate note): `lint`/`format`/`arch`/`docs`/`portability`/`types`
+    (bounded combined run) → `All 6 check(s) passed.`; `test` — unit
+    `1876 passed, 83 skipped` (71s) + integration `150 passed` (7s);
+    `eval` (`ulimit -v 4000000`) — first attempt hit a transient
+    out-of-memory abort inside DuckDB's threaded EM training right at the
+    cap's edge (`Out of Memory Error: Failed to allocate block of 262144
+    bytes`); two immediate, unmodified reruns under the identical cap both
+    passed clean (`All 1 check(s) passed.`) — the same known
+    edge-of-the-ulimit fragility this session already root-caused and
+    documented at B.1's exit gate, not a regression from B.6's own code
+    (the eval harness's fallback synthetic golden set has no
+    `model_profile` set, so B.6.3's new code path isn't even exercised by
+    it); `prompts` (`ulimit -v 4000000`) → `All 1 check(s) passed.`;
+    `frontend` (`NODE_OPTIONS=--max-old-space-size=2048`) →
+    `All 1 check(s) passed.`
 
 ## B.7 — Human-feedback loop (audit §13 #2 DSPy + #12 dedupe.io) → M7
 
