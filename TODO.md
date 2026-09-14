@@ -898,18 +898,21 @@ fixes + Splink matcher fixes, committed group-by-group off `feat/v3-discovery-er
 Runs 2nd, immediately after the quick wins: zero code, zero risk, zero dependency on
 anything else in this plan — no reason to defer pure documentation behind riskier work.
 
-- [ ] **B.2.1** `docs/decisions/0017-reject-hiergat.md` (PyTorch-1.4/Py3.7 research code;
+- [x] **B.2.1** `docs/decisions/0017-reject-hiergat.md` (PyTorch-1.4/Py3.7 research code;
     corroborates the relational-signal direction, not a path in).
-- [ ] **B.2.2** `docs/decisions/0018-reject-relater-code-adopt-its-idea.md` (Python 2,
+- [x] **B.2.2** `docs/decisions/0018-reject-relater-code-adopt-its-idea.md` (Python 2,
     2 commits, benchmark-bound; the idea lands natively as B.5).
-- [ ] **B.2.3** `docs/decisions/0019-utopia-reference-only.md` (standalone Rust system;
+- [x] **B.2.3** `docs/decisions/0019-utopia-reference-only.md` (standalone Rust system;
     our kg schema is already the bitemporal graph; study its decision-ledger design).
-- [ ] **B.2.4** `docs/decisions/0020-ontop-study-not-aws-accelerator.md` (Neptune/Bedrock
+- [x] **B.2.4** `docs/decisions/0020-ontop-study-not-aws-accelerator.md` (Neptune/Bedrock
     coupling violates local-only; Ontop itself is the portable OBDA idea, revisit if a
     concrete SPARQL/OWL need appears).
   - *Accept (all four):* `python scripts/check.py docs` → citations resolve; `docs/INDEX.md`
     lists 0017–0020 (verify numbering against `ls docs/decisions/` first).
-  - *Evidence:* _fill in_
+  - *Evidence:* `ls docs/decisions/` confirmed numbering continues cleanly from `0016-...`
+    before writing (no gap/collision). `python scripts/check.py docs` → `All 1 check(s)
+    passed.` (every citation resolves). `docs/INDEX.md` lists all four with one-line
+    summaries. Commit `6e31362`.
 
 **B.2 exit gate → M2:** ADRs merged, `check.py docs` green.
 
