@@ -15,6 +15,7 @@ from typing import Any
 
 from src.mcp_server.tools.resolve_entities import (
     _PROCESS_POOL_MIN_RECORDS,
+    build_relationship_index,
     resolve_entities_impl,
 )
 from src.orchestrator.spool import (
@@ -71,6 +72,37 @@ def _matching_connector_and_config(state: dict[str, Any]) -> tuple[Any | None, d
                 exc,
             )
     return connector, matching_config
+
+
+def _relationship_index_for_companies(
+    state: dict[str, Any], extracted_data: dict[str, Any]
+) -> dict[str, set[str]]:
+    """B.5.1: the relational-agreement signal's index, built once per run
+    from every extracted table the ``company_relation`` concept matches
+    (pooled the same way target-entity records already are above) — best-
+    effort, never what stops a merge if this data isn't present.
+    """
+    try:
+        relation_records: list[dict[str, Any]] = []
+        for key in list(extracted_data):
+            if concept_matches("company_relation", key):
+                relation_records.extend(entity_rows(state, key))
+        if not relation_records:
+            return {}
+        index = build_relationship_index(relation_records)
+        logger.info(
+            "Relationship index built from %d relation row(s): %d compan(y/ies) indexed.",
+            len(relation_records),
+            len(index),
+        )
+        return index
+    except Exception as exc:
+        logger.warning(
+            "Could not build relationship index (%s); relational-agreement signal off "
+            "for this run.",
+            exc,
+        )
+        return {}
 
 
 def _matching_rules_for(
@@ -208,6 +240,13 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
 
     connector, matching_config = _matching_connector_and_config(state)
 
+    # B.5.1: only worth building when "company" is actually being
+    # resolved this run -- the relational-agreement signal is scoped to
+    # company_relation data, not every entity type.
+    relationship_index: dict[str, set[str]] = {}
+    if any(concept_matches("company", et) for et, _records in prepared):
+        relationship_index = _relationship_index_for_companies(state, extracted_data)
+
     try:
         logger.debug("Dispatching %d entity resolution(s) concurrently", len(prepared))
         results = await asyncio.gather(
@@ -224,6 +263,9 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
                     process_pool=process_pool,
                     connector=connector,
                     matching_config=matching_config,
+                    relationship_index=(
+                        relationship_index if concept_matches("company", entity_type) else None
+                    ),
                 )
                 for entity_type, records in prepared
             ),

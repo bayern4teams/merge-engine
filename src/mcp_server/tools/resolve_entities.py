@@ -259,12 +259,15 @@ def _resolve_core(
     matching_rules: dict[str, Any] | None,
     subject: str | None,
     extra_candidate_pairs: list[tuple[str, str]] | None = None,
+    relationship_index: dict[str, set[str]] | None = None,
 ) -> dict[str, Any]:
     """The CPU-bound heart of resolve_entities_impl: blocking, model fit, and
     scoring — no LLM calls, no clustering. Synchronous and module-level, and
     every argument and return value is plain data (str/list/dict/tuple), so
     it can run either inline or dispatched to a ProcessPoolExecutor worker
-    (Part 1.5 B.3) with no other change.
+    (Part 1.5 B.3) with no other change. ``relationship_index`` (B.5.2) is
+    likewise plain data (dict of str -> set[str]) — safe across that same
+    process boundary.
 
     ``subject`` (a plain string) crosses the process boundary rather than
     the closure ``_subject_stripped_normalize`` builds from it — closures
@@ -321,6 +324,7 @@ def _resolve_core(
             normalise,
             record_cache,
             precomputed_vector,
+            relationship_index,
         )
         if auto_exclude < conf < auto_match:
             borderline.append((id1, id2, rec1, rec2, conf))
@@ -383,6 +387,7 @@ async def resolve_entities_impl(
     process_pool: Any | None = None,
     connector: Any | None = None,
     matching_config: dict[str, Any] | None = None,
+    relationship_index: dict[str, set[str]] | None = None,
 ) -> dict[str, Any]:
     """Cluster matching records for an entity type (hybrid heuristic + LLM).
 
@@ -430,6 +435,15 @@ async def resolve_entities_impl(
         int, "trigram_similarity_threshold": float}`` — the ``matching.*``
         section of ``config.yaml`` (``MatchingConfig``), passed as a plain
         dict the same way ``llm_config`` already is.
+    relationship_index : dict, optional
+        B.5.2. ``{company_native_id: {related_native_id, ...}}`` from
+        ``build_relationship_index`` — built ONCE per entity-resolution
+        call by the caller (from the ``company_relation`` entity family's
+        own extracted rows) and threaded down as plain data, never
+        rebuilt or cached at module scope. Feeds
+        ``_compute_heuristic_confidence``'s bounded relational-agreement
+        boost. ``None`` (the default) disables the signal entirely —
+        every existing caller is unaffected unless it opts in.
 
     Returns
     -------
@@ -632,10 +646,17 @@ async def resolve_entities_impl(
                 rules,
                 subject,
                 extra_candidate_pairs,
+                relationship_index,
             )
         else:
             core = _resolve_core(
-                entity_type, records, blocking_keys, rules, subject, extra_candidate_pairs
+                entity_type,
+                records,
+                blocking_keys,
+                rules,
+                subject,
+                extra_candidate_pairs,
+                relationship_index,
             )
         obs.update(
             output={
@@ -1442,6 +1463,7 @@ def _score_pair(
     normalise: Any = _normalize,
     record_cache: RecordCache | None = None,
     precomputed_vector: dict[str, tuple[str, str | None]] | None = None,
+    relationship_index: dict[str, set[str]] | None = None,
 ) -> float:
     """Confidence that two records are the same entity.
 
@@ -1457,6 +1479,8 @@ def _score_pair(
     comparison vector as already built by ``_fit_match_model`` — reused here
     instead of rebuilt, since it is a pure function of ``(rec1, rec2,
     normalise)`` and both call sites use the same ``normalise``.
+    ``relationship_index`` (B.5.2) feeds ``_compute_heuristic_confidence``'s
+    bounded relational-agreement boost — see there for the guard.
     """
     fields1 = {k: v for k, v in rec1.items() if not k.startswith("_")}
     fields2 = {k: v for k, v in rec2.items() if not k.startswith("_")}
@@ -1471,7 +1495,9 @@ def _score_pair(
     ):
         return 1.0
 
-    heuristic = _compute_heuristic_confidence(rec1, rec2, extra_unique_ids, record_cache)
+    heuristic = _compute_heuristic_confidence(
+        rec1, rec2, extra_unique_ids, record_cache, relationship_index
+    )
     if conflicting:
         # A disagreeing deterministic field (different domain, different
         # ticker, ...) is proof of non-identity even when the names look
@@ -1926,11 +1952,99 @@ def _subject_stripped_normalize(subject_tokens: frozenset[str]):
     return normalise
 
 
+def build_relationship_index(relation_records: list[dict[str, Any]] | None) -> dict[str, set[str]]:
+    """RELATER-style relational-matching signal, adopted natively rather
+    than from RELATER's own unmaintained code (ADR 0018), B.5.1.
+
+    Maps a company's own origin-native id -> the set of other companies'
+    ids it asserts a relationship with, from the ``company_relation``
+    entity family's own extracted rows — real origin columns
+    ``companyid``/``relatedcompanyid`` (``relationtype``/``confidence``
+    exist on the same rows but aren't needed for the set-membership check
+    below). Symmetric: a relation asserted from A's side also indexes B
+    as related to A, since a candidate pair can be checked in either
+    order. Built once per entity-resolution call and threaded down as a
+    parameter (like ``matching_rules``) — never module state
+    (``scripts/lint_arch.py``'s no-module-mutable-state rule).
+    """
+    index: dict[str, set[str]] = {}
+    for row in relation_records or []:
+        a = row.get("companyid")
+        b = row.get("relatedcompanyid")
+        if a is None or b is None:
+            continue
+        a_key = str(a).strip().lower()
+        b_key = str(b).strip().lower()
+        if not a_key or not b_key:
+            continue
+        index.setdefault(a_key, set()).add(b_key)
+        index.setdefault(b_key, set()).add(a_key)
+    return index
+
+
+def _company_native_id(rec: dict[str, Any]) -> str | None:
+    """A record's own origin-native company id, normalized the same way
+    ``build_relationship_index`` normalizes its keys — the join key
+    between a resolve_entities record and its company_relation rows."""
+    for key, value in rec.items():
+        if key.startswith("_") or value is None:
+            continue
+        if key.lower().replace("_", "") == "companyid":
+            text = str(value).strip().lower()
+            if text:
+                return text
+    return None
+
+
+def _shared_neighbors_beyond_common_parent(
+    relationship_index: dict[str, set[str]],
+    rec1: dict[str, Any],
+    rec2: dict[str, Any],
+) -> set[str]:
+    """The pair's shared asserted-relationship neighbors — guarded
+    against the audit's own §00a2 Airbus-blob failure mode (B.5.2).
+
+    Two subsidiaries of the same parent share exactly ONE neighbor (that
+    parent) purely because of where they sit in an org chart — that is
+    evidence they are SIBLINGS, not evidence they are the SAME entity,
+    and boosting on it is exactly what reproduced the Airbus "Defence and
+    Space" blob. Requires >= 2 distinct shared neighbors — never just the
+    one common parent — before this counts as relational agreement.
+    """
+    id1 = _company_native_id(rec1)
+    id2 = _company_native_id(rec2)
+    if id1 is None or id2 is None:
+        return set()
+    n1 = relationship_index.get(id1, set())
+    n2 = relationship_index.get(id2, set())
+    shared = (n1 & n2) - {id1, id2}
+    if len(shared) < 2:
+        return set()
+    return shared
+
+
+def _relational_agreement(
+    rec1: dict[str, Any],
+    rec2: dict[str, Any],
+    relationship_index: dict[str, set[str]],
+) -> float:
+    """Bounded additive confidence boost from shared asserted
+    relationships (RELATER-style, B.5.2) — never sole justification for
+    an auto-merge (see ``_compute_heuristic_confidence``'s weighted sum,
+    the same discipline ``_has_discriminating_agreement`` already uses:
+    a boost alone can never reach ``_AUTO_MATCH`` on its own)."""
+    shared = _shared_neighbors_beyond_common_parent(relationship_index, rec1, rec2)
+    if not shared:
+        return 0.0
+    return min(0.15 * len(shared), 0.3)
+
+
 def _compute_heuristic_confidence(
     rec1: dict[str, Any],
     rec2: dict[str, Any],
     extra_unique_ids: set[str] | None = None,
     record_cache: RecordCache | None = None,
+    relationship_index: dict[str, set[str]] | None = None,
 ) -> float:
     """Compute a match confidence based on field comparison.
 
@@ -1941,6 +2055,13 @@ def _compute_heuristic_confidence(
 
     ``record_cache`` (Part 1.5 A.1) memoizes the per-record projection —
     see ``_cached_projection``.
+
+    ``relationship_index`` (B.5.2, RELATER-style), when given, adds
+    ``_relational_agreement``'s bounded additive boost — shared asserted
+    relationships to the same third parties, guarded against the
+    common-parent trap (``_shared_neighbors_beyond_common_parent``).
+    Applied AFTER the identity-conflict cap below, so it can never
+    override a contradicting unique identifier.
 
     Returns confidence between 0.0 and 1.0.
     """
@@ -1993,6 +2114,9 @@ def _compute_heuristic_confidence(
 
     field_score = score / total if total > 0 else 0.0
     confidence = max(field_score, _cross_name_similarity(rec1, rec2, record_cache))
+
+    if relationship_index:
+        confidence = min(1.0, confidence + _relational_agreement(rec1, rec2, relationship_index))
 
     # Use original records (not projections) for identity conflict check,
     # since _has_conflicting_identity needs the raw fields.
