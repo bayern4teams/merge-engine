@@ -303,11 +303,15 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
 
     # ── Phase 2: the actual LLM round-trips, concurrent (Part 1.5 B.1) ─
     # These are independent per-entity LLM calls with no shared state left
-    # to touch (dest_connector was fully drained in Phase 1) — wall time
-    # was sum(latency), now max(latency). `return_exceptions=True` so one
-    # entity's failure degrades to that entity's error entry, matching the
-    # per-entity try/except semantics this replaces, rather than cancelling
-    # its siblings.
+    # to touch for its own concurrent-Phase-1 reasons (schema/family-map
+    # discovery, all synchronous) — wall time was sum(latency), now
+    # max(latency). B.3.1: map_fields_impl's own Phase 0 (Valentine) still
+    # calls dest_connector.sample_distinct_values per undecided field, so
+    # it stays passed through here; that's async I/O, not a repeat of the
+    # synchronous Phase 1 work this comment originally described.
+    # `return_exceptions=True` so one entity's failure degrades to that
+    # entity's error entry, matching the per-entity try/except semantics
+    # this replaces, rather than cancelling its siblings.
     logger.debug("Dispatching %d field-mapping LLM call(s) concurrently", len(llm_tasks))
     llm_results = await asyncio.gather(
         *(
@@ -317,6 +321,7 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
                 destination_schema=dest_schema_info,
                 llm_config=with_retry_hint(state.get("llm_config") or None, state, "map_fields"),
                 family_schemas=task_family_schemas,
+                connector=dest_connector,
             )
             for entity_type, unified_schema, dest_schema_info, task_family_schemas in llm_tasks
         ),

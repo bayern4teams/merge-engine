@@ -635,6 +635,40 @@ class PostgreSQLDestinationConnector:
         finally:
             cursor.close()
 
+    async def sample_distinct_values(
+        self, table_name: str, column: str, limit: int = 500
+    ) -> list[Any]:
+        """Bounded random DISTINCT sample from a destination column
+        (map_fields' Valentine Phase 0, B.3.1).
+
+        Same duck-typed name/shape as the origin connectors'
+        ``sample_distinct_values`` (e.g. ``PostgresConnector``) — join_graph's
+        inclusion-dependency check and map_fields' Phase 0 can treat either
+        kind of connector identically. Declared ``async def`` to match that
+        shape; the work itself is synchronous psycopg2, same as every other
+        method on this class. Best-effort: a missing table/column degrades
+        to ``[]``, never an error — this is an enhancement over the
+        heuristic tiers, not a prerequisite for mapping to work at all.
+        """
+        conn = self._ensure_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                f'SELECT "{column}" FROM ('
+                f'SELECT DISTINCT "{column}" FROM "{self._schema}"."{table_name}" '
+                f'WHERE "{column}" IS NOT NULL LIMIT %s'
+                f") t ORDER BY random() LIMIT %s",
+                (limit * 5, limit),
+            )
+            return [row[0] for row in cursor.fetchall()]
+        except Exception as exc:
+            logger.debug("sample_distinct_values failed for %s.%s: %s", table_name, column, exc)
+            with suppress(Exception):
+                conn.rollback()
+            return []
+        finally:
+            cursor.close()
+
     def column_exists(self, table_name: str, column_name: str) -> bool:
         """Check if a column exists in a table.
 

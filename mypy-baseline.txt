@@ -47,6 +47,7 @@ src/mcp_server/tools/fellegi_sunter.py: error: Returning Any from function decla
 src/mcp_server/tools/load_data.py: error: Function is missing a return type annotation  [no-untyped-def]
 src/mcp_server/tools/map_fields.py: error: Argument "llm_config" to "_decide_fields_with_llm" has incompatible type "dict[str, Any] | None"; expected "dict[str, Any]"  [arg-type]
 src/mcp_server/tools/map_fields.py: error: Item "None" of "dict[str, Any] | None" has no attribute "get"  [union-attr]
+src/mcp_server/tools/map_fields.py: error: Library stubs not installed for "pandas"  [import-untyped]
 src/mcp_server/tools/metadata_graph.py: error: Library stubs not installed for "psycopg2"  [import-untyped]
 src/mcp_server/tools/metadata_graph.py: error: Library stubs not installed for "psycopg2.extensions"  [import-untyped]
 src/mcp_server/tools/metadata_graph.py: error: Library stubs not installed for "psycopg2.extras"  [import-untyped]

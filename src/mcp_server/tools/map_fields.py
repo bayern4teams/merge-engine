@@ -46,6 +46,7 @@ async def map_fields_impl(
     destination_schema: dict[str, Any],
     llm_config: dict[str, Any] | None = None,
     family_schemas: list[dict[str, Any]] | None = None,
+    connector: Any | None = None,
 ) -> dict[str, Any]:
     """Map unified fields to destination columns.
 
@@ -76,6 +77,16 @@ async def map_fields_impl(
         columns inserted first so an exact tie always prefers staying on
         the entity's own table — cross-table is the fallback, not the
         default.
+    connector : optional
+        B.3.1 (audit §14.2). A live connector exposing
+        ``sample_distinct_values(table, column, limit=...)`` (origin
+        connectors, or ``PostgreSQLDestinationConnector`` — B.1.3's
+        addition). When given, Phase 0 runs Valentine (ADR 0005) over
+        already-collected source sample values vs. sampled destination
+        values, catching fields Phase 1/2's name-based tiers can't (zero
+        name overlap, real value overlap — e.g. ``homepage`` -> ``website``).
+        ``None`` (the default) skips Phase 0 entirely — every existing
+        caller is unaffected unless it opts in.
 
     Returns
     -------
@@ -139,10 +150,66 @@ async def map_fields_impl(
     unmapped_fields: list[dict[str, Any]] = []
     schema_changes: list[dict[str, str]] = []
 
+    # ── Phase 0: Valentine (ADR 0005), behind the existing safety gates ──
+    # B.3.1 / audit §14.2: a working, tested schema matcher that was never
+    # called from the production mapping path. Runs first (not gated on
+    # "undecided" — nothing is decided yet) so a field Phase 1/2's
+    # name-based tiers would never even consider (zero name overlap, real
+    # value overlap) gets a real chance. Every accept still goes through
+    # the SAME `_incompatible_with_column` + `taken` guards Phase 1/2/3
+    # already use — Valentine's top pick is a candidate, never a bypass.
+    if connector is not None and dest_candidates:
+        try:
+            valentine_matches = await _run_valentine_phase0(
+                unified_schema, dest_candidates, connector
+            )
+        except Exception as exc:
+            logger.warning(
+                "Phase 0 (Valentine) failed for entity '%s' (%s); falling through "
+                "to the existing heuristic/LLM tiers unchanged.",
+                entity_type,
+                exc,
+            )
+            valentine_matches = {}
+        valentine_taken: set[tuple[str, str]] = set()
+        for field, (v_key, score) in valentine_matches.items():
+            if score < _HEURISTIC_ACCEPT or v_key in valentine_taken:
+                continue
+            incompatible, reason = _incompatible_with_column(
+                field, dest_candidates.get(v_key), unified_schema
+            )
+            if incompatible:
+                # Refused, not bypassed — falls through to Phase 1/2/3
+                # exactly as if Valentine had never proposed it.
+                logger.debug(
+                    "Phase 0: Valentine's top pick for '%s' (%s.%s) refused: %s",
+                    field,
+                    v_key[0],
+                    v_key[1],
+                    reason,
+                )
+                continue
+            field_mapping[field] = {
+                "dest_column": v_key[1],
+                "dest_table": v_key[0],
+                "confidence": score,
+                "mapped_by": "valentine",
+            }
+            valentine_taken.add(v_key)
+        if valentine_taken:
+            logger.info(
+                "Phase 0 (Valentine): %d field(s) mapped for entity '%s'",
+                len(valentine_taken),
+                entity_type,
+            )
+
     # ── Phase 1: Exact name matching ─────────────────────────────────
     logger.debug("Phase 1: Exact name matching")
     exact_matches = 0
     for field in source_fields:
+        if field in field_mapping:
+            # Already decided by Phase 0 — never overwritten.
+            continue
         key = by_name.get(field)
         if key is not None:
             incompatible, reason = _incompatible_with_column(
@@ -305,6 +372,91 @@ async def map_fields_impl(
         "unmapped_fields": unmapped_fields,
         "schema_changes": schema_changes,
     }
+
+
+async def _run_valentine_phase0(
+    unified_schema: dict[str, Any],
+    dest_candidates: dict[tuple[str, str], Any],
+    connector: Any,
+    limit: int = 200,
+) -> dict[str, tuple[tuple[str, str], float]]:
+    """Phase 0 (B.3.1): each source field's single best Valentine
+    candidate, as ``{field: ((dest_table, dest_column), score)}``.
+
+    The caller (``map_fields_impl``) still runs every accept through
+    ``_incompatible_with_column`` + the ``taken`` guard — this only picks
+    the candidate, never decides whether it's safe to use.
+    """
+    source_df, target_df, column_to_key = await _build_valentine_frames(
+        unified_schema, dest_candidates, connector, limit
+    )
+    if source_df.empty or target_df.empty:
+        return {}
+
+    from src.mcp_server.tools.schema_matching import run_valentine_candidates
+
+    by_source = run_valentine_candidates(source_df, target_df)
+    result: dict[str, tuple[tuple[str, str], float]] = {}
+    for field, candidates in by_source.items():
+        if not candidates:
+            continue
+        top = candidates[0]  # run_valentine_candidates sorts descending
+        key = column_to_key.get(top["target_column"])
+        if key is not None:
+            result[field] = (key, float(top["score"]))
+    return result
+
+
+async def _build_valentine_frames(
+    unified_schema: dict[str, Any],
+    dest_candidates: dict[tuple[str, str], Any],
+    connector: Any,
+    limit: int,
+) -> tuple[Any, Any, dict[str, tuple[str, str]]]:
+    """Build Valentine's source/target DataFrames for Phase 0.
+
+    ``source_df``: one column per unified-schema field, from its
+    already-collected ``sample_values`` — no new sampling on the source
+    side. ``target_df``: one column per destination candidate, sampled via
+    ``connector.sample_distinct_values`` — the same bounded-random-sample
+    primitive ``join_graph._verify_inclusion`` already uses, never an
+    independently invented sampling strategy. Also returns
+    ``column_to_key``: Valentine only sees flat column names, so a name
+    shared by two destination tables keeps its first (primary-table-
+    preferred, per ``dest_candidates``' own insertion order) entry.
+    """
+    import pandas as pd
+
+    source_data: dict[str, list[Any]] = {}
+    for field, info in unified_schema.items():
+        values = info.get("sample_values") or []
+        if not values:
+            sv = info.get("sample_value")
+            values = [sv] if sv is not None else []
+        if values:
+            source_data[field] = values
+
+    target_data: dict[str, list[Any]] = {}
+    column_to_key: dict[str, tuple[str, str]] = {}
+    for key in dest_candidates:
+        table, column = key
+        if column in column_to_key:
+            continue
+        column_to_key[column] = key
+        try:
+            values = await connector.sample_distinct_values(table, column, limit=limit)
+        except Exception as exc:
+            logger.debug("Phase 0: target sampling failed for %s.%s: %s", table, column, exc)
+            values = []
+        if values:
+            target_data[column] = values
+
+    if not source_data or not target_data:
+        return pd.DataFrame(), pd.DataFrame(), column_to_key
+
+    source_df = pd.DataFrame({k: pd.Series(v) for k, v in source_data.items()})
+    target_df = pd.DataFrame({k: pd.Series(v) for k, v in target_data.items()})
+    return source_df, target_df, column_to_key
 
 
 def _incompatible_with_column(
