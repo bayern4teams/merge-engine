@@ -76,6 +76,10 @@ class PostgresConnector(BaseConnector):
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
         self._engine: AsyncEngine | None = None
+        # Cache for _resolve_schema_qualified -- resolved once per bare table
+        # name, not once per call (extract/count/sample_distinct_values/
+        # explain_cost each ask this identically, often many times per run).
+        self._table_schema_cache: dict[str, str] = {}
 
     # ── Lifecycle ─────────────────────────────────────────────────────
 
@@ -121,6 +125,68 @@ class PostgresConnector(BaseConnector):
             await self._engine.dispose()
             self._engine = None
             logger.debug("PostgreSQL engine disposed")
+
+    async def _resolve_schema_qualified(self, table_name: str) -> str:
+        """A bare table name resolved to its REAL schema, not a hardcoded
+        "public" guess.
+
+        ``discover_schema`` scans every non-system schema and exposes each
+        table by its bare name (``"name"``) plus a separately-carried
+        ``"full_name"`` -- but every other query-building method here
+        (``extract``, ``sample_distinct_values``, ``profile_column``,
+        ``estimate_query_cost``) previously received only the bare name and
+        defaulted straight to ``public.<table>`` whenever the caller didn't
+        already pass a dotted name. Live-reproduced: testdiffbot's entire
+        ``diffbot`` schema (13 tables, zero of them in ``public``) made
+        every one of these queries fail with "relation public.<table> does
+        not exist" -- which silently zeroed out scope-planning's join-graph
+        edges (caught there) and then hard-failed live extraction outright
+        (not caught -- this is what a real Boeing run hit once the join
+        graph correctly found a path to ``companyexperience``).
+
+        Cached per connector instance (each table asked identically many
+        times across one run) via ``self._table_schema_cache``; a table
+        found in more than one schema prefers a non-``public`` one, since a
+        bulk-loaded origin's real tables are the common case this is fixing
+        and ``public`` empty-by-convention is the far more common shape for
+        those. Falls back to ``public`` only when the table genuinely isn't
+        found anywhere else -- unchanged behavior for a real public-schema
+        origin.
+        """
+        if "." in table_name:
+            return table_name
+        cached = self._table_schema_cache.get(table_name)
+        if cached:
+            return f"{cached}.{table_name}"
+        schema = "public"
+        try:
+            engine = await self._ensure_engine()
+            async with engine.connect() as conn:
+                result = await conn.execute(
+                    text(
+                        """
+                        SELECT table_schema FROM information_schema.tables
+                        WHERE table_name = :table
+                          AND table_schema NOT IN ('pg_catalog', 'information_schema')
+                        ORDER BY (table_schema = 'public') ASC
+                        LIMIT 1
+                        """
+                    ),
+                    {"table": table_name},
+                )
+                row = result.fetchone()
+                await conn.commit()
+            if row:
+                schema = row[0]
+        except Exception as exc:
+            logger.debug(
+                "Could not resolve real schema for bare table name %r; "
+                "defaulting to 'public': %s",
+                table_name,
+                exc,
+            )
+        self._table_schema_cache[table_name] = schema
+        return f"{schema}.{table_name}"
 
     # ── Schema Discovery ──────────────────────────────────────────────
 
@@ -317,9 +383,7 @@ class PostgresConnector(BaseConnector):
         )
         engine = await self._ensure_engine()
 
-        # Resolve schema-qualified table name (default to public)
-        if "." not in table_name:
-            table_name = f"public.{table_name}"
+        table_name = await self._resolve_schema_qualified(table_name)
         logger.debug("Resolved table name: %s", table_name)
 
         col_list = "* " if columns == ["*"] else ", ".join(f'"{c}"' for c in columns)
@@ -517,7 +581,7 @@ class PostgresConnector(BaseConnector):
             bool(filter_values),
         )
         engine = await self._ensure_engine()
-        resolved = table_name if "." in table_name else f"public.{table_name}"
+        resolved = await self._resolve_schema_qualified(table_name)
         if filter_values:
             sql = text(
                 f'SELECT DISTINCT "{column}" FROM {resolved} WHERE "{column}" IN :values LIMIT :limit'
@@ -658,7 +722,7 @@ class PostgresConnector(BaseConnector):
         by default; FULL removes that bound explicitly.
         """
         engine = await self._ensure_engine()
-        resolved = table_name if "." in table_name else f"public.{table_name}"
+        resolved = await self._resolve_schema_qualified(table_name)
         source = (
             f"(SELECT * FROM {resolved} LIMIT :sample_size) sub" if mode == "SAMPLED" else resolved
         )
@@ -695,7 +759,7 @@ class PostgresConnector(BaseConnector):
         reading ``table_name`` under ``filter`` — a real number from the
         query planner, not a row-count guess."""
         engine = await self._ensure_engine()
-        resolved = table_name if "." in table_name else f"public.{table_name}"
+        resolved = await self._resolve_schema_qualified(table_name)
         where_sql = ""
         params: dict[str, Any] = {}
         if filter:
