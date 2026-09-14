@@ -76,6 +76,64 @@ def build_family_map(dest_connector: Any) -> dict[str, set[str]]:
             family[table].add(ref_table)
             family[ref_table].add(table)
 
+    # Two shapes of table the one-hop FK walk above correctly finds but a
+    # plain column-mapping search must never target, live-reproduced both
+    # (Boeing, this session):
+    #
+    #  1. A table's own entity-supertype ancestors ("entity"/"organization"
+    #     for "company") -- populated automatically by the entity/
+    #     knowledge-graph writer (ensure_entity_chain) once a leaf row is
+    #     loaded, never by mapping an arbitrary source field onto one of
+    #     their columns. A "created_at" field auto-mapped onto
+    #     entity.created_at purely on column-name coincidence.
+    #  2. A "relationship"/fact-shaped table -- one whose own primary key
+    #     references knowledge_item (knowledge_fact itself, and every
+    #     *_relationship table: company_company_relationship,
+    #     company_offering_relationship, ...). These need a resolved
+    #     SECOND entity, a relationship_type, and their own knowledge_item
+    #     row -- a write path this project doesn't have yet (see the
+    #     forensic audit) -- not a simple one-parent child row. A
+    #     "description" field auto-mapped onto
+    #     company_company_relationship.description failed for lacking a
+    #     second company id the mapper has no way to supply.
+    get_chain = getattr(dest_connector, "get_entity_supertype_chain", None)
+    if get_chain is not None:
+        for table in list(family):
+            try:
+                chain = get_chain(table)
+            except Exception as exc:
+                logger.debug("Could not resolve entity-supertype chain for '%s': %s", table, exc)
+                continue
+            if chain:
+                # Symmetric: an ancestor is exactly as invalid a mapping
+                # target for its descendant as the descendant is for it —
+                # both relationships exist only for ensure_entity_chain,
+                # never for column mapping.
+                for ancestor in chain:
+                    family[table].discard(ancestor)
+                    family.get(ancestor, set()).discard(table)
+
+    get_schema = getattr(dest_connector, "get_table_schema", None)
+    if get_schema is not None:
+        item_based_tables = set()
+        for table in list(family):
+            try:
+                pk = get_schema(table).get("primary_key")
+                if pk and get_fks(table).get(pk) == "knowledge_item":
+                    item_based_tables.add(table)
+            except Exception as exc:
+                logger.debug("Could not check '%s' for an item-based primary key: %s", table, exc)
+        for table in item_based_tables:
+            for neighbor in family.pop(table, ()):
+                family[neighbor].discard(table)
+        if item_based_tables:
+            logger.info(
+                "Excluded %d relationship/fact-shaped table(s) from the family map "
+                "(need the dedicated relationship writer, not column mapping): %s",
+                len(item_based_tables),
+                sorted(item_based_tables),
+            )
+
     logger.info(
         "Destination family map built: %d table(s), %d relationship(s)",
         len(family),
