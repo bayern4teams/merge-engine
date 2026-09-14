@@ -724,9 +724,16 @@ the app's own success message.
 Scope: **every** recommendation in §13 (Architecture Recommendations: Quality & Speed —
 the 13 library/architecture leads) and §14 (Algorithm-First: `discover_schemas`,
 `map_fields`, `analyze_dependencies`) of the Merge Engine Forensic Audit, plus the two
-audit-adjacent housekeeping items those sections depend on. Priority order = the audit's
-own "What I'd actually schedule, in order" (artifact §13), interleaved with §14's
-"fix the wiring before reaching for anything new" rule.
+audit-adjacent housekeeping items those sections depend on.
+
+**Priority order (CTO review, 2026-09-14, superseding the original draft order):**
+easiest/lowest-risk work first, riskiest/most-speculative work last, one named milestone
+closing each phase. The original draft sequenced the riskiest quality change (relational
+signal) 2nd and §14's own headline node-wiring recommendation 5th — reordered so the
+report's headline finding and every zero/low-risk item ship before anything that can
+actually regress a real match or depends on data that doesn't exist yet. Nothing about
+*what* each item does changed, only the order and the milestone framing. Label map:
+plan phase N ⇒ TODO.md B.N (unchanged 1:1).
 
 Rules that bind every item below (from the audit + CLAUDE.md, non-negotiable):
 - TDD per task: failing test first (record the red run), implement minimally, green, commit.
@@ -744,6 +751,20 @@ Rules that bind every item below (from the audit + CLAUDE.md, non-negotiable):
 Baseline already on this branch (commit `b9c5e5b..4aded86` on `fix-v3`): the 9 §00a audit
 fixes + Splink matcher fixes, committed group-by-group off `feat/v3-discovery-er`.
 
+## Milestones
+
+| # | Milestone | Closes | Why it's here in the order |
+|---|---|---|---|
+| **M1** | Verification unblocked; 3 already-decided-but-dead adoptions shipped | B.1 | Cheapest possible win — unbreaks `check.py all` first |
+| **M2** | Reference-only / reject decisions recorded | B.2 | Zero code, zero risk, zero dependencies |
+| **M3** | **Algorithm-first architecture live** (the audit's own headline finding) | B.3 | Mechanical, deterministic, reuses existing safety gates |
+| **M4** | Post-merge consistency validation shipped | B.4 | Bounded, self-contained, own maturity fallback |
+| **M5** | Native relational-matching signal validated against ground truth | B.5 | Real quality risk — earned its place after the safe wins |
+| **M6** | Splink promotion decided (promoted, or an honest gap recorded) | B.6 | Genuine blocking unknown + uncertain gate outcome |
+| **M7** | Human-feedback-loop infrastructure in place | B.7 | Data-gated (needs real human labels), not effort-gated |
+| **M8** | Bounded pilots evaluated with real measured docs | B.8 | Most speculative by design — "prove before commit" |
+| **M9** | Final gate — everything green, evidence complete | B.9 | Ship-readiness checkpoint |
+
 ## B.0 — Branch + baseline
 
 - [x] **B.0.1** §00a/§00b audit fixes committed group-by-group on `feat/v3-discovery-er`
@@ -758,7 +779,7 @@ fixes + Splink matcher fixes, committed group-by-group off `feat/v3-discovery-er
   red state — recorded here so the fix's red→green is honest).
   - *Evidence:* _fill in_
 
-## B.1 — "Finish the sentence" (audit §13 schedule bucket 1: already-decided, never shipped)
+## B.1 — "Finish the sentence" (audit §13 schedule bucket 1: already-decided, never shipped) → M1
 
 - [ ] **B.1.1** Unbreak pytest collection — `tests/unit/test_schema_matching.py` gets
   `pytest.importorskip("valentine", reason=...)` (audit §14.2: a module with zero
@@ -778,7 +799,9 @@ fixes + Splink matcher fixes, committed group-by-group off `feat/v3-discovery-er
   `matching.trigram_blocking_min_records` (default 1000), flag
   `matching.trigram_blocking_enabled` default **off**; results **unioned** with existing
   blocking (never replacing — recall safety), deduped. Staging via the destination
-  connector through the existing call path (no module state).
+  connector through the existing call path (no module state). **Note:** carries more open
+  design surface than its siblings (staging-table lifecycle isn't pre-decided) — budget
+  accordingly, it's the one "quick win" that isn't actually quick.
   - *Accept (unit):* fake-connector test asserts the SQL shape (extension, `gin_trgm_ops`,
     `%`, `a.rec_id < b.rec_id`), union-dedupe, flag/threshold gating.
   - *Accept [LIVE]:* real destination, the 5 real Boeing variants → true near-duo pairs
@@ -804,90 +827,36 @@ fixes + Splink matcher fixes, committed group-by-group off `feat/v3-discovery-er
     lineage names `diffbot.companyfinancials.amount`; multi-join chain correct.
   - *Evidence:* _fill in_
 
-**B.1 exit gate:** `python scripts/check.py all` → 10/10.
+**B.1 exit gate → M1:** `python scripts/check.py all` → 10/10.
 
-## B.2 — The actual quality fix: native relational-matching signal (audit §13 #3)
+## B.2 — Decisions recorded as ADRs (audit §13 #4/#8/#11 + RELATER's codebase — reference-only leads) → M2
 
-- [ ] **B.2.1** `build_relationship_index(records) -> dict[str, set[str]]` — record id →
-  asserted related-entity surface forms (from the already-extracted `company_relation` /
-  diffbot `companyrelation` rows: `companyid, relatedcompanyid, relationtype, confidence`).
-  Built once per resolve call, threaded as a parameter (like `matching_rules`).
-  - *Evidence:* _fill in_
-- [ ] **B.2.2** `_relational_agreement(rec1, rec2, relationship_index)` in
-  `resolve_entities.py`, bounded additive boost `min(0.15 * len(shared), 0.3)` into
-  `_compute_heuristic_confidence`'s weighted sum — never sole justification for
-  auto-merge (same discipline as `_has_discriminating_agreement`).
-  - *Negative fixture FIRST (red):* "Airbus SE" + "Airbus Helicopters" (parent/subsidiary
-    per companyrelation) must get **no** boost from the shared parent alone —
-    `_shared_neighbors_beyond_common_parent` guard. The exact §00a2 blob failure mode,
-    encoded as a test before the feature exists.
-  - *Evidence:* _fill in_
-- [ ] **B.2.3 [LIVE]** Ground-truth regression: re-run Airbus + Boeing company resolution
-  against ground truth; acceptance = `f62c560d`-shape does **not** recur (Airbus
-  Helicopters own cluster; Madrid↔Toulouse variants together), Boeing BDS trio merges,
-  the 15 already-correct Airbus clusters unchanged. Precision/recall deltas vs audit
-  baseline recorded here.
+Runs 2nd, immediately after the quick wins: zero code, zero risk, zero dependency on
+anything else in this plan — no reason to defer pure documentation behind riskier work.
+
+- [ ] **B.2.1** `docs/decisions/0017-reject-hiergat.md` (PyTorch-1.4/Py3.7 research code;
+    corroborates the relational-signal direction, not a path in).
+- [ ] **B.2.2** `docs/decisions/0018-reject-relater-code-adopt-its-idea.md` (Python 2,
+    2 commits, benchmark-bound; the idea lands natively as B.5).
+- [ ] **B.2.3** `docs/decisions/0019-utopia-reference-only.md` (standalone Rust system;
+    our kg schema is already the bitemporal graph; study its decision-ledger design).
+- [ ] **B.2.4** `docs/decisions/0020-ontop-study-not-aws-accelerator.md` (Neptune/Bedrock
+    coupling violates local-only; Ontop itself is the portable OBDA idea, revisit if a
+    concrete SPARQL/OWL need appears).
+  - *Accept (all four):* `python scripts/check.py docs` → citations resolve; `docs/INDEX.md`
+    lists 0017–0020 (verify numbering against `ls docs/decisions/` first).
   - *Evidence:* _fill in_
 
-## B.3 — Splink promotion track (audit §13 #1 continuation + §5/§11 discipline)
+**B.2 exit gate → M2:** ADRs merged, `check.py docs` green.
 
-- [ ] **B.3.1** Restore the 560-pair gate fixture `tests/eval/pagila_staff.csv` (missing
-  from checkout; audit §11 names this exact blocker). Recover from git history or the
-  pagila sample DB. **Never hand-author pairs** — if unrecoverable, record `BLOCKED` and
-  the promotion below cannot proceed.
-  - *Accept:* `pytest tests/eval/test_matcher_recall.py --collect-only -q` succeeds and the
-    fixture row-count matches `test_matcher_recall.py`'s own expectation.
-  - *Evidence:* _fill in_
-- [ ] **B.3.2** Token/looser blocking alongside the fixed prefix rule in
-  `splink_matcher.py`; candidate rules costed via `splink_blocking.py`'s costed
-  recommender (S-E machinery); cost table in the commit message.
-  - *Evidence:* _fill in_
-- [ ] **B.3.3** Train-once wiring: `matching_rules = {"engine": "splink",
-    "model_profile": "company_diffbot_zoominfo/v1"}` → load saved profile (ADR 0016
-    file-store), predict-only, no per-call EM retrain. Default path unchanged.
-  - *Accept (unit):* profile path makes zero EM calls (mock assert); default path
-    byte-identical behavior.
-  - *Evidence:* _fill in_
-- [ ] **B.3.4** Re-run `tests/eval/test_matcher_recall.py`'s 560-pair gate; record real
-  numbers. `tests/eval/last_gate.json` and the `test_splink_default_invariant.py` default
-  flip **only on a measured pass** — no hand-override (audit §11).
-  - *Evidence:* _fill in (measured table, gate decision, pass or honest gap analysis)_
+## B.3 — Algorithm-first node wiring (audit §14 — "the headline is inside this repo") → M3
 
-## B.4 — Human-feedback loop (audit §13 #2 DSPy + #12 dedupe.io)
+Runs 3rd, ahead of the relational signal and Splink work: every task here is mechanical
+and deterministic — reuse existing safety gates, no new semantic judgment call, no risk
+of making a real match *worse*. This is literally the audit's own headline finding:
+working, tested code that already exists in this repo and is simply never called.
 
-- [ ] **B.4.1** Start label collection NOW (audit: the column is schema-ready but empty;
-  both #2 and #12 are gated on it): human `human_review_matches` decisions written to
-  `kg.merge_engine_merge_audit.human_override`.
-  - *Accept [LIVE]:* approve one real match manually → `SELECT count(*) … WHERE
-    human_override IS NOT NULL` > 0, read by direct SQL.
-  - *Evidence:* _fill in_
-- [ ] **B.4.2** `src/llm/dspy_lm.py` `configured_lm()` (local vLLM via OpenAI-compatible
-  `api_base`, `max_tokens=4096` — directly closes §6's null-content truncation gap).
-  - *Evidence:* _fill in_
-- [ ] **B.4.3** `src/llm/dspy_programs/entity_match.py` — `EntityMatchJudgment` Signature
-  incl. `relationship_context` input (fed from B.2's index; the two recommendations share
-  one signature by design). Replace the raw prompt at `resolve_entities`' LLM chunk site
-  (~line 2049) inside `dspy.context(lm=configured_lm())`; same fallback contract +
-  warning-level `llm_fallback_count` reaching reconciliation (audit §00b degradation rule).
-  - *Accept (unit):* stub-LM parsing; fallback on failure still returns heuristic score
-    AND increments the visible counter.
-  - *Evidence:* _fill in_
-- [ ] **B.4.4** `scripts/dspy/optimize_entity_match.py`: labelled pairs from
-  `human_override IS NOT NULL`, `match_metric`, `dspy.MIPROv2.compile`, saved to
-  `logs/dspy_programs/entity_match_v1.json` (ADR 0016 versioned-artifact convention).
-  - *Accept (unit):* end-to-end compile against a tiny synthetic labelled set, stub LM.
-  - *Evidence (LIVE, once real labels exist):* compiled vs baseline judgment accuracy on
-    held-out pairs. _fill in_
-- [ ] **B.4.5** `src/mcp_server/tools/dedupe_matcher.py` `train_dedupe_classifier(labelled_pairs)`
-  → score as **one more weighted input** to `_compute_heuristic_confidence` (ensemble
-  member, not a fourth engine); extra `dedupe = ["dedupe>=3.0"]`; default off.
-  - *Accept (unit):* trains on synthetic labelled pairs; monotone sane scores; disabled
-    default changes nothing.
-  - *Evidence:* _fill in_
-
-## B.5 — Algorithm-first node wiring (audit §14 — "the headline is inside this repo")
-
-- [ ] **B.5.1** `map_fields` **Phase 0 = Valentine, behind existing gates** (§14.2):
+- [ ] **B.3.1** `map_fields` **Phase 0 = Valentine, behind existing gates** (§14.2):
   `_build_valentine_frames` (source_df from already-collected `sample_values`; target_df
   via `connector.sample_distinct_values` — the same primitive `join_graph._verify_inclusion`
   uses); Phase 0 runs before Phase 1 (line ~142); a Valentine accept **must pass**
@@ -898,7 +867,7 @@ fixes + Splink matcher fixes, committed group-by-group off `feat/v3-discovery-er
     overlap) fails today, accepted after; incompatible top pick falls through (guard
     non-bypass); empty destination column degrades without crash.
   - *Evidence:* _fill in_
-- [ ] **B.5.2** `analyze_dependencies` — verified graph first, LLM demoted to fallback
+- [ ] **B.3.2** `analyze_dependencies` — verified graph first, LLM demoted to fallback
   (§14.3, FrugalGPT cascade): in-node `await build_join_graph(...)` →
   `state["join_graph"]` (plan_scope's existing key); `_join_graph_to_dependency_tree`
   restricted to confidences `("declared","verified","probable")`; full coverage → skip
@@ -912,22 +881,25 @@ fixes + Splink matcher fixes, committed group-by-group off `feat/v3-discovery-er
   - *Trade-off recorded verbatim (audit §14.3):* bounded SQL sampling moves earlier —
     nothing adds a pass; plan_scope's pass is shared.
   - *Evidence:* _fill in_
-- [ ] **B.5.3** `discover_schemas`: **no change** — audit verdict "fine as-is" (pure
+- [ ] **B.3.3** `discover_schemas`: **no change** — audit verdict "fine as-is" (pure
   introspection, no LLM to replace; the short-TTL cache idea explicitly NOT on the
   roadmap). Recorded here so a future reader doesn't mistake the silence for an omission.
   - *Evidence:* n/a — decision record.
 
-**B.5 exit gate:** `python scripts/check.py all` → 10/10; **[LIVE]** one Boeing scope run
-shows 0 LLM dependency calls for fully-covered schema (log-verified).
+**B.3 exit gate → M3:** `python scripts/check.py all` → 10/10; **[LIVE]** one Boeing scope
+run shows 0 LLM dependency calls for fully-covered schema (log-verified).
 
-## B.6 — Post-merge consistency rules (audit §13 #9 Semantica, narrow: rule engine only)
+## B.4 — Post-merge consistency rules (audit §13 #9 Semantica, narrow: rule engine only) → M4
 
-- [ ] **B.6.1** Verify `semantica` installs and its Rete/Datalog engine runs standalone
+Runs 4th: bounded and self-contained — doesn't touch the matching path, can't regress
+anything upstream, and carries its own explicit fallback if the dependency is immature.
+
+- [ ] **B.4.1** Verify `semantica` installs and its Rete/Datalog engine runs standalone
   first (audit's own caveat: adopt narrowly, prove it). If immature at install time,
   implement the identical rules-as-data contract natively and record the deviation as an
   ADR — no silent swap.
   - *Evidence:* _fill in (install probe output, decision)_
-- [ ] **B.6.2** New node `validate_graph_consistency` in `graph.py` after `load_data`,
+- [ ] **B.4.2** New node `validate_graph_consistency` in `graph.py` after `load_data`,
   before `update_extraction_state`; `config/consistency_rules.yaml` rules-as-data (e.g.
   `company.status == 'ACQUIRED' AND investment_round.valid_from > company.status.valid_from
   => flag`); violations → existing `data_quality.red_flags` (one report). Absent rule file
@@ -938,46 +910,147 @@ shows 0 LLM dependency calls for fully-covered schema (log-verified).
     red flag present in `logs/run_reports/*.json` (read from disk, not the UI).
   - *Evidence:* _fill in_
 
-## B.7 — Bounded pilots (audit §13 #10 Graphiti, #5 LangGraph Swarm — "prove before commit")
+**B.4 exit gate → M4:** unit suite green; **[LIVE]** red flag confirmed via disk-read run report.
 
-- [ ] **B.7.1 [LIVE]** Graphiti + FalkorDB mirror pilot: `mirror_fact_to_graphiti(...)`
+## B.5 — The actual quality risk: native relational-matching signal (audit §13 #3) → M5
+
+Runs 5th, not 2nd: this is a live matching-behavior change with a real, named failure
+mode — the audit's own §00a2 found the exact shape of bug this signal could reintroduce
+if its guard is wrong (the Airbus "Defence and Space" blob). Everything in B.1–B.4 is
+either zero-risk or mechanically deterministic; this is neither, so it runs after them,
+with a negative fixture as its first test and a live ground-truth regression as its exit.
+
+- [ ] **B.5.1** `build_relationship_index(records) -> dict[str, set[str]]` — record id →
+  asserted related-entity surface forms (from the already-extracted `company_relation` /
+  diffbot `companyrelation` rows: `companyid, relatedcompanyid, relationtype, confidence`).
+  Built once per resolve call, threaded as a parameter (like `matching_rules`).
+  - *Evidence:* _fill in_
+- [ ] **B.5.2** `_relational_agreement(rec1, rec2, relationship_index)` in
+  `resolve_entities.py`, bounded additive boost `min(0.15 * len(shared), 0.3)` into
+  `_compute_heuristic_confidence`'s weighted sum — never sole justification for
+  auto-merge (same discipline as `_has_discriminating_agreement`).
+  - *Negative fixture FIRST (red):* "Airbus SE" + "Airbus Helicopters" (parent/subsidiary
+    per companyrelation) must get **no** boost from the shared parent alone —
+    `_shared_neighbors_beyond_common_parent` guard. The exact §00a2 blob failure mode,
+    encoded as a test before the feature exists.
+  - *Evidence:* _fill in_
+- [ ] **B.5.3 [LIVE]** Ground-truth regression: re-run Airbus + Boeing company resolution
+  against ground truth; acceptance = `f62c560d`-shape does **not** recur (Airbus
+  Helicopters own cluster; Madrid↔Toulouse variants together), Boeing BDS trio merges,
+  the 15 already-correct Airbus clusters unchanged. Precision/recall deltas vs audit
+  baseline recorded here.
+  - *Evidence:* _fill in_
+
+**B.5 exit gate → M5:** full unit suite green; **[LIVE]** Airbus/Boeing ground-truth
+comparison recorded.
+
+## B.6 — Splink promotion track (audit §13 #1 continuation + §5/§11 discipline) → M6
+
+Runs 6th: carries a genuine unknown (the 560-pair gate fixture may be unrecoverable) and
+an uncertain outcome even if recovered (recall must measurably beat 0.995, which the
+audit's own honest ceiling says it doesn't yet) — sequenced after the phases whose
+outcomes are within this team's control.
+
+- [ ] **B.6.1** Restore the 560-pair gate fixture `tests/eval/pagila_staff.csv` (missing
+  from checkout; audit §11 names this exact blocker). Recover from git history or the
+  pagila sample DB. **Never hand-author pairs** — if unrecoverable, record `BLOCKED` and
+  the promotion below cannot proceed.
+  - *Accept:* `pytest tests/eval/test_matcher_recall.py --collect-only -q` succeeds and the
+    fixture row-count matches `test_matcher_recall.py`'s own expectation.
+  - *Evidence:* _fill in_
+- [ ] **B.6.2** Token/looser blocking alongside the fixed prefix rule in
+  `splink_matcher.py`; candidate rules costed via `splink_blocking.py`'s costed
+  recommender (S-E machinery); cost table in the commit message.
+  - *Evidence:* _fill in_
+- [ ] **B.6.3** Train-once wiring: `matching_rules = {"engine": "splink",
+    "model_profile": "company_diffbot_zoominfo/v1"}` → load saved profile (ADR 0016
+    file-store), predict-only, no per-call EM retrain. Default path unchanged.
+  - *Accept (unit):* profile path makes zero EM calls (mock assert); default path
+    byte-identical behavior.
+  - *Evidence:* _fill in_
+- [ ] **B.6.4** Re-run `tests/eval/test_matcher_recall.py`'s 560-pair gate; record real
+  numbers. `tests/eval/last_gate.json` and the `test_splink_default_invariant.py` default
+  flip **only on a measured pass** — no hand-override (audit §11).
+  - *Evidence:* _fill in (measured table, gate decision, pass or honest gap analysis)_
+
+**B.6 exit gate → M6:** promotion decided either way, on measured numbers, recorded honestly.
+
+## B.7 — Human-feedback loop (audit §13 #2 DSPy + #12 dedupe.io) → M7
+
+Runs 7th: most of this phase structurally cannot finish today — the optimizer and the
+dedupe classifier both need real human-override labels that only accumulate once
+non-auto-approved review happens in normal use. Building the infrastructure now is
+right; scheduling the phase this late reflects that its real payoff is data-gated, not
+effort-gated.
+
+- [ ] **B.7.1** Start label collection NOW (audit: the column is schema-ready but empty;
+  both DSPy and dedupe are gated on it): human `human_review_matches` decisions written to
+  `kg.merge_engine_merge_audit.human_override`.
+  - *Accept [LIVE]:* approve one real match manually → `SELECT count(*) … WHERE
+    human_override IS NOT NULL` > 0, read by direct SQL.
+  - *Evidence:* _fill in_
+- [ ] **B.7.2** `src/llm/dspy_lm.py` `configured_lm()` (local vLLM via OpenAI-compatible
+  `api_base`, `max_tokens=4096` — directly closes §6's null-content truncation gap).
+  - *Evidence:* _fill in_
+- [ ] **B.7.3** `src/llm/dspy_programs/entity_match.py` — `EntityMatchJudgment` Signature
+  incl. `relationship_context` input (fed from **B.5's** relationship index; the two
+  recommendations share one signature by design). Replace the raw prompt at
+  `resolve_entities`' LLM chunk site (~line 2049) inside `dspy.context(lm=configured_lm())`;
+  same fallback contract + warning-level `llm_fallback_count` reaching reconciliation
+  (audit §00b degradation rule).
+  - *Accept (unit):* stub-LM parsing; fallback on failure still returns heuristic score
+    AND increments the visible counter.
+  - *Evidence:* _fill in_
+- [ ] **B.7.4** `scripts/dspy/optimize_entity_match.py`: labelled pairs from
+  `human_override IS NOT NULL`, `match_metric`, `dspy.MIPROv2.compile`, saved to
+  `logs/dspy_programs/entity_match_v1.json` (ADR 0016 versioned-artifact convention).
+  - *Accept (unit):* end-to-end compile against a tiny synthetic labelled set, stub LM.
+  - *Evidence (LIVE, once real labels exist):* compiled vs baseline judgment accuracy on
+    held-out pairs. _fill in_
+- [ ] **B.7.5** `src/mcp_server/tools/dedupe_matcher.py` `train_dedupe_classifier(labelled_pairs)`
+  → score as **one more weighted input** to `_compute_heuristic_confidence` (ensemble
+  member, not a fourth engine); extra `dedupe = ["dedupe>=3.0"]`; default off.
+  - *Accept (unit):* trains on synthetic labelled pairs; monotone sane scores; disabled
+    default changes nothing.
+  - *Evidence:* _fill in_
+
+**B.7 exit gate → M7:** infrastructure built and unit-tested; label collection live;
+optimization itself remains `PENDING-LIVE` until real labels accumulate — an honest,
+expected state, not a blocker.
+
+## B.8 — Bounded pilots (audit §13 #10 Graphiti, #5 LangGraph Swarm — "prove before commit") → M8
+
+Runs 8th, last before the final gate: the most speculative work in the whole plan by the
+audit's own framing — correctly scheduled after everything whose value is already
+well-understood.
+
+- [ ] **B.8.1 [LIVE]** Graphiti + FalkorDB mirror pilot: `mirror_fact_to_graphiti(...)`
   called **alongside** (never instead of) `write_knowledge_fact`; `pilots.graphiti.enabled`
   default off; FalkorDB via Docker, Graphiti LLM client → local vLLM. Acceptance =
   `docs/diagnostics/GRAPHITI_PILOT.md` filled with measured side-by-side numbers for ≥5
   temporal queries (Graphiti hybrid search vs hand-rolled `valid_from/valid_to` CTEs).
   No ADR-0012 change without those numbers.
   - *Evidence:* _fill in_
-- [ ] **B.7.2** LangGraph Swarm contested-cluster advisor: two-specialist swarm per audit
+- [ ] **B.8.2** LangGraph Swarm contested-cluster advisor: two-specialist swarm per audit
   snippet; new node `resolve_contested_cluster` between `resolve_entities` and
-  `human_review_matches`, firing only when heuristic vs relational signals disagree by
-  > `matching.contested_margin` (0.15). Output attached to `pending_merge_candidates` as
-  **advisory evidence — can never auto-decide** (hard assertion: node output cannot set a
-  merge decision field; router test: every cluster still reaches `human_review_matches`).
+  `human_review_matches`, firing only when heuristic vs **B.5's** relational signal
+  disagree by > `matching.contested_margin` (0.15 — depends on B.5 being live). Output
+  attached to `pending_merge_candidates` as **advisory evidence — can never auto-decide**
+  (hard assertion: node output cannot set a merge decision field; router test: every
+  cluster still reaches `human_review_matches`).
   - *Accept (unit):* trigger-margin gating (most clusters bypass entirely); advisory-only
     invariant test; transcript attached, not decisions.
   - *Evidence:* _fill in_
 
-## B.8 — Decisions recorded as ADRs (audit §13 #4/#8/#11 + RELATER's codebase — reference-only leads)
+**B.8 exit gate → M8:** both pilot docs filled with real measured numbers, or explicitly
+`BLOCKED`/`PENDING-LIVE`.
 
-- [ ] **B.8.1** `docs/decisions/0017-reject-hiergat.md` (PyTorch-1.4/Py3.7 research code;
-    corroborates #3's direction, not a path in).
-- [ ] **B.8.2** `docs/decisions/0018-reject-relater-code-adopt-its-idea.md` (Python 2,
-    2 commits, benchmark-bound; the idea lands natively as B.2).
-- [ ] **B.8.3** `docs/decisions/0019-utopia-reference-only.md` (standalone Rust system;
-    our kg schema is already the bitemporal graph; study its decision-ledger design).
-- [ ] **B.8.4** `docs/decisions/0020-ontop-study-not-aws-accelerator.md` (Neptune/Bedrock
-    coupling violates local-only; Ontop itself is the portable OBDA idea, revisit if a
-    concrete SPARQL/OWL need appears).
-  - *Accept (all four):* `python scripts/check.py docs` → citations resolve; `docs/INDEX.md`
-    lists 0017–0020 (verify numbering against `ls docs/decisions/` first).
-  - *Evidence:* _fill in_
-
-## B.9 — Final gate
+## B.9 — Final gate → M9
 
 - [ ] **B.9.1** `python scripts/check.py all` → 10/10 with everything above merged.
   - *Evidence:* _fill in_
 - [ ] **B.9.2 [LIVE]** One full Boeing + one full Airbus run end-to-end (human gates
-  manual where B.4.1 label collection needs them); destination counts re-verified by
+  manual where B.7.1 label collection needs them); destination counts re-verified by
   direct SQL; before/after table vs the audit baselines (Boeing 92.9%/13-of-14, Airbus
   15-of-16 clusters) recorded.
   - *Evidence:* _fill in_
@@ -985,3 +1058,5 @@ shows 0 LLM dependency calls for fully-covered schema (log-verified).
   honestly. No checked box without evidence. **No push / no merge to main** — branch
   discipline: that call stays with the user.
   - *Evidence:* this file, final pass.
+
+**B.9 exit gate → M9:** ship-ready. All milestones M1–M8 closed with evidence.

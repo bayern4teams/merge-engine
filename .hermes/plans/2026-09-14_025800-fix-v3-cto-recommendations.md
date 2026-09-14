@@ -8,12 +8,20 @@ per-phase evidence.
 - §00a/§00b audit fixes committed group-by-group on `feat/v3-discovery-er` (11 grouped
   commits, `b9c5e5b..4aded86`); branch `fix-v3` created from that tip and checked out.
 - `TODO.md` rewritten on `fix-v3` (commit `8c28be8`): Part A = preserved branch history,
-  **Part B = the live roadmap** (B.0–B.9). Label map: plan C.x ⇒ TODO.md B.x (C.1⇒B.1 …
-  C.9⇒B.9). TODO.md Part B is the checkbox/evidence tracker; this plan keeps the
-  implementation detail.
+  **Part B = the live roadmap** (B.0–B.9). Label map: plan C.x ⇒ TODO.md B.x. TODO.md
+  Part B is the checkbox/evidence tracker; this plan keeps the implementation detail.
 - `artifact.txt` remains untracked (unignored — user left it in place).
-- Baseline note for B.0.2/C.1.1: `python scripts/check.py all` currently FAILS on the
-  `test_schema_matching.py` collection error — that is C.1.1's recorded red state.
+- Baseline note for Phase 1.1: `python scripts/check.py all` currently FAILS on the
+  `test_schema_matching.py` collection error — that is Phase 1.1's recorded red state.
+
+**REORDERED (2026-09-14, CTO review) — phase numbers below are final; do not use any
+earlier draft's numbering.** The original draft sequenced the riskiest quality change
+(relational-matching signal) second and the report's own headline recommendation (§14
+node wiring — mechanical, deterministic, no semantic risk) fifth. Reordered on explicit
+instruction to run **easiest/lowest-risk first, riskiest/most-speculative last**, with a
+named milestone closing every phase. Every cross-reference below (e.g. "fed from Phase
+5's index") uses the **new** phase numbers; nothing changed about what each phase
+contains, only the order and the added milestone framing.
 
 ## Current context / assumptions (verified live 2026-09-14; still valid)
 
@@ -32,15 +40,34 @@ per-phase evidence.
   - `src/ui/connections.py` stores `config/recent_connections.json` (plaintext — out of §13/§14 scope; do NOT touch here, it's §00b/action-list territory).
   - `scripts/check.py all` = the one verification command (10 gates); `scripts/lint_arch.py` forbids module-level mutable state.
 - Live infra needed for verification (may not be up on any given day): Docker `Sample_Database` (ClickHouse :8190) + destination Postgres (the `kg` schema DB), local vLLM at `10.10.9.45:8000`. Tasks that need these are marked **[LIVE]**; each still has a unit-test gate that must pass without them.
-- `tests/eval/pagila_staff.csv` (the 560-pair gate fixture) is missing from the checkout — required before any Splink promotion attempt (C.3.1).
+- `tests/eval/pagila_staff.csv` (the 560-pair gate fixture) is missing from the checkout — required before any Splink promotion attempt (Phase 6.1).
 
 **Standing rules carried from CLAUDE.md / audit discipline:** TDD red→green per task; one commit per task; evidence in TODO.md must come from independently-run SQL/test output, never the app's own success message; no module-level mutables; prompts substituted only via literal `str.replace()`; local-only models/DBs.
 
 ---
 
-## Phase C.1 — "Finish the sentence" quick wins
+## Milestones
 
-### C.1.1 Unbreak pytest collection (2-line fix; do first — everything else's test runs depend on it)
+One per phase, in execution order. Each is the single sentence you'd report to the board
+at that checkpoint — TODO.md's `*Evidence:*` slots are what prove it happened.
+
+| # | Milestone | Closes | Why it's here in the order |
+|---|---|---|---|
+| **M1** | Verification unblocked; 3 already-decided-but-dead adoptions shipped | Phase 1 | Cheapest possible win — unbreaks `check.py all` first, everything after benefits |
+| **M2** | Reference-only / reject decisions recorded | Phase 2 | Zero code, zero risk, zero dependencies — no reason to defer it |
+| **M3** | **Algorithm-first architecture live** (the audit's own headline finding) | Phase 3 | Mechanical, deterministic, reuses existing safety gates — the highest-value work that is also genuinely easy |
+| **M4** | Post-merge consistency validation shipped | Phase 4 | Bounded, self-contained, doesn't touch the matching path; own maturity fallback if the library is immature |
+| **M5** | Native relational-matching signal validated against ground truth | Phase 5 | Real quality risk (can worsen the Airbus blob if the guard is wrong) — earned its place after the safe mechanical wins, not before them |
+| **M6** | Splink promotion decided (promoted on real numbers, or an honest gap recorded) | Phase 6 | Has a genuine blocking unknown (missing fixture may be unrecoverable) and an uncertain gate outcome |
+| **M7** | Human-feedback-loop infrastructure in place | Phase 7 | Structurally can't fully finish yet — gated on human labels that don't exist until real (non-auto-approved) usage happens |
+| **M8** | Bounded pilots evaluated with real measured docs | Phase 8 | Most speculative by design — "prove before commit," correctly last before the gate |
+| **M9** | Final gate — everything green, evidence complete | Phase 9 | Ship-readiness checkpoint; no push/merge without the user's separate call |
+
+---
+
+## Phase 1 — "Finish the sentence" quick wins
+
+### 1.1 Unbreak pytest collection (2-line fix; do first — everything else's test runs depend on it)
 
 **Files:** `tests/unit/test_schema_matching.py`
 
@@ -54,7 +81,7 @@ per-phase evidence.
 - Also run `python scripts/check.py test` → pass.
 - Commit: `fix(tests): importorskip valentine in test_schema_matching (unblocks check.py on standard bootstrap)`.
 
-### C.1.2 Install the `schema_matching` extra by default
+### 1.2 Install the `schema_matching` extra by default
 
 **Files:** `scripts/bootstrap.py` (line ~72)
 
@@ -63,7 +90,7 @@ per-phase evidence.
 - Verify the real path: `python scripts/bootstrap.py` (or just the pip line) then `python -m pytest tests/unit/test_schema_matching.py -q` → `18 passed` (skips disappear once installed).
 - Commit: `chore(bootstrap): install schema_matching extra (ADR 0005 module must be exercised by CI)`.
 
-### C.1.3 pg_trgm + GIN trigram blocking (§13 #13 — highest-leverage speed item, zero new deps)
+### 1.3 pg_trgm + GIN trigram blocking (§13 #13 — highest-leverage speed item, zero new deps)
 
 **Files:** `scripts/schema/` (new migration `003_pg_trgm.sql` if the repo has a schema dir — else `docs/diagnostics/` note + connector-level ensure), `src/mcp_server/tools/resolve_entities.py`, `tests/unit/test_trigram_blocking.py` (new).
 
@@ -80,12 +107,13 @@ per-phase evidence.
   1. New helper `def trigram_candidate_pairs(connector, staging_table: str, name_col: str = "name", threshold: float = 0.6) -> list[tuple[str, str]]` — where staging lives depends on current extract flow: **inspect `resolve_entities.py` first**; if entities are resolved from in-memory records, stage them via the destination connector into a `pg_temp`/`merge_engine_staging` table per run (the destination is Postgres and already reachable from the load path). Guard with config flag `matching.trigram_blocking_enabled: false` (default off) + size threshold `matching.trigram_blocking_min_records: 1000` — YAGNI: small entities keep the existing path.
   2. Union (don't replace) with existing blocking output → dedupe pair set. Replacing outright would risk recall loss on non-Postgres origins; union is safe and measurable.
   3. Config keys go where `matching.*` config already lives (`src/utils/config_loader.py` + `config/config.yaml`).
+- **Note (effort realism):** this task carries more open design surface than its siblings in this phase (staging-table lifecycle isn't pre-decided) — budget it accordingly; it's the one "quick win" that isn't actually quick.
 - TDD:
   - Unit test with a fake connector recording SQL: assert the emitted query contains `gin_trgm_ops` (setup), `%`, `a.rec_id < b.rec_id`, and that pairs union-dedupe with heuristic pairs; assert disabled below threshold records.
   - **[LIVE]** against real destination: create extension, index, insert the 5 real Boeing name variants (`Boeing`, `Boeing Co`, `The Boeing Company`, `Boeing Co. The`, `Boeing Satellite Systems, Inc.`), run the join, assert the true near-duo pairs (0↔3) are proposed. Record wall-clock vs the Python loop for the 1,503-record technology component (regression benchmark, per audit's "measured proof" standard).
 - Commit: `feat(matching): pg_trgm GIN trigram candidate blocking (flag-gated, unioned)`.
 
-### C.1.4 Great Expectations format-level checks (finish ADR 0008)
+### 1.4 Great Expectations format-level checks (finish ADR 0008)
 
 **Files:** `src/mcp_server/tools/data_quality.py`, `pyproject.toml` (add `data_quality = ["great-expectations>=1.0"]` to extras — verify exact current pin intent in ADR 0008 first), `tests/unit/test_data_quality_gx.py` (new), `scripts/bootstrap.py` (append `data_quality` extra).
 
@@ -102,9 +130,9 @@ per-phase evidence.
 - **[LIVE]** catch-the-historic-bug test: run against a sample with `revenue = "$1 Million"` → check fails (the exact §7 failure mode GX exists to catch).
 - Commit: `feat(data-quality): GX ephemeral format expectations per ADR 0008 (folded into existing gate)`.
 
-### C.1.5 sqlglot column lineage (finish ADR 0009)
+### 1.5 sqlglot column lineage (finish ADR 0009)
 
-**Files:** `src/mcp_server/tools/sql_lineage.py` (new), `tests/unit/test_sql_lineage.py` (new), plus surface in review UI later (defer UI to C.9 optional — YAGNI: prove the API first).
+**Files:** `src/mcp_server/tools/sql_lineage.py` (new), `tests/unit/test_sql_lineage.py` (new), plus surface in review UI later (defer UI to Phase 9 optional — YAGNI: prove the API first).
 
 - ```python
   def column_lineage(mapping_sql: str, target_column: str, schema: str | None = None) -> list[dict]:
@@ -116,13 +144,80 @@ per-phase evidence.
 - TDD: `SELECT c.amount AS revenue FROM diffbot.companyfinancials c` lineage for `revenue` → one entry naming `diffbot.companyfinancials.amount`; multi-join mapping → correct chain; unknown column → raises/clear error.
 - Commit: `feat(lineage): sqlglot column-level lineage (ADR 0009 finish)`.
 
-**Phase C.1 exit gate:** `python scripts/check.py all` → 10/10. Update TODO.md C.1 evidence slots. Commit: `docs: C.1 evidence`.
+**Phase 1 exit gate → M1:** `python scripts/check.py all` → 10/10. Update TODO.md B.1 evidence slots. Commit: `docs: Phase 1 / M1 evidence`.
 
 ---
 
-## Phase C.2 — RELATER-style relational signal (§13 #3 — the actual quality fix)
+## Phase 2 — Decisions recorded (reference-only leads, §13 #4/#8/#11 + RELATER-code)
+
+**Files:** `docs/decisions/0017-reject-hiergat.md`, `0018-reject-relater-code-adopt-idea.md`, `0019-utopia-reference-only.md`, `0020-ontop-study-not-aws-accelerator.md`, `docs/INDEX.md` (index all four; ADR numbering continues from 0016 — verify `ls docs/decisions/` before numbering).
+
+- Content = the audit's verified findings verbatim-reasoned (Python 2/2-commit RELATER; HierGAT PyTorch-1.4 staleness; Utopia decision-ledger design-review pointer; AWS accelerator's Neptune/Bedrock coupling vs. local-only requirement; Ontop as the portable OBDA layer if ever needed). No code.
+- **Why this runs 2nd, immediately after the quick wins:** zero code, zero risk, zero dependency on anything else in this plan — there's no reason to defer pure documentation behind riskier work.
+- `python scripts/check.py docs` → pass (every citation resolves). Commit: `docs(adr): record §13 reference-only + rejection decisions`.
+
+**Phase 2 exit gate → M2:** ADRs merged, `check.py docs` green. Commit: `docs: Phase 2 / M2 evidence`.
+
+---
+
+## Phase 3 — Algorithm-first nodes (§14, both guides) — the audit's headline recommendation
+
+**Why this runs 3rd, ahead of the relational signal and Splink work:** every task here is mechanical and deterministic — reuse existing safety gates, no new semantic judgment call, no risk of making a real match *worse*. It is also literally what the audit's §14 called "the headline finding": working, tested code that already exists in this repo and is simply never called. Shipping it early captures the highest-confidence value first.
+
+### 3.1 map_fields Phase 0 (Valentine wiring)
+
+**Files:** `src/mcp_server/tools/map_fields.py`, `tests/unit/test_map_fields_valentine.py` (new).
+
+- New `_build_valentine_frames(unified_schema, dest_candidates, connector)` per audit: source_df from `unified_schema[field]["sample_values"]` (already collected); target_df via `connector.sample_distinct_values(table, column, limit=N)` — the same primitive `join_graph._verify_inclusion` uses (do not invent sampling).
+- Insert **Phase 0** before Phase 1 (line ~142): for each undecided field, Valentine top candidate → **must pass `_incompatible_with_column`** (line 310) and the `taken` coalesce-guard → accept at `>= _HEURISTIC_ACCEPT` (0.85, reuse constant). Record `field_mapping[field]["mapped_by"] = "valentine"` (existing vocabulary: `"coalesce"`/`"llm"`).
+- Phase 3 LLM shape unchanged; it just receives a smaller `undecided` list.
+- TDD (red first): field `homepage` → destination `website` (zero name overlap, real value overlap via fake connector) — fails today, accepted by Phase 0 after; a Valentine top pick that `_incompatible_with_column` refuses must fall through to later phases (guard non-bypass test); empty destination column → Coma degrades, no crash.
+- Commit: `feat(map_fields): Phase 0 Valentine tier behind existing safety gates (ADR 0005 wiring)`.
+
+### 3.2 analyze_dependencies — verified graph first, LLM as fallback (FrugalGPT cascade)
+
+**Files:** `src/orchestrator/nodes/analyze_dependencies.py`, `src/orchestrator/fingerprint.py` (reuse, likely no change), `tests/unit/test_analyze_dependencies_join_graph.py` (new).
+
+Per the audit's 5 steps:
+1. In-node `await build_join_graph(state["schemas"], state["origins"], sample_size=...)` → store in `state["join_graph"]` (same key plan_scope reads; signature verified: `join_graph.py:390`).
+2. `_join_graph_to_dependency_tree(graph, target_entities, entity_tables)` — walk `graph.neighbors()` restricted to confidence `("declared","verified","probable")`; lift table→entity resolution logic out of `_build_coverage_matrix`.
+3. Coverage gate: if every target entity is covered at confidence ≠ heuristic (or legitimately root — reuse `_table_may_be_related`), **skip the LLM call entirely**, return tree tagged `dependency_analysis_origin: "ALGORITHMIC"`. Partial coverage: LLM call as today but prompt includes `CONFIRMED (verified against live data): {child}.{col} -> {parent}.{col} ({overlap:.0%} overlap)` lines before the unverified rows.
+4. Fingerprint skip copied exactly from `parse_request.py:125` pattern: `stage_fingerprint("dependency_tree", origins_fp=origins_fingerprint(origins, schemas), target_entities=sorted(target_entities))`.
+5. plan_scope reuse: verify (test) that when `state["join_graph"]` is already present+fingerprint-matched, `plan_scope.py:45` skips its rebuild.
+- TDD: fake join graph fully covering 3 entities → **assert zero LLM calls** (mock `LLMClient` `assert_not_called`); partial coverage → LLM called once with a prompt containing a `CONFIRMED` line; second identical run → fingerprint hit, zero LLM + zero rebuild.
+- Trade-off note into TODO.md verbatim (sampling moves earlier; nothing adds a pass).
+- Commit: `feat(deps): verified join-graph-first dependency tree + fingerprint skip; LLM demoted to fallback`.
+
+**Phase 3 exit gate → M3:** `python scripts/check.py all` 10/10; **[LIVE]** one Boeing scope run: log line count shows 0 LLM dependency calls for covered schemas. Commit: `docs: Phase 3 / M3 evidence`.
+
+---
+
+## Phase 4 — Semantica rule engine, narrowly (§13 #9)
+
+**Files:** `pyproject.toml` (`consistency = ["semantica"]` extra — **first verify the PyPI package installs and its Rete/Datalog engine works standalone**; if the library is immature/broken at install time, fall back to implementing the same rules-as-data contract with plain-Python clause evaluation and record the deviation as an ADR — do not silently swap), `src/orchestrator/nodes/validate_graph_consistency.py` (new), `config/consistency_rules.yaml` (new), `src/orchestrator/graph.py` (add node after `load_data`, before `update_extraction_state`).
+
+**Why this runs 4th:** bounded and self-contained — it doesn't touch the matching path at all, so it can't regress anything upstream, and it carries its own explicit fallback if the dependency turns out immature. Lower risk than the relational signal or Splink phases that follow.
+
+- Node reads back just-written entities via destination connector; evaluates rules-as-data, e.g.:
+  ```yaml
+  - id: acquired_no_late_investment
+    when: "company.status == 'ACQUIRED' AND investment_round.valid_from > company.status.valid_from"
+    severity: warn
+  ```
+- Violations → appended to the same `data_quality.red_flags` list (GX fold-in pattern, Phase 1.4). One report.
+- TDD: node with fake store — one violating fact → one red flag; clean load → none; rule file missing → node logs + passes (fail-open on *absent config* only, never on a parsed rule).
+- **[LIVE]** load one ACQUIRED company + late investment_round fact into destination → flag appears in run report JSON (read from `logs/run_reports/`, not the UI).
+- Commit: `feat(quality): post-merge consistency rule validation node`.
+
+**Phase 4 exit gate → M4:** unit suite green; **[LIVE]** red flag confirmed via disk-read run report. Commit: `docs: Phase 4 / M4 evidence`.
+
+---
+
+## Phase 5 — RELATER-style relational signal (§13 #3 — the real quality risk)
 
 **Files:** `src/mcp_server/tools/relationship_index.py` (new), `src/mcp_server/tools/resolve_entities.py`, `tests/unit/test_relationship_index.py` (new), `tests/unit/test_relational_agreement.py` (new).
+
+**Why this runs 5th, not 2nd:** this is a live matching-behavior change with a real, named failure mode — the audit's own §00a2 found the exact shape of bug this signal could reintroduce if its guard is wrong (the Airbus "Defence and Space" blob). Everything in Phases 1–4 is either zero-risk or mechanically deterministic; this phase is neither, so it earns its place after them, with a negative fixture as its first test and a live ground-truth regression as its exit gate.
 
 1. `build_relationship_index(records: list[dict]) -> dict[str, set[str]]` — maps record id → asserted related-entity **surface-form** set. Input shape: records already carrying relation rows extracted for the `company_relation` entity family (verify actual field names via a quick read of the extracted-record shape flowing into `resolve_entities`; audit names origin columns `companyid, relatedcompanyid, relationtype, confidence`). Normalize surface forms with `src/utils/column_naming`-style normalization **only for comparison keys**, keep originals for the DSPy context string.
 2. In `resolve_entities.py`, add exactly the audit's function (bounded additive boost, never sole justification):
@@ -143,30 +238,36 @@ per-phase evidence.
 - TDD order per function; each gets its red run first.
 - Commit(s): `feat(matching): relational-agreement signal (RELATER-style, bounded)`, then `feat(matching): common-parent guard for relational signal`.
 
-**Exit gate:** full unit suite green; **[LIVE]** Airbus/Boeing ground-truth comparison recorded.
+**Phase 5 exit gate → M5:** full unit suite green; **[LIVE]** Airbus/Boeing ground-truth comparison recorded. Commit: `docs: Phase 5 / M5 evidence`.
 
 ---
 
-## Phase C.3 — Splink promotion track (§13 #1 continuation)
+## Phase 6 — Splink promotion track (§13 #1 continuation)
 
 **Files:** `src/mcp_server/tools/splink_matcher.py`, `tests/eval/pagila_staff.csv` (restore), `tests/eval/test_matcher_recall.py`, `config/config.yaml`, `logs/splink_models/company_diffbot_zoominfo/v1/` (already trained).
+
+**Why this runs 6th:** it carries a genuine unknown — the 560-pair gate fixture may be unrecoverable — and even if recovered, the promotion outcome itself is uncertain (recall must measurably beat 0.995, which the audit's own honest ceiling says it doesn't yet). Sequenced after the phases whose outcomes are within this team's control.
 
 Ordered sub-tasks (each its own commit):
 1. **Restore the 560-pair gate fixture.** `tests/eval/pagila_staff.csv` is missing. Options in order: recover from git history (`git log --all --diff-filter=D -- tests/eval/pagila_staff.csv` → `git checkout <sha>^ -- ...`); else regenerate from the pagila sample DB if present in Docker. Verify: `python -m pytest tests/eval/test_matcher_recall.py -q --collect-only` succeeds. Do NOT hand-author fake pairs under any circumstance — if unrecoverable, stop the phase and report; the gate must not run on invented data.
 2. **Token-based blocking** alongside the fixed prefix rule: add `block_on("substr(lower(name),1,4)")`-style **plus** a token-overlap rule via `sqlglot`-free Splink `custom_name` rules; use `splink_blocking.py`'s costed recommender (S-E) to cost candidate rules, keep the costed table in the commit message.
 3. **Train-once wiring:** extend `matching_rules` to accept `{"engine": "splink", "model_profile": "company_diffbot_zoominfo/v1"}`; when set, `resolve_entities` loads the saved profile (ADR 0016 file-store pattern already exists in `splink_model.py`) and calls predict-only (no EM). Default path unchanged.
 4. **Re-run the 560-pair gate.** Record real numbers into TODO.md. **Only if** recall ≥ builtin (0.995) does `tests/eval/last_gate.json` change and `tests/unit/test_splink_default_invariant.py` flip the default. If not met (likely), the phase's honest output is the measured table + the gap analysis — **do not hand-override the invariant test.**
-- Commit per sub-task; final `docs: C.3 splink gate measurement`.
+- Commit per sub-task; final `docs: Phase 6 / M6 splink gate measurement`.
+
+**Phase 6 exit gate → M6:** promotion decided either way, on measured numbers, recorded honestly.
 
 ---
 
-## Phase C.4 — Human-feedback loop (§13 #2 DSPy, #12 dedupe)
+## Phase 7 — Human-feedback loop (§13 #2 DSPy, #12 dedupe)
 
 **Files:** `pyproject.toml` (dedupe extra `dedupe = ["dedupe>=3.0"]`; dspy extra already present), `src/llm/dspy_lm.py`, `src/llm/dspy_programs/__init__.py`, `src/llm/dspy_programs/entity_match.py`, `src/mcp_server/tools/dedupe_matcher.py`, `scripts/dspy/optimize_entity_match.py`, tests for each.
 
+**Why this runs 7th:** most of this phase structurally cannot finish today — the optimizer and the dedupe classifier both need real human-override labels that only accumulate once non-auto-approved review happens in normal use. Building the infrastructure now is right; scheduling the phase this late reflects that its real payoff is data-gated, not effort-gated.
+
 1. **Label collection first (data prerequisite, do this even before 2–3):** add a thin writer so *human* gate decisions land in `kg.merge_engine_merge_audit.human_override` (currently schema-ready but empty; `decided_by='auto'` = 115,614 rows). Find where `human_review_matches` applies overrides (grep `human_override` in `src/`), add the INSERT/update with independent-SQL verification. **[LIVE]**: approve one real match manually, then `SELECT count(*) FROM kg.merge_engine_merge_audit WHERE human_override IS NOT NULL` > 0.
 2. `src/llm/dspy_lm.py` — verbatim from the audit guide (`configured_lm()` with `max_tokens=4096`, `api_base` from `config["llm"]`).
-3. `entity_match.py` — the audit's `EntityMatchJudgment` Signature verbatim (its `relationship_context` input is fed from C.2's index — the two recommendations share a signature by design).
+3. `entity_match.py` — the audit's `EntityMatchJudgment` Signature verbatim (its `relationship_context` input is fed from **Phase 5's** relationship index — the two recommendations share a signature by design).
 4. Integration at `resolve_entities.py`'s LLM chunk-scoring site (~line 2049 per §00b): replace raw prompt call with `entity_match_judge(...)` inside `dspy.context(lm=configured_lm())`; keep the exact same fallback contract (any failure → heuristic score) **plus** a warning-level degradation count (feeds the reconciliation `entities.*` dict so reviewers see `llm_fallback_count`).
 5. `optimize_entity_match.py`: pull labels where `human_override IS NOT NULL`, `match_metric` as in the audit, `dspy.MIPROv2(...).compile(...)`, `compiled.save("logs/dspy_programs/entity_match_v1.json")` (same versioned-artifact convention as `splink_model.py`).
 6. `dedupe_matcher.py`: `train_dedupe_classifier(labelled_pairs)` → score added as **one more weighted input** to `_compute_heuristic_confidence`'s sum (ensemble member, not a fourth engine; flag-gated `matching.dedupe_enabled: false` default).
@@ -174,83 +275,42 @@ Ordered sub-tasks (each its own commit):
 - **[LIVE]** once labels exist: real MIPROv2 compile + before/after judgment accuracy on held-out pairs, numbers into TODO.md.
 - Commits: `feat(labels): persist human gate overrides to merge_audit`, `feat(llm): dspy typed judgment layer (flag-gated)`, `feat(matching): dedupe ensemble member`, `chore(dspy): MIPROv2 optimizer script`.
 
----
-
-## Phase C.5 — Algorithm-first nodes (§14, both guides)
-
-### C.5.1 map_fields Phase 0 (Valentine wiring)
-
-**Files:** `src/mcp_server/tools/map_fields.py`, `tests/unit/test_map_fields_valentine.py` (new).
-
-- New `_build_valentine_frames(unified_schema, dest_candidates, connector)` per audit: source_df from `unified_schema[field]["sample_values"]` (already collected); target_df via `connector.sample_distinct_values(table, column, limit=N)` — the same primitive `join_graph._verify_inclusion` uses (do not invent sampling).
-- Insert **Phase 0** before Phase 1 (line ~142): for each undecided field, Valentine top candidate → **must pass `_incompatible_with_column`** (line 310) and the `taken` coalesce-guard → accept at `>= _HEURISTIC_ACCEPT` (0.85, reuse constant). Record `field_mapping[field]["mapped_by"] = "valentine"` (existing vocabulary: `"coalesce"`/`"llm"`).
-- Phase 3 LLM shape unchanged; it just receives a smaller `undecided` list.
-- TDD (red first): field `homepage` → destination `website` (zero name overlap, real value overlap via fake connector) — fails today, accepted by Phase 0 after; a Valentine top pick that `_incompatible_with_column` refuses must fall through to later phases (guard non-bypass test); empty destination column → Coma degrades, no crash.
-- Commit: `feat(map_fields): Phase 0 Valentine tier behind existing safety gates (ADR 0005 wiring)`.
-
-### C.5.2 analyze_dependencies — verified graph first, LLM as fallback (FrugalGPT cascade)
-
-**Files:** `src/orchestrator/nodes/analyze_dependencies.py`, `src/orchestrator/fingerprint.py` (reuse, likely no change), `tests/unit/test_analyze_dependencies_join_graph.py` (new).
-
-Per the audit's 5 steps:
-1. In-node `await build_join_graph(state["schemas"], state["origins"], sample_size=...)` → store in `state["join_graph"]` (same key plan_scope reads; signature verified: `join_graph.py:390`).
-2. `_join_graph_to_dependency_tree(graph, target_entities, entity_tables)` — walk `graph.neighbors()` restricted to confidence `("declared","verified","probable")`; lift table→entity resolution logic out of `_build_coverage_matrix`.
-3. Coverage gate: if every target entity is covered at confidence ≠ heuristic (or legitimately root — reuse `_table_may_be_related`), **skip the LLM call entirely**, return tree tagged `dependency_analysis_origin: "ALGORITHMIC"`. Partial coverage: LLM call as today but prompt includes `CONFIRMED (verified against live data): {child}.{col} -> {parent}.{col} ({overlap:.0%} overlap)` lines before the unverified rows.
-4. Fingerprint skip copied exactly from `parse_request.py:125` pattern: `stage_fingerprint("dependency_tree", origins_fp=origins_fingerprint(origins, schemas), target_entities=sorted(target_entities))`.
-5. plan_scope reuse: verify (test) that when `state["join_graph"]` is already present+fingerprint-matched, `plan_scope.py:45` skips its rebuild.
-- TDD: fake join graph fully covering 3 entities → **assert zero LLM calls** (mock `LLMClient` `assert_not_called`); partial coverage → LLM called once with a prompt containing a `CONFIRMED` line; second identical run → fingerprint hit, zero LLM + zero rebuild.
-- Trade-off note into TODO.md verbatim (sampling moves earlier; nothing adds a pass).
-- Commit: `feat(deps): verified join-graph-first dependency tree + fingerprint skip; LLM demoted to fallback`.
-
-**Phase C.5 exit:** `python scripts/check.py all` 10/10; **[LIVE]** one Boeing scope run: log line count shows 0 LLM dependency calls for covered schemas.
+**Phase 7 exit gate → M7:** infrastructure built and unit-tested; label collection live; optimization itself remains `PENDING-LIVE` until real labels accumulate — that's an honest, expected state, not a blocker. Commit: `docs: Phase 7 / M7 evidence`.
 
 ---
 
-## Phase C.6 — Semantica rule engine, narrowly (§13 #9)
+## Phase 8 — Bounded pilots (§13 #10, #5) — both behind flags, evaluation-first
 
-**Files:** `pyproject.toml` (`consistency = ["semantica"]` extra — **first verify the PyPI package installs and its Rete/Datalog engine works standalone**; if the library is immature/broken at install time, fall back to implementing the same rules-as-data contract with `python-datalog`-free plain-Python clause evaluation and record the deviation as an ADR — do not silently swap), `src/orchestrator/nodes/validate_graph_consistency.py` (new), `config/consistency_rules.yaml` (new), `src/orchestrator/graph.py` (add node after `load_data`, before `update_extraction_state`).
+**Why this runs 8th, last before the final gate:** the most speculative work in the whole plan by the audit's own framing ("prove it before you commit to it") — correctly scheduled after everything whose value is already well-understood.
 
-- Node reads back just-written entities via destination connector; evaluates rules-as-data, e.g.:
-  ```yaml
-  - id: acquired_no_late_investment
-    when: "company.status == 'ACQUIRED' AND investment_round.valid_from > company.status.valid_from"
-    severity: warn
-  ```
-- Violations → appended to the same `data_quality.red_flags` list (GX fold-in pattern, C.1.4). One report.
-- TDD: node with fake store — one violating fact → one red flag; clean load → none; rule file missing → node logs + passes (fail-open on *absent config* only, never on a parsed rule).
-- **[LIVE]** load one ACQUIRED company + late investment_round fact into destination → flag appears in run report JSON (read from `logs/run_reports/`, not the UI).
-- Commit: `feat(quality): post-merge consistency rule validation node`.
+**8a Graphiti/FalkorDB mirror pilot.** Files: `pyproject.toml` (`graphiti = ["graphiti-core"]`), `src/mcp_server/connectors/postgresql_destination.py` (new `mirror_fact_to_graphiti(entity_id, predicate, value, source)` called *alongside* — never instead of — `write_knowledge_fact`), `config/config.yaml` (`pilots.graphiti.enabled: false`), `docs/diagnostics/GRAPHITI_PILOT.md` (the side-by-side temporal-query comparison protocol + results slot). **[LIVE]** FalkorDB via Docker + local vLLM per audit config. Acceptance = the comparison doc filled with real numbers for ≥ 5 temporal queries vs hand-rolled `valid_from/valid_to` CTEs. No ADR-0012 change without those numbers.
 
-## Phase C.7 — Bounded pilots (§13 #10, #5) — both behind flags, evaluation-first
-
-**C.7a Graphiti/FalkorDB mirror pilot.** Files: `pyproject.toml` (`graphiti = ["graphiti-core"]`), `src/mcp_server/connectors/postgresql_destination.py` (new `mirror_fact_to_graphiti(entity_id, predicate, value, source)` called *alongside* — never instead of — `write_knowledge_fact`), `config/config.yaml` (`pilots.graphiti.enabled: false`), `docs/diagnostics/GRAPHITI_PILOT.md` (the side-by-side temporal-query comparison protocol + results slot). **[LIVE]** FalkorDB via Docker + local vLLM per audit config. Acceptance = the comparison doc filled with real numbers for ≥ 5 temporal queries vs hand-rolled `valid_from/valid_to` CTEs. No ADR-0012 change without those numbers.
-
-**C.7b LangGraph Swarm contested-cluster advisor.** Files: `pyproject.toml` (`swarm = ["langgraph-swarm"]`), `src/orchestrator/subgraphs/cluster_resolution_swarm.py` (new; `create_swarm` two specialists per audit snippet), `src/orchestrator/graph.py` new node `resolve_contested_cluster` between `resolve_entities` and `human_review_matches`, firing only when heuristic vs. relational signals disagree by > configurable margin (`matching.contested_margin: 0.15`). Output attached to `pending_merge_candidates` as advisory evidence — **never auto-decides** (hard assertion test: the node's output cannot set a merge decision field; router tests prove every cluster still reaches `human_review_matches`).
+**8b LangGraph Swarm contested-cluster advisor.** Files: `pyproject.toml` (`swarm = ["langgraph-swarm"]`), `src/orchestrator/subgraphs/cluster_resolution_swarm.py` (new; `create_swarm` two specialists per audit snippet), `src/orchestrator/graph.py` new node `resolve_contested_cluster` between `resolve_entities` and `human_review_matches`, firing only when heuristic vs. **Phase 5's** relational signal disagree by > configurable margin (`matching.contested_margin: 0.15` — depends on Phase 5 being live). Output attached to `pending_merge_candidates` as advisory evidence — **never auto-decides** (hard assertion test: the node's output cannot set a merge decision field; router tests prove every cluster still reaches `human_review_matches`).
 - Commit per pilot.
 
-## Phase C.8 — Decisions recorded (reference-only leads, §13 #4/#8/#11 + RELATER-code)
+**Phase 8 exit gate → M8:** both pilot docs filled with real measured numbers, or explicitly `BLOCKED`/`PENDING-LIVE`. Commit: `docs: Phase 8 / M8 evidence`.
 
-**Files:** `docs/decisions/0017-reject-hiergat.md`, `0018-reject-relater-code-adopt-idea.md`, `0019-utopia-reference-only.md`, `0020-ontop-study-not-aws-accelerator.md`, `docs/INDEX.md` (index all four; ADR numbering continues from 0016 — verify `ls docs/decisions/` before numbering).
-- Content = the audit's verified findings verbatim-reasoned (Python 2/2-commit RELATER; HierGAT PyTorch-1.4 staleness; Utopia decision-ledger design-review pointer; AWS accelerator's Neptune/Bedrock coupling vs. local-only requirement; Ontop as the portable OBDA layer if ever needed). No code.
-- `python scripts/check.py docs` → pass (every citation resolves). Commit: `docs(adr): record §13 reference-only + rejection decisions`.
+---
 
-## Phase C.9 — Final gate
+## Phase 9 — Final gate
 
 1. `python scripts/check.py all` → 10/10 expected.
-2. **[LIVE]** one full Boeing + one Airbus run end-to-end (all gates manual where C.4 label collection needs them); independently re-verify destination counts via direct SQL; capture the before/after table (cluster correctness vs audit baselines: Boeing 92.9% run, Airbus 15/16 clusters).
+2. **[LIVE]** one full Boeing + one Airbus run end-to-end (all gates manual where Phase 7 label collection needs them); independently re-verify destination counts via direct SQL; capture the before/after table (cluster correctness vs audit baselines: Boeing 92.9% run, Airbus 15/16 clusters).
 3. Fill every TODO.md `*Evidence:*` slot (or mark `BLOCKED: <reason>` honestly — never leave a checked box without evidence, never check a box whose [LIVE] half couldn't run).
 4. Commit: `docs: fix-v3 final evidence pass`. **No push, no merge to main** — that decision stays with the user (standing branch discipline).
+
+**Phase 9 exit gate → M9:** ship-ready. All milestones M1–M8 closed with evidence.
 
 ---
 
 ## Risks, tradeoffs, open questions
 
-1. **Dirty tree carry-over:** C.0 snapshots 17 uncommitted audit fixes onto `fix-v3`. If the user wants them committed to `feat/v3-discovery-er` instead, say so before Step 0 — it changes only the branch topology, nothing else.
-2. **Library maturity is exactly what §13 warns about:** Semantica and Graphiti are pilots/studies for a reason. Both phases have explicit fallback paths (rule-engine deviation ADR; pilot doc) — the plan never lets an immature dep block the gate.
+1. **~~Dirty tree carry-over~~ — resolved.** The former Step 0 (snapshotting uncommitted audit fixes) is done; see the "DONE" note at the top. Left here only so a reader doesn't wonder why it isn't a phase.
+2. **Library maturity is exactly what §13 warns about:** Semantica (Phase 4) and Graphiti (Phase 8) are pilots/studies for a reason. Both phases have explicit fallback paths (rule-engine deviation ADR; pilot doc) — the plan never lets an immature dep block the gate.
 3. **[LIVE]-dependent verification:** Docker DBs and the vLLM box (10.10.9.45:8000) may be down on implementation day. Every task keeps a hard unit-test gate; live evidence slots stay explicitly `PENDING-LIVE` rather than being faked or skipped silently.
-4. **pagila_staff.csv may be unrecoverable** → C.3 step 1 is a hard stop for Splink promotion; the rest of C.3 (token blocking, train-once wiring) can still land flag-gated with the measurement gap disclosed.
-5. **Relational signal can *worsen* the Airbus blob** if the common-parent guard is wrong — that's why C.2's guard ships with the Airbus negative fixture as its first RED test and a ground-truth regression run as its exit gate.
-6. **DSPy/dedupe need real human labels** that don't exist yet (column empty by design of testing). C.4 step 1 starts collection; steps 2–6 are built + unit-tested now, *optimized* later — the audit's own ordering.
+4. **pagila_staff.csv may be unrecoverable** → Phase 6 step 1 is a hard stop for Splink promotion; the rest of Phase 6 (token blocking, train-once wiring) can still land flag-gated with the measurement gap disclosed.
+5. **Relational signal (Phase 5) can *worsen* the Airbus blob** if the common-parent guard is wrong — that's why Phase 5 ships with the Airbus negative fixture as its first RED test and a ground-truth regression run as its exit gate, and why it's sequenced after every zero/low-risk phase rather than early.
+6. **DSPy/dedupe (Phase 7) need real human labels** that don't exist yet (column empty by design of testing). Phase 7 step 1 starts collection; steps 2–6 are built + unit-tested now, *optimized* later — reflected directly in the reorder (this phase now runs after the mechanical/self-contained work, not before it).
 7. **GX/sqlglot pins:** verify actual installed/importable versions before writing extras into `pyproject.toml`/bootstrap (the audit's sqlglot "30.18.0" claim is from the audit box, not necessarily this one).
 8. TODO.md rewrite **preserves Part A verbatim** — deliberate; history/evidence is load-bearing in this repo.
-9. Effort realism: C.1–C.2 + C.5 are the high-value core (~days); C.3–C.4 partly gated on data/fixtures; C.6–C.7 are bounded experiments with their own exit docs. The plan implements *all* recommendations, but "implemented" for a pilot means "flag-gated + measured doc", not "adopted".
+9. **Effort realism, updated for the new order:** Phases 1, 2, and 3 are the fast, low-risk core and now correctly run first (~days). Phase 5 (relational signal) is real quality-critical work needing careful validation, not a quick add. Phases 6–7 are partly gated on data/fixtures outside this plan's control. Phase 8 is bounded experiments with their own exit docs. The plan implements *all* recommendations, but "implemented" for a pilot means "flag-gated + measured doc", not "adopted".
