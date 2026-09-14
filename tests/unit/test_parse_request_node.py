@@ -547,6 +547,58 @@ class TestParseRequest:
 
         mock_llm_client.call_json.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_llm_naming_collision_does_not_drop_either_groups_tables(
+        self, mock_llm_client: MagicMock
+    ) -> None:
+        """Live regression (Airbus, this session, reproduced deterministically
+        twice): the LLM assigned the SAME display name to two different
+        deterministic groups. entity_tables used to be built as a plain
+        {name_map[g]: ... for g in deterministic_groups} dict comprehension,
+        so the second group's tables silently overwrote the first's entry --
+        raising "Orphaned source tables" downstream with no clue why. Both
+        groups' tables must now survive, one under the LLM's chosen name,
+        the other under a disambiguated fallback -- and this must NOT raise."""
+        state: dict[str, Any] = {
+            "user_request": "Merge everything about Airbus",
+            "schemas": _schema("Person", "Company"),
+            "llm_config": {"provider": "openai", "model": "gpt-4o", "api_key": "k"},
+            "errors": [],
+        }
+        mock_llm_client.call_json = AsyncMock(
+            return_value={
+                # Both "person" and "company" groups named "contact" --
+                # a genuine LLM naming collision.
+                "group_names": {"person": "contact", "company": "contact"},
+                "explicit_groups": ["person", "company"],
+                "subject": "",
+                "scope_type": "none",
+            }
+        )
+        with (
+            patch(
+                "src.orchestrator.nodes.parse_request.LLMClient",
+                return_value=mock_llm_client,
+            ),
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                self._prompts(),
+            ),
+        ):
+            result = await parse_request(state)  # must not raise
+
+        all_tables = {
+            (e["origin_id"], e["table"])
+            for entries in result["entity_tables"].values()
+            for e in entries
+        }
+        assert ("origin_1", "Person") in all_tables
+        assert ("origin_1", "Company") in all_tables
+        # Exactly one entity kept the collided display name; the other
+        # fell back to its own deterministic group key instead of vanishing.
+        assert result["target_entities"].count("contact") == 1
+        assert len(result["target_entities"]) == 2
+
 
 class TestProfileCaching:
     """Phase A4: a profile-pinned entity_tables decision must actually be

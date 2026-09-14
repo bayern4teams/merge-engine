@@ -206,16 +206,57 @@ async def parse_request(state: dict[str, Any]) -> dict[str, Any]:
         merge_scope: dict[str, Any],
         table_selection_notes: str,
     ) -> dict[str, Any]:
-        target_entities = [name_map[g] for g in deterministic_groups]
-        entity_tables = {name_map[g]: deterministic_groups[g] for g in deterministic_groups}
-        explicit_target_entities = [name_map[g] for g in explicit_keys]
+        # entity_tables used to be built as a plain {name_map[g]: ... for g
+        # in deterministic_groups} dict comprehension. Naming is supposed to
+        # be the LLM's only degree of freedom here (per this function's own
+        # docstring) — but nothing stopped it from assigning the SAME
+        # display name to two different deterministic groups, and a plain
+        # dict comprehension lets the second group's tables silently
+        # overwrite the first's entry, with no error at the point of loss
+        # — only downstream, when the post-condition below (correctly)
+        # notices tables are missing. Live-reproduced on Airbus, twice,
+        # deterministically for that request's own LLM-naming output
+        # (never Boeing's) — root-caused, not "the LLM is flaky": resolved
+        # by falling back to the group's own guaranteed-unique deterministic
+        # key for whichever group loses a naming collision, so no group's
+        # tables are ever dropped, regardless of what the LLM named things.
+        used_names: dict[str, str] = {}  # display name -> group_key that holds it
+        resolved_names: dict[str, str] = {}  # group_key -> the name actually used
+        for g in deterministic_groups:
+            proposed = name_map.get(g, g)
+            if proposed in used_names and used_names[proposed] != g:
+                candidate = g
+                suffix = 2
+                while candidate in used_names and used_names[candidate] != g:
+                    candidate = f"{g}_{suffix}"
+                    suffix += 1
+                logger.warning(
+                    "parse_request: LLM assigned the name %r to both group %r "
+                    "and group %r — keeping %r for %r, using %r for %r instead "
+                    "so neither group's tables are lost.",
+                    proposed,
+                    used_names[proposed],
+                    g,
+                    proposed,
+                    used_names[proposed],
+                    candidate,
+                    g,
+                )
+                resolved_names[g] = candidate
+                used_names[candidate] = g
+            else:
+                resolved_names[g] = proposed
+                used_names[proposed] = g
+
+        target_entities = [resolved_names[g] for g in deterministic_groups]
+        entity_tables = {resolved_names[g]: deterministic_groups[g] for g in deterministic_groups}
+        explicit_target_entities = [resolved_names[g] for g in explicit_keys]
 
         # The hard post-condition: every table discover_schemas found must
-        # still be reachable through entity_tables. Naming and explicit-vs-
-        # inferred classification are the LLM's only degrees of freedom
-        # here — membership itself is fixed the moment deterministic_groups
-        # was built, so this can only fail if this function has a bug, not
-        # because of anything the LLM said.
+        # still be reachable through entity_tables. Membership itself is
+        # fixed the moment deterministic_groups was built and naming
+        # collisions are now resolved above, so this can only fail if
+        # this function has a bug, not because of anything the LLM said.
         discovered = _discovered_table_pairs(schemas)
         mapped = {(e["origin_id"], e["table"]) for lst in entity_tables.values() for e in lst}
         orphaned = discovered - mapped
