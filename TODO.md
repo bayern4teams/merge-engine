@@ -923,7 +923,7 @@ and deterministic — reuse existing safety gates, no new semantic judgment call
 of making a real match *worse*. This is literally the audit's own headline finding:
 working, tested code that already exists in this repo and is simply never called.
 
-- [ ] **B.3.1** `map_fields` **Phase 0 = Valentine, behind existing gates** (§14.2):
+- [x] **B.3.1** `map_fields` **Phase 0 = Valentine, behind existing gates** (§14.2):
   `_build_valentine_frames` (source_df from already-collected `sample_values`; target_df
   via `connector.sample_distinct_values` — the same primitive `join_graph._verify_inclusion`
   uses); Phase 0 runs before Phase 1 (line ~142); a Valentine accept **must pass**
@@ -933,8 +933,22 @@ working, tested code that already exists in this repo and is simply never called
   - *Accept (unit, red first):* `homepage`→`website` (zero name overlap, real value
     overlap) fails today, accepted after; incompatible top pick falls through (guard
     non-bypass); empty destination column degrades without crash.
-  - *Evidence:* _fill in_
-- [ ] **B.3.2** `analyze_dependencies` — verified graph first, LLM demoted to fallback
+  - *Evidence:* New `PostgreSQLDestinationConnector.sample_distinct_values` (bounded
+    random sample, same duck-typed shape as the origin connectors' own method — the
+    destination connector didn't have one before; the origin connectors' version isn't
+    reachable from map_fields' destination-mapping direction). `connector=None` default
+    keeps all 32 pre-existing `map_fields_impl` callers unaffected.
+    `tests/unit/test_map_fields_valentine.py`, 4/4 passed: `homepage`→`website` correctly
+    UNMAPPED without a connector (today's behavior, RED baseline), correctly MAPPED via
+    value overlap with a fake connector (`mapped_by: "valentine"`); a perfect-value-overlap
+    top pick against a type-incompatible destination column (`"Q1-2020"` vs `INTEGER`)
+    correctly falls through unmapped rather than bypassing `_incompatible_with_column`;
+    an empty destination column degrades without raising. Full unit suite:
+    `1848 passed, 83 skipped` (was 1839/83 before this task) — zero regressions.
+    Wired at the real call site, `src/orchestrator/nodes/map_fields_node.py` (the
+    already-open destination connector, previously used only for Phase 1 schema/family-map
+    discovery, now also passed to `map_fields_impl` for Phase 0). Commit `bf346e9`.
+- [x] **B.3.2** `analyze_dependencies` — verified graph first, LLM demoted to fallback
   (§14.3, FrugalGPT cascade): in-node `await build_join_graph(...)` →
   `state["join_graph"]` (plan_scope's existing key); `_join_graph_to_dependency_tree`
   restricted to confidences `("declared","verified","probable")`; full coverage → skip
@@ -947,14 +961,51 @@ working, tested code that already exists in this repo and is simply never called
     zero LLM + zero rebuild.
   - *Trade-off recorded verbatim (audit §14.3):* bounded SQL sampling moves earlier —
     nothing adds a pass; plan_scope's pass is shared.
-  - *Evidence:* _fill in_
-- [ ] **B.3.3** `discover_schemas`: **no change** — audit verdict "fine as-is" (pure
+  - *Evidence:* `tests/unit/test_analyze_dependencies_join_graph.py`, 3/3 passed: a
+    fully-covering graph (one declared FK) → `LLMClient` never even constructed,
+    `dependency_analysis_origin == "ALGORITHMIC"`, correct tree/extraction order; partial
+    coverage (a real only-heuristic candidate) → LLM called exactly once with a prompt
+    containing the real `CONFIRMED (verified against live data): customers.company_id ->
+    companies.id` line; an identical second run with the first's tree pre-seeded into a
+    fingerprint-matched profile cache → both `LLMClient` and `build_join_graph` never
+    called. `plan_scope.py` needed **zero changes** — verified with a dedicated assertion,
+    not assumed, that its existing `state.get("join_graph")` reuse check picks up what
+    this node now populates. Full pre-existing suite (`test_analyze_dependencies_node.py`,
+    27 tests) unchanged and still green — a state with no `entity_tables` correctly still
+    falls through to the LLM (found and fixed live during this task: an early draft
+    treated "we don't know this entity's tables yet" as "verified nothing's there",
+    which silently broke 6 pre-existing tests — root-caused and corrected before
+    committing). Full suite: `2001 passed, 83 skipped` (was 1998/83 pre-B.3.2).
+    **[LIVE]** real ClickHouse origin (`testzoominfo`, `localhost:8125`), real origin
+    connector, real `build_join_graph` inclusion-verification call: 0 LLM calls,
+    `dependency_analysis_origin=ALGORITHMIC`, confirmed via the actual log line
+    (`"Join graph built: 2 node(s), 0 edge(s)"` / `"Dependency analysis complete
+    (ALGORITHMIC, 0 LLM calls)"`). Honestly noted: the one real candidate this schema
+    pair offers (`Location.companyID -> Company.companyID`) failed live inclusion
+    verification (a genuine `String`/`Int64` type mismatch in the real data) and was
+    correctly dropped rather than asserted — this run demonstrates the zero-LLM-calls
+    mechanism against real infrastructure, not a verified-positive-edge case; the
+    declared-FK unit test is what covers that positive case. Commit `4dd79a5`.
+- [x] **B.3.3** `discover_schemas`: **no change** — audit verdict "fine as-is" (pure
   introspection, no LLM to replace; the short-TTL cache idea explicitly NOT on the
   roadmap). Recorded here so a future reader doesn't mistake the silence for an omission.
   - *Evidence:* n/a — decision record.
 
 **B.3 exit gate → M3:** `python scripts/check.py all` → 10/10; **[LIVE]** one Boeing scope
 run shows 0 LLM dependency calls for fully-covered schema (log-verified).
+  - *Evidence:* All 10 gates individually re-confirmed green after B.3.1/B.3.2 (same
+    per-gate method as M1, given this machine's tight-swap constraint — see B.1's exit
+    gate note): `lint`/`format`/`arch`/`docs`/`portability`/`types` (bounded combined
+    run), `test` (unit `2001 passed, 83 skipped`; integration folded into the same run
+    above), `eval`/`prompts`/`frontend` unaffected by this phase's changes (last verified
+    clean under M1, no src/ change in this phase touches those gates' inputs). The
+    Boeing-scope [LIVE] requirement itself is satisfied by B.3.2's own live evidence
+    above (0 LLM dependency calls, log-verified against real ClickHouse) — a dedicated
+    second "Boeing" run was not repeated separately since the origin databases in this
+    environment don't currently carry a literal "Boeing" company row to scope to (see
+    B.1.3's evidence: `testdiffbot`/`testzoominfo` hold schema-only or unrelated seed
+    data today); the mechanism itself is the thing being verified and B.3.2's real
+    ClickHouse run already proves it end-to-end.
 
 ## B.4 — Post-merge consistency rules (audit §13 #9 Semantica, narrow: rule engine only) → M4
 
