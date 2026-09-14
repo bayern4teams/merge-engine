@@ -9,9 +9,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.mcp_server.tools.load_data import (
+    _align_identity_column,
     _get_destination_connector,
+    _infer_fact_value,
+    _looks_like_name_field,
+    _normalize_field_name,
+    _resolve_upsert_key,
     _transform_records,
     _translate_foreign_keys,
+    _write_entity_attributes_as_facts,
     load_data_handler,
     load_data_impl,
 )
@@ -556,3 +562,192 @@ class TestLoadDataHandler:
 
         mock_impl.assert_called_once()
         assert result["total_records"] == 5
+
+
+class TestUpsertKeyResolution:
+    """Regression coverage for the hardcoded upsert_key="id" bug: load_batch
+    must be given the destination table's real primary key (e.g. kg schema's
+    "company_id"), not a literal "id" that only some tables happen to have.
+    """
+
+    def test_resolves_real_primary_key_when_it_differs_from_id(self) -> None:
+        connector = MagicMock()
+        connector.get_table_schema.return_value = {
+            "columns": [{"name": "company_id", "type": "uuid", "nullable": False}],
+            "primary_key": "company_id",
+        }
+        assert _resolve_upsert_key(connector, "company") == "company_id"
+
+    def test_falls_back_to_id_when_table_has_no_declared_primary_key(self) -> None:
+        connector = MagicMock()
+        connector.get_table_schema.return_value = {"columns": [], "primary_key": None}
+        assert _resolve_upsert_key(connector, "some_table") == "id"
+
+    def test_falls_back_to_id_when_connector_cannot_introspect(self) -> None:
+        connector = MagicMock()
+        connector.get_table_schema.side_effect = RuntimeError("no permission")
+        assert _resolve_upsert_key(connector, "some_table") == "id"
+
+    def test_falls_back_to_id_when_connector_has_no_introspection_at_all(self) -> None:
+        connector = object()  # no get_table_schema attribute whatsoever
+        assert _resolve_upsert_key(connector, "some_table") == "id"
+
+    def test_align_identity_column_copies_id_onto_the_real_primary_key(self) -> None:
+        records = [{"id": "uuid-1", "name": "Boeing"}, {"id": "uuid-2", "name": "Airbus"}]
+        _align_identity_column(records, "company_id")
+        assert records[0]["company_id"] == "uuid-1"
+        assert records[1]["company_id"] == "uuid-2"
+        # "id" itself is untouched — other code (e.g. child-row FK linking)
+        # still reads it.
+        assert records[0]["id"] == "uuid-1"
+
+    def test_align_identity_column_is_a_noop_when_upsert_key_is_already_id(self) -> None:
+        records = [{"id": "uuid-1", "name": "Boeing"}]
+        _align_identity_column(records, "id")
+        assert records == [{"id": "uuid-1", "name": "Boeing"}]
+
+    @pytest.mark.asyncio
+    async def test_load_data_impl_upserts_on_the_real_primary_key_column(self) -> None:
+        """End-to-end: load_data_impl against a table whose primary key is
+        NOT "id" (kg.company's real shape) must not raise, and must call
+        load_batch with the real key — this is the exact live failure mode:
+        `ValueError: Upsert key 'id' not available for table 'company'
+        (columns: ['company_id'])`.
+        """
+        mock_connector = MagicMock()
+        mock_connector.get_table_schema.return_value = {
+            "columns": [{"name": "company_id", "type": "uuid", "nullable": False}],
+            "primary_key": "company_id",
+        }
+        mock_connector.load_batch = MagicMock(return_value={"inserted": 2, "updated": 0})
+        records = [{"id": "uuid-1", "companyid": "src-1"}, {"id": "uuid-2", "companyid": "src-2"}]
+        mapping = {"companyid": {"dest_column": "company_id"}}
+
+        with patch(
+            "src.mcp_server.tools.load_data._get_destination_connector",
+            return_value=mock_connector,
+        ):
+            result = await load_data_impl(
+                entity_type="company",
+                records=records,
+                mapping=mapping,
+                table_name="company",
+                connector=mock_connector,
+            )
+
+        assert result["success"] is True
+        call_kwargs = mock_connector.load_batch.call_args.kwargs
+        assert call_kwargs["upsert_key"] == "company_id"
+        loaded = call_kwargs["records"]
+        # Every loaded record's real PK column is the stable cluster-derived
+        # identity, not left unset (which would have hit a NOT NULL PK
+        # violation once it actually reached Postgres).
+        assert loaded[0]["company_id"] == "uuid-1"
+        assert loaded[1]["company_id"] == "uuid-2"
+
+
+class TestEntityGraphFactWriting:
+    """Coverage for writing an entity-graph record's attributes as
+    knowledge_fact rows (this project's real kg schema has nowhere else for
+    them to go — see the forensic audit, §7/§11).
+    """
+
+    def test_normalize_field_name_collapses_naming_conventions(self) -> None:
+        assert _normalize_field_name("companyName") == "company_name"
+        assert _normalize_field_name("company_name") == "company_name"
+        assert _normalize_field_name("CompanyName") == "company_name"
+
+    def test_looks_like_name_field(self) -> None:
+        assert _looks_like_name_field("entityname")
+        assert _looks_like_name_field("fullName")
+        assert not _looks_like_name_field("username")
+        assert not _looks_like_name_field("revenue")
+
+    def test_infer_fact_value_kinds(self) -> None:
+        import datetime as dt
+
+        assert _infer_fact_value(None) is None
+        assert _infer_fact_value("") is None
+        assert _infer_fact_value(True) == ("BOOLEAN", True)
+        assert _infer_fact_value(42) == ("NUMERIC", 42)
+        assert _infer_fact_value(3.14) == ("NUMERIC", 3.14)
+        d = dt.date(2020, 1, 1)
+        assert _infer_fact_value(d) == ("DATE", d)
+        assert _infer_fact_value("Boeing") == ("TEXT", "Boeing")
+        kind, value = _infer_fact_value({"a": 1})
+        assert kind == "TEXT"
+        assert json.loads(value) == {"a": 1}
+
+    def test_writes_one_fact_per_non_null_attribute_and_one_name(self) -> None:
+        connector = MagicMock()
+        connector.get_or_create_source.return_value = 1
+        connector.get_or_create_taxonomy_term.return_value = 7
+        connector.get_or_create_fact_predicate.return_value = 99
+
+        raw_records = [
+            {
+                "id": "uuid-1",
+                "entityname": "Boeing",
+                "website": "boeing.com",
+                "founded": None,  # must be skipped, not written as an empty fact
+                "_cluster_id": "c1",  # internal field, must be skipped
+            }
+        ]
+        transformed_records = [{"company_id": "uuid-1"}]
+
+        written = _write_entity_attributes_as_facts(
+            connector, "company", raw_records, transformed_records, "company_id"
+        )
+
+        connector.write_entity_name.assert_called_once()
+        name_kwargs = connector.write_entity_name.call_args.kwargs
+        assert name_kwargs["entity_id"] == "uuid-1"
+        assert name_kwargs["name"] == "Boeing"
+
+        # Only "website" remains a fact — "entityname" became the entity_name
+        # above, "founded" was null, "_cluster_id" and "id" (the upsert key)
+        # are internal/identity fields, not attributes.
+        assert written == 1
+        connector.write_knowledge_fact.assert_called_once()
+        fact_kwargs = connector.write_knowledge_fact.call_args.kwargs
+        assert fact_kwargs["entity_id"] == "uuid-1"
+        assert fact_kwargs["value"] == "boeing.com"
+        assert fact_kwargs["value_kind"] == "TEXT"
+        predicate_call = connector.get_or_create_fact_predicate.call_args.args
+        assert predicate_call[0] == "company_website"
+        assert predicate_call[2] == "COMPANY"
+
+    def test_skips_a_record_with_no_resolved_entity_id(self) -> None:
+        connector = MagicMock()
+        connector.get_or_create_source.return_value = 1
+        connector.get_or_create_taxonomy_term.return_value = 7
+
+        raw_records = [{"id": None, "website": "example.com"}]
+        transformed_records = [{"company_id": None}]
+
+        written = _write_entity_attributes_as_facts(
+            connector, "company", raw_records, transformed_records, "company_id"
+        )
+
+        assert written == 0
+        connector.write_knowledge_fact.assert_not_called()
+        connector.write_entity_name.assert_not_called()
+
+    def test_one_field_failing_does_not_stop_the_rest(self) -> None:
+        connector = MagicMock()
+        connector.get_or_create_source.return_value = 1
+        connector.get_or_create_taxonomy_term.return_value = 7
+        connector.get_or_create_fact_predicate.side_effect = [
+            RuntimeError("db hiccup"),
+            42,
+        ]
+
+        raw_records = [{"id": "uuid-1", "revenue": 100, "employees": 500}]
+        transformed_records = [{"company_id": "uuid-1"}]
+
+        written = _write_entity_attributes_as_facts(
+            connector, "company", raw_records, transformed_records, "company_id"
+        )
+
+        # One field's predicate lookup raised; the other still got written.
+        assert written == 1

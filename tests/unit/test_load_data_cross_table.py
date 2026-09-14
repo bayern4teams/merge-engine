@@ -264,6 +264,58 @@ class TestWriteChildRows:
         }
         connector.load_batch.assert_not_called()
 
+    def test_a_self_referential_relationship_table_is_refused_not_written(self) -> None:
+        """Live regression: a company_company_relationship-shaped table has
+        TWO required FK columns pointing back at the SAME primary table
+        (company_a_id, company_b_id). fk_column only ever populates one of
+        them; the other, still NOT NULL, was left unset -- a doomed insert
+        that violated the constraint and rolled back an otherwise-successful
+        Boeing load (wf_50ab891e, this session). This table needs a second
+        resolved parent entity per row, which this one-parent model cannot
+        supply, so it must be refused up front rather than attempted."""
+        connector = MagicMock()
+        connector.get_foreign_keys = MagicMock(
+            return_value={"company_a_id": "company", "company_b_id": "company"}
+        )
+        connector.get_table_schema = MagicMock(
+            return_value={
+                "columns": [
+                    {"name": "company_a_id", "type": "uuid", "nullable": False},
+                    {"name": "company_b_id", "type": "uuid", "nullable": False},
+                    {"name": "description", "type": "text", "nullable": True},
+                ],
+                "primary_key": None,
+            }
+        )
+        connector.load_batch = MagicMock(return_value={"inserted": 1, "updated": 0})
+        source_records = [{"description": "Boeing Russia is an aerospace company..."}]
+        transformed_parents = [{"id": "dest-company-1"}]
+        mapping_by_table = {
+            "company_company_relationship": {
+                "description": {
+                    "dest_column": "description",
+                    "dest_table": "company_company_relationship",
+                }
+            }
+        }
+
+        results = _write_child_rows(
+            connector=connector,
+            primary_table="company",
+            source_records=source_records,
+            transformed_parent_records=transformed_parents,
+            mapping_by_table=mapping_by_table,
+        )
+
+        assert results == {
+            "company_company_relationship": {
+                "inserted": 0,
+                "updated": 0,
+                "dropped_fields": ["description"],
+            }
+        }
+        connector.load_batch.assert_not_called()
+
     def test_connector_without_get_foreign_keys_skips_everything(self) -> None:
         connector = MagicMock(spec=["load_batch"])
         results = _write_child_rows(
