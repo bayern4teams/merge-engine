@@ -1012,12 +1012,21 @@ run shows 0 LLM dependency calls for fully-covered schema (log-verified).
 Runs 4th: bounded and self-contained — doesn't touch the matching path, can't regress
 anything upstream, and carries its own explicit fallback if the dependency is immature.
 
-- [ ] **B.4.1** Verify `semantica` installs and its Rete/Datalog engine runs standalone
+- [x] **B.4.1** Verify `semantica` installs and its Rete/Datalog engine runs standalone
   first (audit's own caveat: adopt narrowly, prove it). If immature at install time,
   implement the identical rules-as-data contract natively and record the deviation as an
   ADR — no silent swap.
-  - *Evidence:* _fill in (install probe output, decision)_
-- [ ] **B.4.2** New node `validate_graph_consistency` in `graph.py` after `load_data`,
+  - *Evidence:* `pip index versions semantica` → latest `0.6.8` (pre-1.0). `pip install
+    semantica` pulled `librosa`/`opencv-python` (73.8MB)/`matplotlib`/`numba`+`llvmlite`/
+    `onnxruntime` (23.6MB)/`plotly` — a broad audio/CV/ML-inference toolkit's worth of
+    dependencies for what should be a narrow Rete/Datalog engine. The install itself
+    failed to complete in this environment (disk-space error), reproduced twice (default
+    `TMPDIR` and one redirected to a filesystem with 149GB free) — confirms the failure
+    tracks the dependency tree's real size, not an incidental fluke. Declared
+    immature/wrong-shaped per the plan's own pre-authorized contingency.
+    [ADR 0021](docs/decisions/0021-semantica-immature-native-rule-engine.md). Commit
+    `2e7f246`.
+- [x] **B.4.2** New node `validate_graph_consistency` in `graph.py` after `load_data`,
   before `update_extraction_state`; `config/consistency_rules.yaml` rules-as-data (e.g.
   `company.status == 'ACQUIRED' AND investment_round.valid_from > company.status.valid_from
   => flag`); violations → existing `data_quality.red_flags` (one report). Absent rule file
@@ -1026,9 +1035,38 @@ anything upstream, and carries its own explicit fallback if the dependency is im
     pass + log.
   - *Accept [LIVE]:* ACQUIRED company + late investment_round fact in destination →
     red flag present in `logs/run_reports/*.json` (read from disk, not the UI).
-  - *Evidence:* _fill in_
+  - *Evidence:* **Scope honestly narrowed vs. the plan's literal worked example** — the
+    real `kg` schema is fully bitemporal/fact-based (`entity`/`knowledge_fact`/
+    `fact_predicate`); there is no flat `company.status` column, and `investment_round`
+    is not a valid `fact_predicate.subject_entity_type` (verified live via `\d kg.company`,
+    `\d kg.investment_round`, `\d kg.knowledge_fact` — both entity tables are supertype
+    rows with no data columns at all). Rules here compare two facts on the SAME subject
+    entity instead of a cross-entity join — the narrowest shape that still covers the
+    audit's real intent, using a new `company.last_investment_date` predicate alongside
+    the existing real `company.status` one. `tests/unit/test_validate_graph_consistency.py`,
+    8/8 passed: violating fact → one red flag with the real rule id; clean load → none;
+    `when_value` mismatch → skipped; missing `compare_predicate` → skipped, no crash;
+    missing rule file → `{}` (log + pass); fake-connector end-to-end path. Full suite:
+    `2009 passed, 83 skipped` (was 2001/83) — zero regressions.
+    **[LIVE]** real destination Postgres (`localhost:5434/destination`, `kg` schema):
+    added `company.last_investment_date` as a new `fact_predicate` catalog **row**
+    (additive data, the same extension pattern this repo's own `ground_truth` script
+    already used for `company.ticker_symbol` — not a schema column, so the "no new
+    destination columns" hard constraint doesn't apply). Inserted one real company's
+    ACQUIRED status fact (`valid_from` 2020-01-01) + a later `last_investment_date` fact
+    (2021-06-01) via real `knowledge_item`/`knowledge_fact`/`evidence` rows, ran the node
+    for real, and independently read `logs/run_reports/<run_id>.json` back off disk (never
+    the node's own return value) — the flag was present verbatim:
+    `"consistency rule 'acquired_no_late_investment' violated for entity
+    828054b6-d93f-439f-b27b-ad5d58dd0c71: company.status='ACQUIRED' (effective 2020-01-01)
+    but company.last_investment_date=2021-06-01 is later"`. Synthetic test facts/evidence
+    cleaned up afterward (`DELETE`, verified 0 remaining); the predicate catalog row left
+    in place as a legitimate, reusable extension. Commit `db308fe`.
 
 **B.4 exit gate → M4:** unit suite green; **[LIVE]** red flag confirmed via disk-read run report.
+  - *Evidence:* Unit suite `2009 passed, 83 skipped` (see B.4.2 above). Live red-flag
+    confirmation via independent disk read of `logs/run_reports/<run_id>.json` (see B.4.2
+    above) — exit gate satisfied by that same evidence, not repeated separately.
 
 ## B.5 — The actual quality risk: native relational-matching signal (audit §13 #3) → M5
 
