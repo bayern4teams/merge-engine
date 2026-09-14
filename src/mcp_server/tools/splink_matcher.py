@@ -51,6 +51,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from src.mcp_server.tools.splink_workbench import DEFAULT_MODEL_STORE
+
 logger = logging.getLogger("merge-engine.tools.splink_matcher")
 
 try:
@@ -87,10 +89,68 @@ _NAME_TOKEN_OVERLAP_RULE = (
 )
 
 
+def _predict_with_saved_profile(
+    entity_type: str,
+    df: Any,
+    model_profile: str,
+    store_root: str,
+) -> list[tuple[str, str, float]] | None:
+    """B.6.3: predict-only using an already-trained, saved model version —
+    no ``.training`` call of any kind, success or failure. ``model_profile``
+    is ``"<model_name>/v<N>"`` (ADR 0016's S-N file store, already used by
+    the workbench). Malformed profile / missing version / predict failure
+    all return ``None`` so the caller drops to builtin, exactly like every
+    other Splink failure mode in this module — never a silent fresh retrain.
+    """
+    from src.mcp_server.tools import splink_model as sm
+
+    model_name, sep, version_str = model_profile.partition("/v")
+    if not model_name or not sep or not version_str.isdigit():
+        logger.warning(
+            "Splink: malformed model_profile %r for entity '%s' (expected "
+            "'<model_name>/v<N>'); falling back to builtin",
+            model_profile,
+            entity_type,
+        )
+        return None
+    try:
+        version = sm.load_version(store_root, model_name, int(version_str))
+        linker = Linker(df, version["payload"], DuckDBAPI())
+        predictions = linker.inference.predict(threshold_match_probability=0.0)
+        pred_df = predictions.as_pandas_dataframe()  # type: ignore[no-untyped-call]
+    except Exception as exc:
+        logger.warning(
+            "Splink: predict-only load of model_profile %r failed for entity "
+            "'%s' (%s); falling back to builtin",
+            model_profile,
+            entity_type,
+            exc,
+        )
+        return None
+
+    scored_pairs: list[tuple[str, str, float]] = []
+    for _, row in pred_df.iterrows():
+        scored_pairs.append(
+            (
+                str(row["_record_id_str_l"]),
+                str(row["_record_id_str_r"]),
+                float(row["match_probability"]),
+            )
+        )
+    logger.info(
+        "Splink: predict-only via model_profile %r produced %d pairwise predictions for entity '%s'",
+        model_profile,
+        len(scored_pairs),
+        entity_type,
+    )
+    return scored_pairs
+
+
 async def score_pairs_with_splink(
     entity_type: str,
     records: list[dict[str, Any]],
     matching_rules: dict[str, Any] | None = None,
+    store_root: str = DEFAULT_MODEL_STORE,
 ) -> list[tuple[str, str, float]] | None:
     """Train Splink over ``records`` and return every scored candidate pair.
 
@@ -145,6 +205,17 @@ async def score_pairs_with_splink(
             projected_rows.append(row_dict)
 
         df = pd.DataFrame(projected_rows)
+
+        # B.6.3: train-once wiring. A configured model_profile means a
+        # human already trained and validated this model in the workbench
+        # (S-N file store) — predict-only, no per-call EM retrain. Any
+        # failure here (bad format, missing version) falls back to builtin
+        # (returns None), same discipline as every other failure mode in
+        # this function — it never silently degrades to a fresh full
+        # retrain instead of what was actually asked for.
+        model_profile = (matching_rules or {}).get("model_profile")
+        if model_profile:
+            return _predict_with_saved_profile(entity_type, df, model_profile, store_root)
 
         # Identify candidate comparison columns available in the dataframe
         available_cols = [c for c in df.columns if c != "_record_id_str" and df[c].notna().any()]
@@ -365,6 +436,7 @@ async def resolve_with_splink(
     matching_rules: dict[str, Any] | None = None,
     known_cluster_ids: dict[str, str] | None = None,
     build_clusters_fn: Any = None,
+    store_root: str = DEFAULT_MODEL_STORE,
 ) -> dict[str, Any] | None:
     """Run entity resolution using Splink as the pairwise scoring engine.
 
@@ -374,7 +446,7 @@ async def resolve_with_splink(
     from src.mcp_server.tools.resolve_entities import _pending_merge_candidates, _thresholds_for
 
     rules = matching_rules or {}
-    scored_pairs = await score_pairs_with_splink(entity_type, records, rules)
+    scored_pairs = await score_pairs_with_splink(entity_type, records, rules, store_root=store_root)
     if scored_pairs is None:
         return None
 

@@ -1259,12 +1259,60 @@ outcomes are within this team's control.
     pairs in this actual dataset that the prefix rule alone would have missed
     — the concrete, measured version of the reordered/qualifier-prefixed-name
     gap the unit fixture demonstrates synthetically.
-- [ ] **B.6.3** Train-once wiring: `matching_rules = {"engine": "splink",
+- [x] **B.6.3** Train-once wiring: `matching_rules = {"engine": "splink",
     "model_profile": "company_diffbot_zoominfo/v1"}` → load saved profile (ADR 0016
     file-store), predict-only, no per-call EM retrain. Default path unchanged.
   - *Accept (unit):* profile path makes zero EM calls (mock assert); default path
     byte-identical behavior.
-  - *Evidence:* _fill in_
+  - *Evidence:* `matching_rules.engine="splink"` dispatch already existed
+    (`resolve_entities.py:520-521`, prior session); B.6.3 added the
+    `model_profile` handling `score_pairs_with_splink` didn't have —
+    `_predict_with_saved_profile` (new, `splink_matcher.py`) parses
+    `"<model_name>/v<N>"`, calls `splink_model.load_version` (the existing
+    ADR 0016 S-N file-store primitive, reused not reimplemented) and
+    predicts directly against the loaded payload — the function never
+    references `linker.training` at all, success or failure, so "zero EM
+    calls" is a structural property of the code path, not just a lucky
+    mock result. `store_root` threaded as a plain default param (no module
+    state) through `score_pairs_with_splink`/`resolve_with_splink` so tests
+    never touch the real `logs/splink_models`.
+    `tests/unit/test_splink_matcher.py`, 4 new tests, all red-confirmed
+    first (`TypeError: unexpected keyword argument 'store_root'` before the
+    param existed):
+    `test_model_profile_predict_only_makes_zero_em_calls` — a real tiny
+    model trained+saved to a temp store, then loaded via `model_profile`
+    with `LinkerTraining.estimate_u_using_random_sampling` /
+    `estimate_probability_two_random_records_match` /
+    `estimate_parameters_using_expectation_maximisation` all mocked and
+    asserted **not called**, while the known duplicate pair is still
+    correctly scored (proves predict-only actually predicts, not just
+    "doesn't crash"); `test_default_path_still_trains_with_em_when_no_model_profile`
+    — the regression guard for the *other* half of the accept criterion:
+    with no `model_profile`, EM **is** still called (`autospec=True` mock,
+    `assert_called()`) — the default path was not accidentally
+    short-circuited; `test_model_profile_malformed_falls_back_to_none` and
+    `test_model_profile_missing_version_falls_back_to_none` — both return
+    `None` (drop to builtin) rather than raising or silently retraining.
+    Full `test_splink_matcher.py`: 14/14 passed. Full unit suite:
+    `1876 passed, 83 skipped` (was 1872/83) — zero regressions.
+    **[LIVE]** the real, already-trained, already-activated
+    `logs/splink_models/company_diffbot_zoominfo/v1` (status `active`,
+    `round_trip_verified: true`, verified present on disk before this task
+    — see B.6's "Files" note) loaded via `resolve_with_splink("company",
+    records, matching_rules={"engine": "splink", "model_profile":
+    "company_diffbot_zoominfo/v1"}, store_root="logs/splink_models")`
+    against the same real 25 Boeing+Airbus rows from `testdiffbot` used in
+    B.6.2, with the same three `LinkerTraining` methods mocked and
+    independently confirmed **not called**: `EM called: False,
+    u-estimation called: False, prior called: False`, elapsed `0.133s`
+    (predict only, no training). **Honestly recorded, not spun:** this
+    particular saved model scored `159` candidate pairs but produced `0`
+    auto-matches (`155` auto-excluded, the rest borderline) against this
+    specific real record set — every one of the 25 records ended up its
+    own singleton cluster. The wiring is proven correct and genuinely
+    predict-only; this saved v1 model's own precision/recall on real data
+    is a separate question B.6.4 (blocked by B.6.1's missing fixture)
+    would have measured — not claimed as a win here.
 - [ ] **B.6.4** Re-run `tests/eval/test_matcher_recall.py`'s 560-pair gate; record real
   numbers. `tests/eval/last_gate.json` and the `test_splink_default_invariant.py` default
   flip **only on a measured pass** — no hand-override (audit §11).

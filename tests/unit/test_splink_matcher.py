@@ -13,9 +13,11 @@ enough record sets that training completes in well under a second.
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
-from src.mcp_server.tools.resolve_entities import _record_id
+from src.mcp_server.tools.resolve_entities import _domain_of, _project_to_canonical, _record_id
 from src.mcp_server.tools.splink_matcher import (
     _HAS_SPLINK,
     resolve_with_splink,
@@ -327,3 +329,124 @@ async def test_engine_splink_dispatches_and_merges_the_duplicate() -> None:
     matches = [c for c in res["clusters"] if boeing_ids <= set(c["record_ids"])]
     assert len(matches) == 1
     assert set(matches[0]["record_ids"]) == boeing_ids
+
+
+# ── B.6.3: train-once wiring (matching_rules.model_profile) ──────────────
+
+
+def _train_and_save_profile(store_root: str, model_name: str, records: list[dict]) -> None:
+    """Test-only: train a tiny real Splink model over ``records`` (same
+    projection `score_pairs_with_splink` uses) and freeze it as v1 in
+    ``store_root`` — the fixture a real workbench training run would have
+    already produced, stood up locally so the test never touches
+    ``logs/splink_models``.
+    """
+    import pandas as pd
+    import splink.comparison_library as cl
+    from splink import DuckDBAPI, Linker, SettingsCreator, block_on
+
+    from src.mcp_server.tools import splink_model as sm
+
+    rows = []
+    for rec in records:
+        proj, _ = _project_to_canonical(rec)
+        row = {"_record_id_str": str(_record_id(rec))}
+        for k, v in proj.items():
+            if v is not None:
+                row[k] = _domain_of(v) if k == "domain" else str(v)
+        rows.append(row)
+    df = pd.DataFrame(rows)
+
+    settings = SettingsCreator(
+        link_type="dedupe_only",
+        unique_id_column_name="_record_id_str",
+        comparisons=[cl.JaroWinklerAtThresholds("name", [0.9, 0.7]), cl.ExactMatch("email")],
+        blocking_rules_to_generate_predictions=[
+            'substr(lower(l."name"), 1, 4) = substr(lower(r."name"), 1, 4)',
+            block_on("email"),
+        ],
+    )
+    linker = Linker(df, settings, DuckDBAPI())
+    linker.training.estimate_u_using_random_sampling(max_pairs=1_000_000, seed=42)
+    linker.training.estimate_probability_two_random_records_match([block_on("email")], recall=0.7)
+    linker.training.estimate_parameters_using_expectation_maximisation(
+        'substr(lower(l."name"), 1, 4) = substr(lower(r."name"), 1, 4)',
+        fix_probability_two_random_records_match=True,
+    )
+    sm.save_version(store_root, model_name, linker, df=df, status="trained")
+
+
+@pytest.mark.asyncio
+async def test_model_profile_predict_only_makes_zero_em_calls(tmp_path) -> None:
+    """B.6.3 accept criterion: the model_profile path makes zero EM calls."""
+    from splink.internals.linker_components.training import LinkerTraining
+
+    store_root = str(tmp_path / "models")
+    records = _fixture_records()
+    _train_and_save_profile(store_root, "profile_test", records)
+
+    with (
+        patch.object(LinkerTraining, "estimate_u_using_random_sampling") as mock_u,
+        patch.object(LinkerTraining, "estimate_probability_two_random_records_match") as mock_prior,
+        patch.object(
+            LinkerTraining, "estimate_parameters_using_expectation_maximisation"
+        ) as mock_em,
+    ):
+        scored = await score_pairs_with_splink(
+            "company",
+            records,
+            matching_rules={"engine": "splink", "model_profile": "profile_test/v1"},
+            store_root=store_root,
+        )
+
+    mock_u.assert_not_called()
+    mock_prior.assert_not_called()
+    mock_em.assert_not_called()
+
+    assert scored is not None
+    id_boeing_1 = _record_id(records[0])
+    id_boeing_2 = _record_id(records[1])
+    key = (id_boeing_1, id_boeing_2) if id_boeing_1 < id_boeing_2 else (id_boeing_2, id_boeing_1)
+    scores_by_pair = {(a, b): conf for a, b, conf in scored}
+    assert key in scores_by_pair, "the saved model must still score the known duplicate pair"
+
+
+@pytest.mark.asyncio
+async def test_default_path_still_trains_with_em_when_no_model_profile(tmp_path) -> None:
+    """Regression guard for the other half of B.6.3's accept criterion:
+    the default (no model_profile) path is byte-identical to before —
+    it still trains (calls EM), it is not accidentally short-circuited."""
+    from splink.internals.linker_components.training import LinkerTraining
+
+    with patch.object(
+        LinkerTraining,
+        "estimate_parameters_using_expectation_maximisation",
+        autospec=True,
+    ) as mock_em:
+        await score_pairs_with_splink("company", _fixture_records())
+
+    mock_em.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_model_profile_malformed_falls_back_to_none(tmp_path) -> None:
+    store_root = str(tmp_path / "models")
+    scored = await score_pairs_with_splink(
+        "company",
+        _fixture_records(),
+        matching_rules={"model_profile": "not-a-valid-format"},
+        store_root=store_root,
+    )
+    assert scored is None
+
+
+@pytest.mark.asyncio
+async def test_model_profile_missing_version_falls_back_to_none(tmp_path) -> None:
+    store_root = str(tmp_path / "models")
+    scored = await score_pairs_with_splink(
+        "company",
+        _fixture_records(),
+        matching_rules={"model_profile": "nonexistent_model/v1"},
+        store_root=store_root,
+    )
+    assert scored is None
