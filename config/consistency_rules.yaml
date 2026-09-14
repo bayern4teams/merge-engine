@@ -1,0 +1,35 @@
+# Post-merge consistency rules (audit §13 #9, fix-v3 B.4.2).
+#
+# Rules-as-data, evaluated by src/orchestrator/nodes/validate_graph_consistency.py's
+# plain-Python clause matcher -- no rule-engine dependency (ADR 0021:
+# `semantica` rejected as immature/wrong-shaped for this narrow a job).
+#
+# Each rule compares two facts already recorded on the SAME subject entity
+# (see the module's own docstring for why: the real kg schema is fully
+# bitemporal/fact-based -- there is no flat "company.status" column, and
+# "investment_round" is not a valid fact_predicate subject_entity_type --
+# so a cross-entity join isn't how this schema models the relationship).
+#
+# Fields:
+#   id                 unique rule identifier, used in the red-flag text
+#   when_predicate     fact_predicate.code that gates this rule
+#   when_value         the value that predicate must equal for the rule to apply
+#   compare_predicate  the other fact_predicate.code to compare
+#   compare_op         "after_when_valid_from" (the only op implemented today --
+#                      compare_predicate's value must not be later than
+#                      when_predicate's own valid_from)
+#   severity           "warn" or "fail" -- folded into data_quality.red_flags,
+#                      "fail" only escalates the report's grade past "B" if a
+#                      future rule needs that; today's rules stay at "warn".
+rules:
+  - id: acquired_no_late_investment
+    description: >
+      An ACQUIRED company's most recent investment date should not be
+      after the date its ACQUIRED status became effective -- a late
+      investment recorded against an already-acquired company usually
+      means the acquisition date or the investment date was mapped wrong.
+    when_predicate: company.status
+    when_value: ACQUIRED
+    compare_predicate: company.last_investment_date
+    compare_op: after_when_valid_from
+    severity: warn

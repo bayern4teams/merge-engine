@@ -149,6 +149,7 @@ src/orchestrator/nodes/unify_entities.py: error: Missing type arguments for gene
 src/orchestrator/nodes/unify_entities.py: error: Missing type arguments for generic type "dict"  [type-arg]
 src/orchestrator/nodes/unify_entities.py: error: Missing type arguments for generic type "dict"  [type-arg]
 src/orchestrator/nodes/unify_entities.py: error: Missing type arguments for generic type "dict"  [type-arg]
+src/orchestrator/nodes/validate_graph_consistency.py: error: Library stubs not installed for "yaml"  [import-untyped]
 src/orchestrator/profiles.py: error: Returning Any from function declared to return "dict[str, Any] | None"  [no-any-return]
 src/orchestrator/spool.py: error: Call to untyped function "_connect" in typed context  [no-untyped-call]
 src/orchestrator/spool.py: error: Call to untyped function "_connect" in typed context  [no-untyped-call]

@@ -24,6 +24,7 @@ from src.orchestrator.nodes.plan_scope import plan_scope
 from src.orchestrator.nodes.resolve_entities import has_low_confidence_clusters, resolve_entities
 from src.orchestrator.nodes.unify_entities import unify_entity_groups
 from src.orchestrator.nodes.validate_data import validate_data_node
+from src.orchestrator.nodes.validate_graph_consistency import validate_graph_consistency
 
 __all__ = [
     "analyze_dependencies",
@@ -45,4 +46,5 @@ __all__ = [
     "unify_entity_groups",
     "update_extraction_state_node",
     "validate_data_node",
+    "validate_graph_consistency",
 ]
