@@ -106,7 +106,11 @@ async def score_pairs_with_splink(
         return None
 
     try:
-        from src.mcp_server.tools.resolve_entities import _project_to_canonical, _record_id
+        from src.mcp_server.tools.resolve_entities import (
+            _domain_of,
+            _project_to_canonical,
+            _record_id,
+        )
 
         # ── 1. Build Projected Comparison View (Canonical 4-6 fields) ───────
         projected_rows: list[dict[str, Any]] = []
@@ -115,7 +119,16 @@ async def score_pairs_with_splink(
             proj, _ = _project_to_canonical(rec)
             row_dict: dict[str, Any] = {"_record_id_str": str(rid)}
             for k, v in proj.items():
-                row_dict[k] = str(v) if v is not None else ""
+                if v is None:
+                    continue
+                # Registrable-domain normalisation BEFORE Splink ever sees the
+                # value, via the same `_domain_of` the builtin engine already
+                # trusts as a full-confidence identity key (resolve_entities.py
+                # docstring, "C0c"). Without this, "https://www.boeing.com/
+                # careers" and "boeing.com" are two different strings to an
+                # exact-match blocking rule/comparator and a domain column ends
+                # up far weaker here than it already is in the builtin engine.
+                row_dict[k] = _domain_of(v) if k == "domain" else str(v)
             projected_rows.append(row_dict)
 
         df = pd.DataFrame(projected_rows)
@@ -128,21 +141,55 @@ async def score_pairs_with_splink(
             )
             return None
 
-        # Build comparison objects for Splink
+        # Build comparison objects for Splink. Blocking rules are a UNION —
+        # a pair needs to satisfy only ONE to be scored — so every strong
+        # identity-shaped field gets its own rule instead of the first
+        # available column silently claiming the only one. This was the
+        # deeper half of the "block_on(name) can't see the pairs it needs to
+        # score" defect: even after fixing name's own rule, `domain` (a much
+        # stronger blocking key when present — two records sharing a
+        # registrable domain are almost always the same company) was never
+        # given a chance, because `if not blocking_rules` had already been
+        # satisfied by `name`. Live evidence and the fixed numbers are in the
+        # Splink tuning methodology file, not repeated here.
         comparisons: list[Any] = []
         blocking_rules: list[Any] = []
 
         if "name" in available_cols:
             comparisons.append(cl.JaroWinklerAtThresholds("name", [0.9, 0.7]))
-            blocking_rules.append(block_on("name"))
+            # Never block on the exact field you fuzzy-compare (Splink's own
+            # documented anti-pattern — confirmed live: `block_on("name")`
+            # alone scored 0 of 15 pairs on a real Boeing/Airbus fixture,
+            # because almost no true-duplicate pair in real company data
+            # shares a byte-identical name). A loosened first-4-character
+            # key still bounds the block (nothing is compared against every
+            # other row) while catching prefix-sharing variants; it is
+            # unioned with the deterministic keys below, never a substitute
+            # for them.
+            blocking_rules.append(
+                'substr(lower(l."name"), 1, 4) = substr(lower(r."name"), 1, 4)'
+            )
+
+        if "domain" in available_cols:
+            comparisons.append(cl.ExactMatch("domain").configure(term_frequency_adjustments=True))
+            blocking_rules.append(block_on("domain"))
 
         if "email" in available_cols:
             comparisons.append(cl.ExactMatch("email").configure(term_frequency_adjustments=True))
-            if not blocking_rules:
-                blocking_rules.append(block_on("email"))
+            blocking_rules.append(block_on("email"))
 
+        # ponytail: every OTHER exact-match-shaped column still gets a
+        # comparison, but only the first one contributes a blocking rule of
+        # its own (same fallback shape as before this fix) when name/domain/
+        # email left none — unioning a rule per arbitrary remaining column
+        # risks the same low-selectivity blow-up the comparison-budget
+        # bug hit on `jobTitle` values like "senior" (§18.4/§00b); a real fix
+        # would cost each candidate with Splink's own
+        # `count_comparisons_from_blocking_rule` (already used by the B.4
+        # workbench's S-E recommender) before unioning it, not just union
+        # blindly. Upgrade path: reuse S-E's cost check here.
         for col in available_cols:
-            if col not in ("name", "email"):
+            if col not in ("name", "domain", "email"):
                 comparisons.append(cl.ExactMatch(col))
                 if not blocking_rules:
                     blocking_rules.append(block_on(col))
@@ -213,7 +260,17 @@ async def score_pairs_with_splink(
             )
             return None
 
-        deterministic_field = "email" if "email" in available_cols else available_cols[0]
+        # Prefer domain over email as the deterministic-prior field when both
+        # are available: for company-shaped entities domain is populated far
+        # more often than a person-shaped email field, and it's now
+        # registrable-domain-normalised above, so it is at least as reliable
+        # an identity key as email once populated.
+        if "domain" in available_cols:
+            deterministic_field = "domain"
+        elif "email" in available_cols:
+            deterministic_field = "email"
+        else:
+            deterministic_field = available_cols[0]
         prior_fixed = False
         try:
             linker.training.estimate_probability_two_random_records_match(

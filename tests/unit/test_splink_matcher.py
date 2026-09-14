@@ -233,6 +233,49 @@ async def test_engine_builtin_default_is_unaffected() -> None:
 
 
 @pytest.mark.asyncio
+async def test_score_pairs_blocks_on_domain_even_when_names_disagree() -> None:
+    """The blocking-rule union fix (§00b): a pair whose names share no
+    4-character prefix at all — so the loosened name blocking rule alone
+    would never propose it — must still be BLOCKED (proposed for scoring)
+    when the two records share a registrable domain. Before this fix,
+    `name` being present meant no other field's blocking rule was ever
+    added at all (`if not blocking_rules`), so this pair would never even
+    reach the scorer regardless of how strong the domain agreement was.
+    """
+    records = [
+        *_fixture_records(),
+        _company(
+            "origin1",
+            "Company",
+            "11",
+            "Umbrella Aerodyne Holdings",
+            "info@umbrella-test.example",
+            website="https://shared-domain-test.example/about",
+        ),
+        _company(
+            "origin2",
+            "company_profile",
+            "12",
+            "Zenith Sky Ventures",
+            "hi@zenith-test.example",
+            website="www.shared-domain-test.example",
+        ),
+    ]
+    scored = await score_pairs_with_splink("company", records)
+    assert scored is not None
+
+    umbrella_id = _record_id(records[-2])
+    zenith_id = _record_id(records[-1])
+    scores_by_pair = {(a, b) if a < b else (b, a): conf for a, b, conf in scored}
+    key = (umbrella_id, zenith_id) if umbrella_id < zenith_id else (zenith_id, umbrella_id)
+    assert key in scores_by_pair, (
+        "a pair sharing a registrable domain but no 4-char name prefix must "
+        "still be blocked together — the blocking-rule union, not just the "
+        "loosened name rule alone"
+    )
+
+
+@pytest.mark.asyncio
 async def test_engine_splink_dispatches_and_merges_the_duplicate() -> None:
     from src.mcp_server.tools.resolve_entities import resolve_entities_impl
 
