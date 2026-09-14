@@ -16,6 +16,7 @@ any id field a caller already set -- silently falls back to `str(id(rec))`,
 Python's object-identity address. Every record in this script sets those
 three fields for exactly that reason.
 """
+
 import csv
 import sys
 from pathlib import Path
@@ -36,15 +37,17 @@ def load_diffbot_tsv(path):
             if len(row) != 5:
                 continue
             companyid, entityname, fullname, website, summary = row
-            recs.append({
-                "_origin_id": "testdiffbot",
-                "_origin_table": "company",
-                "_origin_id_row": companyid,
-                "name": entityname or "",
-                "fullname": fullname or "",
-                "domain": _domain_of(website) if website else "",
-                "description": (summary or "")[:150],
-            })
+            recs.append(
+                {
+                    "_origin_id": "testdiffbot",
+                    "_origin_table": "company",
+                    "_origin_id_row": companyid,
+                    "name": entityname or "",
+                    "fullname": fullname or "",
+                    "domain": _domain_of(website) if website else "",
+                    "description": (summary or "")[:150],
+                }
+            )
     return recs
 
 
@@ -84,15 +87,17 @@ ZOOMINFO_ROWS = [
 def zoominfo_recs():
     out = []
     for cid, name, domain in ZOOMINFO_ROWS:
-        out.append({
-            "_origin_id": "testzoominfo",
-            "_origin_table": "Company",
-            "_origin_id_row": cid,
-            "name": name,
-            "fullname": name,
-            "domain": _domain_of(domain) if domain else "",
-            "description": "",
-        })
+        out.append(
+            {
+                "_origin_id": "testzoominfo",
+                "_origin_table": "Company",
+                "_origin_id_row": cid,
+                "name": name,
+                "fullname": name,
+                "domain": _domain_of(domain) if domain else "",
+                "description": "",
+            }
+        )
     return out
 
 
@@ -105,7 +110,7 @@ if not _SAMPLE_PATH.exists():
         "  psql -h <origin host> -p <port> -U <user> -d testdiffbot -t -A -F $'\\t' -c \"\n"
         "  select companyid, entityname, fullname, coalesce(website,''), coalesce(left(summary,150),'')\n"
         "  from diffbot.company where entityname is not null and entityname <> ''\n"
-        "  order by random() limit 3000;\" > "
+        '  order by random() limit 3000;" > '
         f"{_SAMPLE_PATH}\n\n"
         "See docs/diagnostics/SPLINK_TUNING_METHODOLOGY.md §3.4 for the full method."
     )
@@ -138,7 +143,9 @@ result = wb.train(
     config,
     store_root="logs/splink_models",
 )
-print(f"\nTrained model version {result['version']}, round-trip verified: {result['round_trip_verified']}")
+print(
+    f"\nTrained model version {result['version']}, round-trip verified: {result['round_trip_verified']}"
+)
 print("Training warnings:", result["training"].get("warnings"))
 
 pred = wb.predict(
@@ -170,7 +177,12 @@ def find_exact(fullname_or_name, origin):
 
 
 pairs_to_check = [
-    ("Boeing Satellite Systems, Inc.", "diffbot", "Boeing Satellite Systems International, Inc.", "diffbot"),
+    (
+        "Boeing Satellite Systems, Inc.",
+        "diffbot",
+        "Boeing Satellite Systems International, Inc.",
+        "diffbot",
+    ),
     ("Boeing Co", "diffbot", "Boeing", "zoominfo"),
     ("The Boeing Company", "diffbot", "Boeing", "zoominfo"),
     ("Boeing Co", "diffbot", "The Boeing Company", "diffbot"),
@@ -178,7 +190,12 @@ pairs_to_check = [
     ("AIRBUS SE", "diffbot", "Airbus Group", "zoominfo"),
     ("Boeing Australia Holdings Proprietary Limited", "diffbot", "The Boeing", "zoominfo"),
     ("BOEING INTEGRATED DEFENSE SY", "diffbot", "Boeing Defense & Space Group", "diffbot"),
-    ("BOEING INTEGRATED DEFENSE SY", "diffbot", "The Boeing Company Boeing Information Space & Defense Systems", "diffbot"),
+    (
+        "BOEING INTEGRATED DEFENSE SY",
+        "diffbot",
+        "The Boeing Company Boeing Information Space & Defense Systems",
+        "diffbot",
+    ),
 ]
 print("\n--- Known true-duplicate pairs, scored by the BULK-TRAINED model ---")
 n_blocked = 0
@@ -191,7 +208,9 @@ for n1, o1, n2, o2 in pairs_to_check:
     conf = scores_by_pair.get(key)
     if conf is not None:
         n_blocked += 1
-    print(f"  {n1} [{o1}] <-> {n2} [{o2}]: {'scored ' + format(conf, '.4f') if conf is not None else 'NOT BLOCKED'}")
+    print(
+        f"  {n1} [{o1}] <-> {n2} [{o2}]: {'scored ' + format(conf, '.4f') if conf is not None else 'NOT BLOCKED'}"
+    )
 print(f"\n{n_blocked}/{len(pairs_to_check)} known true-duplicate pairs blocked & scored.")
 
 sat1 = find_exact("Boeing Satellite Systems, Inc.", "diffbot")

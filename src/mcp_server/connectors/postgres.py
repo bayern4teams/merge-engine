@@ -180,8 +180,7 @@ class PostgresConnector(BaseConnector):
                 schema = row[0]
         except Exception as exc:
             logger.debug(
-                "Could not resolve real schema for bare table name %r; "
-                "defaulting to 'public': %s",
+                "Could not resolve real schema for bare table name %r; defaulting to 'public': %s",
                 table_name,
                 exc,
             )

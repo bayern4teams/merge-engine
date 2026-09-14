@@ -79,7 +79,16 @@ splink = ["splink>=4.0.0"]
 dq = ["great-expectations>=1.0.0"]
 lineage = ["sqlglot>=25.0.0"]
 swarm = ["langgraph-swarm>=0.0.11"]
-perf = ["numpy>=1.26", "pandas>=2.2"]
+# numpy<2.5: 2.5.0's bundled __init__.pyi started using PEP 695 `type X = ...`
+# syntax, which mypy refuses to parse under this project's `python_version =
+# "3.11"` target -- it halts the ENTIRE `mypy src` run at that stub's parse
+# error, checking nothing beyond import resolution (verified live 2026-09-14:
+# 93 source files went unchecked, only surfaced when a stale Windows-path
+# mypy-baseline.txt was independently found needing a refresh anyway). Not a
+# fix-v3 change; pinned narrowly here so a fresh clone doesn't silently lose
+# type coverage the same way. Revisit once mypy targets >=3.12 or this
+# project's own minimum Python does.
+perf = ["numpy>=1.26,<2.5", "pandas>=2.2"]
 # ADR 0005 (docs/decisions/0005-adopt-valentine-schema-matching.md): P-7's
 # first-pass schema matcher, ahead of the deterministic heuristic pass and
 # the LLM.

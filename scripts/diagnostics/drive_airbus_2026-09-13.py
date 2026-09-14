@@ -1,6 +1,7 @@
 """Drive a live Airbus merge through the real app, this session's actual
 origins/destination (adapted from scripts/diagnostics/drive_app.py, whose
 hardcoded connection details are from an earlier project phase)."""
+
 import json
 import sys
 import time
@@ -16,8 +17,11 @@ ORIGINS = [
         "id": "testdiffbot",
         "type": "postgres",
         "connection": {
-            "host": "localhost", "port": 5433, "user": "postgres",
-            "password": "supersecurepassword", "database": "testdiffbot",
+            "host": "localhost",
+            "port": 5433,
+            "user": "postgres",
+            "password": "supersecurepassword",
+            "database": "testdiffbot",
         },
         "priority": 1,
     },
@@ -25,16 +29,23 @@ ORIGINS = [
         "id": "testzoominfo",
         "type": "clickhouse",
         "connection": {
-            "host": "localhost", "port": 8125, "user": "postgres",
-            "password": "supersecurepassword", "database": "testzoominfo",
+            "host": "localhost",
+            "port": 8125,
+            "user": "postgres",
+            "password": "supersecurepassword",
+            "database": "testzoominfo",
         },
         "priority": 2,
     },
 ]
 DESTINATION = {
     "type": "postgres",
-    "host": "localhost", "port": 5434, "user": "postgres",
-    "password": "supersecurepassword", "database": "destination", "schema": "kg",
+    "host": "localhost",
+    "port": 5434,
+    "user": "postgres",
+    "password": "supersecurepassword",
+    "database": "destination",
+    "schema": "kg",
 }
 
 

@@ -166,9 +166,7 @@ async def score_pairs_with_splink(
             # other row) while catching prefix-sharing variants; it is
             # unioned with the deterministic keys below, never a substitute
             # for them.
-            blocking_rules.append(
-                'substr(lower(l."name"), 1, 4) = substr(lower(r."name"), 1, 4)'
-            )
+            blocking_rules.append('substr(lower(l."name"), 1, 4) = substr(lower(r."name"), 1, 4)')
 
         if "domain" in available_cols:
             comparisons.append(cl.ExactMatch("domain").configure(term_frequency_adjustments=True))
