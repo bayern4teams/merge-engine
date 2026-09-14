@@ -38,6 +38,7 @@ Split from the old root `TECHNICAL_README.md`, by subsystem, in reading order:
 - [0018-reject-relater-code-adopt-idea.md](decisions/0018-reject-relater-code-adopt-idea.md) — rejected: Python 2, 2-commit snapshot; its relational-matching idea lands natively as B.5's `_relational_agreement`
 - [0019-utopia-reference-only.md](decisions/0019-utopia-reference-only.md) — reference only: this project's own `kg` schema is already the bitemporal, evidence-carrying decision ledger Utopia demonstrates
 - [0020-ontop-study-not-aws-accelerator.md](decisions/0020-ontop-study-not-aws-accelerator.md) — AWS accelerator rejected (Neptune/Bedrock cloud coupling); Ontop itself a portable OBDA reference if a concrete SPARQL/OWL need appears
+- [0021-semantica-immature-native-rule-engine.md](decisions/0021-semantica-immature-native-rule-engine.md) — `semantica` rejected (pre-1.0, drags in an unrelated audio/CV/ML-inference dependency tree, failed to install); B.4's rules-as-data contract implemented natively instead
 
 ## plans/ — the plans this repo is executing against
 
