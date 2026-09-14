@@ -145,6 +145,24 @@ class ScopeConfig(BaseModel):
     engine: str = "v3_discovery"
 
 
+class MatchingConfig(BaseModel):
+    """Entity-resolution blocking/matching tuning knobs (fix-v3 B.1.3)."""
+
+    # pg_trgm GIN-indexed candidate-pair blocking (audit §13 #13). Off by
+    # default: it UNIONS with, never replaces, resolve_entities.py's
+    # existing Python blocking pass (recall-safe to turn on), but needs
+    # pg_trgm available on the destination, so it stays opt-in rather than
+    # assumed.
+    trigram_blocking_enabled: bool = False
+    # Below this many records the existing O(n^2) Python blocking pass is
+    # already fast enough — not worth a staging round-trip to the
+    # destination for a small entity.
+    trigram_blocking_min_records: int = 1000
+    # pg_trgm's `%` operator threshold (`set_limit`). 0.6 is conservative —
+    # this only *proposes* candidate pairs; scoring is unchanged.
+    trigram_similarity_threshold: float = 0.6
+
+
 class Config(BaseModel):
     """Top-level application configuration."""
 
@@ -153,6 +171,7 @@ class Config(BaseModel):
     retry: RetryConfig = Field(default_factory=RetryConfig)
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
     scope: ScopeConfig = Field(default_factory=ScopeConfig)
+    matching: MatchingConfig = Field(default_factory=MatchingConfig)
 
 
 # ---------------------------------------------------------------------------

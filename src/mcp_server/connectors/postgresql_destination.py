@@ -406,7 +406,9 @@ class PostgreSQLDestinationConnector:
         finally:
             cursor.close()
 
-    def get_or_create_taxonomy_term(self, taxonomy_code: str, term_code: str, term_name: str) -> int:
+    def get_or_create_taxonomy_term(
+        self, taxonomy_code: str, term_code: str, term_name: str
+    ) -> int:
         """Resolve a controlled-vocabulary term, creating its taxonomy and
         the term itself on first use — this schema's own design intent
         (``taxonomy.is_extensible`` defaults to true) for values discovered
@@ -463,9 +465,7 @@ class PostgreSQLDestinationConnector:
             row = cursor.fetchone()
             if row:
                 return row[0]
-            source_type_id = self.get_or_create_taxonomy_term(
-                "source_type", "DATABASE", "Database"
-            )
+            source_type_id = self.get_or_create_taxonomy_term("source_type", "DATABASE", "Database")
             cursor.execute(
                 f'INSERT INTO "{self._schema}"."source" (source_type_term_id, uri, title) '
                 f"VALUES (%s, %s, %s) RETURNING source_id",
@@ -506,7 +506,12 @@ class PostgreSQLDestinationConnector:
             cursor.close()
 
     def write_entity_name(
-        self, item_id: str, entity_id: str, name: str, name_type_term_id: int, language_code: str = "en"
+        self,
+        item_id: str,
+        entity_id: str,
+        name: str,
+        name_type_term_id: int,
+        language_code: str = "en",
     ) -> None:
         """Insert one ``entity_name`` row. ``item_id`` is caller-supplied and
         deterministic (derived from ``entity_id``) so a re-run of the same
@@ -658,6 +663,33 @@ class PostgreSQLDestinationConnector:
                 (self._schema, table_name, column_name),
             )
             return cursor.fetchone()[0]
+        finally:
+            cursor.close()
+
+    def execute_sql(self, sql: str, params: tuple[Any, ...] | None = None) -> list[Any]:
+        """Run one ad hoc SQL statement, returning its rows (or ``[]`` for
+        a statement with no result set, e.g. DDL).
+
+        A minimal, generic escape hatch for callers that need destination
+        SQL with no dedicated typed method (e.g. resolve_entities.py's
+        pg_trgm trigram-blocking pass, B.1.3) — every upsert/write still
+        goes through its own typed method above; this is for one-off
+        reads/DDL only. Same cursor/commit/rollback idiom as
+        ``read_entity_rows``/``column_exists`` above.
+        """
+        conn = self._ensure_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(sql, params)
+            if cursor.description is None:
+                self._commit(conn)
+                return []
+            rows: list[Any] = cursor.fetchall()
+            self._commit(conn)
+            return rows
+        except Exception:
+            self._rollback(conn)
+            raise
         finally:
             cursor.close()
 

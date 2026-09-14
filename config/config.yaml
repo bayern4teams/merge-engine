@@ -96,6 +96,15 @@ splink:
     exclude_threshold: 0.2  # score <= this → auto-keep-apart band
     review_limit: 200       # review queue rows returned (counts are whole-band)
 
+# ── Entity-resolution blocking/matching tuning (fix-v3 B.1.3) ──────────────
+matching:
+  # pg_trgm GIN-indexed candidate-pair blocking (audit §13 #13). Off by
+  # default: unions with, never replaces, resolve_entities.py's own Python
+  # blocking pass. Needs `pg_trgm` available on the destination.
+  trigram_blocking_enabled: false
+  trigram_blocking_min_records: 1000
+  trigram_similarity_threshold: 0.6
+
 # ── Tracing (self-hosted Langfuse) ─────────────────────────────────────────
 # Tracing is configured purely via environment variables in .env:
 #   LANGFUSE_PUBLIC_KEY=<project public key>

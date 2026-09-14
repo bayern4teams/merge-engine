@@ -38,6 +38,41 @@ logger = logging.getLogger("merge-engine.orchestrator.resolve_entities")
 _MAX_POOL_WORKERS = 4
 
 
+def _matching_connector_and_config(state: dict[str, Any]) -> tuple[Any | None, dict[str, Any]]:
+    """The destination connector + ``matching.*`` config for B.1.3's pg_trgm
+    trigram blocking, best-effort (never what stops a merge — same ethos as
+    ``_inject_subject_destination_rows``). ``resolve_entities_impl`` itself
+    stays disabled (``trigram_blocking_enabled`` defaults False) unless
+    config.yaml turns it on, so a connector failure here just means that
+    flag has no effect, not a broken run.
+    """
+    matching_config: dict[str, Any] = {}
+    try:
+        from src.utils.config_loader import load_config
+
+        cfg = load_config()
+        matching_config = cfg.matching.model_dump()
+    except Exception as exc:
+        logger.debug("Could not load matching config (%s); trigram blocking stays off.", exc)
+
+    connector = None
+    destination = state.get("destination")
+    if isinstance(destination, dict) and matching_config.get("trigram_blocking_enabled"):
+        try:
+            from src.mcp_server.tools.load_data import _get_destination_connector
+
+            candidate = _get_destination_connector(destination)
+            if hasattr(candidate, "execute_sql"):
+                connector = candidate
+        except Exception as exc:
+            logger.warning(
+                "Could not open destination connector for trigram blocking (%s); "
+                "falling back to the existing blocking pass alone.",
+                exc,
+            )
+    return connector, matching_config
+
+
 def _matching_rules_for(
     matching_rules: dict[str, Any] | None, entity_type: str
 ) -> dict[str, Any] | None:
@@ -171,6 +206,8 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
             )
             process_pool = None
 
+    connector, matching_config = _matching_connector_and_config(state)
+
     try:
         logger.debug("Dispatching %d entity resolution(s) concurrently", len(prepared))
         results = await asyncio.gather(
@@ -185,6 +222,8 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
                     matching_rules=_matching_rules_for(state.get("matching_rules"), entity_type),
                     subject=(state.get("merge_scope") or {}).get("subject") or None,
                     process_pool=process_pool,
+                    connector=connector,
+                    matching_config=matching_config,
                 )
                 for entity_type, records in prepared
             ),
