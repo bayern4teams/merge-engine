@@ -14,6 +14,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
 import pytest
 
+pytest.importorskip("valentine", reason="schema_matching optional extra not installed")
+
 from src.mcp_server.tools.schema_matching import (
     heuristic_candidates_for_column,
     match_columns_to_canonical_schema,
