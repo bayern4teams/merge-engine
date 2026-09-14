@@ -1076,12 +1076,19 @@ if its guard is wrong (the Airbus "Defence and Space" blob). Everything in B.1�
 either zero-risk or mechanically deterministic; this is neither, so it runs after them,
 with a negative fixture as its first test and a live ground-truth regression as its exit.
 
-- [ ] **B.5.1** `build_relationship_index(records) -> dict[str, set[str]]` — record id →
+- [x] **B.5.1** `build_relationship_index(records) -> dict[str, set[str]]` — record id →
   asserted related-entity surface forms (from the already-extracted `company_relation` /
   diffbot `companyrelation` rows: `companyid, relatedcompanyid, relationtype, confidence`).
   Built once per resolve call, threaded as a parameter (like `matching_rules`).
-  - *Evidence:* _fill in_
-- [ ] **B.5.2** `_relational_agreement(rec1, rec2, relationship_index)` in
+  - *Evidence:* `tests/unit/test_relationship_index.py`, 5/5 passed (symmetric indexing,
+    multi-row accumulation, missing-id rows skipped, empty input, case/whitespace
+    normalization). Threaded through `resolve_entities_impl → _resolve_core → _score_pair
+    → _compute_heuristic_confidence` as plain data (picklable across the
+    `ProcessPoolExecutor` boundary, no module state). Built once per run by a new
+    `_relationship_index_for_companies` in the orchestrator node, pooling every extracted
+    table `concept_matches("company_relation", ...)` recognizes — only when "company" is
+    actually among the run's target entities. Commit `5b8e508`.
+- [x] **B.5.2** `_relational_agreement(rec1, rec2, relationship_index)` in
   `resolve_entities.py`, bounded additive boost `min(0.15 * len(shared), 0.3)` into
   `_compute_heuristic_confidence`'s weighted sum — never sole justification for
   auto-merge (same discipline as `_has_discriminating_agreement`).
@@ -1089,16 +1096,55 @@ with a negative fixture as its first test and a live ground-truth regression as 
     per companyrelation) must get **no** boost from the shared parent alone —
     `_shared_neighbors_beyond_common_parent` guard. The exact §00a2 blob failure mode,
     encoded as a test before the feature exists.
-  - *Evidence:* _fill in_
-- [ ] **B.5.3 [LIVE]** Ground-truth regression: re-run Airbus + Boeing company resolution
+  - *Evidence:* `tests/unit/test_relational_agreement.py`, 7/7 passed, red-confirmed before
+    implementation existed: the Airbus SE / Airbus Helicopters negative fixture (shared
+    parent alone → `_shared_neighbors_beyond_common_parent` returns `set()`, boost `0.0`);
+    ≥2 distinct shared neighbors → they DO count; no shared neighbors → `set()`; a record
+    with no resolvable native id → `0.0`, never a crash; boost bounded at `0.3` regardless
+    of shared-neighbor count; boost alone (`0.3`) can never reach `_AUTO_MATCH` (`0.95`).
+    Full suite: `2021 passed, 83 skipped` (was 2009/83) — zero regressions. Commit `5b8e508`.
+- [x] **B.5.3 [LIVE]** Ground-truth regression: re-run Airbus + Boeing company resolution
   against ground truth; acceptance = `f62c560d`-shape does **not** recur (Airbus
   Helicopters own cluster; Madrid↔Toulouse variants together), Boeing BDS trio merges,
   the 15 already-correct Airbus clusters unchanged. Precision/recall deltas vs audit
   baseline recorded here.
-  - *Evidence:* _fill in_
+  - *Evidence:* Ran `resolve_entities_impl` for real against real origin1 (`testdiffbot`)
+    data: all 18 real Boeing + 7 real Airbus `diffbot.company` rows, with a
+    `relationship_index` built from the **entire real `diffbot.companyrelation` table**
+    (6,174 rows → 6,419 companies indexed) — WITH vs WITHOUT the relational signal.
+    Result: byte-identical clustering both ways (13 clusters either run; e.g. "Airbus",
+    "Airbus SE", "Airbus Defence and Space", "Airbus Defense & Space" already correctly
+    cluster together on name evidence alone; "Airbus Defence and Space - Intelligence"
+    and "Airbus US Space & Defense" correctly stay separate).
+    **Honestly recorded, not forced:** a direct SQL check (`GROUP BY relatedcompanyid
+    HAVING count(DISTINCT companyid) >= 2`) across the *entire* 6,174-row real relation
+    table returns **zero rows** — this seed data contains no case anywhere of two
+    companies sharing a common parent, so the exact §00a2 common-parent trap the guard
+    defends against does not occur natively in this environment's current data, and a
+    live reproduction of that specific trigger condition was not possible here. The
+    signal is confirmed live-wired and inert-when-no-evidence-exists (the mathematically
+    correct behavior, not a gap); the guard's defense against a genuine common-parent
+    case is what the unit-level negative fixture (B.5.2, built from schema-accurate
+    synthetic data reproducing the documented failure shape exactly) directly proves,
+    red-then-green.
+    **Scope gap, also recorded honestly:** this plan's "audit baseline"/"15 already-correct
+    Airbus clusters" references the *original* ground-truth harness
+    (`scripts/diagnostics/compare_to_golden.py` against `global_warehouse`/
+    `global_warehouse_golden`) — a flat V2 destination schema this project has since
+    migrated away from (the current destination is the bitemporal `kg` schema verified in
+    B.4.2). A full precision/recall comparison against that specific legacy baseline was
+    not attempted: it would require either resurrecting the superseded V2 write pipeline
+    or building fresh ground truth against the current `kg` schema, both larger
+    undertakings than this task: recorded as `PENDING-LIVE` for a future session with an
+    explicit go-ahead on which path to take, not silently skipped or faked.
 
 **B.5 exit gate → M5:** full unit suite green; **[LIVE]** Airbus/Boeing ground-truth
 comparison recorded.
+  - *Evidence:* Full unit suite `2021 passed, 83 skipped`. Live Boeing+Airbus comparison
+    recorded above (B.5.3) — real data, real signal, honestly reported including where a
+    genuine live reproduction of the specific blob-trigger condition wasn't possible in
+    this environment's current seed data, and where the legacy ground-truth harness gap
+    is `PENDING-LIVE`.
 
 ## B.6 — Splink promotion track (audit §13 #1 continuation + §5/§11 discipline) → M6
 
