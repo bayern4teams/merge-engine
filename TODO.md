@@ -1,4 +1,20 @@
-# merge-engine — Branch `feat/v3-discovery-er` Implementation TODO
+# merge-engine — Implementation TODO
+
+Branch `fix-v3`. Part A is the preserved, verbatim history of `feat/v3-discovery-er`
+(every phase's evidence log, unchanged — history in this repo is load-bearing and is
+kept, never edited into silence). Part B is the current roadmap: every §13
+(Architecture — Quality & Speed) and §14 (Algorithm-First: discover_schemas,
+map_fields, analyze_dependencies) recommendation of the Merge Engine Forensic Audit
+(2026-09-13), sequenced in the audit's own priority order ("What I'd actually
+schedule, in order") and implemented on this branch.
+
+Evidence rule, unchanged throughout: independently-run SQL / test output, never the
+app's own success message. Full implementation detail for every Part B item:
+`.hermes/plans/2026-09-14_025800-fix-v3-cto-recommendations.md`.
+
+---
+
+# Part A — History: `feat/v3-discovery-er` (verbatim)
 
 Tracks Part B (V3 discovery/entity-resolution engine) up to BP-B3, per `Branch_Plan.md` at this
 worktree's root. Scope override in effect: continue straight through BP-B1 and BP-B2 without
@@ -700,3 +716,272 @@ the app's own success message.
   confirmed live — not a guess). The push to `feat/v3-discovery-er` should have triggered a run;
   the user needs to check `https://github.com/Reza-Sh83/merge-engine/actions` directly and report
   back, or authenticate `gh`/a browser session so a future pass can verify it independently.
+
+---
+
+# Part B — `fix-v3` roadmap: §13 + §14 CTO recommendations
+
+Scope: **every** recommendation in §13 (Architecture Recommendations: Quality & Speed —
+the 13 library/architecture leads) and §14 (Algorithm-First: `discover_schemas`,
+`map_fields`, `analyze_dependencies`) of the Merge Engine Forensic Audit, plus the two
+audit-adjacent housekeeping items those sections depend on. Priority order = the audit's
+own "What I'd actually schedule, in order" (artifact §13), interleaved with §14's
+"fix the wiring before reaching for anything new" rule.
+
+Rules that bind every item below (from the audit + CLAUDE.md, non-negotiable):
+- TDD per task: failing test first (record the red run), implement minimally, green, commit.
+- One commit per task; message names the audit section it closes.
+- Evidence in this file = independently-run SQL / test output / measured numbers,
+  never the app's own success message. An item whose live half could not run stays
+  unchecked with an explicit `BLOCKED:` / `PENDING-LIVE:` note — never silently passed.
+- No module-level mutable state (`scripts/lint_arch.py`); degradation paths must
+  self-report (ADR 0014 pattern), never a silent `except`.
+- Everything runs against local models/DBs only (vLLM `10.10.9.45:8000`, Docker
+  `Sample_Database` ClickHouse :8190 + destination Postgres `kg` schema).
+- **Items marked [LIVE] additionally require the live infrastructure; their unit gate
+  must pass without it.**
+
+Baseline already on this branch (commit `b9c5e5b..4aded86` on `fix-v3`): the 9 §00a audit
+fixes + Splink matcher fixes, committed group-by-group off `feat/v3-discovery-er`.
+
+## B.0 — Branch + baseline
+
+- [x] **B.0.1** §00a/§00b audit fixes committed group-by-group on `feat/v3-discovery-er`
+  (11 commits: config→scope-engine→schema-qualification→load-path PK/EAV→dest-family
+  exclusions→join-graph natural key→parse_request collision guard→splink blocking
+  union/case→methodology doc→ground-truth scripts→tuning scripts), then branch `fix-v3`
+  created from that tip and checked out fully.
+  - *Evidence:* `git log --oneline feat/v3-discovery-er | head -11` shows the 11 grouped
+    commits; `git branch --show-current` → `fix-v3`; `git status --short` → clean.
+- [ ] **B.0.2** Baseline gate recorded on `fix-v3`: `python scripts/check.py all`.
+  Expected as-is: FAIL on the `test_schema_matching.py` collection error (that is B.1.1's
+  red state — recorded here so the fix's red→green is honest).
+  - *Evidence:* _fill in_
+
+## B.1 — "Finish the sentence" (audit §13 schedule bucket 1: already-decided, never shipped)
+
+- [ ] **B.1.1** Unbreak pytest collection — `tests/unit/test_schema_matching.py` gets
+  `pytest.importorskip("valentine", reason=...)` (audit §14.2: a module with zero
+  production callers currently breaks `pytest tests/unit` collection — and therefore
+  `scripts/check.py all` — on every standard bootstrap).
+  - *Accept:* `python -m pytest tests/unit --collect-only -q` → 0 errors.
+  - *Evidence:* _fill in (red run output, then green)_
+- [ ] **B.1.2** `scripts/bootstrap.py`: install `.[dev,perf,schema_matching]` (line ~72 +
+  the two echoed strings) so ADR 0005's dependency is actually present on a fresh clone.
+  - *Accept:* `python -c "import valentine"` ok; `pytest tests/unit/test_schema_matching.py -q` → 18 passed (no skips).
+  - *Evidence:* _fill in_
+- [ ] **B.1.3** **pg_trgm + GIN trigram blocking** (audit §13 #13 — highest-leverage,
+  lowest-risk speed item; targets the O(n²) `resolve_entities` clustering, §00b/§9's 86%
+  of wall-clock). `CREATE EXTENSION pg_trgm`; GIN `gin_trgm_ops` index on the staging
+  name column; candidate-pair generation `SELECT a.rec_id, b.rec_id FROM staging a JOIN
+  staging b ON a.name % b.name AND a.rec_id < b.rec_id` for entities ≥
+  `matching.trigram_blocking_min_records` (default 1000), flag
+  `matching.trigram_blocking_enabled` default **off**; results **unioned** with existing
+  blocking (never replacing — recall safety), deduped. Staging via the destination
+  connector through the existing call path (no module state).
+  - *Accept (unit):* fake-connector test asserts the SQL shape (extension, `gin_trgm_ops`,
+    `%`, `a.rec_id < b.rec_id`), union-dedupe, flag/threshold gating.
+  - *Accept [LIVE]:* real destination, the 5 real Boeing variants → true near-duo pairs
+    proposed; wall-clock vs Python loop on the 1,503-record technology component recorded.
+  - *Evidence:* _fill in_
+- [ ] **B.1.4** **Great Expectations — finish ADR 0008** (audit §13 #6):
+  `_run_format_expectations(sample, columns)` in `src/mcp_server/tools/data_quality.py`,
+  GX 1.x ephemeral context, `ExpectColumnValuesToMatchRegex` (email/phone-shaped) +
+  `ExpectColumnValuesToBeDateutilParseable` (date-shaped), results folded into the
+  existing `entity_severity`/red-flags mechanism — one report, not two. GX-unavailable →
+  warning-level degradation log + `gx_checks_skipped` in the report (never silent).
+  New extra `data_quality = ["great-expectations>=1.0"]` + bootstrap.
+  - *Accept (unit):* bad email + unparseable date → 2 fail entries; clean → pass.
+  - *Accept [LIVE]:* `revenue="$1 Million"` sample → format check fails (the §7 bug GX
+    exists to catch).
+  - *Evidence:* _fill in_
+- [ ] **B.1.5** **sqlglot column lineage — finish ADR 0009** (audit §13 #7): new
+  `src/mcp_server/tools/sql_lineage.py` with `column_lineage(mapping_sql, target_column,
+  schema)` over `sqlglot.lineage.lineage`, plus `mapping_to_sql()` rendering recorded
+  `field_mappings`/`md_field_mapping` decisions as parseable SQL. UI surfacing deferred
+  (YAGNI) until the API is proven.
+  - *Accept (unit):* `SELECT c.amount AS revenue FROM diffbot.companyfinancials c` →
+    lineage names `diffbot.companyfinancials.amount`; multi-join chain correct.
+  - *Evidence:* _fill in_
+
+**B.1 exit gate:** `python scripts/check.py all` → 10/10.
+
+## B.2 — The actual quality fix: native relational-matching signal (audit §13 #3)
+
+- [ ] **B.2.1** `build_relationship_index(records) -> dict[str, set[str]]` — record id →
+  asserted related-entity surface forms (from the already-extracted `company_relation` /
+  diffbot `companyrelation` rows: `companyid, relatedcompanyid, relationtype, confidence`).
+  Built once per resolve call, threaded as a parameter (like `matching_rules`).
+  - *Evidence:* _fill in_
+- [ ] **B.2.2** `_relational_agreement(rec1, rec2, relationship_index)` in
+  `resolve_entities.py`, bounded additive boost `min(0.15 * len(shared), 0.3)` into
+  `_compute_heuristic_confidence`'s weighted sum — never sole justification for
+  auto-merge (same discipline as `_has_discriminating_agreement`).
+  - *Negative fixture FIRST (red):* "Airbus SE" + "Airbus Helicopters" (parent/subsidiary
+    per companyrelation) must get **no** boost from the shared parent alone —
+    `_shared_neighbors_beyond_common_parent` guard. The exact §00a2 blob failure mode,
+    encoded as a test before the feature exists.
+  - *Evidence:* _fill in_
+- [ ] **B.2.3 [LIVE]** Ground-truth regression: re-run Airbus + Boeing company resolution
+  against ground truth; acceptance = `f62c560d`-shape does **not** recur (Airbus
+  Helicopters own cluster; Madrid↔Toulouse variants together), Boeing BDS trio merges,
+  the 15 already-correct Airbus clusters unchanged. Precision/recall deltas vs audit
+  baseline recorded here.
+  - *Evidence:* _fill in_
+
+## B.3 — Splink promotion track (audit §13 #1 continuation + §5/§11 discipline)
+
+- [ ] **B.3.1** Restore the 560-pair gate fixture `tests/eval/pagila_staff.csv` (missing
+  from checkout; audit §11 names this exact blocker). Recover from git history or the
+  pagila sample DB. **Never hand-author pairs** — if unrecoverable, record `BLOCKED` and
+  the promotion below cannot proceed.
+  - *Accept:* `pytest tests/eval/test_matcher_recall.py --collect-only -q` succeeds and the
+    fixture row-count matches `test_matcher_recall.py`'s own expectation.
+  - *Evidence:* _fill in_
+- [ ] **B.3.2** Token/looser blocking alongside the fixed prefix rule in
+  `splink_matcher.py`; candidate rules costed via `splink_blocking.py`'s costed
+  recommender (S-E machinery); cost table in the commit message.
+  - *Evidence:* _fill in_
+- [ ] **B.3.3** Train-once wiring: `matching_rules = {"engine": "splink",
+    "model_profile": "company_diffbot_zoominfo/v1"}` → load saved profile (ADR 0016
+    file-store), predict-only, no per-call EM retrain. Default path unchanged.
+  - *Accept (unit):* profile path makes zero EM calls (mock assert); default path
+    byte-identical behavior.
+  - *Evidence:* _fill in_
+- [ ] **B.3.4** Re-run `tests/eval/test_matcher_recall.py`'s 560-pair gate; record real
+  numbers. `tests/eval/last_gate.json` and the `test_splink_default_invariant.py` default
+  flip **only on a measured pass** — no hand-override (audit §11).
+  - *Evidence:* _fill in (measured table, gate decision, pass or honest gap analysis)_
+
+## B.4 — Human-feedback loop (audit §13 #2 DSPy + #12 dedupe.io)
+
+- [ ] **B.4.1** Start label collection NOW (audit: the column is schema-ready but empty;
+  both #2 and #12 are gated on it): human `human_review_matches` decisions written to
+  `kg.merge_engine_merge_audit.human_override`.
+  - *Accept [LIVE]:* approve one real match manually → `SELECT count(*) … WHERE
+    human_override IS NOT NULL` > 0, read by direct SQL.
+  - *Evidence:* _fill in_
+- [ ] **B.4.2** `src/llm/dspy_lm.py` `configured_lm()` (local vLLM via OpenAI-compatible
+  `api_base`, `max_tokens=4096` — directly closes §6's null-content truncation gap).
+  - *Evidence:* _fill in_
+- [ ] **B.4.3** `src/llm/dspy_programs/entity_match.py` — `EntityMatchJudgment` Signature
+  incl. `relationship_context` input (fed from B.2's index; the two recommendations share
+  one signature by design). Replace the raw prompt at `resolve_entities`' LLM chunk site
+  (~line 2049) inside `dspy.context(lm=configured_lm())`; same fallback contract +
+  warning-level `llm_fallback_count` reaching reconciliation (audit §00b degradation rule).
+  - *Accept (unit):* stub-LM parsing; fallback on failure still returns heuristic score
+    AND increments the visible counter.
+  - *Evidence:* _fill in_
+- [ ] **B.4.4** `scripts/dspy/optimize_entity_match.py`: labelled pairs from
+  `human_override IS NOT NULL`, `match_metric`, `dspy.MIPROv2.compile`, saved to
+  `logs/dspy_programs/entity_match_v1.json` (ADR 0016 versioned-artifact convention).
+  - *Accept (unit):* end-to-end compile against a tiny synthetic labelled set, stub LM.
+  - *Evidence (LIVE, once real labels exist):* compiled vs baseline judgment accuracy on
+    held-out pairs. _fill in_
+- [ ] **B.4.5** `src/mcp_server/tools/dedupe_matcher.py` `train_dedupe_classifier(labelled_pairs)`
+  → score as **one more weighted input** to `_compute_heuristic_confidence` (ensemble
+  member, not a fourth engine); extra `dedupe = ["dedupe>=3.0"]`; default off.
+  - *Accept (unit):* trains on synthetic labelled pairs; monotone sane scores; disabled
+    default changes nothing.
+  - *Evidence:* _fill in_
+
+## B.5 — Algorithm-first node wiring (audit §14 — "the headline is inside this repo")
+
+- [ ] **B.5.1** `map_fields` **Phase 0 = Valentine, behind existing gates** (§14.2):
+  `_build_valentine_frames` (source_df from already-collected `sample_values`; target_df
+  via `connector.sample_distinct_values` — the same primitive `join_graph._verify_inclusion`
+  uses); Phase 0 runs before Phase 1 (line ~142); a Valentine accept **must pass**
+  `_incompatible_with_column` + the `taken` coalesce-guard; accept at `>= _HEURISTIC_ACCEPT`
+  (0.85, reuse constant); `mapped_by: "valentine"` provenance tag. Phase 3 LLM shape
+  unchanged, just fewer undecided fields.
+  - *Accept (unit, red first):* `homepage`→`website` (zero name overlap, real value
+    overlap) fails today, accepted after; incompatible top pick falls through (guard
+    non-bypass); empty destination column degrades without crash.
+  - *Evidence:* _fill in_
+- [ ] **B.5.2** `analyze_dependencies` — verified graph first, LLM demoted to fallback
+  (§14.3, FrugalGPT cascade): in-node `await build_join_graph(...)` →
+  `state["join_graph"]` (plan_scope's existing key); `_join_graph_to_dependency_tree`
+  restricted to confidences `("declared","verified","probable")`; full coverage → skip
+  LLM entirely, tag `dependency_analysis_origin: "ALGORITHMIC"`; partial → LLM prompt
+  gains `CONFIRMED (verified against live data): …` lines; fingerprint skip copied from
+  the `parse_request.py:125` pattern (`stage_fingerprint("dependency_tree", …)`);
+  plan_scope then skips its own rebuild via its existing `join_graph_fp` check.
+  - *Accept (unit):* fully-covering fake graph → `LLMClient` **assert_not_called**;
+    partial → one call with a CONFIRMED line in the prompt; repeat run → fingerprint hit,
+    zero LLM + zero rebuild.
+  - *Trade-off recorded verbatim (audit §14.3):* bounded SQL sampling moves earlier —
+    nothing adds a pass; plan_scope's pass is shared.
+  - *Evidence:* _fill in_
+- [ ] **B.5.3** `discover_schemas`: **no change** — audit verdict "fine as-is" (pure
+  introspection, no LLM to replace; the short-TTL cache idea explicitly NOT on the
+  roadmap). Recorded here so a future reader doesn't mistake the silence for an omission.
+  - *Evidence:* n/a — decision record.
+
+**B.5 exit gate:** `python scripts/check.py all` → 10/10; **[LIVE]** one Boeing scope run
+shows 0 LLM dependency calls for fully-covered schema (log-verified).
+
+## B.6 — Post-merge consistency rules (audit §13 #9 Semantica, narrow: rule engine only)
+
+- [ ] **B.6.1** Verify `semantica` installs and its Rete/Datalog engine runs standalone
+  first (audit's own caveat: adopt narrowly, prove it). If immature at install time,
+  implement the identical rules-as-data contract natively and record the deviation as an
+  ADR — no silent swap.
+  - *Evidence:* _fill in (install probe output, decision)_
+- [ ] **B.6.2** New node `validate_graph_consistency` in `graph.py` after `load_data`,
+  before `update_extraction_state`; `config/consistency_rules.yaml` rules-as-data (e.g.
+  `company.status == 'ACQUIRED' AND investment_round.valid_from > company.status.valid_from
+  => flag`); violations → existing `data_quality.red_flags` (one report). Absent rule file
+  → log + pass; a *parsed* rule failing evaluation is always a finding, never swallowed.
+  - *Accept (unit):* violating fact → exactly one red flag; clean → none; missing file →
+    pass + log.
+  - *Accept [LIVE]:* ACQUIRED company + late investment_round fact in destination →
+    red flag present in `logs/run_reports/*.json` (read from disk, not the UI).
+  - *Evidence:* _fill in_
+
+## B.7 — Bounded pilots (audit §13 #10 Graphiti, #5 LangGraph Swarm — "prove before commit")
+
+- [ ] **B.7.1 [LIVE]** Graphiti + FalkorDB mirror pilot: `mirror_fact_to_graphiti(...)`
+  called **alongside** (never instead of) `write_knowledge_fact`; `pilots.graphiti.enabled`
+  default off; FalkorDB via Docker, Graphiti LLM client → local vLLM. Acceptance =
+  `docs/diagnostics/GRAPHITI_PILOT.md` filled with measured side-by-side numbers for ≥5
+  temporal queries (Graphiti hybrid search vs hand-rolled `valid_from/valid_to` CTEs).
+  No ADR-0012 change without those numbers.
+  - *Evidence:* _fill in_
+- [ ] **B.7.2** LangGraph Swarm contested-cluster advisor: two-specialist swarm per audit
+  snippet; new node `resolve_contested_cluster` between `resolve_entities` and
+  `human_review_matches`, firing only when heuristic vs relational signals disagree by
+  > `matching.contested_margin` (0.15). Output attached to `pending_merge_candidates` as
+  **advisory evidence — can never auto-decide** (hard assertion: node output cannot set a
+  merge decision field; router test: every cluster still reaches `human_review_matches`).
+  - *Accept (unit):* trigger-margin gating (most clusters bypass entirely); advisory-only
+    invariant test; transcript attached, not decisions.
+  - *Evidence:* _fill in_
+
+## B.8 — Decisions recorded as ADRs (audit §13 #4/#8/#11 + RELATER's codebase — reference-only leads)
+
+- [ ] **B.8.1** `docs/decisions/0017-reject-hiergat.md` (PyTorch-1.4/Py3.7 research code;
+    corroborates #3's direction, not a path in).
+- [ ] **B.8.2** `docs/decisions/0018-reject-relater-code-adopt-its-idea.md` (Python 2,
+    2 commits, benchmark-bound; the idea lands natively as B.2).
+- [ ] **B.8.3** `docs/decisions/0019-utopia-reference-only.md` (standalone Rust system;
+    our kg schema is already the bitemporal graph; study its decision-ledger design).
+- [ ] **B.8.4** `docs/decisions/0020-ontop-study-not-aws-accelerator.md` (Neptune/Bedrock
+    coupling violates local-only; Ontop itself is the portable OBDA idea, revisit if a
+    concrete SPARQL/OWL need appears).
+  - *Accept (all four):* `python scripts/check.py docs` → citations resolve; `docs/INDEX.md`
+    lists 0017–0020 (verify numbering against `ls docs/decisions/` first).
+  - *Evidence:* _fill in_
+
+## B.9 — Final gate
+
+- [ ] **B.9.1** `python scripts/check.py all` → 10/10 with everything above merged.
+  - *Evidence:* _fill in_
+- [ ] **B.9.2 [LIVE]** One full Boeing + one full Airbus run end-to-end (human gates
+  manual where B.4.1 label collection needs them); destination counts re-verified by
+  direct SQL; before/after table vs the audit baselines (Boeing 92.9%/13-of-14, Airbus
+  15-of-16 clusters) recorded.
+  - *Evidence:* _fill in_
+- [ ] **B.9.3** Every `*Evidence:*` slot above filled, or marked `BLOCKED:`/`PENDING-LIVE:`
+  honestly. No checked box without evidence. **No push / no merge to main** — branch
+  discipline: that call stays with the user.
+  - *Evidence:* this file, final pass.
