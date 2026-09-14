@@ -67,13 +67,15 @@ def create_venv() -> None:
 
 def install_python_deps() -> None:
     py = _venv_python()
-    print("Installing merge-engine[dev,perf] ...")
+    print("Installing merge-engine[dev,perf,schema_matching] ...")
     result = subprocess.run(
-        [str(py), "-m", "pip", "install", "-e", f"{ROOT}[dev,perf]"],
+        [str(py), "-m", "pip", "install", "-e", f"{ROOT}[dev,perf,schema_matching]"],
         cwd=ROOT,
     )
     if result.returncode != 0:
-        _fail("pip install -e '.[dev,perf]' failed — see output above.")
+        _fail(
+            "pip install -e '.[dev,perf,schema_matching]' failed — see output above."
+        )
 
 
 def build_frontend() -> None:
