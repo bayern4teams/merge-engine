@@ -1,16 +1,24 @@
-# Plan: `fix-v3` branch — implement all §13 + §14 CTO recommendations, rewrite TODO.md
+# Plan: `fix-v3` — implement all §13 + §14 CTO recommendations
 
-**Goal:** Create branch `fix-v3` from the current dirty `feat/v3-discovery-er` HEAD, rewrite `TODO.md` there into a phased roadmap covering every §13 (architecture/library) and §14 (algorithm-first node wiring) recommendation from the Merge Engine Forensic Audit, then implement all of them in CTO-priority order with TDD and per-phase evidence.
+**Goal:** Implement every §13 (architecture/library) and §14 (algorithm-first node wiring)
+recommendation from the Merge Engine Forensic Audit in CTO-priority order, TDD, with
+per-phase evidence.
 
-**Source of truth for scope:** the audit artifact (copy at `/home/bayern/Projects/merge-engine/artifact.txt`, §13 lines ~615–874, §14 lines ~875–941). Its implementation guides are largely pre-written; this plan adapts them to the verified current tree.
+**DONE (2026-09-14) — former Steps 0–1, removed from this plan:**
+- §00a/§00b audit fixes committed group-by-group on `feat/v3-discovery-er` (11 grouped
+  commits, `b9c5e5b..4aded86`); branch `fix-v3` created from that tip and checked out.
+- `TODO.md` rewritten on `fix-v3` (commit `8c28be8`): Part A = preserved branch history,
+  **Part B = the live roadmap** (B.0–B.9). Label map: plan C.x ⇒ TODO.md B.x (C.1⇒B.1 …
+  C.9⇒B.9). TODO.md Part B is the checkbox/evidence tracker; this plan keeps the
+  implementation detail.
+- `artifact.txt` remains untracked (unignored — user left it in place).
+- Baseline note for B.0.2/C.1.1: `python scripts/check.py all` currently FAILS on the
+  `test_schema_matching.py` collection error — that is C.1.1's recorded red state.
 
----
+## Current context / assumptions (verified live 2026-09-14; still valid)
 
-## Current context / assumptions (verified live 2026-09-14)
-
-- Repo: `/home/bayern/Projects/merge-engine`, branch `feat/v3-discovery-er`, HEAD `ed35ec2`.
-- **Working tree is dirty**: 17 modified files (the §00a audit fixes: `load_data.py`, `splink_matcher.py`, `parse_request.py`, `join_graph.py`, `postgres.py`, `postgresql_destination.py`, `dest_family.py`, `config_loader.py`, `graph.py`, `config.yaml` + 7 test files) and untracked `docs/diagnostics/SPLINK_TUNING_METHODOLOGY.md`, `scripts/ground_truth/`, `scripts/splink/`, `scripts/diagnostics/drive_airbus_2026-09-13.py`, `artifact.txt`.
-- `TODO.md` (702 lines) is the branch's evidence log (B.0–B.4 + GitHub publish). **The rewrite must preserve its completed history** — the project's rule is "evidence, kept intact" — and append the new roadmap as fresh sections. Deleting proven evidence would repeat the "silently edited" antipattern the audit itself calls out.
+- Repo: `/home/bayern/Projects/merge-engine`, branch `fix-v3` (clean tree),
+  HEAD `8c28be8` on top of the grouped audit-fix commits.
 - Verified anchors in the current tree:
   - `scripts/bootstrap.py:72` installs `.[dev,perf]` (missing `schema_matching` extra).
   - `pyproject.toml`: `dspy = ["dspy-ai>=2.6"]` (line 77), `splink = ["splink>=4.0.0"]`, `schema_matching = ["valentine>=0.2", "pandas>=2.2"]` (line 86). **No** extras yet for `great_expectations`, `dedupe`, `semantica`, `graphiti`, `langgraph-swarm`.
@@ -24,63 +32,9 @@
   - `src/ui/connections.py` stores `config/recent_connections.json` (plaintext — out of §13/§14 scope; do NOT touch here, it's §00b/action-list territory).
   - `scripts/check.py all` = the one verification command (10 gates); `scripts/lint_arch.py` forbids module-level mutable state.
 - Live infra needed for verification (may not be up on any given day): Docker `Sample_Database` (ClickHouse :8190) + destination Postgres (the `kg` schema DB), local vLLM at `10.10.9.45:8000`. Tasks that need these are marked **[LIVE]**; each still has a unit-test gate that must pass without them.
-- `tests/eval/pagila_staff.csv` (the 560-pair gate fixture) is missing from the checkout — required before any Splink promotion attempt.
+- `tests/eval/pagila_staff.csv` (the 560-pair gate fixture) is missing from the checkout — required before any Splink promotion attempt (C.3.1).
 
 **Standing rules carried from CLAUDE.md / audit discipline:** TDD red→green per task; one commit per task; evidence in TODO.md must come from independently-run SQL/test output, never the app's own success message; no module-level mutables; prompts substituted only via literal `str.replace()`; local-only models/DBs.
-
----
-
-## Step 0 — Branch protocol (do first, exactly)
-
-1. Do **not** commit anything to `feat/v3-discovery-er`.
-2. Create the new branch carrying the dirty tree over:
-   ```bash
-   cd /home/bayern/Projects/merge-engine
-   git checkout -b fix-v3
-   ```
-   Expected: `Switched to a new branch 'fix-v3'`; `git status --short` unchanged (dirty files follow).
-3. Add the audit copy to gitignore (keep it on disk, untracked):
-   ```bash
-   echo "/artifact.txt" >> .gitignore
-   git add .gitignore
-   ```
-4. Snapshot the in-flight audit fixes as the first commit on `fix-v3`:
-   ```bash
-   git add -A -- . ':!artifact.txt'
-   git commit -m "wip: carry §00a audit fixes + splink tuning methodology onto fix-v3"
-   git status --short   # expected: clean (artifact.txt ignored)
-   ```
-5. Baseline check: `source .venv/bin/activate && python scripts/check.py all` → record output (currently expected **failing** on the `test_schema_matching.py` collection error; that is C.1.1's red state).
-
----
-
-## Step 1 — Rewrite `TODO.md` (the roadmap deliverable)
-
-Rewrite `TODO.md` on `fix-v3` with this exact structure:
-
-```markdown
-# merge-engine — Branch `fix-v3` — CTO Recommendations Implementation TODO
-
-Covers every §13 (Architecture: Quality & Speed) and §14 (Algorithm-First nodes)
-recommendation of the Merge Engine Forensic Audit (artifact 2026-09-13).
-Priority order = §13's own "What I'd actually schedule, in order".
-Evidence rule unchanged: independently-run SQL / test output, never app self-report.
-
-## Part A — History (B.0–B.4 + publish log)   ← keep ALL existing content verbatim, collapsed under this heading
-## Part C — fix-v3 roadmap (this plan)
-  C.0 branch + baseline
-  C.1 "finish the sentence" quick wins (§13 #6 GX, #7 sqlglot, #13 pg_trgm; §14 pytest/bootstrap fixes)
-  C.2 relational-matching signal (§13 #3 RELATER-native)
-  C.3 Splink promotion track (§13 #1 continuation: token blocking, train-once, 560-pair gate)
-  C.4 human-feedback loop (§13 #2 DSPy, #12 dedupe.io — label collection starts NOW)
-  C.5 algorithm-first node wiring (§14: Valentine Phase 0, analyze_dependencies early join-graph + fingerprint)
-  C.6 post-merge consistency rules (§13 #9 Semantica rule engine)
-  C.7 bounded pilots (§13 #10 Graphiti/FalkorDB, #5 LangGraph Swarm)
-  C.8 reference-only decisions recorded as ADRs (§13 #4 HierGAT reject, #8 Utopia study, #11 Ontop, RELATER code reject)
-  C.9 final gate + evidence pass
-```
-
-Each roadmap item is written as a checkbox with: target files, one-line acceptance test, and an empty `*Evidence:*` slot to fill when done. Commit: `docs: rewrite TODO.md as fix-v3 CTO-recommendations roadmap (Part A history preserved)`.
 
 ---
 
