@@ -23,7 +23,7 @@ destination:
 # ── LLM Configuration ──────────────────────────────────────────────────────
 llm:
   provider: "openai"      # "openai" | "azure" | "anthropic"
-  model: "qwen3.5-122b-a10b"
+  model: "Qwen/Qwen3.6-35B-A3B-FP8"
   # Tried in this exact order (LLMClient.call) whenever the active model
   # hits a quota/billing error — a same-account retry can't recover from
   # that, so the client advances to the next entry instead of failing.
@@ -37,7 +37,7 @@ llm:
     - "qwen3.5-plus-2026-04-20"
     - "qwen3.5-plus-2026-02-15"
   api_key: "${LLM_API_KEY}"
-  base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+  base_url: "http://10.10.9.45:8000/v1"
   temperature: 0.2      # Deterministic outputs preferred
   structured_output: true         # Request JSON-object response_format (disable if endpoint rejects it)
   entity_resolution_enabled: true # LLM judgment for borderline entity pairs (0.70-0.95 band)
