@@ -73,6 +73,19 @@ _U_ESTIMATION_SEED = 42
 # Splink's own tutorials for a single reasonably-selective exact-match rule.
 _DETERMINISTIC_RULE_RECALL = 0.7
 
+# B.6.2: token-overlap blocking, alongside (not instead of) the 4-char
+# prefix rule. A reordered or qualifier-prefixed name ("Satellite Systems
+# Boeing" vs "Boeing Satellite Division") shares no 4-char prefix and no
+# domain, but does share a real word — this rule catches that case. Plain
+# DuckDB SQL (Splink's own backend here), sqlglot-free per the plan: split
+# each side's lowercased name on spaces and require a nonempty intersection.
+# Costed against the existing rules via splink_blocking.py's recommender
+# before being unioned in — see the B.6.2 commit message for the numbers.
+_NAME_TOKEN_OVERLAP_RULE = (
+    "len(list_intersect(string_split(lower(l.\"name\"), ' '), "
+    "string_split(lower(r.\"name\"), ' '))) > 0"
+)
+
 
 async def score_pairs_with_splink(
     entity_type: str,
@@ -167,6 +180,10 @@ async def score_pairs_with_splink(
             # unioned with the deterministic keys below, never a substitute
             # for them.
             blocking_rules.append('substr(lower(l."name"), 1, 4) = substr(lower(r."name"), 1, 4)')
+            # Looser still, unioned alongside the prefix rule (B.6.2): catches
+            # a shared real word the prefix rule misses on reordered/
+            # qualifier-prefixed names. See _NAME_TOKEN_OVERLAP_RULE above.
+            blocking_rules.append(_NAME_TOKEN_OVERLAP_RULE)
 
         if "domain" in available_cols:
             comparisons.append(cl.ExactMatch("domain").configure(term_frequency_adjustments=True))

@@ -1230,10 +1230,35 @@ outcomes are within this team's control.
     measurement it cannot make, exactly as designed. B.6.4 below is `BLOCKED` by this
     entry; B.6.2 and B.6.3 do not depend on the fixture and proceed per the plan's own
     fallback.
-- [ ] **B.6.2** Token/looser blocking alongside the fixed prefix rule in
+- [x] **B.6.2** Token/looser blocking alongside the fixed prefix rule in
   `splink_matcher.py`; candidate rules costed via `splink_blocking.py`'s costed
   recommender (S-E machinery); cost table in the commit message.
-  - *Evidence:* _fill in_
+  - *Evidence:* `_NAME_TOKEN_OVERLAP_RULE` (plain DuckDB SQL,
+    `list_intersect(string_split(...), string_split(...))`, no sqlglot) added
+    to the "name" branch of `score_pairs_with_splink`'s blocking-rule union,
+    alongside (never replacing) the existing 4-char prefix rule. Red-first:
+    `tests/unit/test_splink_matcher.py::test_score_pairs_blocks_on_shared_name_token_even_with_different_prefix`
+    — "Satellite Systems Boeing" / "Boeing Satellite Division" (shares real
+    words, no 4-char prefix, no domain) confirmed RED (pair never blocked,
+    test failed) before the rule existed, GREEN after. Full
+    `test_splink_matcher.py`: 10/10 passed. Full unit suite:
+    `1872 passed, 83 skipped` (was 1871/83) — zero regressions.
+    **[LIVE] costed table**, real Boeing+Airbus rows from origin1
+    (`testdiffbot.diffbot.company`, `entityname ILIKE '%boeing%' OR
+    '%airbus%'` → 25 real records), via `splink_blocking.recommend_prediction_blocking`
+    against the real projected comparison view:
+
+    | rule | pairs (standalone) | cumulative after this rule | too_broad? |
+    |---|---|---|---|
+    | 4-char prefix (`substr(lower(name),1,4)=...`) | 157 | 157 | no |
+    | **token overlap (new, B.6.2)** | 194 | 194 (+37 new over prefix alone) | no |
+    | domain exact match | 46 | 194 (+0 new in this slice) | no |
+
+    All three rules stay far under the 600k pair budget
+    (`DEFAULT_PAIR_BUDGET`). The token-overlap rule surfaces 37 real candidate
+    pairs in this actual dataset that the prefix rule alone would have missed
+    — the concrete, measured version of the reordered/qualifier-prefixed-name
+    gap the unit fixture demonstrates synthetically.
 - [ ] **B.6.3** Train-once wiring: `matching_rules = {"engine": "splink",
     "model_profile": "company_diffbot_zoominfo/v1"}` → load saved profile (ADR 0016
     file-store), predict-only, no per-call EM retrain. Default path unchanged.

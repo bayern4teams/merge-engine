@@ -276,6 +276,46 @@ async def test_score_pairs_blocks_on_domain_even_when_names_disagree() -> None:
 
 
 @pytest.mark.asyncio
+async def test_score_pairs_blocks_on_shared_name_token_even_with_different_prefix() -> None:
+    """B.6.2: a pair whose names share a real word but neither the first
+    4 characters nor a registrable domain (e.g. word order flipped, or a
+    qualifier inserted at the front) must still be BLOCKED via the new
+    token-overlap rule. Before this change, only a shared 4-char *prefix*
+    or a shared domain could propose a pair — reordered/qualified names
+    that share a real token but no prefix were invisible to blocking no
+    matter how strong the eventual field agreement would be.
+    """
+    records = [
+        *_fixture_records(),
+        _company(
+            "origin1",
+            "Company",
+            "13",
+            "Satellite Systems Boeing",
+            "info@boeing-sat-test-a.example",
+        ),
+        _company(
+            "origin2",
+            "company_profile",
+            "14",
+            "Boeing Satellite Division",
+            "info@boeing-sat-test-b.example",
+        ),
+    ]
+    scored = await score_pairs_with_splink("company", records)
+    assert scored is not None
+
+    a_id = _record_id(records[-2])
+    b_id = _record_id(records[-1])
+    scores_by_pair = {(a, b) if a < b else (b, a): conf for a, b, conf in scored}
+    key = (a_id, b_id) if a_id < b_id else (b_id, a_id)
+    assert key in scores_by_pair, (
+        "names sharing a real token ('boeing', 'satellite') but no 4-char "
+        "prefix or domain must still be blocked together via token overlap"
+    )
+
+
+@pytest.mark.asyncio
 async def test_engine_splink_dispatches_and_merges_the_duplicate() -> None:
     from src.mcp_server.tools.resolve_entities import resolve_entities_impl
 
