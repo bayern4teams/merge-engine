@@ -1066,9 +1066,10 @@ def _load_scope_config(config_path: str | None) -> dict[str, Any]:
         return {
             "max_hops": cfg.scope.max_hops,
             "join_graph_sample_size": cfg.scope.join_graph_sample_size,
+            "engine": cfg.scope.engine,
         }
     except Exception:
-        return {"max_hops": 6, "join_graph_sample_size": 500}
+        return {"max_hops": 6, "join_graph_sample_size": 500, "engine": "v3_discovery"}
 
 
 # ── Server Mode Export ──────────────────────────────────────────────

@@ -131,6 +131,18 @@ class ScopeConfig(BaseModel):
     # Distinct values sampled per column when verifying a candidate join
     # edge's inclusion dependency (join_graph.py's build_join_graph).
     join_graph_sample_size: int = 500
+    # "v2" (the original per-(subject-table, dependent-table) find_paths
+    # heuristic) or "v3_discovery" (P-9's policy-capped subgraph traversal,
+    # entity_extraction_v3.traverse_subgraph -- reaches every entity within
+    # max_hops of the subject in one BFS pass, not just the ones an LLM
+    # happened to name). v3_discovery is strictly additive and never
+    # raises out to the caller (plan_scope.py's own try/except falls back
+    # to the v2 floor on any exception), so it's the default: live-
+    # reproduced this session, v2-plus-LLM alone left 11 of 14 Boeing
+    # entity families at zero rows (join paths needing 2+ hops -- company
+    # financials/industry/investors/relations/... -- that the LLM's answer
+    # didn't happen to cover and the one-hop v2 floor doesn't reach).
+    engine: str = "v3_discovery"
 
 
 class Config(BaseModel):
