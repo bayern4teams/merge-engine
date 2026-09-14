@@ -39,8 +39,9 @@ documented in the evidence text:
    relationship to Airbus, which is itself the ground-truth assertion:
    "this company is not part of Airbus."
 """
-import psycopg2
 from datetime import date
+
+import psycopg2
 
 DSN = "host=localhost port=5434 dbname=ground_truth user=postgres password=supersecurepassword"
 TODAY = date(2026, 9, 13)

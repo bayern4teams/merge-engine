@@ -15,8 +15,8 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
 
-from src.mcp_server.tools.splink_matcher import score_pairs_with_splink
-from src.mcp_server.tools.resolve_entities import _record_id, _project_to_canonical
+from src.mcp_server.tools.resolve_entities import _record_id  # noqa: E402
+from src.mcp_server.tools.splink_matcher import score_pairs_with_splink  # noqa: E402
 
 _HERE = Path(__file__).resolve().parent
 

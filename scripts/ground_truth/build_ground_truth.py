@@ -15,8 +15,9 @@ extends. Simplifications documented inline (EUR->USD uses one flat rate, not
 historical per-year rates; hierarchy is flattened to parent+subsidiary, not a full
 multi-level org chart).
 """
-import psycopg2
 from datetime import date
+
+import psycopg2
 
 DSN = "host=localhost port=5434 dbname=ground_truth user=postgres password=supersecurepassword"
 TODAY = date(2026, 9, 10)
@@ -440,5 +441,6 @@ for yr, amt in [(2016,20180000000),(2017,20561000000),(2018,23195000000)]:
 
 conn.commit()
 print("BOEING done. total entities:", len(MAP))
-cur.close(); conn.close()
+cur.close()
+conn.close()
 print("ALL COMMITTED OK")

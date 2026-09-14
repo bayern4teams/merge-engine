@@ -4,6 +4,7 @@ hardcoded connection details are from an earlier project phase)."""
 import json
 import sys
 import time
+
 import requests
 
 BASE = "http://localhost:7860"

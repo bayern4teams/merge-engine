@@ -23,8 +23,8 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
 
-from src.mcp_server.tools import splink_workbench as wb
-from src.mcp_server.tools.resolve_entities import _domain_of, _record_id
+from src.mcp_server.tools import splink_workbench as wb  # noqa: E402
+from src.mcp_server.tools.resolve_entities import _domain_of, _record_id  # noqa: E402
 
 SCRATCH = str(Path(__file__).resolve().parent)
 
