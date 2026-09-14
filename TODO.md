@@ -975,7 +975,23 @@ working, tested code that already exists in this repo and is simply never called
     falls through to the LLM (found and fixed live during this task: an early draft
     treated "we don't know this entity's tables yet" as "verified nothing's there",
     which silently broke 6 pre-existing tests — root-caused and corrected before
-    committing). Full suite: `2001 passed, 83 skipped` (was 1998/83 pre-B.3.2).
+    committing). Full suite: `1851 passed, 83 skipped` (was 1848/83 pre-B.3.2,
+    matching B.3.1's own recorded figure exactly).
+    **Correction (fix-v3 Phase 6 continuation, 2026-09-14):** this line
+    previously read `2001 passed... (was 1998/83 pre-B.3.2)`. That `1998`
+    baseline was never independently re-run — it doesn't match B.3.1's own
+    recorded `1848 passed, 83 skipped` one entry above, and every later
+    "full suite" figure (B.4.2, B.5.2, and their exit gates) was chained
+    off this wrong number instead of being freshly measured. Re-verified
+    via `git worktree add .worktrees/4dd79a5 4dd79a5` (this task's own
+    commit) **on the `/home` partition** (the session's default `/tmp`
+    scratchpad sits on a 436 MB partition with ~205 MB free, which
+    independently and correctly fails this repo's own disk-space preflight
+    check — a measurement artifact of *where* the check ran, not a real
+    historical test failure; confirmed by re-running the identical suite
+    on `/home`, which has 147 GB free, with a clean 0-failed result) with
+    `python -m pytest tests/unit -q`: real result `1851 passed, 83 skipped,
+    0 failed`. The number above is now that real, independently-run figure.
     **[LIVE]** real ClickHouse origin (`testzoominfo`, `localhost:8125`), real origin
     connector, real `build_join_graph` inclusion-verification call: 0 LLM calls,
     `dependency_analysis_origin=ALGORITHMIC`, confirmed via the actual log line
@@ -996,7 +1012,8 @@ run shows 0 LLM dependency calls for fully-covered schema (log-verified).
   - *Evidence:* All 10 gates individually re-confirmed green after B.3.1/B.3.2 (same
     per-gate method as M1, given this machine's tight-swap constraint — see B.1's exit
     gate note): `lint`/`format`/`arch`/`docs`/`portability`/`types` (bounded combined
-    run), `test` (unit `2001 passed, 83 skipped`; integration folded into the same run
+    run), `test` (unit `1851 passed, 83 skipped` — corrected figure, see B.3.2's own
+    evidence entry above; integration folded into the same run
     above), `eval`/`prompts`/`frontend` unaffected by this phase's changes (last verified
     clean under M1, no src/ change in this phase touches those gates' inputs). The
     Boeing-scope [LIVE] requirement itself is satisfied by B.3.2's own live evidence
@@ -1047,7 +1064,15 @@ anything upstream, and carries its own explicit fallback if the dependency is im
     8/8 passed: violating fact → one red flag with the real rule id; clean load → none;
     `when_value` mismatch → skipped; missing `compare_predicate` → skipped, no crash;
     missing rule file → `{}` (log + pass); fake-connector end-to-end path. Full suite:
-    `2009 passed, 83 skipped` (was 2001/83) — zero regressions.
+    `1859 passed, 83 skipped` (was 1851/83, matching B.3.2's corrected figure) —
+    zero regressions.
+    **Correction (fix-v3 Phase 6 continuation, 2026-09-14):** this line
+    previously read `2009 passed, 83 skipped (was 2001/83)`, chained off
+    B.3.2's since-corrected wrong baseline (see B.3.2's evidence entry for
+    the root cause). Re-verified via `git worktree add .worktrees/db308fe
+    db308fe` (this task's own commit) on the `/home` partition with
+    `python -m pytest tests/unit -q`: real result `1859 passed, 83 skipped,
+    0 failed`. The number above is now that real, independently-run figure.
     **[LIVE]** real destination Postgres (`localhost:5434/destination`, `kg` schema):
     added `company.last_investment_date` as a new `fact_predicate` catalog **row**
     (additive data, the same extension pattern this repo's own `ground_truth` script
@@ -1064,7 +1089,7 @@ anything upstream, and carries its own explicit fallback if the dependency is im
     in place as a legitimate, reusable extension. Commit `db308fe`.
 
 **B.4 exit gate → M4:** unit suite green; **[LIVE]** red flag confirmed via disk-read run report.
-  - *Evidence:* Unit suite `2009 passed, 83 skipped` (see B.4.2 above). Live red-flag
+  - *Evidence:* Unit suite `1859 passed, 83 skipped` (corrected figure — see B.4.2 above). Live red-flag
     confirmation via independent disk read of `logs/run_reports/<run_id>.json` (see B.4.2
     above) — exit gate satisfied by that same evidence, not repeated separately.
 
@@ -1102,7 +1127,17 @@ with a negative fixture as its first test and a live ground-truth regression as 
     ≥2 distinct shared neighbors → they DO count; no shared neighbors → `set()`; a record
     with no resolvable native id → `0.0`, never a crash; boost bounded at `0.3` regardless
     of shared-neighbor count; boost alone (`0.3`) can never reach `_AUTO_MATCH` (`0.95`).
-    Full suite: `2021 passed, 83 skipped` (was 2009/83) — zero regressions. Commit `5b8e508`.
+    Full suite: `1871 passed, 83 skipped` (was 1859/83, matching B.4.2's corrected
+    figure) — zero regressions. Commit `5b8e508`.
+    **Correction (fix-v3 Phase 6 continuation, 2026-09-14):** this line
+    previously read `2021 passed, 83 skipped (was 2009/83)`, chained off
+    B.4.2's since-corrected wrong baseline. Re-verified with a fresh,
+    independent run on HEAD (`5b8e508` + the TODO.md-only `e3d7242`, i.e.
+    the actual current branch tip) — `python -m pytest tests/unit -q` on
+    the real repo checkout (`/home` partition): real result `1871 passed,
+    83 skipped, 0 failed`. The number above is now that real,
+    independently-run figure; it also settles the B.5 exit-gate figure
+    below to the same value.
 - [x] **B.5.3 [LIVE]** Ground-truth regression: re-run Airbus + Boeing company resolution
   against ground truth; acceptance = `f62c560d`-shape does **not** recur (Airbus
   Helicopters own cluster; Madrid↔Toulouse variants together), Boeing BDS trio merges,
@@ -1140,7 +1175,7 @@ with a negative fixture as its first test and a live ground-truth regression as 
 
 **B.5 exit gate → M5:** full unit suite green; **[LIVE]** Airbus/Boeing ground-truth
 comparison recorded.
-  - *Evidence:* Full unit suite `2021 passed, 83 skipped`. Live Boeing+Airbus comparison
+  - *Evidence:* Full unit suite `1871 passed, 83 skipped` (corrected figure — see B.5.2 above). Live Boeing+Airbus comparison
     recorded above (B.5.3) — real data, real signal, honestly reported including where a
     genuine live reproduction of the specific blob-trigger condition wasn't possible in
     this environment's current seed data, and where the legacy ground-truth harness gap
