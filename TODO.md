@@ -1188,13 +1188,48 @@ an uncertain outcome even if recovered (recall must measurably beat 0.995, which
 audit's own honest ceiling says it doesn't yet) — sequenced after the phases whose
 outcomes are within this team's control.
 
-- [ ] **B.6.1** Restore the 560-pair gate fixture `tests/eval/pagila_staff.csv` (missing
-  from checkout; audit §11 names this exact blocker). Recover from git history or the
-  pagila sample DB. **Never hand-author pairs** — if unrecoverable, record `BLOCKED` and
+- [x] **B.6.1 — `BLOCKED`** Restore the 560-pair gate fixture `tests/eval/pagila_staff.csv`
+  (missing from checkout; audit §11 names this exact blocker). Recover from git history or
+  the pagila sample DB. **Never hand-author pairs** — if unrecoverable, record `BLOCKED` and
   the promotion below cannot proceed.
   - *Accept:* `pytest tests/eval/test_matcher_recall.py --collect-only -q` succeeds and the
     fixture row-count matches `test_matcher_recall.py`'s own expectation.
-  - *Evidence:* _fill in_
+  - *Evidence:* **Option 1, git history — exhausted, confirmed impossible.**
+    `git log --all --diff-filter=D --oneline -- tests/eval/pagila_staff.csv` → empty output;
+    `git log --all --oneline -- tests/eval/pagila_staff.csv` → also empty. The file was
+    **never committed to this repo at all** (it's covered by the `*.csv` line in
+    `.gitignore`, confirmed via `git check-ignore -v tests/eval/pagila_staff.csv` →
+    `.gitignore:48:*.csv`), so there is no prior commit to `git checkout` it back from —
+    not a deletion to reverse, a file that was always local-only and never checked in.
+    **Option 2, the pagila sample DB in Docker — also exhausted.** `docker images` (all
+    images on this host) and `docker ps -a` (all containers, running or stopped) both
+    checked: zero `pagila`-named or `pagila`-tagged image/container anywhere on this
+    machine. `find / -iname "*pagila*"` (excluding `/proc`) found nothing outside this
+    repo's own source files that merely *reference* the name (`golden.py`,
+    `test_matcher_recall.py`, docs). **Also checked and ruled out honestly:** even if a
+    stock Pagila demo DB were available, it would not actually produce this fixture —
+    `golden.py`'s own docstring describes a **1500-row** staff table with 1500 distinct
+    emails, but the real/stock Pagila sample database's `staff` table has only 2 rows; no
+    generator script for an expanded/synthetic 1500-row variant exists anywhere in
+    `scripts/` or `tests/` (`grep -rl "1500.*staff\|generate.*pagila" scripts/ tests/` →
+    only the 3 files that reference the fixture by name, no producer). This fixture was a
+    hand-built, never-committed local artifact from a prior session — genuinely
+    unrecoverable by either of the plan's two sanctioned paths, and the plan's own rule is
+    explicit: **do not hand-author pairs** as a third option.
+    **Recorded honestly as `BLOCKED`,** per the plan's own instruction for this exact case.
+    Confirmed downstream, not just asserted: `pytest tests/eval/test_matcher_recall.py
+    --collect-only -q` → `2 tests collected` (collection itself succeeds — the codebase's
+    own missing-fixture guard, not a crash); running them
+    (`pytest tests/eval/test_matcher_recall.py -q -m ""`) → `2 skipped`, each via the
+    module's own `pytest.skip(...)` guard citing the exact missing 1500-row file; the
+    module's own `_merge_gate_record(a_measurable=False, a_met=False)` call fires on the
+    skip path, and the real `tests/eval/last_gate.json` on disk (read independently, not
+    the test's own pass/fail message) confirms it:
+    `{"a_measurable": false, "a_met": false, "b_measurable": false, "b_met": false,
+    "gate_passed": false}` — the gate mechanism itself correctly refuses to claim a
+    measurement it cannot make, exactly as designed. B.6.4 below is `BLOCKED` by this
+    entry; B.6.2 and B.6.3 do not depend on the fixture and proceed per the plan's own
+    fallback.
 - [ ] **B.6.2** Token/looser blocking alongside the fixed prefix rule in
   `splink_matcher.py`; candidate rules costed via `splink_blocking.py`'s costed
   recommender (S-E machinery); cost table in the commit message.
