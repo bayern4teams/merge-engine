@@ -34,6 +34,10 @@ Split from the old root `TECHNICAL_README.md`, by subsystem, in reading order:
 - [0014-replace-budget-truncation-with-blocking-analysis.md](decisions/0014-replace-budget-truncation-with-blocking-analysis.md) — costed blocking before pair generation, replacing after-the-fact truncation
 - [0015-v3-discovery-engine-flag.md](decisions/0015-v3-discovery-engine-flag.md) — P-9's engine wired into `plan_scope_impl` as a `scope_config.engine` flag, scoped to planning only (not extraction execution)
 - [0016-splink-model-versioning-file-store.md](decisions/0016-splink-model-versioning-file-store.md) — B.4 S-N: trained Splink models as immutable file-store versions, activation as a pointer, round-trip-verify gating activation
+- [0017-reject-hiergat.md](decisions/0017-reject-hiergat.md) — rejected: unmaintained PyTorch 1.4/Python 3.7 research code; its relational-signal finding corroborates B.5, adopted natively instead
+- [0018-reject-relater-code-adopt-idea.md](decisions/0018-reject-relater-code-adopt-idea.md) — rejected: Python 2, 2-commit snapshot; its relational-matching idea lands natively as B.5's `_relational_agreement`
+- [0019-utopia-reference-only.md](decisions/0019-utopia-reference-only.md) — reference only: this project's own `kg` schema is already the bitemporal, evidence-carrying decision ledger Utopia demonstrates
+- [0020-ontop-study-not-aws-accelerator.md](decisions/0020-ontop-study-not-aws-accelerator.md) — AWS accelerator rejected (Neptune/Bedrock cloud coupling); Ontop itself a portable OBDA reference if a concrete SPARQL/OWL need appears
 
 ## plans/ — the plans this repo is executing against
 
