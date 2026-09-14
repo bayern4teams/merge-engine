@@ -178,6 +178,29 @@ def _resolve_primary_key(table: dict[str, Any]) -> list[str]:
     column_names = {c.get("name") for c in table.get("columns", []) or []}
     if "_id" in column_names:
         return ["_id"]
+    # No declared PK and no Mongo-style _id: a bulk-loaded/denormalized
+    # origin table often has no PK constraint at all despite having an
+    # obvious natural key -- e.g. "companyid" on "company", following
+    # exactly the {table}id/{table}_id convention this module already uses
+    # to match a CHILD column to ITS parent (see _find_candidate_edges).
+    # Without this fallback, a PK-less origin (live: testdiffbot's
+    # `diffbot` schema has zero declared PKs across all 13 tables) can
+    # never be a valid candidate-edge PARENT at all -- _find_candidate_
+    # edges' `if not other_pk: continue` guard skips every table, the
+    # whole heuristic tier finds nothing, and every multi-hop entity
+    # behind it (financials, industry, investors, relations, ...) gets
+    # silently zero rows with no join-graph edge to explain why.
+    table_name = str(table.get("name") or "").lower()
+    if table_name:
+        candidate_names = {table_name, _singularise_table(table_name)}
+        lower_to_actual = {
+            str(c.get("name", "")).lower(): c.get("name") for c in table.get("columns", []) or []
+        }
+        for name in candidate_names:
+            for suffix in ("id", "_id"):
+                actual = lower_to_actual.get(f"{name}{suffix}")
+                if actual:
+                    return [actual]
     return []
 
 
@@ -187,6 +210,26 @@ class _EdgeCandidate:
     child_column: str
     parent_table: str
     parent_column: str
+    # Schema-qualified table names ("diffbot.company"), for verification
+    # queries only -- the JoinEdge this candidate becomes still keys on the
+    # bare name everywhere else in the pipeline. Falls back to the bare
+    # name when a table dict carries no "full_name" (e.g. hand-built dicts
+    # in tests). Without this, sample_distinct_values (called with only the
+    # bare table name) can't tell which schema to query and silently
+    # defaults to "public" -- live-reproduced: every one of testdiffbot's
+    # tables actually lives in the "diffbot" schema, so every single
+    # inclusion-dependency check failed with "relation public.<table> does
+    # not exist", caught by _verify_inclusion's own try/except, and
+    # returned None -- zero edges ever verified despite _find_candidate_
+    # edges correctly proposing 10 of them.
+    child_full_table: str = ""
+    parent_full_table: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.child_full_table:
+            object.__setattr__(self, "child_full_table", self.child_table)
+        if not self.parent_full_table:
+            object.__setattr__(self, "parent_full_table", self.parent_table)
 
 
 # A tiny, deliberately conservative singulariser used only to widen FK-
@@ -270,6 +313,10 @@ def _find_candidate_edges(
                             # The other table's ACTUAL primary key -- never
                             # a hard-coded "id".
                             parent_column=other_pk[0],
+                            child_full_table=str(table.get("full_name") or table_name),
+                            parent_full_table=str(
+                                table_by_name.get(other_name, {}).get("full_name") or other_name
+                            ),
                         )
                     )
     return candidates
@@ -302,7 +349,7 @@ async def _verify_inclusion(
     """
     try:
         child_vals = await connector.sample_distinct_values(
-            candidate.child_table, candidate.child_column, limit=sample_size
+            candidate.child_full_table, candidate.child_column, limit=sample_size
         )
     except Exception as exc:
         logger.debug(
@@ -320,7 +367,7 @@ async def _verify_inclusion(
 
     try:
         parent_matches = await connector.sample_distinct_values(
-            candidate.parent_table,
+            candidate.parent_full_table,
             candidate.parent_column,
             limit=sample_size,
             filter_values=raw_child_vals,
