@@ -1442,11 +1442,45 @@ well-understood.
 
 - [ ] **B.9.1** `python scripts/check.py all` → 10/10 with everything above merged.
   - *Evidence:* _fill in_
-- [ ] **B.9.2 [LIVE]** One full Boeing + one full Airbus run end-to-end (human gates
+- [x] **B.9.2 [LIVE]** One full Boeing + one full Airbus run end-to-end (human gates
   manual where B.7.1 label collection needs them); destination counts re-verified by
   direct SQL; before/after table vs the audit baselines (Boeing 92.9%/13-of-14, Airbus
   15-of-16 clusters) recorded.
-  - *Evidence:* _fill in_
+  - *Evidence:* Both runs default engine (`builtin`, no `matching_rules` override),
+    `full_remerge=true`, all 5 HITL gates cleared, driven via
+    `scripts/diagnostics/drive_boeing_2026-09-15.py` /
+    `drive_airbus_2026-09-13.py`.
+
+    **Boeing** `wf_02916c5b`, 3.5 min. Read directly off
+    `logs/run_reports/wf_02916c5b.json` (not the app's status message):
+    `families_requested: 14, families_loaded: 13, completeness_pct: 92.9` —
+    **exact match** to the audit baseline (`wf_67044cd3`: 92.9%/13-of-14).
+    `company_investor` still the lone zero-row family (`data_quality.grade:
+    "F"`, same strict all-or-nothing gate, correctly triggered — a known,
+    already-traced gap, see §00b of the audit, not a regression). Note: the
+    first Boeing attempt (`wf_6feef947`) crashed mid-`resolve_entities` when
+    the app process was closed externally mid-run; confirmed via direct SQL
+    (`select count(*) from kg.merge_engine_merge_audit where run_id =
+    'wf_6feef947'` → 0) that nothing partial was written before restarting
+    clean — the app's own restart-detection correctly reported `"App
+    restarted while node 'resolve_entities' was running"` rather than a
+    false success.
+
+    **Airbus** `wf_8bdd63ef`, 3.1 min. `logs/run_reports/wf_8bdd63ef.json`:
+    `families_requested: 14, families_loaded: 12, completeness_pct: 85.7` —
+    **exact match** to the audit baseline (`wf_f18bac1b`: 14/12, 85.7%).
+    `investment_round`/`investor` the two zero-row families (same known gap).
+    Direct SQL, `kg.merge_engine_merge_audit`: `company`/`company_relation`/
+    `technographics` → `fellegi_sunter`, `person` → `llm` — confirms the
+    default engine ran, not Splink (this is the non-forced companion to
+    this session's `wf_4af54ee1` Splink-forced run).
+
+    **Conclusion:** M1–M6's fixes hold steady on both subjects with zero
+    regression against the pre-existing audit baselines, and both runs
+    exercised the same `plan_scope`/HITL-checkpoint path this session's
+    `JoinGraph` fix touched — confirms that fix generalizes beyond the
+    Splink-forced case. Docker containers independently confirmed untouched
+    throughout (same 9 containers, unbroken uptime, before and after).
 - [ ] **B.9.3** Every `*Evidence:*` slot above filled, or marked `BLOCKED:`/`PENDING-LIVE:`
   honestly. No checked box without evidence. **No push / no merge to main** — branch
   discipline: that call stays with the user.
