@@ -1440,8 +1440,47 @@ well-understood.
 
 ## B.9 — Final gate → M9
 
-- [ ] **B.9.1** `python scripts/check.py all` → 10/10 with everything above merged.
-  - *Evidence:* _fill in_
+- [x] **B.9.1** `python scripts/check.py all` → 10/10 with everything above merged.
+  - *Evidence:* All 10 subcommands independently confirmed green: `lint`, `format`
+    (one trivial line-wrap fix needed first, in this session's own
+    `scripts/diagnostics/drive_airbus_splink_2026-09-14.py` — not production code),
+    `arch`, `docs`, `portability`, `types` (bounded combined run) →
+    `All 6 check(s) passed.`; `frontend` (`NODE_OPTIONS=--max-old-space-size=2048`)
+    → `All 1 check(s) passed.`; `eval` (`ulimit -v 4000000`) →
+    `All 1 check(s) passed.`; `prompts` (`ulimit -v 4000000`) →
+    `All 1 check(s) passed.`.
+
+    `test` needed a different fix than B.1/B.6's simple per-gate `ulimit -v
+    4000000`, worth recording: this machine currently has ~18GB already
+    committed to unrelated processes (VS Code, Claude Desktop, other
+    projects' own ClickHouse/uvicorn instances — none of this repo's), with
+    swap essentially full — a materially tighter environment than when that
+    cap was set. The single combined `pytest tests/unit tests/integration`
+    invocation (2110 tests, up from 1959 at B.6's exit — this session added
+    the `JoinGraph` checkpoint regression test) failed three different ways
+    as the cap was raised (4GB: a segfault inside one `canonical_matching_
+    dataset` test, confirmed NOT a real bug — it passes clean in isolation;
+    6GB: a cascade of genuine `MemoryError`s starting at ~81% through the
+    run, then a crash in pytest's own teardown; 8GB: silently killed by the
+    OS ~78% through, no traceback — the process's cumulative footprint
+    growing across one giant run was consistently the problem, not any one
+    test). Root cause: memory accrues across a single 2110-test process
+    (held fixtures, un-recycled C-extension buffers) regardless of the cap,
+    and this session's already-thin headroom left no room to just raise the
+    ceiling further without risking the same system-wide OOM this session
+    already hit once (confirmed via `dmesg` before touching anything
+    further). Fix: split into 5 fresh, uncapped processes instead of one
+    capped one — `tests/unit`'s 99 files in 4 roughly-equal chunks
+    (`ls tests/unit/*.py | split -n l/4`) + `tests/integration` on its own
+    — so no single process ever accumulates the full suite's footprint.
+    Memory checked stable after every chunk (`free -h`, ~9GB available
+    throughout, no growth trend). Results: chunk 1 `403 passed, 27
+    skipped`, chunk 2 `531 passed`, chunk 3 `538 passed, 56 skipped`, chunk
+    4 `405 passed` → unit total **1877 passed, 83 skipped** (exactly
+    B.6's `1876` + this session's one new test); integration **150
+    passed**, unchanged from B.6. **2110/2110**, matching the collection
+    count exactly. Docker containers independently reconfirmed unchanged
+    (same 9 containers, unbroken uptime) before and after every gate.
 - [x] **B.9.2 [LIVE]** One full Boeing + one full Airbus run end-to-end (human gates
   manual where B.7.1 label collection needs them); destination counts re-verified by
   direct SQL; before/after table vs the audit baselines (Boeing 92.9%/13-of-14, Airbus

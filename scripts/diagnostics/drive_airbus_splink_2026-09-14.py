@@ -65,7 +65,9 @@ def log(m):
 
 def drive(company: str):
     wall_start = time.monotonic()
-    log(f"\n{'=' * 70}\nSTARTING WORKFLOW (SPLINK-FORCED): 'merge all information about {company}'\n{'=' * 70}")
+    log(
+        f"\n{'=' * 70}\nSTARTING WORKFLOW (SPLINK-FORCED): 'merge all information about {company}'\n{'=' * 70}"
+    )
     r = requests.post(
         f"{BASE}/api/workflow/start",
         json={
