@@ -118,17 +118,26 @@ class JoinGraph:
     it came from.
     """
 
-    nodes: set[Node] = field(default_factory=set)
+    # dict[Node, None], not set[Node]: this graph is stored in orchestrator
+    # state and must survive a LangGraph checkpoint round-trip across a HITL
+    # gate. LangGraph's msgpack checkpoint serializer decodes a bare set's
+    # elements as lists (msgpack has no tuple type outside dict keys), so
+    # `set(tuple_of_node_tuples)` throws on resume ("unhashable type: list")
+    # and the ext hook silently swallows it to None -- plan_scope.py then
+    # crashes on `node not in graph.nodes` with a NoneType. Dict keys decode
+    # correctly (proven: `_adjacency` below round-trips fine), so a dict
+    # used as an ordered set sidesteps the bug entirely.
+    nodes: dict[Node, None] = field(default_factory=dict)
     _adjacency: dict[Node, list[JoinEdge]] = field(default_factory=dict)
 
     def add_node(self, node: Node) -> None:
-        self.nodes.add(node)
+        self.nodes[node] = None
 
     def add_edge(self, edge: JoinEdge) -> None:
         child_node = (edge.child_origin, edge.child_table)
         parent_node = (edge.parent_origin, edge.parent_table)
-        self.nodes.add(child_node)
-        self.nodes.add(parent_node)
+        self.nodes[child_node] = None
+        self.nodes[parent_node] = None
         self._adjacency.setdefault(child_node, []).append(edge)
         self._adjacency.setdefault(parent_node, []).append(edge)
 

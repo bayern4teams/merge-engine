@@ -571,7 +571,7 @@ class TestBuildJoinGraph:
 
     async def test_all_nodes_present_even_with_no_edges(self) -> None:
         graph, _ = await self._run_with_overlaps({})
-        assert graph.nodes == {
+        assert set(graph.nodes) == {
             ("origin_2", "Company"),
             ("origin_2", "Experience"),
             ("origin_2", "Person"),
@@ -604,6 +604,31 @@ class TestJoinGraphDataStructure:
     def test_neighbors_of_unknown_node_is_empty(self) -> None:
         graph = JoinGraph()
         assert graph.neighbors(("o1", "Nonexistent")) == []
+
+    def test_survives_langgraph_checkpoint_round_trip(self) -> None:
+        """Regression: a JoinGraph stored in orchestrator state must survive
+        a real LangGraph checkpoint save/load (e.g. across a HITL gate).
+        `nodes` used to be a bare `set[Node]`; LangGraph's msgpack
+        checkpoint serializer decodes a set's tuple elements as lists
+        (unhashable), so `set(...)` reconstruction threw and was silently
+        swallowed to None -- plan_scope.py then crashed on
+        `node not in graph.nodes` with a NoneType. `nodes` is now a dict
+        used as an ordered set, whose tuple *keys* round-trip correctly.
+        """
+        from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+        graph = JoinGraph()
+        graph.add_node(("o1", "Isolated"))  # no edges -- must still survive
+        graph.add_edge(_edge("Experience", "companyID", "Company", "companyID"))
+
+        serializer = JsonPlusSerializer()
+        typ, data = serializer.dumps_typed(graph)
+        restored = serializer.loads_typed((typ, data))
+
+        assert restored.nodes is not None
+        assert set(restored.nodes) == set(graph.nodes)
+        assert ("o1", "Isolated") in restored.nodes
+        assert restored.neighbors(("o1", "Experience"))
 
 
 def _edge(
