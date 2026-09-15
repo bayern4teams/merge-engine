@@ -1381,10 +1381,18 @@ effort-gated.
   `kg.merge_engine_merge_audit.human_override`.
   - *Accept [LIVE]:* approve one real match manually → `SELECT count(*) … WHERE
     human_override IS NOT NULL` > 0, read by direct SQL.
-  - *Evidence:* _fill in_
+  - *Evidence:* **PENDING-LIVE.** Confirmed live, 2026-09-15: `SELECT count(*) FROM
+    kg.merge_engine_merge_audit WHERE human_override IS NOT NULL` → `0` (118,033 rows
+    total, all `decided_by IN ('auto', 'llm')`). Every gate driven this session (B.9.2
+    included) used blanket per-gate `approve`, not a per-cluster `human_review_matches`
+    override — real, deliberate human review hasn't happened yet in normal use. Not
+    started.
 - [ ] **B.7.2** `src/llm/dspy_lm.py` `configured_lm()` (local vLLM via OpenAI-compatible
   `api_base`, `max_tokens=4096` — directly closes §6's null-content truncation gap).
-  - *Evidence:* _fill in_
+  - *Evidence:* **NOT STARTED.** Confirmed via `codebase-memory-mcp` (`search_graph` for
+    `dspy_lm`/`configured_lm`, project-wide) and `find src -iname '*dspy*'`: no such file
+    anywhere in `src/`. `dspy-ai` is declared as an optional extra in `pyproject.toml`
+    (line 77) but never imported. Correctly deferred behind B.7.1.
 - [ ] **B.7.3** `src/llm/dspy_programs/entity_match.py` — `EntityMatchJudgment` Signature
   incl. `relationship_context` input (fed from **B.5's** relationship index; the two
   recommendations share one signature by design). Replace the raw prompt at
@@ -1393,19 +1401,25 @@ effort-gated.
   (audit §00b degradation rule).
   - *Accept (unit):* stub-LM parsing; fallback on failure still returns heuristic score
     AND increments the visible counter.
-  - *Evidence:* _fill in_
+  - *Evidence:* **NOT STARTED.** No `entity_match.py`/`EntityMatchJudgment` anywhere in
+    `src/`; `resolve_entities.py`'s LLM chunk site (~line 2049) still calls the raw
+    prompt path unchanged. Also gated on the §00b degradation-ledger recommendation
+    (`llm_fallback_count`), itself not built either. Correctly deferred behind B.7.1/B.7.2.
 - [ ] **B.7.4** `scripts/dspy/optimize_entity_match.py`: labelled pairs from
   `human_override IS NOT NULL`, `match_metric`, `dspy.MIPROv2.compile`, saved to
   `logs/dspy_programs/entity_match_v1.json` (ADR 0016 versioned-artifact convention).
   - *Accept (unit):* end-to-end compile against a tiny synthetic labelled set, stub LM.
-  - *Evidence (LIVE, once real labels exist):* compiled vs baseline judgment accuracy on
-    held-out pairs. _fill in_
+  - *Evidence (LIVE, once real labels exist):* **PENDING-LIVE, correctly.** No
+    `scripts/dspy/` directory exists. Structurally cannot start before B.7.1 produces
+    real labels and B.7.3 exists to optimize — this is the plan's own named data-gated
+    (not effort-gated) item, exactly as scheduled.
 - [ ] **B.7.5** `src/mcp_server/tools/dedupe_matcher.py` `train_dedupe_classifier(labelled_pairs)`
   → score as **one more weighted input** to `_compute_heuristic_confidence` (ensemble
   member, not a fourth engine); extra `dedupe = ["dedupe>=3.0"]`; default off.
   - *Accept (unit):* trains on synthetic labelled pairs; monotone sane scores; disabled
     default changes nothing.
-  - *Evidence:* _fill in_
+  - *Evidence:* **NOT STARTED.** No `dedupe_matcher.py` in `src/mcp_server/tools/`; no
+    `dedupe` extra in `pyproject.toml`. Same B.7.1 label dependency as B.7.3-B.7.4.
 
 **B.7 exit gate → M7:** infrastructure built and unit-tested; label collection live;
 optimization itself remains `PENDING-LIVE` until real labels accumulate — an honest,
@@ -1423,7 +1437,11 @@ well-understood.
   `docs/diagnostics/GRAPHITI_PILOT.md` filled with measured side-by-side numbers for ≥5
   temporal queries (Graphiti hybrid search vs hand-rolled `valid_from/valid_to` CTEs).
   No ADR-0012 change without those numbers.
-  - *Evidence:* _fill in_
+  - *Evidence:* **NOT STARTED.** No `graphiti`/`falkordb`/`mirror_fact_to_graphiti`
+    anywhere in `src/` (confirmed via `codebase-memory-mcp`); no
+    `docs/diagnostics/GRAPHITI_PILOT.md`; no FalkorDB container in `docker ps`. Correctly
+    last — the plan's own most-speculative item, scheduled after everything
+    well-understood.
 - [ ] **B.8.2** LangGraph Swarm contested-cluster advisor: two-specialist swarm per audit
   snippet; new node `resolve_contested_cluster` between `resolve_entities` and
   `human_review_matches`, firing only when heuristic vs **B.5's** relational signal
@@ -1433,7 +1451,10 @@ well-understood.
   cluster still reaches `human_review_matches`).
   - *Accept (unit):* trigger-margin gating (most clusters bypass entirely); advisory-only
     invariant test; transcript attached, not decisions.
-  - *Evidence:* _fill in_
+  - *Evidence:* **NOT STARTED.** No `resolve_contested_cluster`/`cluster_resolution_swarm`
+    anywhere in `src/orchestrator/` (confirmed via `codebase-memory-mcp`); `graph.py`'s
+    node list unchanged from B.9.1's fully-green `check.py all` run. `langgraph-swarm`
+    not in `pyproject.toml`.
 
 **B.8 exit gate → M8:** both pilot docs filled with real measured numbers, or explicitly
 `BLOCKED`/`PENDING-LIVE`.
@@ -1520,9 +1541,28 @@ well-understood.
     `JoinGraph` fix touched — confirms that fix generalizes beyond the
     Splink-forced case. Docker containers independently confirmed untouched
     throughout (same 9 containers, unbroken uptime, before and after).
-- [ ] **B.9.3** Every `*Evidence:*` slot above filled, or marked `BLOCKED:`/`PENDING-LIVE:`
+- [x] **B.9.3** Every `*Evidence:*` slot above filled, or marked `BLOCKED:`/`PENDING-LIVE:`
   honestly. No checked box without evidence. **No push / no merge to main** — branch
   discipline: that call stays with the user.
-  - *Evidence:* this file, final pass.
+  - *Evidence:* Full sweep, 2026-09-15 (`grep -n "_fill in_" TODO.md` → no matches
+    before this pass; 7 slots found and filled — all in B.7/B.8). Filled each honestly
+    against live state, not assumed: `human_override` confirmed `0` rows by direct SQL
+    (B.7.1); every named file (`dspy_lm.py`, `entity_match.py`, `dedupe_matcher.py`,
+    `graphiti`/`falkordb`, `resolve_contested_cluster`) confirmed absent from `src/` via
+    `codebase-memory-mcp` `search_graph` (B.7.2–B.7.5, B.8.1–B.8.2) — none marked done
+    that isn't. B.6.1/B.6.4's pre-existing `BLOCKED` (unrecoverable fixture) and B.6's
+    exit gate's "not promoted, honestly undecided-pending-fixture" stand unchanged; no
+    new attempt made to fabricate a gate result.
 
 **B.9 exit gate → M9:** ship-ready. All milestones M1–M8 closed with evidence.
+  - *Evidence:* **M1–M6 and M9's own mechanics (B.9.1/B.9.2/B.9.3) are closed** — full
+    `check.py all` 10/10, Boeing+Airbus e2e matching the audit baselines exactly, this
+    evidence sweep clean. **M7 and M8 are honestly still open** — correctly, by the
+    plan's own design (§B.7's exit gate: "optimization remains `PENDING-LIVE` until
+    real labels accumulate — an honest, expected state, not a blocker"; §B.8: "prove
+    before commit," scheduled last). Nothing in M7/M8 was started this session; nothing
+    here claims otherwise. **This is not the "all M1–M8 closed" ship-ready state the
+    original sentence above describes** — nine milestones are M1–M9, not eight, and two
+    (M7, M8) are real, scoped future work, not a gap in what was asked for this round.
+    **No push, no merge to `main`** — untouched, per branch discipline; that call stays
+    with the user.
