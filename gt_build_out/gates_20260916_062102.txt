@@ -1,0 +1,203 @@
+======================================================================
+V1 Coverage — closure ids all mapped; every closure id in ≥1 evidence locator
+
+### V1: PASS
+    diffbot: closure=30 mapped-in-entity_map=30 ==
+    zoominfo: closure=51 mapped-in-entity_map=51 ==
+    closure ids with NO evidence locator: 0
+======================================================================
+V2 Seed presence — 5 seeds → exactly one canonical entity, official name+domain
+
+### V2: PASS
+    boeing: entity=d28d66e0… canonical='Boeing' names=(Boeing / Boeing Co / Boeing Co. The / Boeing International / The Boeing Company) domain='boeing.com' name_ok=True domain_ok=True
+    airbus: entity=11340c32… canonical='Airbus' names=(Airbus / Airbus SAS / Airbus SE / AIRBUS SE) domain='airbus.com' name_ok=True domain_ok=True
+        airbus subsidiary seed zoominfo:365384179: [['Airbus Helicopters', 'airbus.com/helicopters.html']] (separate entity — guide §3 stub rule, not the family canonical)
+    thuraya: entity=5d000cc4… canonical='THURAYA' names=(Thuraya / THURAYA / Thuraya Telecommunications) domain='thuraya.com' name_ok=True domain_ok=True
+    ohb: entity=b333c266… canonical='Ohb Se' names=(Ohb Se / OHB SE) domain='ohb.de' name_ok=True domain_ok=True
+        ohb subsidiary seed zoominfo:28656225: [['OHB System', 'ohb.de']] (separate entity — guide §3 stub rule, not the family canonical)
+    capella: entity=f460e58f… canonical='Capella Space' names=(Capella Space / Capella Space Corporation) domain='capellaspace.com' name_ok=True domain_ok=True
+======================================================================
+V3 No orphan entities
+
+### V3: PASS
+    entities without entity_name: 0
+    entities without fact/relationship: 0
+    organizations without company supertype row: 0
+    persons without entity row: 0
+======================================================================
+V4 FK integrity — NULL-id relationships not reported as unresolved
+
+### V4: PASS
+    person_company_relationship rows with NULL ids: 0
+    graph_edge rows with NULL ids: 0
+    unresolved company-company endpoints reported (not loaded): 1,381 (gt_build.unresolved_links; company_company_relationship rows loaded: 0)
+======================================================================
+V5 No over-merge — no cluster mixes two different official domains; traps split
+
+### V5: FAIL
+    clusters with 2+ distinct non-empty member domains: 2
+      Boeing: ['boeing.com', 'boeinginternational.net']
+      THURAYA: ['thuraya-kazakhstan.kz', 'thuraya.com']
+      trap Monterey Airbus (zoominfo:73664537) in airbus root cluster: False
+      trap Al Thuraya Rent A Car (zoominfo:480703181) in thuraya root cluster: False
+      trap Al Thuraya Security (zoominfo:474376460) in thuraya root cluster: False
+      trap Capella University (zoominfo:42603095) in capella root cluster: False
+      trap Boeing Mesa Fire Department (diffbot:E17cdTqqHO5y1wMmj4p50tg) in boeing root cluster: False
+      trap Airbus Bank (zoominfo:449306384) in airbus root cluster: False
+      trap Airbus Bank (zoominfo:449306384) in airbus root cluster: False
+======================================================================
+V6 extract_ledger extracted == landed modulo documented drop-list
+
+### V6: FAIL
+    diffbot/diffbot.companycontact: extracted=74 landed=-1 delta=74 drop-list=0 UNCOVERED
+    diffbot/diffbot.companycontact: extracted=74 landed=-1 delta=74 drop-list=0 UNCOVERED
+    diffbot/diffbot.companycontact: extracted=74 landed=-1 delta=74 drop-list=0 UNCOVERED
+    diffbot/diffbot.companycontact: extracted=74 landed=-1 delta=74 drop-list=0 UNCOVERED
+    diffbot/diffbot.companycontact: extracted=74 landed=-1 delta=74 drop-list=0 UNCOVERED
+    diffbot/diffbot.companycontact: extracted=74 landed=-1 delta=74 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyemployeecategory: extracted=420 landed=-1 delta=420 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyemployeecategory: extracted=420 landed=-1 delta=420 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyemployeecategory: extracted=420 landed=-1 delta=420 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyemployeecategory: extracted=420 landed=-1 delta=420 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyemployeecategory: extracted=420 landed=-1 delta=420 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyemployeecategory: extracted=420 landed=-1 delta=420 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyexperience: extracted=100 landed=99 delta=1 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyexperience: extracted=100 landed=99 delta=1 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyexperience: extracted=100 landed=99 delta=1 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyexperience: extracted=100 landed=99 delta=1 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyexperience: extracted=100 landed=99 delta=1 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyexperience: extracted=100 landed=99 delta=1 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyfinancials: extracted=54 landed=-1 delta=54 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyfinancials: extracted=54 landed=-1 delta=54 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyfinancials: extracted=54 landed=-1 delta=54 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyfinancials: extracted=54 landed=-1 delta=54 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyfinancials: extracted=54 landed=-1 delta=54 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyfinancials: extracted=54 landed=-1 delta=54 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyindustry: extracted=30 landed=-1 delta=30 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyindustry: extracted=30 landed=-1 delta=30 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyindustry: extracted=30 landed=-1 delta=30 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyindustry: extracted=30 landed=-1 delta=30 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyindustry: extracted=30 landed=-1 delta=30 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyindustry: extracted=30 landed=-1 delta=30 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyinvestmentround: extracted=17 landed=-1 delta=17 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyinvestmentround: extracted=17 landed=-1 delta=17 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyinvestmentround: extracted=17 landed=-1 delta=17 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyinvestmentround: extracted=17 landed=-1 delta=17 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyinvestmentround: extracted=17 landed=-1 delta=17 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyinvestmentround: extracted=17 landed=-1 delta=17 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyinvestor: extracted=48 landed=-1 delta=48 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyinvestor: extracted=48 landed=-1 delta=48 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyinvestor: extracted=48 landed=-1 delta=48 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyinvestor: extracted=48 landed=-1 delta=48 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyinvestor: extracted=48 landed=-1 delta=48 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyinvestor: extracted=48 landed=-1 delta=48 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyrelation: extracted=1352 landed=-1 delta=1352 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyrelation: extracted=1352 landed=-1 delta=1352 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyrelation: extracted=1352 landed=-1 delta=1352 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyrelation: extracted=1352 landed=-1 delta=1352 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyrelation: extracted=1352 landed=-1 delta=1352 drop-list=0 UNCOVERED
+    diffbot/diffbot.companyrelation: extracted=1352 landed=-1 delta=1352 drop-list=0 UNCOVERED
+    diffbot/diffbot.companytechnographics: extracted=3812 landed=-1 delta=3812 drop-list=0 UNCOVERED
+    diffbot/diffbot.companytechnographics: extracted=3812 landed=-1 delta=3812 drop-list=0 UNCOVERED
+    diffbot/diffbot.companytechnographics: extracted=3812 landed=-1 delta=3812 drop-list=0 UNCOVERED
+    diffbot/diffbot.companytechnographics: extracted=3812 landed=-1 delta=3812 drop-list=0 UNCOVERED
+    diffbot/diffbot.companytechnographics: extracted=3812 landed=-1 delta=3812 drop-list=0 UNCOVERED
+    diffbot/diffbot.companytechnographics: extracted=3812 landed=-1 delta=3812 drop-list=0 UNCOVERED
+    diffbot/diffbot.industryclassification: extracted=15 landed=-1 delta=15 drop-list=0 UNCOVERED
+    diffbot/diffbot.industryclassification: extracted=15 landed=-1 delta=15 drop-list=0 UNCOVERED
+    diffbot/diffbot.industryclassification: extracted=15 landed=-1 delta=15 drop-list=0 UNCOVERED
+    diffbot/diffbot.industryclassification: extracted=15 landed=-1 delta=15 drop-list=0 UNCOVERED
+    diffbot/diffbot.industryclassification: extracted=15 landed=-1 delta=15 drop-list=0 UNCOVERED
+    diffbot/diffbot.industryclassification: extracted=15 landed=-1 delta=15 drop-list=0 UNCOVERED
+    diffbot/diffbot.location: extracted=29 landed=-1 delta=29 drop-list=0 UNCOVERED
+    diffbot/diffbot.location: extracted=29 landed=-1 delta=29 drop-list=0 UNCOVERED
+    diffbot/diffbot.location: extracted=29 landed=-1 delta=29 drop-list=0 UNCOVERED
+    diffbot/diffbot.location: extracted=29 landed=-1 delta=29 drop-list=0 UNCOVERED
+    diffbot/diffbot.location: extracted=29 landed=-1 delta=29 drop-list=0 UNCOVERED
+    diffbot/diffbot.location: extracted=29 landed=-1 delta=29 drop-list=0 UNCOVERED
+    diffbot/diffbot.person: extracted=99 landed=8226 delta=-8127 drop-list=0 covered
+    diffbot/diffbot.person: extracted=99 landed=8226 delta=-8127 drop-list=0 covered
+    diffbot/diffbot.person: extracted=99 landed=8226 delta=-8127 drop-list=0 covered
+    diffbot/diffbot.person: extracted=99 landed=8226 delta=-8127 drop-list=0 covered
+    diffbot/diffbot.person: extracted=99 landed=8226 delta=-8127 drop-list=0 covered
+    diffbot/diffbot.person: extracted=99 landed=8226 delta=-8127 drop-list=0 covered
+    zoominfo/testzoominfo.CompanyIndustry: extracted=41 landed=-1 delta=41 drop-list=0 UNCOVERED
+    zoominfo/testzoominfo.CompanyIndustry: extracted=41 landed=-1 delta=41 drop-list=0 UNCOVERED
+    zoominfo/testzoominfo.CompanyIndustry: extracted=41 landed=-1 delta=41 drop-list=0 UNCOVERED
+    zoominfo/testzoominfo.CompanyIndustry: extracted=41 landed=-1 delta=41 drop-list=0 UNCOVERED
+    zoominfo/testzoominfo.CompanyIndustry: extracted=41 landed=-1 delta=41 drop-list=0 UNCOVERED
+    zoominfo/testzoominfo.Experience: extracted=32768 landed=8229 delta=24539 drop-list=24638 covered
+    zoominfo/testzoominfo.Experience: extracted=32768 landed=8229 delta=24539 drop-list=24638 covered
+    zoominfo/testzoominfo.Experience: extracted=32768 landed=8229 delta=24539 drop-list=24638 covered
+    zoominfo/testzoominfo.Industry: extracted=4 landed=-1 delta=4 drop-list=0 UNCOVERED
+    zoominfo/testzoominfo.Industry: extracted=4 landed=-1 delta=4 drop-list=0 UNCOVERED
+    zoominfo/testzoominfo.Industry: extracted=4 landed=-1 delta=4 drop-list=0 UNCOVERED
+    zoominfo/testzoominfo.Industry: extracted=4 landed=-1 delta=4 drop-list=0 UNCOVERED
+    zoominfo/testzoominfo.Industry: extracted=4 landed=-1 delta=4 drop-list=0 UNCOVERED
+    zoominfo/testzoominfo.Location: extracted=18 landed=-1 delta=18 drop-list=0 UNCOVERED
+    zoominfo/testzoominfo.Location: extracted=18 landed=-1 delta=18 drop-list=0 UNCOVERED
+    zoominfo/testzoominfo.Location: extracted=18 landed=-1 delta=18 drop-list=0 UNCOVERED
+    zoominfo/testzoominfo.Location: extracted=18 landed=-1 delta=18 drop-list=0 UNCOVERED
+    zoominfo/testzoominfo.Location: extracted=18 landed=-1 delta=18 drop-list=0 UNCOVERED
+    zoominfo/testzoominfo.PersonContact: extracted=6033 landed=-1 delta=6033 drop-list=0 UNCOVERED
+    zoominfo/testzoominfo.PersonContact: extracted=6033 landed=-1 delta=6033 drop-list=0 UNCOVERED
+    drop-list total rows: 24638 (all reasons recorded in gt_build.drop_list)
+======================================================================
+V7 graph_edge parity
+
+### V7: PASS
+    relationships=8229 forward_edges=8229 (equal=True)
+    symmetric-type relationships=0 reverse_edges=0 (equal=True)
+======================================================================
+V8 Provenance walk — 10 random facts re-verified against origin
+
+### V8: FAIL
+      OK  COMPANY company_technologyname = 'Eclipse IDE'  <- diffbot.companytechnographics:6c2198c404775351
+      OK  PERSON person_first_name = 'Max'  <- testzoominfo.Person:-1315802950
+      OK  PERSON person_last_name = 'McIntyre'  <- testzoominfo.Person:1760232061
+      OK  PERSON person_last_name = 'Lorenson'  <- testzoominfo.Person:3082893370
+      OK  PERSON person_last_name = 'Level'  <- testzoominfo.Person:-2040361194
+      OK  PERSON person_first_name = 'Griffin'  <- testzoominfo.Person:8475914883
+      OK  PERSON person_last_name = 'Minzghor'  <- testzoominfo.Person:-1092517735
+      OK  PERSON person_last_name = 'Wright'  <- testzoominfo.Person:9590924530
+      OK  PERSON person_last_name = 'Sieglinger'  <- testzoominfo.Person:2308710062
+      BAD COMPANY company_technology_categories = '["Emerging technologies"]'  <- diffbot.companytechnographics:15dc0d1fc60017e7
+======================================================================
+V9 Idempotence — re-run load; zero new rows
+
+### V9: PASS
+    gtload re-run exit=0
+    kg.entity: 8298 -> 8298 same
+    kg.entity_name: 8324 -> 8324 same
+    kg.organization: 72 -> 72 same
+    kg.person: 8226 -> 8226 same
+    kg.company: 72 -> 72 same
+    kg.knowledge_item: 37854 -> 37854 same
+    kg.knowledge_fact: 29625 -> 29625 same
+    kg.evidence: 23821 -> 23821 same
+    kg.knowledge_item_evidence: 37854 -> 37854 same
+    kg.graph_edge: 8229 -> 8229 same
+    kg.person_company_relationship: 8229 -> 8229 same
+    kg.merge_engine_entity_map: 8307 -> 8307 same
+    kg.merge_engine_merge_audit: 929 -> 929 same
+======================================================================
+V10 Cross-check vs app run (destination.kg)
+
+### V10: PASS
+    destination.kg (app output, TRUNCATED by this run's Stage A — see note): entity=0 merge_audit=0 predicates=0
+    PRE-BUILD snapshot (backup/kg_pre_rebuild.sql): 138 entities (58 direct + supertype rows; app run: 62 companies/76 persons per guide §10 V10)
+    this build: companies=72 persons=8226
+    delta explanation: the app's 62-company Boeing+Airbus figure counted every relatedCompany surfaceForm + ZoomInfo name-variant as a company; this build loads only closure-verified records and records 1,381 dangling relation endpoints as unresolved-link evidence instead of entities (over-merge worse than split). Person 76 -> 8,226: app capped experience; this build has no cap (locked decision #3).
+======================================================================
+SUMMARY
+  V1: PASS
+  V2: PASS
+  V3: PASS
+  V4: PASS
+  V5: FAIL
+  V6: FAIL
+  V7: PASS
+  V8: FAIL
+  V9: PASS
+  V10: PASS
+ALL GATES: FAIL

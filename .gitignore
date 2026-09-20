@@ -127,3 +127,6 @@ V3/
 
 # diagnosis
 Bugs/
+scripts/ground_truth/cache_zi_company.tsv
+scripts/ground_truth/cache_diffbot/
+backup/
