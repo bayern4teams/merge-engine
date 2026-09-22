@@ -73,7 +73,9 @@ def drive(company: str, splink: bool):
 
     wall_start = time.monotonic()
     tag = "SPLINK-FORCED" if splink else "DEFAULT-ENGINE"
-    log(f"\n{'=' * 70}\nSTARTING WORKFLOW ({tag}): 'merge all information about {company}'\n{'=' * 70}")
+    log(
+        f"\n{'=' * 70}\nSTARTING WORKFLOW ({tag}): 'merge all information about {company}'\n{'=' * 70}"
+    )
     r = requests.post(f"{BASE}/api/workflow/start", json=payload, timeout=60)
     log(f"start -> HTTP {r.status_code}")
     if r.status_code != 200:

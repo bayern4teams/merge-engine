@@ -9,7 +9,7 @@ found a real change but not the one that matters here.
 Phase 0 Sec 0.3 calls for both local (pre-commit) and server-side CI. The
 local half is done: `.pre-commit-config.yaml` runs `ruff`, `ruff-format`,
 the mypy ratchet, `lint_arch.py`, `lint_docs.py`, and five local hooks
-(`no-blanket-json-ignore`, `no-sample-databases-commit`,
+(`no-blanket-data-ignore`, `no-sample-databases-commit`,
 `no-str-format-on-prompts`, `no-new-bare-except-pass` — all four verified
 live via `pre-commit run --all-files`, which also caught and fixed a real
 crash in the except-pass hook's git-diff comparison under Windows' default

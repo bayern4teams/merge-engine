@@ -10,7 +10,8 @@ build/
 *.whl
 
 # Virtual environments
-.venv/
+.venv*/
+.tmp/
 venv/
 env/
 
@@ -45,8 +46,12 @@ sample_databases/
 # clone had no way to `npm install` (see TECHNICAL_README.md §18.1). Scope json
 # ignores to the specific generated/transient files, not the whole repo.
 data/
-*.csv
-!tests/fixtures/
+# NOT a blanket `*.csv` either: it silently untracked
+# tests/eval/pagila_staff.csv, so load_staff() fell back to a 2-row stub and
+# `check.py eval` hung forever on the degenerate record set. `data/` and
+# `backup/` already cover the large dumps this was reaching for.
+# (`!tests/fixtures/` used to sit here and was a no-op -- un-ignoring a
+#  directory cannot re-include files a `*.csv` rule already matched.)
 # Generated verification/test-run output, not source
 docs/verification/*.json
 tests/integration/test_*_report.json

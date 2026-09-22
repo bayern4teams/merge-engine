@@ -86,7 +86,9 @@ SRC_ORIGIN1 = make_source(
 SRC_ORIGIN2 = make_source(
     "origin2: ClickHouse testzoominfo", "clickhouse://localhost:8125/testzoominfo", 0.70
 )
-SRC_ANALYST = make_source("Analyst hand-merge judgment (ground-truth sweep, 2026-09-15)", None, 0.85)
+SRC_ANALYST = make_source(
+    "Analyst hand-merge judgment (ground-truth sweep, 2026-09-15)", None, 0.85
+)
 
 
 def make_evidence(source_id, locator, snippet):
@@ -199,11 +201,25 @@ def add_fact_money(entity_id, pred_code, amount, iso, year, source_id, ev_id, co
                        value_numeric, currency_id, normalized_amount, normalized_currency_id,
                        exchange_rate, exchange_rate_date, valid_from, valid_to, date_precision)
                    VALUES (%s,%s,%s,'MONEY',%s,%s,%s,%s,%s,%s,%s,%s,'YEAR')""",
-        (item_id, entity_id, PRED[pred_code], amount, cid, norm_amount, norm_cid, rate, TODAY, vf, vt),
+        (
+            item_id,
+            entity_id,
+            PRED[pred_code],
+            amount,
+            cid,
+            norm_amount,
+            norm_cid,
+            rate,
+            TODAY,
+            vf,
+            vt,
+        ),
     )
 
 
-def add_relationship(a_key, b_key, reltype_code, source_id, ev_id, confidence=0.9, description=None):
+def add_relationship(
+    a_key, b_key, reltype_code, source_id, ev_id, confidence=0.9, description=None
+):
     item_id = new_item(source_id, confidence)
     link_evidence(item_id, ev_id)
     cur.execute(
@@ -213,7 +229,9 @@ def add_relationship(a_key, b_key, reltype_code, source_id, ev_id, confidence=0.
     )
 
 
-def add_person_company(person_key, company_key, reltype_code, role_title, source_id, ev_id, confidence=0.9):
+def add_person_company(
+    person_key, company_key, reltype_code, role_title, source_id, ev_id, confidence=0.9
+):
     item_id = new_item(source_id, confidence)
     link_evidence(item_id, ev_id)
     cur.execute(
@@ -252,10 +270,30 @@ ev_thuraya_merge = make_evidence(
 new_company("thuraya", [ev_thuraya_diffbot, ev_thuraya_zoominfo])
 add_name(MAP["thuraya"], "Thuraya", "PREFERRED", SRC_ORIGIN2, ev_thuraya_zoominfo)
 add_name(MAP["thuraya"], "Thuraya Telecommunications", "LEGAL", SRC_ORIGIN1, ev_thuraya_diffbot)
-add_name(MAP["thuraya"], "Thuraya Telecommunications Company", "TRADE", SRC_ORIGIN1, ev_thuraya_diffbot)
-add_fact_text(MAP["thuraya"], "company.website", "thuraya.com", SRC_ORIGIN1, ev_thuraya_diffbot, 0.95)
-add_fact_date(MAP["thuraya"], "company.founded_date", date(1997, 4, 1), "DAY", SRC_ORIGIN1, ev_thuraya_diffbot, 0.9)
-add_fact_code(MAP["thuraya"], "company.status", "ACTIVE", STATUS["ACTIVE"], SRC_ORIGIN1, ev_thuraya_diffbot, 0.95)
+add_name(
+    MAP["thuraya"], "Thuraya Telecommunications Company", "TRADE", SRC_ORIGIN1, ev_thuraya_diffbot
+)
+add_fact_text(
+    MAP["thuraya"], "company.website", "thuraya.com", SRC_ORIGIN1, ev_thuraya_diffbot, 0.95
+)
+add_fact_date(
+    MAP["thuraya"],
+    "company.founded_date",
+    date(1997, 4, 1),
+    "DAY",
+    SRC_ORIGIN1,
+    ev_thuraya_diffbot,
+    0.9,
+)
+add_fact_code(
+    MAP["thuraya"],
+    "company.status",
+    "ACTIVE",
+    STATUS["ACTIVE"],
+    SRC_ORIGIN1,
+    ev_thuraya_diffbot,
+    0.95,
+)
 add_fact_text(
     MAP["thuraya"],
     "company.description",
@@ -267,13 +305,23 @@ add_fact_text(
     ev_thuraya_merge,
     0.85,
 )
-add_fact_numeric(MAP["thuraya"], "company.employee_count", 220, SRC_ORIGIN2, ev_thuraya_zoominfo, 0.75, TODAY)
-add_fact_money(MAP["thuraya"], "company.revenue", 67229000, "USD", 2025, SRC_ORIGIN2, ev_thuraya_zoominfo, 0.6)
+add_fact_numeric(
+    MAP["thuraya"], "company.employee_count", 220, SRC_ORIGIN2, ev_thuraya_zoominfo, 0.75, TODAY
+)
+add_fact_money(
+    MAP["thuraya"], "company.revenue", 67229000, "USD", 2025, SRC_ORIGIN2, ev_thuraya_zoominfo, 0.6
+)
 
 new_person("sulaiman_al_ali")
 add_name(MAP["sulaiman_al_ali"], "Sulaiman Al Ali", "PREFERRED", SRC_ORIGIN1, ev_thuraya_diffbot)
 add_person_company(
-    "sulaiman_al_ali", "thuraya", "LEADS", "Chief Executive Officer", SRC_ORIGIN1, ev_thuraya_diffbot, 0.85
+    "sulaiman_al_ali",
+    "thuraya",
+    "LEADS",
+    "Chief Executive Officer",
+    SRC_ORIGIN1,
+    ev_thuraya_diffbot,
+    0.85,
 )
 
 # Decoy, unlinked -- confirmed NOT the same company (different domain), same pattern as
@@ -287,8 +335,21 @@ ev_thuraya_kz = make_evidence(
     "kept separate at the human_review_matches gate.",
 )
 new_company("thuraya_kz_decoy", [ev_thuraya_kz])
-add_name(MAP["thuraya_kz_decoy"], "THURAYA (Kazakhstan reseller)", "PREFERRED", SRC_ORIGIN1, ev_thuraya_kz)
-add_fact_text(MAP["thuraya_kz_decoy"], "company.website", "thuraya-kazakhstan.kz", SRC_ORIGIN1, ev_thuraya_kz, 0.9)
+add_name(
+    MAP["thuraya_kz_decoy"],
+    "THURAYA (Kazakhstan reseller)",
+    "PREFERRED",
+    SRC_ORIGIN1,
+    ev_thuraya_kz,
+)
+add_fact_text(
+    MAP["thuraya_kz_decoy"],
+    "company.website",
+    "thuraya-kazakhstan.kz",
+    SRC_ORIGIN1,
+    ev_thuraya_kz,
+    0.9,
+)
 add_fact_text(
     MAP["thuraya_kz_decoy"],
     "company.description",
@@ -327,8 +388,12 @@ new_company("ohb", [ev_ohb_diffbot, ev_ohb_zoominfo])
 add_name(MAP["ohb"], "OHB SE", "PREFERRED", SRC_ORIGIN1, ev_ohb_diffbot)
 add_name(MAP["ohb"], "OHB System", "TRADE", SRC_ORIGIN2, ev_ohb_zoominfo)
 add_fact_text(MAP["ohb"], "company.website", "ohb.de", SRC_ORIGIN1, ev_ohb_diffbot, 0.95)
-add_fact_date(MAP["ohb"], "company.founded_date", date(1981, 1, 1), "YEAR", SRC_ORIGIN1, ev_ohb_diffbot, 0.85)
-add_fact_code(MAP["ohb"], "company.status", "ACTIVE", STATUS["ACTIVE"], SRC_ORIGIN1, ev_ohb_diffbot, 0.95)
+add_fact_date(
+    MAP["ohb"], "company.founded_date", date(1981, 1, 1), "YEAR", SRC_ORIGIN1, ev_ohb_diffbot, 0.85
+)
+add_fact_code(
+    MAP["ohb"], "company.status", "ACTIVE", STATUS["ACTIVE"], SRC_ORIGIN1, ev_ohb_diffbot, 0.95
+)
 add_fact_text(
     MAP["ohb"],
     "company.description",
@@ -340,7 +405,9 @@ add_fact_text(
     ev_ohb_merge,
     0.85,
 )
-add_fact_numeric(MAP["ohb"], "company.employee_count", 2984, SRC_ORIGIN2, ev_ohb_zoominfo, 0.75, TODAY)
+add_fact_numeric(
+    MAP["ohb"], "company.employee_count", 2984, SRC_ORIGIN2, ev_ohb_zoominfo, 0.75, TODAY
+)
 for yr, amt in [
     (2020, 880319000),
     (2021, 905001000),
@@ -353,7 +420,9 @@ for yr, amt in [
 # zoominfo's own snapshot (USD, likely a different fiscal-year basis) -- kept, not overwritten,
 # same "conflicting figure kept as a lower-confidence fact" discipline as build_ground_truth.py's
 # Airbus SAS 2019 revenue.
-add_fact_money(MAP["ohb"], "company.revenue", 954974000, "USD", 2025, SRC_ORIGIN2, ev_ohb_zoominfo, 0.5)
+add_fact_money(
+    MAP["ohb"], "company.revenue", 954974000, "USD", 2025, SRC_ORIGIN2, ev_ohb_zoominfo, 0.5
+)
 
 new_person("marco_fuchs")
 add_name(MAP["marco_fuchs"], "Marco R Fuchs", "PREFERRED", SRC_ORIGIN1, ev_ohb_diffbot)
@@ -374,7 +443,9 @@ ev_ohb_italia = make_evidence(
 )
 new_company("ohb_italia", [ev_ohb_italia])
 add_name(MAP["ohb_italia"], "OHB Italia", "PREFERRED", SRC_ORIGIN1, ev_ohb_italia)
-add_fact_text(MAP["ohb_italia"], "company.website", "ohb-italia.it", SRC_ORIGIN1, ev_ohb_italia, 0.9)
+add_fact_text(
+    MAP["ohb_italia"], "company.website", "ohb-italia.it", SRC_ORIGIN1, ev_ohb_italia, 0.9
+)
 add_fact_text(
     MAP["ohb_italia"],
     "company.description",
@@ -424,9 +495,27 @@ ev_capella_merge = make_evidence(
 )
 new_company("capella", [ev_capella_diffbot, ev_capella_zoominfo])
 add_name(MAP["capella"], "Capella Space", "PREFERRED", SRC_ORIGIN1, ev_capella_diffbot)
-add_fact_text(MAP["capella"], "company.website", "capellaspace.com", SRC_ORIGIN1, ev_capella_diffbot, 0.95)
-add_fact_date(MAP["capella"], "company.founded_date", date(2016, 3, 1), "MONTH", SRC_ORIGIN1, ev_capella_diffbot, 0.85)
-add_fact_code(MAP["capella"], "company.status", "ACTIVE", STATUS["ACTIVE"], SRC_ORIGIN1, ev_capella_diffbot, 0.95)
+add_fact_text(
+    MAP["capella"], "company.website", "capellaspace.com", SRC_ORIGIN1, ev_capella_diffbot, 0.95
+)
+add_fact_date(
+    MAP["capella"],
+    "company.founded_date",
+    date(2016, 3, 1),
+    "MONTH",
+    SRC_ORIGIN1,
+    ev_capella_diffbot,
+    0.85,
+)
+add_fact_code(
+    MAP["capella"],
+    "company.status",
+    "ACTIVE",
+    STATUS["ACTIVE"],
+    SRC_ORIGIN1,
+    ev_capella_diffbot,
+    0.95,
+)
 add_fact_text(
     MAP["capella"],
     "company.description",
@@ -437,13 +526,23 @@ add_fact_text(
     ev_capella_diffbot,
     0.9,
 )
-add_fact_numeric(MAP["capella"], "company.employee_count", 160, SRC_ORIGIN2, ev_capella_zoominfo, 0.75, TODAY)
-add_fact_money(MAP["capella"], "company.revenue", 59128000, "USD", 2025, SRC_ORIGIN2, ev_capella_zoominfo, 0.6)
+add_fact_numeric(
+    MAP["capella"], "company.employee_count", 160, SRC_ORIGIN2, ev_capella_zoominfo, 0.75, TODAY
+)
+add_fact_money(
+    MAP["capella"], "company.revenue", 59128000, "USD", 2025, SRC_ORIGIN2, ev_capella_zoominfo, 0.6
+)
 
 new_person("frank_backes")
 add_name(MAP["frank_backes"], "Frank Backes", "PREFERRED", SRC_ORIGIN1, ev_capella_diffbot)
 add_person_company(
-    "frank_backes", "capella", "LEADS", "Chief Executive Officer", SRC_ORIGIN1, ev_capella_diffbot, 0.85
+    "frank_backes",
+    "capella",
+    "LEADS",
+    "Chief Executive Officer",
+    SRC_ORIGIN1,
+    ev_capella_diffbot,
+    0.85,
 )
 
 # Funding history -- the exact data the app's own `company_investor` gap (§00b, reconfirmed
@@ -474,7 +573,12 @@ for ikey, iname, amount_usd, rdate in [
     new_company(ikey, [ev_investor])
     add_name(MAP[ikey], iname, "PREFERRED", SRC_ORIGIN1, ev_investor)
     add_relationship(
-        ikey, "capella", "INVESTS_IN", SRC_ORIGIN1, ev_investor, 0.9,
+        ikey,
+        "capella",
+        "INVESTS_IN",
+        SRC_ORIGIN1,
+        ev_investor,
+        0.9,
         f"Investor in Capella Space's {rdate.isoformat()} round ($29.4M total round size).",
     )
 
@@ -490,8 +594,17 @@ ev_capella_univ = make_evidence(
     "capellaspace.com.",
 )
 new_company("capella_university_decoy", [ev_capella_univ])
-add_name(MAP["capella_university_decoy"], "Capella University", "PREFERRED", SRC_ORIGIN2, ev_capella_univ)
-add_fact_text(MAP["capella_university_decoy"], "company.website", "capella.edu", SRC_ORIGIN2, ev_capella_univ, 0.9)
+add_name(
+    MAP["capella_university_decoy"], "Capella University", "PREFERRED", SRC_ORIGIN2, ev_capella_univ
+)
+add_fact_text(
+    MAP["capella_university_decoy"],
+    "company.website",
+    "capella.edu",
+    SRC_ORIGIN2,
+    ev_capella_univ,
+    0.9,
+)
 
 conn.commit()
 print("THURAYA + OHB SE + CAPELLA SPACE done. total entities this script:", len(MAP))

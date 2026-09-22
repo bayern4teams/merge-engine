@@ -4,7 +4,11 @@ One-time: pull the diffbot tables needed by Stages C/D/E/F into local TSV caches
 Caches live under scripts/ground_truth/cache_<table>.tsv (TSVWithNames-ish, pipe-sep
 for embedding ease).
 """
-import sys, os, time, json
+
+import os
+import sys
+import time
+
 sys.path.insert(0, "/home/bayern/Projects/merge-engine/scripts/ground_truth")
 from helpers import psql
 
@@ -40,5 +44,7 @@ for tbl, cols in tables.items():
     with open(path, "w") as f:
         f.write(q + "\n")  # header line 0 = query
         f.write(out)
-    print(f"{tbl}: {len(out.splitlines())} rows, {time.time()-t0:.1f}s -> {path} ({os.path.getsize(path)}b)")
+    print(
+        f"{tbl}: {len(out.splitlines())} rows, {time.time() - t0:.1f}s -> {path} ({os.path.getsize(path)}b)"
+    )
 print("done")

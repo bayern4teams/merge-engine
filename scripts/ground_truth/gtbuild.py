@@ -7,10 +7,25 @@ Stages: d | e | g | gates | all (g implies g-load from staging produced by e)
 Deterministic ids per §6.4; sorted intermediates per §1.5; every step
 independently re-queried per §1.6.
 """
+
 import hashlib
 import sys
 import time
 import uuid
+
+sys.path.insert(0, "/home/bayern/Projects/merge-engine/scripts/ground_truth")
+from gtcore import (
+    ch_rows,
+    copy_rows,
+    dom_root,
+    dpsi,
+    dpsi1,
+    exec_multi,
+    norm_dom,
+    norm_name,
+    psql,
+    q,
+)
 
 NS_URL = uuid.UUID("6ba7b811-9dad-11d1-80b4-00c04fd430c8")  # NAMESPACE_URL
 
@@ -22,53 +37,78 @@ def sha_hex(s: str) -> str:
 def uuid5_ns(name: str) -> uuid.UUID:
     return uuid.uuid5(NS_URL, name)
 
-sys.path.insert(0, "/home/bayern/Projects/merge-engine/scripts/ground_truth")
-from gtcore import (DEST, RUN_ID, ch, ch_rows, copy_rows, dom_root, dpsi, dpsi1,
-                    exec_multi, norm_dom, norm_name, psql, q)
 
 NS = "'6ba7b811-9dad-11d1-80b4-00c04fd430c8'::uuid"
 T0 = time.time()
 
 
 def log(*a):
-    print(f"[{time.time()-T0:7.1f}s]", *a, flush=True)
+    print(f"[{time.time() - T0:7.1f}s]", *a, flush=True)
 
 
 def in_chunks(sorted_ids, fn, n=900):
     for i in range(0, len(sorted_ids), n):
-        fn(sorted_ids[i:i + n])
+        fn(sorted_ids[i : i + n])
 
 
 # ============================================================ STAGE D
 def stage_d():
     """Extraction: pull every row attached to the closure into gt_build.s_* staging."""
     log("=== STAGE D: extraction ===")
-    db_ids = sorted({r[0] for r in dpsi(
-        "SELECT DISTINCT company_id FROM gt_build.company_closure WHERE origin='diffbot'")})
-    zi_ids = sorted({r[0] for r in dpsi(
-        "SELECT DISTINCT company_id FROM gt_build.company_closure WHERE origin='zoominfo'")})
+    db_ids = sorted(
+        {
+            r[0]
+            for r in dpsi(
+                "SELECT DISTINCT company_id FROM gt_build.company_closure WHERE origin='diffbot'"
+            )
+        }
+    )
+    zi_ids = sorted(
+        {
+            r[0]
+            for r in dpsi(
+                "SELECT DISTINCT company_id FROM gt_build.company_closure WHERE origin='zoominfo'"
+            )
+        }
+    )
     log(f"closure: diffbot={len(db_ids)} zi={len(zi_ids)}")
 
     # ---- diffbot side (FDW mirror gt_origin1 = live 5433) -----------------
     dbin = ",".join(q(x) for x in db_ids)
     tables = {
-        "company": ("companyid",
-                    "companyid, entityname, fullname, sourcecategory, description, summary, alldescriptions, types, motto, website, logo, foundingdate, totalinvestment, totalinvestmentcurrency, ispublic, isnonprofit, isacquired, isdissolved, ceoname, foundername, metadata_confidence, explicit_origins"),
-        "companycontact": ("companyid",
-                    "contactid, companyid, contactstring, contacttype, confidence"),
-        "location": ("companyid",
-                     "locationid, companyid, street, addressfull, city, region, postalcode, country, latitude, longitude, precision, isprimary, iscurrent"),
-        "companyfinancials": ("companyid",
-                     "financialid, companyid, year, amount, currency, iscurrent, confidence"),
+        "company": (
+            "companyid",
+            "companyid, entityname, fullname, sourcecategory, description, summary, alldescriptions, types, motto, website, logo, foundingdate, totalinvestment, totalinvestmentcurrency, ispublic, isnonprofit, isacquired, isdissolved, ceoname, foundername, metadata_confidence, explicit_origins",
+        ),
+        "companycontact": (
+            "companyid",
+            "contactid, companyid, contactstring, contacttype, confidence",
+        ),
+        "location": (
+            "companyid",
+            "locationid, companyid, street, addressfull, city, region, postalcode, country, latitude, longitude, precision, isprimary, iscurrent",
+        ),
+        "companyfinancials": (
+            "companyid",
+            "financialid, companyid, year, amount, currency, iscurrent, confidence",
+        ),
         "companyindustry": ("companyid", "companyid, classificationid"),
-        "companyinvestmentround": ("companyid",
-                     "investmentid, companyid, date, amount, currency, confidence, explicit_origin"),
-        "companytechnographics": ("companyid",
-                     "techid, companyid, technologyname, technologytype, categories, confidence"),
-        "companyemployeecategory": ("companyid",
-                     "empcatid, companyid, category, firsthiredate, confidence"),
-        "companyexperience": ("companyid",
-                     "companyid, personid, personname, role, confidence, types"),
+        "companyinvestmentround": (
+            "companyid",
+            "investmentid, companyid, date, amount, currency, confidence, explicit_origin",
+        ),
+        "companytechnographics": (
+            "companyid",
+            "techid, companyid, technologyname, technologytype, categories, confidence",
+        ),
+        "companyemployeecategory": (
+            "companyid",
+            "empcatid, companyid, category, firsthiredate, confidence",
+        ),
+        "companyexperience": (
+            "companyid",
+            "companyid, personid, personname, role, confidence, types",
+        ),
         "companyrelation": (None, None),  # special: both sides
     }
     for t, (col, cols) in tables.items():
@@ -88,7 +128,7 @@ def stage_d():
         n = int(dpsi1(f"SELECT count(*) FROM gt_build.s_db_{t}"))
         log(f"s_db_{t}: {n}")
         psql(f"""INSERT INTO gt_build.extract_ledger VALUES
-                 ('diffbot', {q('diffbot.'+t)}, {n}, NULL)""")
+                 ('diffbot', {q("diffbot." + t)}, {n}, NULL)""")
 
     # second-order ids: classifications + persons
     psql("""DROP TABLE IF EXISTS gt_build.s_db_classifications""")
@@ -99,7 +139,9 @@ def stage_d():
             ORDER BY 1""")
     n = int(dpsi1("SELECT count(*) FROM gt_build.s_db_classifications"))
     log(f"s_db_classifications: {n}")
-    psql(f"INSERT INTO gt_build.extract_ledger VALUES ('diffbot','diffbot.industryclassification',{n},NULL)")
+    psql(
+        f"INSERT INTO gt_build.extract_ledger VALUES ('diffbot','diffbot.industryclassification',{n},NULL)"
+    )
 
     psql("""DROP TABLE IF EXISTS gt_build.s_db_persons""")
     psql("""CREATE TABLE gt_build.s_db_persons AS
@@ -120,7 +162,9 @@ def stage_d():
             ORDER BY 1, 2""")
     n = int(dpsi1("SELECT count(*) FROM gt_build.s_db_investors"))
     log(f"s_db_investors: {n}")
-    psql(f"INSERT INTO gt_build.extract_ledger VALUES ('diffbot','diffbot.companyinvestor',{n},NULL)")
+    psql(
+        f"INSERT INTO gt_build.extract_ledger VALUES ('diffbot','diffbot.companyinvestor',{n},NULL)"
+    )
 
     # ---- zoominfo side (ClickHouse HTTP) ----------------------------------
     def zi_inl(batch):
@@ -132,7 +176,7 @@ def stage_d():
               emp_range text, phone text, revenue text, revenue000s text, employees text,
               revenue_range text, ticker text, ctype text, dup_rows int)""")
     for batch_i in range(0, len(zi_ids), 400):
-        batch = zi_ids[batch_i:batch_i + 400]
+        batch = zi_ids[batch_i : batch_i + 400]
         rows = ch_rows(
             f"SELECT companyID, argMax(companyName,_version), argMax(companyDescription,_version), "
             f"argMax(companyDomain,_version), argMax(website,_version), "
@@ -141,13 +185,29 @@ def stage_d():
             f"toString(argMax(companyEmployees,_version)), argMax(companyRevenueRange,_version), "
             f"argMax(companyTicker,_version), argMax(companyType,_version), count() "
             f"FROM Company WHERE companyID IN ({zi_inl(batch)}) "
-            f"GROUP BY companyID ORDER BY companyID")
+            f"GROUP BY companyID ORDER BY companyID"
+        )
         if rows:
-            copy_rows("s_zi_company",
-                      ["companyid", "name", "description", "domain", "website", "emp_range",
-                       "phone", "revenue", "revenue000s", "employees", "revenue_range",
-                       "ticker", "ctype", "dup_rows"],
-                      [[(r + [""] * 14)[:14]][0] for r in rows])
+            copy_rows(
+                "s_zi_company",
+                [
+                    "companyid",
+                    "name",
+                    "description",
+                    "domain",
+                    "website",
+                    "emp_range",
+                    "phone",
+                    "revenue",
+                    "revenue000s",
+                    "employees",
+                    "revenue_range",
+                    "ticker",
+                    "ctype",
+                    "dup_rows",
+                ],
+                [[(r + [""] * 14)[:14]][0] for r in rows],
+            )
     n = int(dpsi1("SELECT count(*) FROM gt_build.s_zi_company"))
     log(f"s_zi_company: {n}")
     psql(f"INSERT INTO gt_build.extract_ledger VALUES ('zoominfo','testzoominfo.Company',{n},NULL)")
@@ -155,65 +215,85 @@ def stage_d():
     psql("DROP TABLE IF EXISTS gt_build.s_zi_ind")
     psql("""CREATE TABLE gt_build.s_zi_ind (companyid text, industryid text, isprimary text)""")
     for batch_i in range(0, len(zi_ids), 400):
-        batch = zi_ids[batch_i:batch_i + 400]
+        batch = zi_ids[batch_i : batch_i + 400]
         rows = ch_rows(
             f"SELECT DISTINCT companyID, industryID, isPrimary FROM CompanyIndustry "
-            f"WHERE companyID IN ({zi_inl(batch)}) ORDER BY companyID, industryID")
+            f"WHERE companyID IN ({zi_inl(batch)}) ORDER BY companyID, industryID"
+        )
         if rows:
-            psql("INSERT INTO gt_build.s_zi_ind VALUES " +
-                 ", ".join("(" + ",".join(q(c) for c in r) + ")" for r in rows))
+            psql(
+                "INSERT INTO gt_build.s_zi_ind VALUES "
+                + ", ".join("(" + ",".join(q(c) for c in r) + ")" for r in rows)
+            )
     n = int(dpsi1("SELECT count(*) FROM gt_build.s_zi_ind"))
     log(f"s_zi_ind: {n}")
-    psql(f"INSERT INTO gt_build.extract_ledger VALUES ('zoominfo','testzoominfo.CompanyIndustry',{n},NULL)")
+    psql(
+        f"INSERT INTO gt_build.extract_ledger VALUES ('zoominfo','testzoominfo.CompanyIndustry',{n},NULL)"
+    )
 
     # industries referenced
     psql("DROP TABLE IF EXISTS gt_build.s_zi_industry")
     psql("""CREATE TABLE gt_build.s_zi_industry (industryid text, name text)""")
     ind_ids = sorted({r[0] for r in dpsi("SELECT DISTINCT industryid FROM gt_build.s_zi_ind")})
     for batch_i in range(0, len(ind_ids), 400):
-        batch = ind_ids[batch_i:batch_i + 400]
-        rows = ch_rows(f"SELECT industryID, any(coalesce(name,'')) FROM Industry "
-                       f"WHERE industryID IN ({zi_inl(batch)}) GROUP BY industryID ORDER BY industryID")
+        batch = ind_ids[batch_i : batch_i + 400]
+        rows = ch_rows(
+            f"SELECT industryID, any(coalesce(name,'')) FROM Industry "
+            f"WHERE industryID IN ({zi_inl(batch)}) GROUP BY industryID ORDER BY industryID"
+        )
         if rows:
-            psql("INSERT INTO gt_build.s_zi_industry VALUES " +
-                 ", ".join("(" + ",".join(q(c) for c in r) + ")" for r in rows))
+            psql(
+                "INSERT INTO gt_build.s_zi_industry VALUES "
+                + ", ".join("(" + ",".join(q(c) for c in r) + ")" for r in rows)
+            )
     n = int(dpsi1("SELECT count(*) FROM gt_build.s_zi_industry"))
     log(f"s_zi_industry: {n}")
-    psql(f"INSERT INTO gt_build.extract_ledger VALUES ('zoominfo','testzoominfo.Industry',{n},NULL)")
+    psql(
+        f"INSERT INTO gt_build.extract_ledger VALUES ('zoominfo','testzoominfo.Industry',{n},NULL)"
+    )
 
     psql("DROP TABLE IF EXISTS gt_build.s_zi_loc")
     psql("""CREATE TABLE gt_build.s_zi_loc (locationid text, companyid text, street text,
               city text, state text, zip text, country text)""")
     for batch_i in range(0, len(zi_ids), 400):
-        batch = zi_ids[batch_i:batch_i + 400]
+        batch = zi_ids[batch_i : batch_i + 400]
         rows = ch_rows(
             f"SELECT DISTINCT locationID, toString(companyID), coalesce(Street,''), coalesce(City,''), "
             f"coalesce(State,''), coalesce(Zip,''), coalesce(CountryCode,'') "
             f"FROM Location WHERE companyID IN ({zi_inl(batch)}) "
-            f"ORDER BY locationID, companyID")
+            f"ORDER BY locationID, companyID"
+        )
         if rows:
-            copy_rows("s_zi_loc", ["locationid", "companyid", "street", "city",
-                                   "state", "zip", "country"],
-                      [[(r + [""] * 7)[:7]][0] for r in rows])
+            copy_rows(
+                "s_zi_loc",
+                ["locationid", "companyid", "street", "city", "state", "zip", "country"],
+                [[(r + [""] * 7)[:7]][0] for r in rows],
+            )
     n = int(dpsi1("SELECT count(*) FROM gt_build.s_zi_loc"))
     log(f"s_zi_loc: {n}")
-    psql(f"INSERT INTO gt_build.extract_ledger VALUES ('zoominfo','testzoominfo.Location',{n},NULL)")
+    psql(
+        f"INSERT INTO gt_build.extract_ledger VALUES ('zoominfo','testzoominfo.Location',{n},NULL)"
+    )
 
     # Experience: full for closure (no cap). Split loadable (Person row exists) vs dropped.
     psql("DROP TABLE IF EXISTS gt_build.s_zi_exp_raw")
-    psql("""CREATE TABLE gt_build.s_zi_exp_raw (personid text, companyid text, title text, jobtitle text)""")
+    psql(
+        """CREATE TABLE gt_build.s_zi_exp_raw (personid text, companyid text, title text, jobtitle text)"""
+    )
     for batch_i in range(0, len(zi_ids), 400):
-        batch = zi_ids[batch_i:batch_i + 400]
+        batch = zi_ids[batch_i : batch_i + 400]
         rows = ch_rows(
             f"SELECT DISTINCT personID, companyID, coalesce(title,''), coalesce(jobTitle,'') "
             f"FROM Experience WHERE companyID IN ({zi_inl(batch)}) "
-            f"ORDER BY personID, companyID, title, jobTitle")
+            f"ORDER BY personID, companyID, title, jobTitle"
+        )
         if rows:
-            copy_rows("s_zi_exp_raw", ["personid", "companyid", "title", "jobtitle"],
-                      rows)
+            copy_rows("s_zi_exp_raw", ["personid", "companyid", "title", "jobtitle"], rows)
     n_raw = int(dpsi1("SELECT count(*) FROM gt_build.s_zi_exp_raw"))
     log(f"s_zi_exp_raw: {n_raw}")
-    psql(f"INSERT INTO gt_build.extract_ledger VALUES ('zoominfo','testzoominfo.Experience',{n_raw},NULL)")
+    psql(
+        f"INSERT INTO gt_build.extract_ledger VALUES ('zoominfo','testzoominfo.Experience',{n_raw},NULL)"
+    )
 
     # which closure persons have a Person row (name available)?
     pexp_ids = sorted({r[0] for r in dpsi("SELECT DISTINCT personid FROM gt_build.s_zi_exp_raw")})
@@ -222,13 +302,15 @@ def stage_d():
     psql("CREATE TABLE gt_build.s_zi_person_ids_ok (personid text PRIMARY KEY)")
     # COPY cannot skip conflicts; batches are distinct per query so no dupes arise
     for batch_i in range(0, len(pexp_ids), 900):
-        batch = pexp_ids[batch_i:batch_i + 900]
-        rows = ch_rows(f"SELECT DISTINCT personID FROM Person "
-                       f"WHERE personID IN ({zi_inl(batch)}) ORDER BY personID")
+        batch = pexp_ids[batch_i : batch_i + 900]
+        rows = ch_rows(
+            f"SELECT DISTINCT personID FROM Person "
+            f"WHERE personID IN ({zi_inl(batch)}) ORDER BY personID"
+        )
         if rows:
             copy_rows("s_zi_person_ids_ok", ["personid"], [[r[0]] for r in rows])
     n_ok = int(dpsi1("SELECT count(*) FROM gt_build.s_zi_person_ids_ok"))
-    log(f"zi persons WITH Person row: {n_ok} (without: {len(pexp_ids)-n_ok} -> drop_list)")
+    log(f"zi persons WITH Person row: {n_ok} (without: {len(pexp_ids) - n_ok} -> drop_list)")
     # documented drop-list (§5/§6: nothing silently dropped)
     psql("""INSERT INTO gt_build.drop_list
             SELECT 'zoominfo','testzoominfo.Experience', e.personid||'|'||e.companyid,
@@ -242,15 +324,19 @@ def stage_d():
               last_name text, middle_initial text)""")
     ok_ids = sorted({r[0] for r in dpsi("SELECT personid FROM gt_build.s_zi_person_ids_ok")})
     for batch_i in range(0, len(ok_ids), 900):
-        batch = ok_ids[batch_i:batch_i + 900]
-        rows = ch_rows(f"SELECT personID, any(coalesce(name,'')), any(coalesce(firstName,'')), "
-                       f"any(coalesce(lastName,'')), any(coalesce(middleInitial,'')) "
-                       f"FROM Person WHERE personID IN ({zi_inl(batch)}) "
-                       f"GROUP BY personID ORDER BY personID")
+        batch = ok_ids[batch_i : batch_i + 900]
+        rows = ch_rows(
+            f"SELECT personID, any(coalesce(name,'')), any(coalesce(firstName,'')), "
+            f"any(coalesce(lastName,'')), any(coalesce(middleInitial,'')) "
+            f"FROM Person WHERE personID IN ({zi_inl(batch)}) "
+            f"GROUP BY personID ORDER BY personID"
+        )
         if rows:
-            copy_rows("s_zi_person", ["personid", "name", "first_name", "last_name",
-                                      "middle_initial"],
-                      [[(r + [""] * 5)[:5]][0] for r in rows])
+            copy_rows(
+                "s_zi_person",
+                ["personid", "name", "first_name", "last_name", "middle_initial"],
+                [[(r + [""] * 5)[:5]][0] for r in rows],
+            )
     n = int(dpsi1("SELECT count(*) FROM gt_build.s_zi_person"))
     log(f"s_zi_person: {n}")
     psql(f"INSERT INTO gt_build.extract_ledger VALUES ('zoominfo','testzoominfo.Person',{n},NULL)")
@@ -258,16 +344,22 @@ def stage_d():
     psql("DROP TABLE IF EXISTS gt_build.s_zi_pcontact")
     psql("""CREATE TABLE gt_build.s_zi_pcontact (personid text, freemails text)""")
     for batch_i in range(0, len(pexp_ids), 900):
-        batch = pexp_ids[batch_i:batch_i + 900]
-        rows = ch_rows(f"SELECT DISTINCT personID, freeMails FROM PersonContact "
-                       f"WHERE personID IN ({zi_inl(batch)}) AND freeMails != '' "
-                       f"ORDER BY personID, freeMails")
+        batch = pexp_ids[batch_i : batch_i + 900]
+        rows = ch_rows(
+            f"SELECT DISTINCT personID, freeMails FROM PersonContact "
+            f"WHERE personID IN ({zi_inl(batch)}) AND freeMails != '' "
+            f"ORDER BY personID, freeMails"
+        )
         if rows:
-            psql("INSERT INTO gt_build.s_zi_pcontact VALUES " +
-                 ", ".join("(" + ",".join(q(c) for c in r) + ")" for r in rows))
+            psql(
+                "INSERT INTO gt_build.s_zi_pcontact VALUES "
+                + ", ".join("(" + ",".join(q(c) for c in r) + ")" for r in rows)
+            )
     n = int(dpsi1("SELECT count(*) FROM gt_build.s_zi_pcontact"))
     log(f"s_zi_pcontact: {n}")
-    psql(f"INSERT INTO gt_build.extract_ledger VALUES ('zoominfo','testzoominfo.PersonContact',{n},NULL)")
+    psql(
+        f"INSERT INTO gt_build.extract_ledger VALUES ('zoominfo','testzoominfo.PersonContact',{n},NULL)"
+    )
 
     # ---- GATE (§5): every closure id present in its own origin's company extract
     miss_db = dpsi("""SELECT c.company_id FROM gt_build.company_closure c
@@ -284,8 +376,18 @@ def stage_d():
 def stage_e():
     """Entity resolution -> gt_build.clusters / cluster_members / pair_decisions."""
     log("=== STAGE E: entity resolution ===")
-    CIVEC = ("fire department", "police", "university", "college", "school",
-             "association", "club", "foundation", "fansite", "department")
+    CIVEC = (
+        "fire department",
+        "police",
+        "university",
+        "college",
+        "school",
+        "association",
+        "club",
+        "foundation",
+        "fansite",
+        "department",
+    )
 
     # ---- candidate company records = closure + per-record normalized keys ----
     psql("DROP TABLE IF EXISTS gt_build.cand")
@@ -298,30 +400,36 @@ def stage_e():
             LEFT JOIN gt_build.s_db_company sd ON sd.companyid = c.company_id AND c.origin='diffbot'
             LEFT JOIN gt_build.s_zi_company sz ON sz.companyid = c.company_id AND c.origin='zoominfo'""")
     # normalized keys computed in python (shared normalizer), written back
-    rows = dpsi("SELECT family, origin, company_id, primary_name, legal_name, norm_domain FROM gt_build.cand")
+    rows = dpsi(
+        "SELECT family, origin, company_id, primary_name, legal_name, norm_domain FROM gt_build.cand"
+    )
     upd = []
     for fam, org, cid, pname, lname, dom in rows:
         np_, nl, nd = norm_name(pname), norm_name(lname), norm_dom(dom)
         dr = dom_root(nd)
         civ = any(k in np_ for k in CIVEC)
         upd.append((fam, org, cid, np_, nl, nd, dr, civ))
-    psql("ALTER TABLE gt_build.cand ADD COLUMN IF NOT EXISTS norm_primary text, "
-         "ADD COLUMN IF NOT EXISTS norm_legal text, "
-         "ADD COLUMN IF NOT EXISTS norm_domain2 text, ADD COLUMN IF NOT EXISTS dom_root text, "
-         "ADD COLUMN IF NOT EXISTS civic boolean, ADD COLUMN IF NOT EXISTS is_fp boolean, "
-         "ADD COLUMN IF NOT EXISTS country text")
+    psql(
+        "ALTER TABLE gt_build.cand ADD COLUMN IF NOT EXISTS norm_primary text, "
+        "ADD COLUMN IF NOT EXISTS norm_legal text, "
+        "ADD COLUMN IF NOT EXISTS norm_domain2 text, ADD COLUMN IF NOT EXISTS dom_root text, "
+        "ADD COLUMN IF NOT EXISTS civic boolean, ADD COLUMN IF NOT EXISTS is_fp boolean, "
+        "ADD COLUMN IF NOT EXISTS country text"
+    )
     for col, idx in (("norm_primary", 3), ("norm_legal", 4), ("norm_domain2", 5), ("dom_root", 6)):
         for i in range(0, len(upd), 500):
-            batch = upd[i:i + 500]
+            batch = upd[i : i + 500]
             case = " ".join(
                 f"WHEN (family,origin,company_id)=({q(u[0])},{q(u[1])},{q(u[2])}) THEN {q(u[idx])}"
-                for u in batch)
+                for u in batch
+            )
             psql(f"UPDATE gt_build.cand SET {col} = CASE {case} END")
     for i in range(0, len(upd), 500):
-        batch = upd[i:i + 500]
+        batch = upd[i : i + 500]
         case = " ".join(
             f"WHEN (family,origin,company_id)=({q(u[0])},{q(u[1])},{q(u[2])}) THEN {'true' if u[7] else 'false'}"
-            for u in batch)
+            for u in batch
+        )
         psql(f"UPDATE gt_build.cand SET civic = CASE {case} END")
     # FP flag + primary country
     psql("""UPDATE gt_build.cand SET is_fp = EXISTS
@@ -344,7 +452,7 @@ def stage_e():
               decision text, confidence float, method text, note text,
               PRIMARY KEY (family, origin_a, rec_a, origin_b, rec_b))""")
     # candidate pairs: same family; rule-block evaluated here in SQL
-    psql(f"""INSERT INTO gt_build.pair_decisions
+    psql("""INSERT INTO gt_build.pair_decisions
         SELECT a.family, a.origin, a.company_id, b.origin, b.company_id,
           CASE
             -- explicit FP never merges (§1.3/V5 traps)
@@ -414,15 +522,39 @@ def stage_e():
     # Thuraya = one cluster of 3 despite the thuraya-kazakhstan.kz scrape domain;
     # Airbus SE + Airbus SAS merged on shared-CEO evidence (§12 prior analyst pass).
     for fam, ra, oa, rb, ob, note in (
-        ("thuraya", "EW-cM595xNjS5v41pCDvgwQ", "diffbot", "Eif_jUgzxOoWHqb_7EphYeQ", "diffbot",
-         "§12 pitfall: two diffbot Thuraya rows + zoominfo Thuraya = one real company"),
-        ("thuraya", "EW-cM595xNjS5v41pCDvgwQ", "diffbot", "345715253", "zoominfo",
-         "§12: THURAYA row joins the Thuraya cluster despite scrape-artifact domain"),
-        ("thuraya", "Eif_jUgzxOoWHqb_7EphYeQ", "diffbot", "345715253", "zoominfo",
-         "§12: Thuraya Telecommunications = zoominfo Thuraya (thuraya.com both)"),
-        ("airbus", "Ec_P38BE4MX6mRCDh9NWh_A", "diffbot", "EXRo_XwecMo6TPp_x5JybaA", "diffbot",
-         "§12: prior analyst pass merged Airbus SE + Airbus SAS on shared CEO/founding "
-         "evidence (both airbus.com, both d1970-12-18, both public)"),
+        (
+            "thuraya",
+            "EW-cM595xNjS5v41pCDvgwQ",
+            "diffbot",
+            "Eif_jUgzxOoWHqb_7EphYeQ",
+            "diffbot",
+            "§12 pitfall: two diffbot Thuraya rows + zoominfo Thuraya = one real company",
+        ),
+        (
+            "thuraya",
+            "EW-cM595xNjS5v41pCDvgwQ",
+            "diffbot",
+            "345715253",
+            "zoominfo",
+            "§12: THURAYA row joins the Thuraya cluster despite scrape-artifact domain",
+        ),
+        (
+            "thuraya",
+            "Eif_jUgzxOoWHqb_7EphYeQ",
+            "diffbot",
+            "345715253",
+            "zoominfo",
+            "§12: Thuraya Telecommunications = zoominfo Thuraya (thuraya.com both)",
+        ),
+        (
+            "airbus",
+            "Ec_P38BE4MX6mRCDh9NWh_A",
+            "diffbot",
+            "EXRo_XwecMo6TPp_x5JybaA",
+            "diffbot",
+            "§12: prior analyst pass merged Airbus SE + Airbus SAS on shared CEO/founding "
+            "evidence (both airbus.com, both d1970-12-18, both public)",
+        ),
     ):
         psql(f"""INSERT INTO gt_build.pair_decisions VALUES
             ({q(fam)},{q(oa)},{q(ra)},{q(ob)},{q(rb)},'accepted',0.90,'analyst §12',{q(note)})
@@ -443,10 +575,12 @@ def stage_e():
         ra, rb = find(a), find(b)
         if ra != rb:
             parent[ra] = rb
-    members = [r[0] for r in dpsi(
-        "SELECT DISTINCT origin || ':' || company_id FROM gt_build.cand")]
-    domroot_of = {r[0]: r[1] for r in dpsi(
-        "SELECT DISTINCT origin||':'||company_id, dom_root FROM gt_build.cand")}
+
+    members = [r[0] for r in dpsi("SELECT DISTINCT origin || ':' || company_id FROM gt_build.cand")]
+    domroot_of = {
+        r[0]: r[1]
+        for r in dpsi("SELECT DISTINCT origin||':'||company_id, dom_root FROM gt_build.cand")
+    }
     accepted = dpsi("""SELECT origin_a, rec_a, origin_b, rec_b, confidence, method
                         FROM gt_build.pair_decisions WHERE decision='accepted'""")
 
@@ -467,9 +601,11 @@ def stage_e():
     # re-cut without the auto edges that created the conflict; those edges are
     # demoted to borderline. Pinned 'analyst §12' edges are never removed.
     demoted = []
+
     def conflicts(mset):
         roots = {domroot_of.get(m, "") for m in mset if domroot_of.get(m, "")}
         return len(roots) > 1
+
     if any(conflicts(v) for v in comps.values()):
         keep, drop = [], []
         for e in accepted:
@@ -477,7 +613,7 @@ def stage_e():
         # greedily re-add auto edges that don't create a conflict
         cand_edges = list(keep)
         for e in sorted(drop):
-            trial = cand_edges + [e]
+            trial = [*cand_edges, e]
             c2 = build(trial)
             if not any(conflicts(v) for v in c2.values()):
                 cand_edges.append(e)
@@ -489,8 +625,11 @@ def stage_e():
     if demoted:
         vals = ",".join(
             f"('repair',{q(f'{e[0]}:{e[1]}')},{q(f'{e[2]}:{e[3]}')},{e[4]},{q('conflict-split §6.3')},{q(e[5])})"
-            for e in demoted)
-        psql(f"INSERT INTO gt_build.borderline (family,record_a,record_b,confidence,method,note) VALUES {vals}")
+            for e in demoted
+        )
+        psql(
+            f"INSERT INTO gt_build.borderline (family,record_a,record_b,confidence,method,note) VALUES {vals}"
+        )
     log(f"clusters: {len(comps)} company clusters over {len(members)} records")
 
     psql("DROP TABLE IF EXISTS gt_build.clusters, gt_build.cluster_members")
@@ -516,12 +655,22 @@ def stage_e():
         canonical = name_of.get(mem[0], "")
         eid = uuid5_ns("merge-engine:kg:company:" + key)
         stmts.append(
-            "INSERT INTO gt_build.clusters VALUES (" + q(key) + ",'company',"
-            + q(str(eid)) + "::uuid," + q(canonical) + "," + q(",".join(fams)) + ")")
-        stmts.append("INSERT INTO gt_build.cluster_members VALUES " +
-                     ",".join(f"({q(key)},{q(m.split(':')[0])},{q(m.split(':')[1])})" for m in mem))
+            "INSERT INTO gt_build.clusters VALUES ("
+            + q(key)
+            + ",'company',"
+            + q(str(eid))
+            + "::uuid,"
+            + q(canonical)
+            + ","
+            + q(",".join(fams))
+            + ")"
+        )
+        stmts.append(
+            "INSERT INTO gt_build.cluster_members VALUES "
+            + ",".join(f"({q(key)},{q(m.split(':')[0])},{q(m.split(':')[1])})" for m in mem)
+        )
     for i in range(0, len(stmts), 40):
-        exec_multi(stmts[i:i + 40])
+        exec_multi(stmts[i : i + 40])
     # verify: every cand record in exactly one cluster
     n_in = int(dpsi1("SELECT count(DISTINCT (origin,record_id)) FROM gt_build.cluster_members"))
     n_cand_d = int(dpsi1("SELECT count(DISTINCT (origin,company_id)) FROM gt_build.cand"))
@@ -542,6 +691,7 @@ def stage_e():
     zi_p = dpsi("""SELECT personid, name FROM gt_build.s_zi_person ORDER BY personid""")
     # bulk-load via COPY: cluster_key, entity_id, display_name
     import gtcore
+
     pc_rows = []
     pm_rows = []
     for org, ppl in (("diffbot", db_p), ("zoominfo", zi_p)):
@@ -551,7 +701,9 @@ def stage_e():
             pc_rows.append([sha, str(eid), name])
             pm_rows.append([sha, org, pid, name])
     gtcore.copy_rows("person_clusters", ["cluster_key", "entity_id", "display_name"], pc_rows)
-    gtcore.copy_rows("person_members", ["cluster_key", "origin", "record_id", "display_name"], pm_rows)
+    gtcore.copy_rows(
+        "person_members", ["cluster_key", "origin", "record_id", "display_name"], pm_rows
+    )
     log(f"persons: diffbot={len(db_p)} zoominfo={len(zi_p)} (one entity each)")
 
     # cross-origin same-name person pairs at same family company -> borderline
@@ -575,25 +727,37 @@ def stage_e():
             FROM gt_build.pair_decisions WHERE decision='borderline'""")
 
     # V5 trap assertion: traps must be their own single-member clusters
-    for trap_origin, trap_id in [("zoominfo", "73664537"), ("zoominfo", "480703181"),
-                                 ("zoominfo", "42603095"), ("diffbot", "E17cdTqqHO5y1wMmj4p50tg")]:
-        n_mem = int(dpsi1(f"""SELECT count(*) FROM gt_build.cluster_members m
+    for trap_origin, trap_id in [
+        ("zoominfo", "73664537"),
+        ("zoominfo", "480703181"),
+        ("zoominfo", "42603095"),
+        ("diffbot", "E17cdTqqHO5y1wMmj4p50tg"),
+    ]:
+        n_mem = int(
+            dpsi1(f"""SELECT count(*) FROM gt_build.cluster_members m
                              WHERE m.cluster_key = (SELECT cluster_key FROM gt_build.cluster_members
-                                                    WHERE origin={q(trap_origin)} AND record_id={q(trap_id)})"""))
+                                                    WHERE origin={q(trap_origin)} AND record_id={q(trap_id)})""")
+        )
         assert n_mem == 1, f"V5 trap {trap_id} merged into cluster of {n_mem}!"
-    log("V5 trap split-check PASS (Monterey Airbus / Al Thuraya / Capella U / Boeing Mesa FD alone)")
+    log(
+        "V5 trap split-check PASS (Monterey Airbus / Al Thuraya / Capella U / Boeing Mesa FD alone)"
+    )
 
     # §12 check: Thuraya = one cluster with 3 members
-    n_th = int(dpsi1("""SELECT count(*) FROM gt_build.cluster_members WHERE cluster_key =
+    n_th = int(
+        dpsi1("""SELECT count(*) FROM gt_build.cluster_members WHERE cluster_key =
                         (SELECT cluster_key FROM gt_build.cluster_members
-                         WHERE origin='zoominfo' AND record_id='345715253')"""))
+                         WHERE origin='zoominfo' AND record_id='345715253')""")
+    )
     log(f"thuraya cluster members: {n_th}")
     # Boeing cluster member list for eyeballing
-    log("boeing-family clusters:",
+    log(
+        "boeing-family clusters:",
         dpsi("""SELECT left(c.cluster_key,8), c.seed_family, count(*),
                        string_agg(m.origin||':'||left(m.record_id,12),'|' ORDER BY m.origin, m.record_id)
                 FROM gt_build.clusters c JOIN gt_build.cluster_members m USING (cluster_key)
-                WHERE c.seed_family LIKE '%boeing%' GROUP BY 1,2 ORDER BY 3 DESC LIMIT 15""")[:15])
+                WHERE c.seed_family LIKE '%boeing%' GROUP BY 1,2 ORDER BY 3 DESC LIMIT 15""")[:15],
+    )
 
 
 if __name__ == "__main__":

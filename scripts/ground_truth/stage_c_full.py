@@ -14,20 +14,38 @@ Cross-origin join: for each NEW diffbot hop company, match zoominfo companies by
   normalized domain) -> add as zoominfo closure member (same hop as the diffbot
   company plus one).
 """
-import sys, re, os, time
+
+import os
+import re
+import sys
+import time
 from collections import defaultdict, deque
 
 sys.path.insert(0, "/home/bayern/Projects/merge-engine/scripts/ground_truth")
-from helpers import psql, normalize_name, normalize_domain, domain_root
+from helpers import domain_root, normalize_domain, normalize_name, psql
 
 DEST = "ground_truth"
 CD = "/home/bayern/Projects/merge-engine/scripts/ground_truth/cache_diffbot"
 CH_CACHE = "/home/bayern/Projects/merge-engine/scripts/ground_truth/cache_zi_company.tsv"
 MAX_HOP = 3
 
+
+def read_lines(path):
+    """Slurp a cache TSV (each is ~2 MB) so the handle closes deterministically."""
+    with open(path, encoding="utf-8") as fh:
+        return fh.readlines()
+
+
+def sq(v):
+    """SQL single-quote a literal, doubling embedded quotes (same rule as gtcore.q)."""
+    return "'" + str(v).replace("'", "''") + "'"
+
+
 # ---------------- read families ----------------
 families = {}
-for line in psql(DEST, "SELECT family, name_pattern, official_domain FROM gt_build.families").splitlines():
+for line in psql(
+    DEST, "SELECT family, name_pattern, official_domain FROM gt_build.families"
+).splitlines():
     if not line.strip():
         continue
     fam, np_, od = line.split("|")
@@ -43,10 +61,10 @@ for line in psql(DEST, "SELECT family, origin, record_id FROM gt_build.seed_root
     seed_roots.append((fam, org, rid))
 
 # ---------------- diffbot company cache ----------------
-db_rows = {}   # companyid -> row dict
-db_normname = defaultdict(list)   # normalized name -> [companyid]
-db_domain = {} # companyid -> normalized domain
-for line in open(os.path.join(CD, "company.tsv"), encoding="utf-8"):
+db_rows = {}  # companyid -> row dict
+db_normname = defaultdict(list)  # normalized name -> [companyid]
+db_domain = {}  # companyid -> normalized domain
+for line in read_lines(os.path.join(CD, "company.tsv")):
     line = line.rstrip("\n")
     if line.startswith("SELECT") or not line.strip():
         continue
@@ -78,7 +96,7 @@ zi_rows = {}
 zi_normname = defaultdict(list)
 zi_domain = {}
 zi_domroot = defaultdict(list)
-for line in open(CH_CACHE, encoding="utf-8"):
+for line in read_lines(CH_CACHE):
     cells = line.rstrip("\n").split("\t")
     if cells[0] == "companyID":
         continue
@@ -108,14 +126,15 @@ def db_name_match(cid: str, pattern: str) -> bool:
 
 # ---------------- diffbot adjacency ----------------
 adj = defaultdict(set)
-for line in open(os.path.join(CD, "companyrelation.tsv"), encoding="utf-8"):
+for line in read_lines(os.path.join(CD, "companyrelation.tsv")):
     line = line.rstrip("\n")
     if line.startswith("SELECT") or not line.strip():
         continue
     cells = line.split("|")
     a, b = cells[0].strip().strip('"'), cells[1].strip().strip('"')
-    adj[a].add(b); adj[b].add(a)
-for line in open(os.path.join(CD, "companyinvestor.tsv"), encoding="utf-8"):
+    adj[a].add(b)
+    adj[b].add(a)
+for line in read_lines(os.path.join(CD, "companyinvestor.tsv")):
     line = line.rstrip("\n")
     if line.startswith("SELECT") or not line.strip():
         continue
@@ -126,14 +145,14 @@ for line in open(os.path.join(CD, "companyinvestor.tsv"), encoding="utf-8"):
     pass
 # investment edges: join investmentid
 round_investee = {}
-for line in open(os.path.join(CD, "companyinvestmentround.tsv"), encoding="utf-8"):
+for line in read_lines(os.path.join(CD, "companyinvestmentround.tsv")):
     line = line.rstrip("\n")
     if line.startswith("SELECT") or not line.strip():
         continue
     cells = line.split("|")
     cid, iid = cells[0].strip().strip('"'), cells[1].strip().strip('"')
     round_investee[iid] = cid
-for line in open(os.path.join(CD, "companyinvestor.tsv"), encoding="utf-8"):
+for line in read_lines(os.path.join(CD, "companyinvestor.tsv")):
     line = line.rstrip("\n")
     if line.startswith("SELECT") or not line.strip():
         continue
@@ -142,7 +161,8 @@ for line in open(os.path.join(CD, "companyinvestor.tsv"), encoding="utf-8"):
     inv = cells[1].strip().strip('"')
     invst = round_investee.get(iid)
     if inv and invst:
-        adj[inv].add(invst); adj[invst].add(inv)
+        adj[inv].add(invst)
+        adj[invst].add(inv)
 print("diffbot adjacency nodes:", len(adj))
 
 # ---------------- BFS closure ----------------
@@ -181,6 +201,7 @@ for fam, info in families.items():
         k = (fam, "zoominfo", cid)
         closure[k] = min(closure.get(k, 99), 1)
 
+
 # BFS hops 1..3 over diffbot edges
 def bfs_db(fam):
     """expand diffbot closure for a family by company-company edges from hop<3 members."""
@@ -199,7 +220,7 @@ def bfs_db(fam):
         if hop >= MAX_HOP:
             continue
         for nxt in adj.get(cid, ()):
-            if nxt not in db_rows:      # dangling id -> unresolved
+            if nxt not in db_rows:  # dangling id -> unresolved
                 continue
             k = (fam, "diffbot", nxt)
             nh = hop + 1
@@ -208,9 +229,11 @@ def bfs_db(fam):
                 if nh < MAX_HOP:
                     q.append((nxt, nh))
 
+
 for fam, info in families.items():
     bfs_db(fam)
-print("BFS done:", time.time()-t_stage, "closure:", len(closure))
+print("BFS done:", time.time() - t_stage, "closure:", len(closure))
+
 
 # cross-origin join: after diffbot closure, match zoominfo by name/domain
 def cross_origin(fam, info):
@@ -239,9 +262,10 @@ def cross_origin(fam, info):
             k = (fam, "zoominfo", zc)
             closure[k] = min(closure.get(k, 99), hop + 1)
 
+
 for fam, info in families.items():
     cross_origin(fam, info)
-print("cross-origin done:", time.time()-t_stage, "closure:", len(closure))
+print("cross-origin done:", time.time() - t_stage, "closure:", len(closure))
 
 # hop clamp to 3
 for k, h in list(closure.items()):
@@ -254,13 +278,12 @@ print("closure rows:", len(rows))
 # batch insert via a single multi-row INSERT (single psql call, chunked)
 CHUNK = 500
 for i in range(0, len(rows), CHUNK):
-    chunk = rows[i:i+CHUNK]
-    vals = ", ".join(
-        "('%s','%s','%s',%d)" % (fam.replace("'", "''"), org, cid.replace("'", "''"), hop)
-        for fam, org, cid, hop in chunk
+    chunk = rows[i : i + CHUNK]
+    vals = ", ".join(f"({sq(fam)},{sq(org)},{sq(cid)},{hop})" for fam, org, cid, hop in chunk)
+    sql = (
+        "INSERT INTO gt_build.company_closure(family, origin, company_id, hop) VALUES "
+        + vals
+        + " ON CONFLICT (family, origin, company_id) DO UPDATE SET hop = LEAST(gt_build.company_closure.hop, EXCLUDED.hop)"
     )
-    sql = ("INSERT INTO gt_build.company_closure(family, origin, company_id, hop) VALUES "
-           + vals +
-           " ON CONFLICT (family, origin, company_id) DO UPDATE SET hop = LEAST(gt_build.company_closure.hop, EXCLUDED.hop)")
     psql(DEST, sql)
 print("wrote closure rows:", len(rows))

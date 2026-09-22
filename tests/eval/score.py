@@ -13,11 +13,23 @@ are not errors, they are the system correctly saying "I'm not sure".
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from tests.eval.golden import Pair, build_golden_pairs
+
+# Splink blocks on name, so a record set where a single name covers a large
+# share of the rows degenerates into a near-cartesian block that never
+# returns. Real Pagila staff is ~1500 mostly-distinct names (largest block
+# well under 1%); the 2-row stub load_staff() falls back to when
+# tests/eval/pagila_staff.csv is missing yields 3 names over 204 records
+# (50%), which is what hung `check.py eval` -- and CI, for an hour, until the
+# runner was killed.
+# ponytail: flat 10% heuristic; swap for a real block-size estimate if a
+# legitimate dataset ever trips it.
+_MAX_NAME_BLOCK_SHARE = 0.10
 
 
 @dataclass
@@ -119,6 +131,14 @@ def evaluate(
     return report
 
 
+def is_degenerate_for_splink(records: list[dict[str, Any]]) -> bool:
+    """True when one name dominates ``records`` enough to hang Splink's blocking."""
+    if not records:
+        return True
+    blocks = Counter((r.get("first_name"), r.get("last_name")) for r in records)
+    return max(blocks.values()) > _MAX_NAME_BLOCK_SHARE * len(records)
+
+
 def splink_scorer_from_records(
     entity_type: str, records: list[dict[str, Any]]
 ) -> Callable[[dict[str, Any], dict[str, Any]], float] | None:
@@ -139,6 +159,9 @@ def splink_scorer_from_records(
     """
     from src.mcp_server.tools.resolve_entities import _record_id
     from src.mcp_server.tools.splink_matcher import score_pairs_with_splink
+
+    if is_degenerate_for_splink(records):
+        return None
 
     scored = asyncio.run(score_pairs_with_splink(entity_type, records))
     if scored is None:

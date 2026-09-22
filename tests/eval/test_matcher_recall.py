@@ -302,3 +302,22 @@ def test_airbus_parity_exceeds_boeing_baseline() -> None:
             "parity leg is not met. Do not promote Splink on this evidence."
         )
     print("\n" + summary)
+
+
+def test_stub_staff_dataset_is_rejected_before_splink_blocking() -> None:
+    """The 2-row load_staff() fallback must be skipped, not fed to Splink.
+
+    Regression guard for the CI hang: a blanket `*.csv` in .gitignore kept
+    tests/eval/pagila_staff.csv untracked, so load_staff() fell back to its
+    stub and the resulting 204 records carried 3 distinct names. Splink's
+    blocking never returned on that, hanging `check.py eval` indefinitely.
+    """
+    from tests.eval.golden import build_golden_pairs
+    from tests.eval.score import is_degenerate_for_splink
+
+    records = [r for pair in build_golden_pairs() for r in (pair[0], pair[1])]
+    assert is_degenerate_for_splink(records) is True
+
+    # A healthy set (every record a distinct person) must NOT be rejected.
+    healthy = [{"first_name": f"First{i}", "last_name": f"Last{i}"} for i in range(200)]
+    assert is_degenerate_for_splink(healthy) is False

@@ -1,27 +1,44 @@
 #!/usr/bin/env python3
-"""§10 verification gates V1–V10 for the manual ground-truth build.
+"""§10 verification gates V1-V10 for the manual ground-truth build.
 
 Reads only: ground_truth.kg + ground_truth.gt_build (scratch), origin sources
 (read-only), backup/ files. Writes gt_build_out/gates_<ts>.txt with every
 number. Each gate prints PASS/FAIL + evidence.
 """
+
 import random
 import subprocess
 import sys
+from pathlib import Path
 
 sys.path.insert(0, "/home/bayern/Projects/merge-engine/scripts/ground_truth")
-from gtcore import dpsi, dpsi1, ch, psql, q, norm_dom  # noqa: E402
+from gtcore import ch, dpsi, dpsi1, norm_dom, q
 
-PGPW = open("/tmp/.gtpw").read().strip()
+PGPW = Path("/tmp/.gtpw").read_text(encoding="utf-8").strip()
 
 
 def dq33(sql):
     """Query origin 1 (diffbot @5433)."""
     import os
-    p = subprocess.run(["psql", "-h", "localhost", "-p", "5433", "-U", "postgres",
-                        "-d", "testdiffbot", "-Atc", sql],
-                       capture_output=True, text=True,
-                       env=dict(os.environ, PGPASSWORD=PGPW))
+
+    p = subprocess.run(
+        [
+            "psql",
+            "-h",
+            "localhost",
+            "-p",
+            "5433",
+            "-U",
+            "postgres",
+            "-d",
+            "testdiffbot",
+            "-Atc",
+            sql,
+        ],
+        capture_output=True,
+        text=True,
+        env=dict(os.environ, PGPASSWORD=PGPW),
+    )
     return p.stdout.strip() if p.returncode == 0 else None
 
 
@@ -57,8 +74,9 @@ def main():
     for org, n_closure, n_mapped in rows:
         good = int(n_closure) == int(n_mapped)
         ok &= good
-        det.append(f"{org}: closure={n_closure} mapped-in-entity_map={n_mapped} "
-                   f"{'==' if good else '!='}")
+        det.append(
+            f"{org}: closure={n_closure} mapped-in-entity_map={n_mapped} {'==' if good else '!='}"
+        )
     # every closure company id appears in ≥1 evidence locator
     miss = dpsi("""
         SELECT cc.origin||':'||cc.company_id
@@ -88,8 +106,11 @@ def main():
     CANON = {
         "boeing": ["diffbot:EMAakygGHMUiRPfT6DPOr6Q", "zoominfo:5128546"],
         "airbus": ["diffbot:EXRo_XwecMo6TPp_x5JybaA", "diffbot:Ec_P38BE4MX6mRCDh9NWh_A"],
-        "thuraya": ["diffbot:EW-cM595xNjS5v41pCDvgwQ", "diffbot:Eif_jUgzxOoWHqb_7EphYeQ",
-                    "zoominfo:345715253"],
+        "thuraya": [
+            "diffbot:EW-cM595xNjS5v41pCDvgwQ",
+            "diffbot:Eif_jUgzxOoWHqb_7EphYeQ",
+            "zoominfo:345715253",
+        ],
         "ohb": ["diffbot:Ei7Rdy8jOPwSaA07eN7gnpw"],
         "capella": ["diffbot:Eab4Feq-pPeSUpmSKYuToDA", "zoominfo:398000639"],
     }
@@ -117,8 +138,10 @@ def main():
         name_ok = any(nm.lower() in (enames or "").lower() for nm in names)
         dom_ok = (dom or "").lower() == domain
         ok &= name_ok and dom_ok
-        det.append(f"{fam}: entity={eid[:8]}… canonical={canon!r} names=({enames}) "
-                   f"domain={dom!r} name_ok={name_ok} domain_ok={dom_ok}")
+        det.append(
+            f"{fam}: entity={eid[:8]}… canonical={canon!r} names=({enames}) "
+            f"domain={dom!r} name_ok={name_ok} domain_ok={dom_ok}"
+        )
         for sub in SUBSIDIARY.get(fam, []):
             subcl = dpsi(f"""SELECT c.canonical_name,
                    (SELECT f.value_text FROM kg.knowledge_fact f
@@ -127,48 +150,68 @@ def main():
                       AND p.code='company.website' ORDER BY 1 LIMIT 1)
                    FROM gt_build.cluster_members m JOIN gt_build.clusters c USING (cluster_key)
                    WHERE m.origin||':'||m.record_id={q(sub)}""")
-            det.append(f"    {fam} subsidiary seed {sub}: {subcl} (separate entity — "
-                       f"guide §3 stub rule, not the family canonical)")
+            det.append(
+                f"    {fam} subsidiary seed {sub}: {subcl} (separate entity — "
+                f"guide §3 stub rule, not the family canonical)"
+            )
     results["V2"] = gate("V2", ok, det)
 
     # ---------------- V3 no orphans ----------------------------------------
     log("=" * 70)
     log("V3 No orphan entities")
-    no_name = int(dpsi1("""SELECT count(*) FROM kg.entity e WHERE NOT EXISTS
-        (SELECT 1 FROM kg.entity_name n WHERE n.entity_id=e.entity_id)"""))
-    no_content = int(dpsi1("""SELECT count(*) FROM kg.entity e
+    no_name = int(
+        dpsi1("""SELECT count(*) FROM kg.entity e WHERE NOT EXISTS
+        (SELECT 1 FROM kg.entity_name n WHERE n.entity_id=e.entity_id)""")
+    )
+    no_content = int(
+        dpsi1("""SELECT count(*) FROM kg.entity e
         WHERE NOT EXISTS (SELECT 1 FROM kg.knowledge_fact f WHERE f.subject_entity_id=e.entity_id)
           AND NOT EXISTS (SELECT 1 FROM kg.person_company_relationship r
-                          WHERE r.person_id=e.entity_id OR r.company_id=e.entity_id)"""))
-    co_ok = int(dpsi1("""SELECT count(*) FROM kg.organization o WHERE NOT EXISTS
-        (SELECT 1 FROM kg.company c WHERE c.company_id=o.organization_id)"""))
-    per_ok = int(dpsi1("""SELECT count(*) FROM kg.person p WHERE NOT EXISTS
-        (SELECT 1 FROM kg.entity e WHERE e.entity_id=p.person_id)"""))
-    det = [f"entities without entity_name: {no_name}",
-           f"entities without fact/relationship: {no_content}",
-           f"organizations without company supertype row: {co_ok}",
-           f"persons without entity row: {per_ok}"]
+                          WHERE r.person_id=e.entity_id OR r.company_id=e.entity_id)""")
+    )
+    co_ok = int(
+        dpsi1("""SELECT count(*) FROM kg.organization o WHERE NOT EXISTS
+        (SELECT 1 FROM kg.company c WHERE c.company_id=o.organization_id)""")
+    )
+    per_ok = int(
+        dpsi1("""SELECT count(*) FROM kg.person p WHERE NOT EXISTS
+        (SELECT 1 FROM kg.entity e WHERE e.entity_id=p.person_id)""")
+    )
+    det = [
+        f"entities without entity_name: {no_name}",
+        f"entities without fact/relationship: {no_content}",
+        f"organizations without company supertype row: {co_ok}",
+        f"persons without entity row: {per_ok}",
+    ]
     results["V3"] = gate("V3", no_name == 0 and no_content == 0 and co_ok == 0 and per_ok == 0, det)
 
     # ---------------- V4 FK integrity of relationships ---------------------
     log("=" * 70)
     log("V4 FK integrity — NULL-id relationships not reported as unresolved")
-    nullrels = int(dpsi1("""SELECT count(*) FROM kg.person_company_relationship r
-        WHERE r.person_id IS NULL OR r.company_id IS NULL"""))
-    nulledges = int(dpsi1("""SELECT count(*) FROM kg.graph_edge
-        WHERE source_entity_id IS NULL OR target_entity_id IS NULL"""))
+    nullrels = int(
+        dpsi1("""SELECT count(*) FROM kg.person_company_relationship r
+        WHERE r.person_id IS NULL OR r.company_id IS NULL""")
+    )
+    nulledges = int(
+        dpsi1("""SELECT count(*) FROM kg.graph_edge
+        WHERE source_entity_id IS NULL OR target_entity_id IS NULL""")
+    )
     # unresolved company-company links live only in unresolved_links + evidence, never as rows
-    det = [f"person_company_relationship rows with NULL ids: {nullrels}",
-           f"graph_edge rows with NULL ids: {nulledges}",
-           f"unresolved company-company endpoints reported (not loaded): 1,381 "
-           f"(gt_build.unresolved_links; company_company_relationship rows loaded: "
-           f"{dpsi1('SELECT count(*) FROM kg.company_company_relationship')})"]
+    det = [
+        f"person_company_relationship rows with NULL ids: {nullrels}",
+        f"graph_edge rows with NULL ids: {nulledges}",
+        f"unresolved company-company endpoints reported (not loaded): 1,381 "
+        f"(gt_build.unresolved_links; company_company_relationship rows loaded: "
+        f"{dpsi1('SELECT count(*) FROM kg.company_company_relationship')})",
+    ]
     results["V4"] = gate("V4", nullrels == 0 and nulledges == 0, det)
 
     # ---------------- V5 no over-merge --------------------------------------
     log("=" * 70)
-    log("V5 No over-merge — trap-list entities NOT in root clusters; "
-        "subsidiary-domain clusters are legitimate 3-hop adjacencies")
+    log(
+        "V5 No over-merge — trap-list entities NOT in root clusters; "
+        "subsidiary-domain clusters are legitimate 3-hop adjacencies"
+    )
     # Per guide §3: subsidiaries with independent domains (boeinginternational.net,
     # boeing.cn, airbusturkiye.com, etc.) are expected multi-domain adjacencies — not
     # over-merge. The only hard constraint is that trap-list entities must NOT appear
@@ -184,21 +227,36 @@ def main():
             WHERE s.family={q(fam)}""")
         root_ck[fam] = {r[0] for r in ck}
 
-    traps = ["Monterey Airbus", "Al Thuraya Rent A Car", "Al Thuraya Security",
-             "Capella University", "Boeing Mesa Fire Department", "Airbus Bank"]
+    traps = [
+        "Monterey Airbus",
+        "Al Thuraya Rent A Car",
+        "Al Thuraya Security",
+        "Capella University",
+        "Boeing Mesa Fire Department",
+        "Airbus Bank",
+    ]
     trap_det = []
     trap_ok = True
-    for label, fam in [("Monterey Airbus", "airbus"), ("Al Thuraya Rent A Car", "thuraya"),
-                       ("Al Thuraya Security", "thuraya"), ("Capella University", "capella"),
-                       ("Boeing Mesa Fire Department", "boeing"), ("Airbus Bank", "airbus")]:
+    for label, fam in [
+        ("Monterey Airbus", "airbus"),
+        ("Al Thuraya Rent A Car", "thuraya"),
+        ("Al Thuraya Security", "thuraya"),
+        ("Capella University", "capella"),
+        ("Boeing Mesa Fire Department", "boeing"),
+        ("Airbus Bank", "airbus"),
+    ]:
         recs = dpsi(f"""SELECT origin||':'||company_id FROM gt_build.cand
-                        WHERE primary_name ILIKE {q('%'+label)}""")
+                        WHERE primary_name ILIKE {q("%" + label)}""")
         if not recs:
             trap_det.append(f"  trap {label}: no candidate record in closure (absent from graph)")
         for (org_r,) in recs:
-            cks = {r[0] for r in dpsi(
-                f"""SELECT cluster_key FROM gt_build.cluster_members
-                    WHERE origin||':'||record_id={q(org_r)}""")}
+            cks = {
+                r[0]
+                for r in dpsi(
+                    f"""SELECT cluster_key FROM gt_build.cluster_members
+                    WHERE origin||':'||record_id={q(org_r)}"""
+                )
+            }
             in_root = bool(cks & root_ck[fam])
             trap_ok &= not in_root
             trap_det.append(f"  trap {label} ({org_r}) in {fam} root cluster: {in_root}")
@@ -212,9 +270,11 @@ def main():
             JOIN gt_build.cand c ON c.origin = m.origin AND c.company_id = m.record_id
             GROUP BY 1 HAVING count(DISTINCT coalesce(nullif(c.norm_domain2,''),'')) > 1
         ) t""")
-    det = [f"root clusters checked: boeing={len(root_ck['boeing'])}, "
-           f"airbus={len(root_ck['airbus'])}, thuraya={len(root_ck['thuraya'])}, "
-           f"ohb={len(root_ck['ohb'])}, capella={len(root_ck['capella'])}"]
+    det = [
+        f"root clusters checked: boeing={len(root_ck['boeing'])}, "
+        f"airbus={len(root_ck['airbus'])}, thuraya={len(root_ck['thuraya'])}, "
+        f"ohb={len(root_ck['ohb'])}, capella={len(root_ck['capella'])}"
+    ]
     det.append(f"multi-domain clusters (subsidiary adjacencies, legitimate): {multi_dom_count}")
     det += trap_det
     results["V5"] = gate("V5", trap_ok, det)
@@ -222,7 +282,7 @@ def main():
     # ---------------- V6 completeness per record type -----------------------
     log("=" * 70)
     log("V6 extract_ledger extracted == landed modulo documented drop-list")
-    # Ledger has 6× duplicate rows per (origin, source_table) from the entity-loop
+    # Ledger has 6x duplicate rows per (origin, source_table) from the entity-loop
     # in gtload.py. Use MAX(rows_landed) to get the real landed count.
     # Tables loaded via entity-loop (not unmapped, not ledger-managed) have no
     # rows_landed entry — they were loaded row-by-row, so extracted == landed.
@@ -240,8 +300,11 @@ def main():
                       GROUP BY 1,2 ORDER BY 1,2""")
     drop_by = {(o, t): int(n) for o, t, n in dropsum}
     # Unmapped set
-    unmapped_set = {(o, t) for o, t in dpsi("""SELECT origin, source_table FROM gt_build.unmapped_fields
-                        GROUP BY origin, source_table""")}
+    unmapped_set = {
+        (o, t)
+        for o, t in dpsi("""SELECT origin, source_table FROM gt_build.unmapped_fields
+                        GROUP BY origin, source_table""")
+    }
 
     det, ok = [], True
     for org, tbl, ext, land in all_ledger:
@@ -257,23 +320,31 @@ def main():
         if land_int == 0 and delta_int > 0:
             # Entity-loop table: rows_extracted was set but rows_landed was not
             # These were loaded row-by-row, so delta is a false alarm
-            det.append(f"{org}/{tbl}: extracted={ext} entity-loop (loaded row-by-row, delta is artifact)")
+            det.append(
+                f"{org}/{tbl}: extracted={ext} entity-loop (loaded row-by-row, delta is artifact)"
+            )
             continue
 
         # companyexperience has 1 row where personid wasn't in cluster_members (skipped by design)
         if (org, tbl) == ("diffbot", "diffbot.companyexperience") and delta_int == 1:
-            det.append(f"{org}/{tbl}: extracted={ext} landed={land_int} delta={delta_int} "
-                       f"1 row skipped (personid not in cluster_members — expected)")
+            det.append(
+                f"{org}/{tbl}: extracted={ext} landed={land_int} delta={delta_int} "
+                f"1 row skipped (personid not in cluster_members — expected)"
+            )
             continue
 
         good = delta_int <= d or (org, tbl) in drop_by
         ok &= good
-        det.append(f"{org}/{tbl}: extracted={ext} max_landed={land} delta={delta_int} "
-                   f"drop-list={d} {'covered' if good else 'UNCOVERED'}")
+        det.append(
+            f"{org}/{tbl}: extracted={ext} max_landed={land} delta={delta_int} "
+            f"drop-list={d} {'covered' if good else 'UNCOVERED'}"
+        )
 
     # report drop-list total
-    det.append(f"drop-list total rows: {sum(drop_by.values())} "
-               f"(all reasons recorded in gt_build.drop_list)")
+    det.append(
+        f"drop-list total rows: {sum(drop_by.values())} "
+        f"(all reasons recorded in gt_build.drop_list)"
+    )
     results["V6"] = gate("V6", ok, det)
 
     # ---------------- V7 graph_edge parity ----------------------------------
@@ -282,17 +353,22 @@ def main():
     nrel = int(dpsi1("SELECT count(*) FROM kg.person_company_relationship"))
     nfwd = int(dpsi1("SELECT count(*) FROM kg.graph_edge WHERE NOT is_reverse_projection"))
     nrev = int(dpsi1("SELECT count(*) FROM kg.graph_edge WHERE is_reverse_projection"))
-    nsym = int(dpsi1("""SELECT count(*) FROM kg.person_company_relationship r
-        JOIN kg.relationship_type t USING (relationship_type_id) WHERE t.is_symmetric"""))
-    det = [f"relationships={nrel} forward_edges={nfwd} (equal={nrel==nfwd})",
-           f"symmetric-type relationships={nsym} reverse_edges={nrev} (equal={nsym==nrev})"]
+    nsym = int(
+        dpsi1("""SELECT count(*) FROM kg.person_company_relationship r
+        JOIN kg.relationship_type t USING (relationship_type_id) WHERE t.is_symmetric""")
+    )
+    det = [
+        f"relationships={nrel} forward_edges={nfwd} (equal={nrel == nfwd})",
+        f"symmetric-type relationships={nsym} reverse_edges={nrev} (equal={nsym == nrev})",
+    ]
     results["V7"] = gate("V7", nrel == nfwd and nsym == nrev, det)
 
     # ---------------- V8 provenance walk ------------------------------------
     log("=" * 70)
     log("V8 Provenance walk — 10 random facts re-verified against origin")
     random.seed(20260916)
-    rows = dpsi("""
+    rows = dpsi(
+        """
         SELECT f.item_id::text, e.entity_type, p.code, f.value_kind,
                coalesce(f.value_text, f.value_numeric::text, f.value_date::text,
                         f.value_boolean::text) val,
@@ -305,7 +381,9 @@ def main():
         JOIN kg.entity e ON e.entity_id = f.subject_entity_id
         WHERE f.value_kind='TEXT' AND length(coalesce(f.value_text,'')) > 1
           AND ev.locator NOT LIKE 'manual:%' AND ev.locator NOT LIKE 'unresolved:%'
-        ORDER BY random() LIMIT 10""", sep="\x1f")
+        ORDER BY random() LIMIT 10""",
+        sep="\x1f",
+    )
     det, ok8 = [], True
     for iid, etype, code, kind, val, sid, loc, snip in rows:
         v8 = None
@@ -319,16 +397,20 @@ def main():
                     v8 = (got or "").strip() == val.strip()
                 elif tbl == "company" and code == "company.legal_name":
                     got = dq33(f"SELECT fullname FROM diffbot.company WHERE companyid={q(rec)}")
-                    v8 = (got == val)
+                    v8 = got == val
                 elif tbl == "companytechnographics":
                     # techid is the PK of companytechnographics — rec IS the techid
                     got = dq33(f"""SELECT coalesce(technologyname,'') || '|||' || coalesce(categories,'')
                                    FROM diffbot.companytechnographics
                                    WHERE techid={q(rec)}""")
-                    v8 = got and (val in got or val.replace('["','').replace('"]','').strip() in got)
+                    v8 = got and (
+                        val in got or val.replace('["', "").replace('"]', "").strip() in got
+                    )
                 elif tbl == "industryclassification":
                     # industryclassification: industry_name column
-                    got = dq33(f"SELECT industry_name FROM diffbot.industryclassification WHERE id={q(rec)}")
+                    got = dq33(
+                        f"SELECT industry_name FROM diffbot.industryclassification WHERE id={q(rec)}"
+                    )
                     v8 = got and (val == got or val.lower() in got.lower())
                 elif tbl == "companyindustry":
                     # companyindustry: uses taxonomy_membership with companyid
@@ -346,7 +428,7 @@ def main():
                     v8 = got and (val in got)
                 elif tbl == "person" and code == "person_role":
                     got = dq33(f"SELECT role FROM diffbot.person WHERE personid={q(rec)}")
-                    v8 = (got == val)
+                    v8 = got == val
                 else:
                     # general fallback: value must appear in the cited snippet
                     v8 = val in snip
@@ -379,15 +461,30 @@ def main():
     # ---------------- V9 idempotence -----------------------------------------
     log("=" * 70)
     log("V9 Idempotence — re-run load; zero new rows")
-    tables = ["kg.entity", "kg.entity_name", "kg.organization", "kg.person",
-              "kg.company", "kg.knowledge_item", "kg.knowledge_fact", "kg.evidence",
-              "kg.knowledge_item_evidence", "kg.graph_edge",
-              "kg.person_company_relationship", "kg.merge_engine_entity_map",
-              "kg.merge_engine_merge_audit"]
+    tables = [
+        "kg.entity",
+        "kg.entity_name",
+        "kg.organization",
+        "kg.person",
+        "kg.company",
+        "kg.knowledge_item",
+        "kg.knowledge_fact",
+        "kg.evidence",
+        "kg.knowledge_item_evidence",
+        "kg.graph_edge",
+        "kg.person_company_relationship",
+        "kg.merge_engine_entity_map",
+        "kg.merge_engine_merge_audit",
+    ]
     before = {t: int(dpsi1(f"SELECT count(*) FROM {t}")) for t in tables}
     import subprocess
-    r = subprocess.run([".venv/bin/python", "scripts/ground_truth/gtload.py"],
-                       capture_output=True, text=True, cwd="/home/bayern/Projects/merge-engine")
+
+    r = subprocess.run(
+        [".venv/bin/python", "scripts/ground_truth/gtload.py"],
+        capture_output=True,
+        text=True,
+        cwd="/home/bayern/Projects/merge-engine",
+    )
     after = {t: int(dpsi1(f"SELECT count(*) FROM {t}")) for t in tables}
     det = [f"gtload re-run exit={r.returncode}"]
     ok9 = r.returncode == 0
@@ -401,13 +498,30 @@ def main():
     log("=" * 70)
     log("V10 Cross-check vs app run (destination.kg)")
     import os
+
     env = dict(os.environ, PGPASSWORD=PGPW)
 
     def dq(sql):
-        p = subprocess.run(["psql", "-h", "localhost", "-p", "5434", "-U", "postgres",
-                            "-d", "destination", "-Atc", sql], capture_output=True,
-                           text=True, env=env)
+        p = subprocess.run(
+            [
+                "psql",
+                "-h",
+                "localhost",
+                "-p",
+                "5434",
+                "-U",
+                "postgres",
+                "-d",
+                "destination",
+                "-Atc",
+                sql,
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
         return p.stdout.strip() if p.returncode == 0 else "ERR"
+
     det = [
         f"destination.kg (app output, TRUNCATED by this run's Stage A — see note): "
         f"entity={dq('SELECT count(*) FROM kg.entity')} "
@@ -435,6 +549,7 @@ def main():
     log(f"ALL GATES: {'PASS' if allok else 'FAIL'}")
 
     from datetime import datetime
+
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = f"/home/bayern/Projects/merge-engine/gt_build_out/gates_{ts}.txt"
     with open(path, "w") as f:

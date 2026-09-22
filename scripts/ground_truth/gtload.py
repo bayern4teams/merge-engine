@@ -5,6 +5,7 @@ Reads gt_build staging (s_*) + clusters from gtbuild.py stage e, writes
 kg.* in FK order (§9), then updates extract_ledger.rows_landed.
 Idempotent: deterministic uuid5 item ids + ON CONFLICT DO NOTHING.
 """
+
 import hashlib
 import re
 import sys
@@ -12,17 +13,18 @@ import time
 import uuid
 
 sys.path.insert(0, "/home/bayern/Projects/merge-engine/scripts/ground_truth")
-from gtcore import (RUN_ID, copy_rows, dpsi, dpsi1, norm_dom, norm_name, psql,
-                    psql_script, psql_stdin, q)
+from gtcore import RUN_ID, dpsi, dpsi1, norm_dom, norm_name, psql, psql_script, q
 
 
 def run_batched(stmts, max_bytes=2_000_000):
     """Execute many statements in transactions bounded by total byte size."""
     import os
+
     dump_dir = os.environ.get("GT_DUMP_DIR")
     buf = []
     total = 0
     idx = 0
+
     def _send(b):
         nonlocal idx
         script = "BEGIN;\n" + ";\n".join(b) + ";\nCOMMIT;"
@@ -31,6 +33,7 @@ def run_batched(stmts, max_bytes=2_000_000):
             with open(f"{dump_dir}/batch_{idx:04d}.sql", "w") as f:
                 f.write(script)
         psql_script(script)
+
     for st in stmts:
         sz = len(st.encode())
         if buf and total + sz > max_bytes:
@@ -41,14 +44,15 @@ def run_batched(stmts, max_bytes=2_000_000):
     if buf:
         _send(buf)
 
+
 NS_URL = uuid.UUID("6ba7b811-9dad-11d1-80b4-00c04fd430c8")
 T0 = time.time()
-CUR = {}   # iso -> currency_id
+CUR = {}  # iso -> currency_id
 PRED = {}  # code -> predicate_id
 
 
 def log(*a):
-    print(f"[{time.time()-T0:7.1f}s]", *a, flush=True)
+    print(f"[{time.time() - T0:7.1f}s]", *a, flush=True)
 
 
 def sha_hex(s):
@@ -76,6 +80,7 @@ def d_parse(raw):
     iso = f"{y}-{mo}-{d}"
     try:
         import datetime as dt
+
         dt.date.fromisoformat(iso)
     except ValueError:
         return None, None
@@ -155,14 +160,26 @@ RAW_PREDICATES = [
     ("company_location_iscurrent", "Location is current", "COMPANY", "TEXT", True),
     ("company_industry", "Industry label", "COMPANY", "TEXT", True),
     ("company_empcategory", "Employee category", "COMPANY", "TEXT", True),
-    ("company_empcategory_firsthiredate", "Employee category first-hire date", "COMPANY", "DATE", True),
+    (
+        "company_empcategory_firsthiredate",
+        "Employee category first-hire date",
+        "COMPANY",
+        "DATE",
+        True,
+    ),
     ("company_technologyname", "Technology name", "COMPANY", "TEXT", True),
     ("company_technologytype", "Technology type", "COMPANY", "TEXT", True),
     ("company_technology_categories", "Technology categories", "COMPANY", "TEXT", True),
     ("company_investmentround_date", "Investment round date", "COMPANY", "DATE", True),
     ("company_investmentround_amount", "Investment round amount", "COMPANY", "NUMERIC", True),
     ("company_investmentround_currency", "Investment round currency", "COMPANY", "TEXT", True),
-    ("company_investmentround_investor", "Investment round investor (unresolved)", "COMPANY", "TEXT", True),
+    (
+        "company_investmentround_investor",
+        "Investment round investor (unresolved)",
+        "COMPANY",
+        "TEXT",
+        True,
+    ),
     ("company_employees_exact", "Employee count (exact)", "COMPANY", "NUMERIC", False),
     ("company_revenue_range", "Revenue range label", "COMPANY", "TEXT", False),
     ("company_companytype", "Company type (zi)", "COMPANY", "TEXT", False),
@@ -178,17 +195,62 @@ RAW_PREDICATES = [
 
 UNMAPPED = [
     # (origin, table, field, reason)
-    ("diffbot", "company", "descriptors", "column exists in source but guide §0.1 does not list it; no canonical/raw predicate defined — reported, not loaded"),
-    ("diffbot", "company", "created_at/_version", "source bookkeeping columns — provenance is carried by evidence locator instead"),
-    ("diffbot", "location", "(all)", "no kg.location table in ground_truth (§0.3); mapped to company_location_* raw facts instead"),
+    (
+        "diffbot",
+        "company",
+        "descriptors",
+        "column exists in source but guide §0.1 does not list it; no canonical/raw predicate defined — reported, not loaded",
+    ),
+    (
+        "diffbot",
+        "company",
+        "created_at/_version",
+        "source bookkeeping columns — provenance is carried by evidence locator instead",
+    ),
+    (
+        "diffbot",
+        "location",
+        "(all)",
+        "no kg.location table in ground_truth (§0.3); mapped to company_location_* raw facts instead",
+    ),
     ("zoominfo", "Location", "(all)", "same: raw company_location_* facts"),
-    ("diffbot", "companyindustry", "entity_taxonomy_membership", "kg taxonomy id 1 (Industry) has 0 seeded terms (§2.0 vocab intact) — industry names stored as company_industry TEXT facts; membership rows would need new taxonomy terms = vocab change (forbidden §2.0)"),
+    (
+        "diffbot",
+        "companyindustry",
+        "entity_taxonomy_membership",
+        "kg taxonomy id 1 (Industry) has 0 seeded terms (§2.0 vocab intact) — industry names stored as company_industry TEXT facts; membership rows would need new taxonomy terms = vocab change (forbidden §2.0)",
+    ),
     ("zoominfo", "CompanyIndustry", "entity_taxonomy_membership", "same as above"),
-    ("diffbot", "companyrelation", "company_company_relationship", "100% of relatedcompanyid values are dangling (0/6174 resolve in diffbot.company) — recorded as unresolved-link evidence per §4; NO company-company relationship rows exist"),
-    ("diffbot", "companyinvestor", "INVESTS_IN relationship", "investorcompanyid 100% dangling (0/1260 resolve) — investor name kept as company_investmentround_investor fact + unresolved-link evidence"),
-    ("diffbot", "company", "ispublic -> company.status CODE 'public'", "Company Status taxonomy (4) has no PUBLIC term (§2.0 vocab fixed) — status emitted as taxonomy membership term 5 PRIVATE when False (§7) + raw company_ispublic BOOLEAN always"),
-    ("diffbot", "location", "country -> company.headquarters_country CODE", "no country taxonomy — §7 composite-CODE path impossible; raw company_location_country TEXT used (§7 alt path)"),
-    ("zoominfo", "Experience", "personHashtags", "no mapping defined in §7; would need a new predicate not covered by §7 — reported unmapped"),
+    (
+        "diffbot",
+        "companyrelation",
+        "company_company_relationship",
+        "100% of relatedcompanyid values are dangling (0/6174 resolve in diffbot.company) — recorded as unresolved-link evidence per §4; NO company-company relationship rows exist",
+    ),
+    (
+        "diffbot",
+        "companyinvestor",
+        "INVESTS_IN relationship",
+        "investorcompanyid 100% dangling (0/1260 resolve) — investor name kept as company_investmentround_investor fact + unresolved-link evidence",
+    ),
+    (
+        "diffbot",
+        "company",
+        "ispublic -> company.status CODE 'public'",
+        "Company Status taxonomy (4) has no PUBLIC term (§2.0 vocab fixed) — status emitted as taxonomy membership term 5 PRIVATE when False (§7) + raw company_ispublic BOOLEAN always",
+    ),
+    (
+        "diffbot",
+        "location",
+        "country -> company.headquarters_country CODE",
+        "no country taxonomy — §7 composite-CODE path impossible; raw company_location_country TEXT used (§7 alt path)",
+    ),
+    (
+        "zoominfo",
+        "Experience",
+        "personHashtags",
+        "no mapping defined in §7; would need a new predicate not covered by §7 — reported unmapped",
+    ),
 ]
 
 
@@ -204,25 +266,39 @@ def ensure_vocab():
         stmts.append(
             "INSERT INTO kg.fact_predicate (code, name, subject_entity_type, "
             f"value_kind, is_multi_valued) VALUES ({q(code)},{q(name)},{q(subj)},{q(kind)},"
-            f"{'true' if multi else 'false'}) ON CONFLICT (code) DO NOTHING")
+            f"{'true' if multi else 'false'}) ON CONFLICT (code) DO NOTHING"
+        )
     if stmts:
         psql("BEGIN;\n" + ";\n".join(stmts) + ";\nCOMMIT;")
         PRED = {r[0]: int(r[1]) for r in dpsi("SELECT code, predicate_id FROM kg.fact_predicate")}
-    log(f"fact_predicate rows: {len(PRED)} (canonical 23 + raw {len(PRED)-23})")
+    log(f"fact_predicate rows: {len(PRED)} (canonical 23 + raw {len(PRED) - 23})")
 
 
 # ------------------------------------------------------------ fact helpers
-FACTS = []      # (item_id, subject, pred_code, kind, value, currency, valid_from, valid_to, precision, conf, source_id, ev_key)
+FACTS = []  # (item_id, subject, pred_code, kind, value, currency, valid_from, valid_to, precision, conf, source_id, ev_key)
 FACT_KEYS = set()
-ITEMS = {}      # item_id -> (item_type, source_id, conf, kind_meta)
-EVID = {}       # ev_key -> (source_id, locator, snippet)
-KIE = set()     # (item_id, evidence_id_key, is_primary)
-NAMES = set()   # (entity_id, name, norm, name_type)
+ITEMS = {}  # item_id -> (item_type, source_id, conf, kind_meta)
+EVID = {}  # ev_key -> (source_id, locator, snippet)
+KIE = set()  # (item_id, evidence_id_key, is_primary)
+NAMES = set()  # (entity_id, name, norm, name_type)
 
 
-def add_fact(entity_id, pred, kind, value, *, source_id, ev_key, conf=0.9,
-             currency=None, valid_from=None, valid_to=None, prec=None,
-             dedupe=True, numeric2=None):
+def add_fact(
+    entity_id,
+    pred,
+    kind,
+    value,
+    *,
+    source_id,
+    ev_key,
+    conf=0.9,
+    currency=None,
+    valid_from=None,
+    valid_to=None,
+    prec=None,
+    dedupe=True,
+    numeric2=None,
+):
     """kind: TEXT/NUMERIC/DATE/BOOLEAN/MONEY. value per kind."""
     if value is None or value == "":
         return None
@@ -231,8 +307,22 @@ def add_fact(entity_id, pred, kind, value, *, source_id, ev_key, conf=0.9,
         return key
     FACT_KEYS.add(key)
     item_id = u5("kg_fact:" + key)
-    FACTS.append((item_id, entity_id, pred, kind, value, currency,
-                  valid_from, valid_to, prec, conf, source_id, ev_key))
+    FACTS.append(
+        (
+            item_id,
+            entity_id,
+            pred,
+            kind,
+            value,
+            currency,
+            valid_from,
+            valid_to,
+            prec,
+            conf,
+            source_id,
+            ev_key,
+        )
+    )
     ITEMS[item_id] = ("FACT", source_id, conf)
     KIE.add((item_id, ev_key, True))
     return item_id
@@ -257,32 +347,50 @@ def stage_g():
             VALUES (3, 31, 'manual:merge-judgment', 'analyst: manual merge judgments (this build)')
             ON CONFLICT (source_id) DO NOTHING""")
 
-    clusters = dpsi("""SELECT cluster_key, entity_id::text, canonical_name FROM gt_build.clusters""")
-    members = dpsi("SELECT cluster_key, origin, record_id FROM gt_build.cluster_members ORDER BY 1,2,3")
+    clusters = dpsi(
+        """SELECT cluster_key, entity_id::text, canonical_name FROM gt_build.clusters"""
+    )
+    members = dpsi(
+        "SELECT cluster_key, origin, record_id FROM gt_build.cluster_members ORDER BY 1,2,3"
+    )
     mem_by_cluster = {}
     for ck, org, rid in members:
         mem_by_cluster.setdefault(ck, []).append((org, rid))
     log(f"companies: {len(clusters)} clusters / {len(members)} member records")
 
-    persons = dpsi("SELECT cluster_key, entity_id::text, display_name FROM gt_build.person_clusters")
-    pmembers = dpsi("SELECT cluster_key, origin, record_id FROM gt_build.person_members ORDER BY 1,2,3")
+    persons = dpsi(
+        "SELECT cluster_key, entity_id::text, display_name FROM gt_build.person_clusters"
+    )
+    pmembers = dpsi(
+        "SELECT cluster_key, origin, record_id FROM gt_build.person_members ORDER BY 1,2,3"
+    )
     p_mem = {(org, rid): ck for ck, org, rid in pmembers}
     log(f"persons: {len(persons)}")
 
     # ---------- 1) entity + subtypes (one txn) -----------------------------
     stmts = []
     for ck, eid, cname in clusters:
-        stmts.append(f"INSERT INTO kg.entity (entity_id, entity_type) VALUES ({q(eid)}::uuid,'COMPANY') ON CONFLICT (entity_id) DO NOTHING")
-        stmts.append(f"INSERT INTO kg.organization (organization_id) VALUES ({q(eid)}::uuid) ON CONFLICT DO NOTHING")
-        stmts.append(f"INSERT INTO kg.company (company_id) VALUES ({q(eid)}::uuid) ON CONFLICT DO NOTHING")
+        stmts.append(
+            f"INSERT INTO kg.entity (entity_id, entity_type) VALUES ({q(eid)}::uuid,'COMPANY') ON CONFLICT (entity_id) DO NOTHING"
+        )
+        stmts.append(
+            f"INSERT INTO kg.organization (organization_id) VALUES ({q(eid)}::uuid) ON CONFLICT DO NOTHING"
+        )
+        stmts.append(
+            f"INSERT INTO kg.company (company_id) VALUES ({q(eid)}::uuid) ON CONFLICT DO NOTHING"
+        )
     for i in range(0, len(stmts), 300):
-        psql("BEGIN;\n" + ";\n".join(stmts[i:i + 300]) + ";\nCOMMIT;")
+        psql("BEGIN;\n" + ";\n".join(stmts[i : i + 300]) + ";\nCOMMIT;")
     stmts = []
     for ck, eid, dname in persons:
-        stmts.append(f"INSERT INTO kg.entity (entity_id, entity_type) VALUES ({q(eid)}::uuid,'PERSON') ON CONFLICT (entity_id) DO NOTHING")
-        stmts.append(f"INSERT INTO kg.person (person_id) VALUES ({q(eid)}::uuid) ON CONFLICT DO NOTHING")
+        stmts.append(
+            f"INSERT INTO kg.entity (entity_id, entity_type) VALUES ({q(eid)}::uuid,'PERSON') ON CONFLICT (entity_id) DO NOTHING"
+        )
+        stmts.append(
+            f"INSERT INTO kg.person (person_id) VALUES ({q(eid)}::uuid) ON CONFLICT DO NOTHING"
+        )
     for i in range(0, len(stmts), 300):
-        psql("BEGIN;\n" + ";\n".join(stmts[i:i + 300]) + ";\nCOMMIT;")
+        psql("BEGIN;\n" + ";\n".join(stmts[i : i + 300]) + ";\nCOMMIT;")
     n_e = int(dpsi1("SELECT count(*) FROM kg.entity WHERE deleted_at IS NULL"))
     n_c = int(dpsi1("SELECT count(*) FROM kg.company"))
     n_p = int(dpsi1("SELECT count(*) FROM kg.person"))
@@ -293,12 +401,22 @@ def stage_g():
     # company records
     dbco = dpsi("""SELECT companyid, entityname, fullname, website FROM gt_build.s_db_company""")
     for cid, en, fn, ws in dbco:
-        evidence(f"diffbot.company:{cid}", 1, f"diffbot.company:{cid}",
-                 f"entityname={en!r} fullname={fn!r} website={ws!r}")
-    zico = dpsi("SELECT companyid, name, domain, ticker, emp_range, revenue FROM gt_build.s_zi_company")
+        evidence(
+            f"diffbot.company:{cid}",
+            1,
+            f"diffbot.company:{cid}",
+            f"entityname={en!r} fullname={fn!r} website={ws!r}",
+        )
+    zico = dpsi(
+        "SELECT companyid, name, domain, ticker, emp_range, revenue FROM gt_build.s_zi_company"
+    )
     for cid, nm, dom, tk, er, rv in zico:
-        evidence(f"testzoominfo.Company:{cid}", 2, f"testzoominfo.Company:{cid}",
-                 f"companyName={nm!r} companyDomain={dom!r} ticker={tk!r} employees={er!r} revenue={rv!r}")
+        evidence(
+            f"testzoominfo.Company:{cid}",
+            2,
+            f"testzoominfo.Company:{cid}",
+            f"companyName={nm!r} companyDomain={dom!r} ticker={tk!r} employees={er!r} revenue={rv!r}",
+        )
     # persons
     for pid, nm in dpsi("SELECT personid, name FROM gt_build.s_db_persons"):
         evidence(f"diffbot.person:{pid}", 1, f"diffbot.person:{pid}", f"name={nm!r}")
@@ -306,14 +424,20 @@ def stage_g():
         evidence(f"testzoominfo.Person:{pid}", 2, f"testzoominfo.Person:{pid}", f"name={nm!r}")
 
     # ---------- 3) COMPANY facts per cluster -------------------------------
-    co_by_member = {("diffbot", r[0]): r for r in dpsi("""SELECT companyid, entityname, fullname,
+    co_by_member = {
+        ("diffbot", r[0]): r
+        for r in dpsi("""SELECT companyid, entityname, fullname,
         sourcecategory, description, summary, alldescriptions, types, motto, website, logo,
         foundingdate, totalinvestment, totalinvestmentcurrency, ispublic, isnonprofit,
         isacquired, isdissolved, ceoname, foundername, metadata_confidence, explicit_origins
-        FROM gt_build.s_db_company""")}
-    zi_by_member = {("zoominfo", r[0]): r for r in dpsi("""SELECT companyid, name, description,
+        FROM gt_build.s_db_company""")
+    }
+    zi_by_member = {
+        ("zoominfo", r[0]): r
+        for r in dpsi("""SELECT companyid, name, description,
         domain, website, emp_range, phone, revenue, revenue000s, employees, revenue_range,
-        ticker, ctype FROM gt_build.s_zi_company""")}
+        ticker, ctype FROM gt_build.s_zi_company""")
+    }
 
     cluster_of = {ck: eid for ck, eid, _ in clusters}
 
@@ -353,8 +477,14 @@ def stage_g():
         # legal names -> canonical fact 1
         for m in mems:
             if m in co_by_member and co_by_member[m][2]:
-                add_fact(eid, "company.legal_name", "TEXT", co_by_member[m][2],
-                         source_id=1, ev_key=f"diffbot.company:{m[1]}")
+                add_fact(
+                    eid,
+                    "company.legal_name",
+                    "TEXT",
+                    co_by_member[m][2],
+                    source_id=1,
+                    ev_key=f"diffbot.company:{m[1]}",
+                )
         # description
         desc = company_desc(dbs[0] if dbs else None, zis[0] if zis else None)
         if desc:
@@ -374,18 +504,37 @@ def stage_g():
         for r in dbs:
             iso, prec = d_parse(r[11])
             if iso:
-                add_fact(eid, "company.founded_date", "DATE", iso, source_id=1,
-                         ev_key=f"diffbot.company:{r[0]}", prec=prec)
+                add_fact(
+                    eid,
+                    "company.founded_date",
+                    "DATE",
+                    iso,
+                    source_id=1,
+                    ev_key=f"diffbot.company:{r[0]}",
+                    prec=prec,
+                )
         # employee count: zi range → NUMERIC; exact → raw
         for zr in zis:
             ec = emp_range(zr[5])
             if ec is not None:
-                add_fact(eid, "company.employee_count", "NUMERIC", str(ec), source_id=2,
-                         ev_key=f"testzoominfo.Company:{zr[0]}")
+                add_fact(
+                    eid,
+                    "company.employee_count",
+                    "NUMERIC",
+                    str(ec),
+                    source_id=2,
+                    ev_key=f"testzoominfo.Company:{zr[0]}",
+                )
             try:
                 if zr[9] and int(zr[9]) > 0:
-                    add_fact(eid, "company_employees_exact", "NUMERIC", zr[9], source_id=2,
-                             ev_key=f"testzoominfo.Company:{zr[0]}")
+                    add_fact(
+                        eid,
+                        "company_employees_exact",
+                        "NUMERIC",
+                        zr[9],
+                        source_id=2,
+                        ev_key=f"testzoominfo.Company:{zr[0]}",
+                    )
             except ValueError:
                 pass
         # revenue: zi companyRevenue → MONEY (§7 prefer explicit over 000s)
@@ -397,28 +546,69 @@ def stage_g():
                 except ValueError:
                     amt = None
             if amt is not None:
-                add_fact(eid, "company.revenue", "MONEY", f"{amt:.2f}", source_id=2,
-                         ev_key=f"testzoominfo.Company:{zr[0]}", currency="USD")
+                add_fact(
+                    eid,
+                    "company.revenue",
+                    "MONEY",
+                    f"{amt:.2f}",
+                    source_id=2,
+                    ev_key=f"testzoominfo.Company:{zr[0]}",
+                    currency="USD",
+                )
         # ticker
         for zr in zis:
             if zr[11]:
-                add_fact(eid, "company.ticker_symbol", "TEXT", zr[11], source_id=2,
-                         ev_key=f"testzoominfo.Company:{zr[0]}")
+                add_fact(
+                    eid,
+                    "company.ticker_symbol",
+                    "TEXT",
+                    zr[11],
+                    source_id=2,
+                    ev_key=f"testzoominfo.Company:{zr[0]}",
+                )
         # booleans + misc diffbot raw
         for r in dbs:
             ek = f"diffbot.company:{r[0]}"
             cf = conf_or(r[20] if len(r) > 20 else None, 0.9)
-            add_fact(eid, "company_ispublic", "BOOLEAN", bool_txt(r[14]), source_id=1, ev_key=ek, conf=cf)
-            add_fact(eid, "company_isnonprofit", "BOOLEAN", bool_txt(r[15]), source_id=1, ev_key=ek, conf=cf)
-            add_fact(eid, "company_isacquired", "BOOLEAN", bool_txt(r[16]), source_id=1, ev_key=ek, conf=cf)
-            add_fact(eid, "company_isdissolved", "BOOLEAN", bool_txt(r[17]), source_id=1, ev_key=ek, conf=cf)
+            add_fact(
+                eid, "company_ispublic", "BOOLEAN", bool_txt(r[14]), source_id=1, ev_key=ek, conf=cf
+            )
+            add_fact(
+                eid,
+                "company_isnonprofit",
+                "BOOLEAN",
+                bool_txt(r[15]),
+                source_id=1,
+                ev_key=ek,
+                conf=cf,
+            )
+            add_fact(
+                eid,
+                "company_isacquired",
+                "BOOLEAN",
+                bool_txt(r[16]),
+                source_id=1,
+                ev_key=ek,
+                conf=cf,
+            )
+            add_fact(
+                eid,
+                "company_isdissolved",
+                "BOOLEAN",
+                bool_txt(r[17]),
+                source_id=1,
+                ev_key=ek,
+                conf=cf,
+            )
             add_fact(eid, "company_sourcecategory", "TEXT", r[3], source_id=1, ev_key=ek)
             add_fact(eid, "company_types", "TEXT", r[7], source_id=1, ev_key=ek)
             add_fact(eid, "company_motto", "TEXT", r[8], source_id=1, ev_key=ek)
             add_fact(eid, "company_logo", "TEXT", r[10], source_id=1, ev_key=ek)
             if r[12] and r[12] != "0":
                 add_fact(eid, "company_totalinvestment", "NUMERIC", r[12], source_id=1, ev_key=ek)
-                add_fact(eid, "company_totalinvestment_currency", "TEXT", r[13], source_id=1, ev_key=ek)
+                add_fact(
+                    eid, "company_totalinvestment_currency", "TEXT", r[13], source_id=1, ev_key=ek
+                )
             add_fact(eid, "company_ceoname", "TEXT", r[18], source_id=1, ev_key=ek)
             add_fact(eid, "company_foundername", "TEXT", r[19], source_id=1, ev_key=ek)
             add_fact(eid, "company_metadata_confidence", "NUMERIC", r[20], source_id=1, ev_key=ek)
@@ -436,16 +626,25 @@ def stage_g():
         for m in mems:
             if m[0] != "diffbot":
                 continue
-            for ctid, cstr, ctype, ccf in dpsi(f"""SELECT contactid, contactstring, contacttype, confidence
+            for (
+                ctid,
+                cstr,
+                ctype,
+                ccf,
+            ) in dpsi(f"""SELECT contactid, contactstring, contacttype, confidence
                     FROM gt_build.s_db_companycontact WHERE companyid={q(m[1])}"""):
                 ek = f"diffbot.companycontact:{ctid}"
-                evidence(ek, 1, f"diffbot.companycontact:{ctid}",
-                         f"contactstring={cstr!r} contacttype={ctype!r}")
-                pred = {"OFFICE": "company_phone",
-                        "PROFESSIONAL": "company_contact_email"}.get(ctype, "company_contact_other")
+                evidence(
+                    ek,
+                    1,
+                    f"diffbot.companycontact:{ctid}",
+                    f"contactstring={cstr!r} contacttype={ctype!r}",
+                )
+                pred = {"OFFICE": "company_phone", "PROFESSIONAL": "company_contact_email"}.get(
+                    ctype, "company_contact_other"
+                )
                 val = cstr if ctype in ("OFFICE", "PROFESSIONAL") else f"{ctype}: {cstr}"
-                add_fact(eid, pred, "TEXT", val, source_id=1, ev_key=ek,
-                         conf=conf_or(ccf, 0.9))
+                add_fact(eid, pred, "TEXT", val, source_id=1, ev_key=ek, conf=conf_or(ccf, 0.9))
         # locations → raw predicates
         for m in mems:
             if m[0] == "diffbot":
@@ -454,12 +653,19 @@ def stage_g():
                         FROM gt_build.s_db_location WHERE companyid={q(m[1])}"""):
                     ek = f"diffbot.location:{row[0]}"
                     evidence(ek, 1, ek, f"city={row[3]!r} country={row[6]!r} isprimary={row[10]!r}")
-                    fields = [("company_location_street", 1), ("company_location_address_full", 2),
-                              ("company_location_city", 3), ("company_location_region", 4),
-                              ("company_location_postalcode", 5), ("company_location_country", 6),
-                              ("company_location_latitude", 7), ("company_location_longitude", 8),
-                              ("company_location_precision", 9), ("company_location_isprimary", 10),
-                              ("company_location_iscurrent", 11)]
+                    fields = [
+                        ("company_location_street", 1),
+                        ("company_location_address_full", 2),
+                        ("company_location_city", 3),
+                        ("company_location_region", 4),
+                        ("company_location_postalcode", 5),
+                        ("company_location_country", 6),
+                        ("company_location_latitude", 7),
+                        ("company_location_longitude", 8),
+                        ("company_location_precision", 9),
+                        ("company_location_isprimary", 10),
+                        ("company_location_iscurrent", 11),
+                    ]
                     for pred, idx in fields:
                         add_fact(eid, pred, "TEXT", row[idx], source_id=1, ev_key=ek)
             else:
@@ -467,30 +673,52 @@ def stage_g():
                         FROM gt_build.s_zi_loc WHERE companyid={q(m[1])}"""):
                     ek = f"testzoominfo.Location:{row[0]}|{m[1]}"
                     evidence(ek, 2, ek, f"City={row[2]!r} CountryCode={row[5]!r}")
-                    for pred, v in (("company_location_street", row[1]),
-                                    ("company_location_city", row[2]),
-                                    ("company_location_region", row[3]),
-                                    ("company_location_postalcode", row[4]),
-                                    ("company_location_country", row[5])):
+                    for pred, v in (
+                        ("company_location_street", row[1]),
+                        ("company_location_city", row[2]),
+                        ("company_location_region", row[3]),
+                        ("company_location_postalcode", row[4]),
+                        ("company_location_country", row[5]),
+                    ):
                         add_fact(eid, pred, "TEXT", v, source_id=2, ev_key=ek)
         # industries (§7: taxonomy id 1 has no terms → TEXT facts)
         for m in mems:
             if m[0] == "diffbot":
-                for cn in [r[0] for r in dpsi(
+                for cn in [
+                    r[0]
+                    for r in dpsi(
                         f"""SELECT DISTINCT ci.name FROM gt_build.s_db_classifications ci
                             WHERE ci.classificationid IN
                               (SELECT classificationid FROM gt_build.s_db_companyindustry
-                               WHERE companyid={q(m[1])}) AND ci.name != '' ORDER BY 1""")]:
-                    add_fact(eid, "company_industry", "TEXT", cn, source_id=1,
-                             ev_key=f"diffbot.company:{m[1]}")
+                               WHERE companyid={q(m[1])}) AND ci.name != '' ORDER BY 1"""
+                    )
+                ]:
+                    add_fact(
+                        eid,
+                        "company_industry",
+                        "TEXT",
+                        cn,
+                        source_id=1,
+                        ev_key=f"diffbot.company:{m[1]}",
+                    )
             else:
-                for iname in [r[0] for r in dpsi(
+                for iname in [
+                    r[0]
+                    for r in dpsi(
                         f"""SELECT DISTINCT i.name FROM gt_build.s_zi_industry i
                             WHERE i.industryid IN
                               (SELECT industryid FROM gt_build.s_zi_ind WHERE companyid={q(m[1])})
-                              AND i.name != '' ORDER BY 1""")]:
-                    add_fact(eid, "company_industry", "TEXT", iname, source_id=2,
-                             ev_key=f"testzoominfo.Company:{m[1]}")
+                              AND i.name != '' ORDER BY 1"""
+                    )
+                ]:
+                    add_fact(
+                        eid,
+                        "company_industry",
+                        "TEXT",
+                        iname,
+                        source_id=2,
+                        ev_key=f"testzoominfo.Company:{m[1]}",
+                    )
         # employee categories
         for m in mems:
             if m[0] != "diffbot":
@@ -502,8 +730,15 @@ def stage_g():
                 add_fact(eid, "company_empcategory", "TEXT", cat, source_id=1, ev_key=ek)
                 iso, prec = d_parse(fhd)
                 if iso:
-                    add_fact(eid, "company_empcategory_firsthiredate", "DATE", iso,
-                             source_id=1, ev_key=ek, prec=prec)
+                    add_fact(
+                        eid,
+                        "company_empcategory_firsthiredate",
+                        "DATE",
+                        iso,
+                        source_id=1,
+                        ev_key=ek,
+                        prec=prec,
+                    )
         # technographics
         for m in mems:
             if m[0] != "diffbot":
@@ -527,41 +762,76 @@ def stage_g():
                 if cid is None:
                     psql(f"""INSERT INTO gt_build.drop_list VALUES
                              ('diffbot','diffbot.companyfinancials',{q(fid)},
-                              {q('currency '+ccy+' not in kg.currency (vocab fixed §2.0) — dropped with reason')})""")
+                              {q("currency " + ccy + " not in kg.currency (vocab fixed §2.0) — dropped with reason")})""")
                     continue
                 rate = 1.08 if ccy == "EUR" else 1.0
-                add_fact(eid, "company.revenue", "MONEY", str(amount), source_id=1,
-                         ev_key=ek, currency=ccy,
-                         valid_from=f"{year}-01-01", valid_to=f"{year}-12-31", prec="YEAR")
+                add_fact(
+                    eid,
+                    "company.revenue",
+                    "MONEY",
+                    str(amount),
+                    source_id=1,
+                    ev_key=ek,
+                    currency=ccy,
+                    valid_from=f"{year}-01-01",
+                    valid_to=f"{year}-12-31",
+                    prec="YEAR",
+                )
         # investment rounds (§7 raw path; investor dangling → fact + unresolved link)
         for m in mems:
             if m[0] != "diffbot":
                 continue
-            for iid, rdate, ramt, rccy, surf in dpsi(f"""SELECT r.investmentid, r.date, r.amount,
+            for iid, rdate, ramt, rccy, surf in dpsi(
+                f"""SELECT r.investmentid, r.date, r.amount,
                     r.currency, coalesce(string_agg(i.surfaceform,' | ' ORDER BY i.surfaceform),'')
                     FROM gt_build.s_db_companyinvestmentround r
                     LEFT JOIN gt_build.s_db_investors i USING (investmentid)
-                    WHERE r.companyid={q(m[1])} GROUP BY 1,2,3,4""", sep="\x1f")[:]:
+                    WHERE r.companyid={q(m[1])} GROUP BY 1,2,3,4""",
+                sep="\x1f",
+            )[:]:
                 ek = f"diffbot.companyinvestmentround:{iid}"
-                evidence(ek, 1, ek, f"date={rdate!r} amount={ramt} currency={rccy!r} investor={surf!r}")
+                evidence(
+                    ek, 1, ek, f"date={rdate!r} amount={ramt} currency={rccy!r} investor={surf!r}"
+                )
                 iso, prec = d_parse(rdate)
-                add_fact(eid, "company_investmentround_date", "DATE", iso or "",
-                         source_id=1, ev_key=ek, prec=prec)
+                add_fact(
+                    eid,
+                    "company_investmentround_date",
+                    "DATE",
+                    iso or "",
+                    source_id=1,
+                    ev_key=ek,
+                    prec=prec,
+                )
                 if ramt and ramt != "0":
-                    add_fact(eid, "company_investmentround_amount", "NUMERIC", ramt,
-                             source_id=1, ev_key=ek)
-                add_fact(eid, "company_investmentround_currency", "TEXT", rccy,
-                         source_id=1, ev_key=ek)
+                    add_fact(
+                        eid,
+                        "company_investmentround_amount",
+                        "NUMERIC",
+                        ramt,
+                        source_id=1,
+                        ev_key=ek,
+                    )
+                add_fact(
+                    eid, "company_investmentround_currency", "TEXT", rccy, source_id=1, ev_key=ek
+                )
                 if surf:
-                    add_fact(eid, "company_investmentround_investor", "TEXT", surf,
-                             source_id=1, ev_key=ek)
-    log(f"company facts staged: {len(FACTS)-n_f0}")
+                    add_fact(
+                        eid,
+                        "company_investmentround_investor",
+                        "TEXT",
+                        surf,
+                        source_id=1,
+                        ev_key=ek,
+                    )
+    log(f"company facts staged: {len(FACTS) - n_f0}")
 
     # ---------- 4) PERSON facts ---------------------------------------------
     n_f1 = len(FACTS)
     peid_of = {c: e for c, e, _ in persons}
     for pid, name, summary, role, types, confidence in dpsi(
-            "SELECT personid, name, summary, role, types, confidence FROM gt_build.s_db_persons"):
+        "SELECT personid, name, summary, role, types, confidence FROM gt_build.s_db_persons"
+    ):
         ck = p_mem[("diffbot", pid)]
         eid = peid_of[ck]
         ek = f"diffbot.person:{pid}"
@@ -572,7 +842,8 @@ def stage_g():
         add_fact(eid, "person_types", "TEXT", types, source_id=1, ev_key=ek, conf=cf)
         add_fact(eid, "person_confidence", "NUMERIC", confidence, source_id=1, ev_key=ek, conf=cf)
     for pid, name, fn, ln, mi in dpsi(
-            "SELECT personid, name, first_name, last_name, middle_initial FROM gt_build.s_zi_person"):
+        "SELECT personid, name, first_name, last_name, middle_initial FROM gt_build.s_zi_person"
+    ):
         ck = p_mem.get(("zoominfo", pid))
         if not ck:
             continue
@@ -590,10 +861,15 @@ def stage_g():
         eid = peid_of[ck]
         ek = f"testzoominfo.PersonContact:{pid}"
         evidence(ek, 2, ek, f"freeMails={mails!r}")
-        for m in sorted({x.strip().strip("[]'\" ") for x in
-                         re.split(r"[,\s]+", mails.replace("\\'", "")) if "@" in x}):
+        for m in sorted(
+            {
+                x.strip().strip("[]'\" ")
+                for x in re.split(r"[,\s]+", mails.replace("\\'", ""))
+                if "@" in x
+            }
+        ):
             add_fact(eid, "person_free_mails", "TEXT", m, source_id=2, ev_key=ek)
-    log(f"person facts staged: {len(FACTS)-n_f1}")
+    log(f"person facts staged: {len(FACTS) - n_f1}")
 
     # ---------- 5) NAMES -----------------------------------------------------
     ent_of_cluster = {c: e for c, e, _cn in clusters}
@@ -621,7 +897,7 @@ def stage_g():
 
     # ---------- 6) RELATIONSHIPS --------------------------------------------
     # person_company: diffbot experience + zi experience (no cap, §D)
-    rels = []   # (item_id, person_eid, company_eid, rel_type_id, role_title, source, ev_key, conf)
+    rels = []  # (item_id, person_eid, company_eid, rel_type_id, role_title, source, ev_key, conf)
     ROLE2RT = {"CEO": 69, "Founder": 68, "BoardMember": 70}
     co_eid_by_member = {}
     for ck, members_ in mem_by_cluster.items():
@@ -631,7 +907,8 @@ def stage_g():
     p_eid_by_member = {(org, rid): _pe[ck] for ck, org, rid in pmembers}
 
     for cid, pid, pname, role, cf in dpsi(
-            "SELECT companyid, personid, personname, role, confidence FROM gt_build.s_db_companyexperience"):
+        "SELECT companyid, personid, personname, role, confidence FROM gt_build.s_db_companyexperience"
+    ):
         ceid = co_eid_by_member.get(("diffbot", cid))
         peid = p_eid_by_member.get(("diffbot", pid))
         if not ceid or not peid:
@@ -643,9 +920,10 @@ def stage_g():
         rels.append((item, peid, ceid, rt, role, 1, ek, conf_or(cf, 0.9)))
     n_db_rel = len(rels)
     for pid, cid, title, jtitle in dpsi(
-            """SELECT e.personid, e.companyid, e.title, e.jobtitle FROM gt_build.s_zi_exp_raw e
+        """SELECT e.personid, e.companyid, e.title, e.jobtitle FROM gt_build.s_zi_exp_raw e
                WHERE e.personid IN (SELECT personid FROM gt_build.s_zi_person_ids_ok)
-               ORDER BY 1,2"""):
+               ORDER BY 1,2"""
+    ):
         ceid = co_eid_by_member.get(("zoominfo", cid))
         peid = p_eid_by_member.get(("zoominfo", pid))
         if not ceid or not peid:
@@ -655,15 +933,21 @@ def stage_g():
         evidence(ek, 2, ek, f"title={title!r}")
         item = u5(f"kg_rel:pc|{peid}|{ceid}|{rt}|{jtitle or title}")
         rels.append((item, peid, ceid, rt, (jtitle or title), 2, ek, 0.9))
-    log(f"person-company relationships staged: {len(rels)} (diffbot {n_db_rel}, zi {len(rels)-n_db_rel})")
+    log(
+        f"person-company relationships staged: {len(rels)} (diffbot {n_db_rel}, zi {len(rels) - n_db_rel})"
+    )
 
     # company-company: all endpoints dangling (§4) → unresolved-link evidence
     unres = dpsi("""SELECT family, rel_kind, endpoint_id, surfaceform, relationtype
                     FROM gt_build.dangling_endpoints ORDER BY rel_kind, endpoint_id""")
     for fam, kind, ep, surf, rt in unres:
         ek = f"unresolved:{kind}:{ep}"
-        evidence(ek, 1, f"diffbot.companyrelation->{ep}",
-                 f"dangling endpoint id={ep!r} surfaceform={surf!r} relationtype={rt!r} family={fam!r}")
+        evidence(
+            ek,
+            1,
+            f"diffbot.companyrelation->{ep}",
+            f"dangling endpoint id={ep!r} surfaceform={surf!r} relationtype={rt!r} family={fam!r}",
+        )
     log(f"unresolved company-company endpoints as evidence: {len(unres)}")
 
     # ---------- 7) WRITE (FK order §9) ---------------------------------------
@@ -676,10 +960,7 @@ def stage_g():
         if iid in seen:
             continue
         seen.add(iid)
-        if iid in ITEMS:
-            it, sid, cf = ITEMS[iid]
-        else:
-            it, sid, cf = "RELATIONSHIP", None, None
+        it, sid, cf = ITEMS.get(iid, ("RELATIONSHIP", None, None))
         dedup_rows.append([iid, it, sid, cf])
     # relationship items: type RELATIONSHIP, source_id + confidence from rel tuple
     rel_items = {r[0]: (r[5], r[7]) for r in rels}
@@ -695,26 +976,32 @@ def stage_g():
         out.append(row)
     ki_rows = []
     for r in out:
-        ki_rows.append(f"({q(r[0])}::uuid,{q(r[1])},{r[2] if r[2] else 'NULL'},"
-                       f"{r[3] if r[3] is not None else 0.9},{q('manual-ground-truth-build')},{q('1.0')})")
+        ki_rows.append(
+            f"({q(r[0])}::uuid,{q(r[1])},{r[2] if r[2] else 'NULL'},"
+            f"{r[3] if r[3] is not None else 0.9},{q('manual-ground-truth-build')},{q('1.0')})"
+        )
     # multi-row INSERT chunks sized by bytes, appended ON CONFLICT
     CHUNK = 4000
     ins_stmts = []
     for i in range(0, len(ki_rows), CHUNK):
         ins_stmts.append(
             "INSERT INTO kg.knowledge_item (item_id, item_type, source_id, confidence,"
-            " extractor_name, extractor_version) VALUES " +
-            ",".join(ki_rows[i:i + CHUNK]) + " ON CONFLICT (item_id) DO NOTHING")
+            " extractor_name, extractor_version) VALUES "
+            + ",".join(ki_rows[i : i + CHUNK])
+            + " ON CONFLICT (item_id) DO NOTHING"
+        )
     run_batched(ins_stmts, max_bytes=100_000)
     log(f"knowledge_item rows: {len(out)}")
 
     # facts
-    FACT_COLS = ("item_id, subject_entity_id, predicate_id, value_kind, value_text,"
-                 " value_numeric, value_date, value_boolean, currency_id,"
-                 " normalized_amount, normalized_currency_id, exchange_rate,"
-                 " exchange_rate_date, valid_from, valid_to, date_precision")
+    FACT_COLS = (
+        "item_id, subject_entity_id, predicate_id, value_kind, value_text,"
+        " value_numeric, value_date, value_boolean, currency_id,"
+        " normalized_amount, normalized_currency_id, exchange_rate,"
+        " exchange_rate_date, valid_from, valid_to, date_precision"
+    )
     fact_stmts = []
-    for (item_id, entity_id, pred_code, kind, value, cur_iso, vf, vt, prec, cf, sid, evk) in FACTS:
+    for item_id, entity_id, pred_code, kind, value, cur_iso, vf, vt, prec, cf, sid, evk in FACTS:
         pid = PRED[pred_code]
         v_txt = v_num = v_dat = v_bool = cur_c = n_amt = n_cur = rate = rdate = ""
         if kind == "TEXT":
@@ -728,7 +1015,7 @@ def stage_g():
         elif kind == "MONEY":
             c = CUR.get(cur_iso, CUR["USD"])
             rate = 1.08 if cur_iso == "EUR" else 1.0
-            usd = f"{float(value)*rate:.2f}" if cur_iso != "USD" else value
+            usd = f"{float(value) * rate:.2f}" if cur_iso != "USD" else value
             v_num = q(value)
             cur_c, n_amt, n_cur = c, q(usd), CUR["USD"]
             rdate = "'2026-01-01'::date"
@@ -741,39 +1028,46 @@ def stage_g():
             f"{v_txt or 'NULL'}, {v_num or 'NULL'}, {v_dat or 'NULL'}, {v_bool or 'NULL'}, "
             f"{cur_c or 'NULL'}, {n_amt or 'NULL'}, {n_cur or 'NULL'}, "
             f"{rate if rate != '' else 'NULL'}, {rdate or 'NULL'}, "
-            f"{vfc}, {vtc}, {prc}) ON CONFLICT (item_id) DO NOTHING")
+            f"{vfc}, {vtc}, {prc}) ON CONFLICT (item_id) DO NOTHING"
+        )
     run_batched(fact_stmts)
     log(f"knowledge_fact rows: {int(dpsi1('SELECT count(*) FROM kg.knowledge_fact'))}")
 
     # entity_name
     en_stmts = []
-    for (eid, name, norm, ntype) in sorted(NAMES):
+    for eid, name, norm, ntype in sorted(NAMES):
         iid = u5(f"kg_name:{eid}:{name}")
         en_stmts.append(
             "INSERT INTO kg.entity_name (item_id, entity_id, name, normalized_name, language_code,"
             " name_type_term_id) VALUES "
             f"({q(iid)}::uuid,{q(eid)}::uuid,{q(name)},{q(norm)},'en',{ntype}) "
-            "ON CONFLICT (item_id) DO NOTHING")
+            "ON CONFLICT (item_id) DO NOTHING"
+        )
     run_batched(en_stmts)
     log(f"entity_name rows: {int(dpsi1('SELECT count(*) FROM kg.entity_name'))}")
 
     # relationships + graph_edge (forward; reverse only for symmetric types —
     # WORKS_FOR/FOUNDED/LEADS/BOARD_MEMBER are not symmetric ⇒ none)
     rel_stmts, edge_stmts = [], []
-    sym_ids = {int(r[0]) for r in dpsi("SELECT relationship_type_id FROM kg.relationship_type WHERE is_symmetric")}
-    for (item, peid, ceid, rt, role_title, sid, ek, cf) in rels:
+    sym_ids = {
+        int(r[0])
+        for r in dpsi("SELECT relationship_type_id FROM kg.relationship_type WHERE is_symmetric")
+    }
+    for item, peid, ceid, rt, role_title, sid, ek, cf in rels:
         rel_stmts.append(
             "INSERT INTO kg.person_company_relationship (item_id, person_id, company_id,"
             " relationship_type_id, role_title) VALUES "
             f"({q(item)}::uuid,{q(peid)}::uuid,{q(ceid)}::uuid,{rt},{q(role_title)})"
-            " ON CONFLICT (item_id) DO NOTHING")
+            " ON CONFLICT (item_id) DO NOTHING"
+        )
         edge_stmts.append(
             "INSERT INTO kg.graph_edge (edge_id, source_entity_id, target_entity_id,"
             " relationship_type_id, relationship_item_id, confidence, is_reverse_projection)"
             f" SELECT {q(u5('kg_edge:fwd:' + item))}::uuid,{q(peid)}::uuid,{q(ceid)}::uuid,"
             f"{rt},{q(item)}::uuid,{cf},false"
             " WHERE NOT EXISTS (SELECT 1 FROM kg.graph_edge e WHERE e.edge_id ="
-            f" {q(u5('kg_edge:fwd:' + item))}::uuid)")
+            f" {q(u5('kg_edge:fwd:' + item))}::uuid)"
+        )
         if rt in sym_ids:
             edge_stmts.append(
                 "INSERT INTO kg.graph_edge (edge_id, source_entity_id, target_entity_id,"
@@ -781,11 +1075,14 @@ def stage_g():
                 f" SELECT {q(u5('kg_edge:rev:' + item))}::uuid,{q(ceid)}::uuid,{q(peid)}::uuid,"
                 f"{rt},{q(item)}::uuid,{cf},true"
                 " WHERE NOT EXISTS (SELECT 1 FROM kg.graph_edge e WHERE e.edge_id ="
-                f" {q(u5('kg_edge:rev:' + item))}::uuid)")
+                f" {q(u5('kg_edge:rev:' + item))}::uuid)"
+            )
     run_batched(rel_stmts)
     run_batched(edge_stmts)
-    log(f"person_company_relationship: {int(dpsi1('SELECT count(*) FROM kg.person_company_relationship'))}; "
-        f"graph_edge: {int(dpsi1('SELECT count(*) FROM kg.graph_edge'))}")
+    log(
+        f"person_company_relationship: {int(dpsi1('SELECT count(*) FROM kg.person_company_relationship'))}; "
+        f"graph_edge: {int(dpsi1('SELECT count(*) FROM kg.graph_edge'))}"
+    )
 
     # evidence rows (uuid5 deterministic)
     ev_rows = []
@@ -798,26 +1095,32 @@ def stage_g():
     for i in range(0, len(ev_rows), 400):
         ev_stmts.append(
             "INSERT INTO kg.evidence (evidence_id, source_id, evidence_type_term_id,"
-            " text_snippet, locator) VALUES " +
-            ",".join(f"({q(e)}::uuid,{s},35,{q(sn)},{q(lo)})"
-                     for e, s, t, sn, lo in ev_rows[i:i + 400]) +
-            " ON CONFLICT (evidence_id) DO NOTHING")
+            " text_snippet, locator) VALUES "
+            + ",".join(
+                f"({q(e)}::uuid,{s},35,{q(sn)},{q(lo)})" for e, s, t, sn, lo in ev_rows[i : i + 400]
+            )
+            + " ON CONFLICT (evidence_id) DO NOTHING"
+        )
     run_batched(ev_stmts, max_bytes=100_000)
     log(f"evidence rows: {int(dpsi1('SELECT count(*) FROM kg.evidence'))}")
 
     # knowledge_item_evidence
     kie_stmts = []
-    for (item_id, ek, primary) in sorted(KIE):
+    for item_id, ek, primary in sorted(KIE):
         if ek in ev_id:
-            kie_stmts.append("INSERT INTO kg.knowledge_item_evidence (item_id, evidence_id, is_primary)"
-                             f" VALUES ({q(item_id)}::uuid,{q(ev_id[ek])}::uuid,{'true' if primary else 'false'})"
-                             " ON CONFLICT (item_id, evidence_id) DO NOTHING")
+            kie_stmts.append(
+                "INSERT INTO kg.knowledge_item_evidence (item_id, evidence_id, is_primary)"
+                f" VALUES ({q(item_id)}::uuid,{q(ev_id[ek])}::uuid,{'true' if primary else 'false'})"
+                " ON CONFLICT (item_id, evidence_id) DO NOTHING"
+            )
     # link relationship items too
-    for (item, peid, ceid, rt, role, sid, ek, cf) in rels:
+    for item, peid, ceid, rt, role, sid, ek, cf in rels:
         if ek in ev_id:
-            kie_stmts.append("INSERT INTO kg.knowledge_item_evidence (item_id, evidence_id, is_primary)"
-                             f" VALUES ({q(item)}::uuid,{q(ev_id[ek])}::uuid,true)"
-                             " ON CONFLICT (item_id, evidence_id) DO NOTHING")
+            kie_stmts.append(
+                "INSERT INTO kg.knowledge_item_evidence (item_id, evidence_id, is_primary)"
+                f" VALUES ({q(item)}::uuid,{q(ev_id[ek])}::uuid,true)"
+                " ON CONFLICT (item_id, evidence_id) DO NOTHING"
+            )
     # unresolved endpoint evidence: attach to the source company's evidence set via its own item?
     # (no item exists — they are reported in gt_build.unresolved_links instead, §4)
     run_batched(kie_stmts)
@@ -829,7 +1132,7 @@ def stage_g():
     for fam, kind, ep, surf, rt in unres:
         vals.append(f"('diffbot',{q(kind)},{q(ep)},{q(surf)},{q(rt)},{q('family ' + fam)})")
     for i in range(0, len(vals), 500):
-        psql("INSERT INTO gt_build.unresolved_links VALUES " + ",".join(vals[i:i + 500]))
+        psql("INSERT INTO gt_build.unresolved_links VALUES " + ",".join(vals[i : i + 500]))
 
     # ---------- 9) audit + entity_map (§6.5) ---------------------------------
     psql(f"""INSERT INTO kg.merge_engine_entity_map (entity_type, record_id, cluster_id, first_seen_run)
@@ -866,20 +1169,36 @@ def stage_g():
                     jsonb_build_object('note', note), 'auto', NULL
              FROM gt_build.borderline WHERE family='persons'
              ON CONFLICT (run_id, entity_type, record_a, record_b) DO NOTHING""")
-    log(f"entity_map: {int(dpsi1('SELECT count(*) FROM kg.merge_engine_entity_map'))}; "
-        f"merge_audit: {int(dpsi1('SELECT count(*) FROM kg.merge_engine_merge_audit'))}")
+    log(
+        f"entity_map: {int(dpsi1('SELECT count(*) FROM kg.merge_engine_entity_map'))}; "
+        f"merge_audit: {int(dpsi1('SELECT count(*) FROM kg.merge_engine_merge_audit'))}"
+    )
 
     # ---------- 10) ledger landed counts (companies: distinct member records landed)
-    for org, tbl in ((("diffbot", "diffbot.company"), ("zoominfo", "testzoominfo.Company"))):
-        n = int(dpsi1(f"SELECT count(*) FROM kg.merge_engine_entity_map WHERE entity_type='company' AND split_part(record_id,':',1)={q(org)}"))
-        psql(f"UPDATE gt_build.extract_ledger SET rows_landed={n} WHERE origin={q(org)} AND source_table={q(tbl)}")
+    for org, tbl in (("diffbot", "diffbot.company"), ("zoominfo", "testzoominfo.Company")):
+        n = int(
+            dpsi1(
+                f"SELECT count(*) FROM kg.merge_engine_entity_map WHERE entity_type='company' AND split_part(record_id,':',1)={q(org)}"
+            )
+        )
+        psql(
+            f"UPDATE gt_build.extract_ledger SET rows_landed={n} WHERE origin={q(org)} AND source_table={q(tbl)}"
+        )
     # persons landed
     n_p = int(dpsi1("SELECT count(*) FROM kg.merge_engine_entity_map WHERE entity_type='person'"))
     n_pc = int(dpsi1("SELECT count(*) FROM kg.person_company_relationship"))
-    psql(f"UPDATE gt_build.extract_ledger SET rows_landed={n_p} WHERE source_table='diffbot.person' AND origin='diffbot'")
-    psql(f"UPDATE gt_build.extract_ledger SET rows_landed=(SELECT count(*) FROM kg.merge_engine_entity_map WHERE entity_type='person' AND split_part(record_id,':',1)='zoominfo') WHERE source_table='testzoominfo.Person'")
-    psql(f"UPDATE gt_build.extract_ledger SET rows_landed={n_pc} WHERE source_table='testzoominfo.Experience'")
-    psql(f"UPDATE gt_build.extract_ledger SET rows_landed=(SELECT count(*) FROM kg.person_company_relationship r JOIN kg.knowledge_item ki USING(item_id) WHERE ki.source_id=1) WHERE source_table='diffbot.companyexperience'")
+    psql(
+        f"UPDATE gt_build.extract_ledger SET rows_landed={n_p} WHERE source_table='diffbot.person' AND origin='diffbot'"
+    )
+    psql(
+        "UPDATE gt_build.extract_ledger SET rows_landed=(SELECT count(*) FROM kg.merge_engine_entity_map WHERE entity_type='person' AND split_part(record_id,':',1)='zoominfo') WHERE source_table='testzoominfo.Person'"
+    )
+    psql(
+        f"UPDATE gt_build.extract_ledger SET rows_landed={n_pc} WHERE source_table='testzoominfo.Experience'"
+    )
+    psql(
+        "UPDATE gt_build.extract_ledger SET rows_landed=(SELECT count(*) FROM kg.person_company_relationship r JOIN kg.knowledge_item ki USING(item_id) WHERE ki.source_id=1) WHERE source_table='diffbot.companyexperience'"
+    )
     # deduplicate: INSERT can create duplicates in the ledger; consolidate here
     psql("""INSERT INTO gt_build.extract_ledger (origin, source_table, rows_extracted, rows_landed)
             SELECT origin, source_table, MIN(rows_extracted),

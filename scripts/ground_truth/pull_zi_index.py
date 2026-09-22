@@ -3,7 +3,11 @@ One-time: pull the full zoominfo Company index (id, name, domain [+ a few seed
 fields for later]) into a local sorted TSV cache, so cross-origin matching and
 extraction don't hammer ClickHouse repeatedly.
 """
-import sys, os, time
+
+import os
+import sys
+import time
+
 sys.path.insert(0, "/home/bayern/Projects/merge-engine/scripts/ground_truth")
 from helpers import ch
 
@@ -20,7 +24,7 @@ SELECT companyID, companyName, companyDomain, companyEmployeeCountRange,
 FROM Company
 ORDER BY companyID
 """
-print("pulling %s ..." % sql.splitlines()[1].strip())
+print(f"pulling {sql.splitlines()[1].strip()} ...")
 with open(CACHE, "w") as f:
     f.write(ch(sql, fmt="TSVWithNames"))
-print("done in %.1fs, size=%d" % (time.time() - t0, os.path.getsize(CACHE)))
+print(f"done in {time.time() - t0:.1f}s, size={os.path.getsize(CACHE)}")

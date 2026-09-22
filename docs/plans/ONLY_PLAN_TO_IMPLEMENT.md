@@ -1483,7 +1483,7 @@ Re-run every pre-commit hook against the full tree (not just staged files) to
 confirm none silently stopped matching after the reorg; confirm
 `detect-private-key` + the `dashscope`/`sk-` pattern hook still fire; re-verify
 the `no-str-format-on-prompts`, `no-sample-databases-commit`,
-`no-blanket-json-ignore`, `no-new-bare-except-pass`,
+`no-blanket-data-ignore`, `no-new-bare-except-pass`,
 `no-import-time-graph-compile` hooks each still block a deliberately-bad commit.
 Re-confirm the `git.n4t.com` server-CI status against ADR 0003 — if still
 unreachable, keep the documented fallback and make the reachable CI (Docker/venv
