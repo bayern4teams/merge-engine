@@ -65,8 +65,13 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=5.0.0",
     "pytest-xdist>=3.5.0",
-    "mypy>=1.8.0",
-    "ruff>=0.4.0",
+    # Pinned to a minor series, not floated. `ruff>=0.4.0` let CI resolve the
+    # newest release (0.16.8) while local envs sat on 0.15.x, so lint rules
+    # differed between them -- exactly the "passes locally, fails in CI"
+    # discrepancy check.py's docstring says must never exist. Both tools gate
+    # `check.py`, so a rule change in either is a CI break with no code change.
+    "mypy~=2.3.1",
+    "ruff~=0.16.8",
     "pre-commit>=3.6.0",
 ]
 # Phase 0 §0.1: every branch's dependency is pre-declared here so no branch
