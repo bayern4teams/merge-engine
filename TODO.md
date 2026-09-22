@@ -710,12 +710,42 @@ the app's own success message.
   out or commit to a branch live in another worktree. Propagating the same file to the other 7
   branches is a small follow-up left for the user (or a future session working in that specific
   worktree) to pick up; the identical file is ready to copy from this branch.
-- [ ] **CI run outcome on GitHub Actions not yet independently confirmed.** No `gh` CLI, GitHub
-  MCP connector, or authenticated browser session was available in this session to check the
-  Actions tab (a private repo returns "Page not found" to an unauthenticated request, which was
-  confirmed live — not a guess). The push to `feat/v3-discovery-er` should have triggered a run;
-  the user needs to check `https://github.com/Reza-Sh83/merge-engine/actions` directly and report
-  back, or authenticate `gh`/a browser session so a future pass can verify it independently.
+- [x] **CI run outcome independently confirmed — and CI made green for the first time
+  (2026-09-22).** `gh` is now authenticated, so the Actions tab was read directly rather than
+  guessed at. Every run in the repo's history had failed. Four independent causes, each read out
+  of a run log, not inferred:
+  1. 47 ruff errors in `scripts/ground_truth/` (8 files, never linted; `src/`+`tests/` clean).
+  2. `check.py eval` hung forever: a blanket `*.csv` in `.gitignore` silently untracked
+     `tests/eval/pagila_staff.csv`, so `load_staff()` fell back to a 2-row stub, the 204 eval
+     records carried 3 distinct names, and Splink's blocking never returned. Same bug class the
+     repo already documents for `*.json`; the hook is now `no-blanket-data-ignore` and covers
+     csv/tsv too.
+  3. CI installed 5 of 8 extras while `mypy-baseline.txt` was generated with all of them (it
+     holds zero `import-not-found` lines) — 6 phantom `great_expectations` errors.
+  4. `check.py test` hung 30 min: `config/config.yaml` (tracked) points `base_url` at
+     `http://10.10.9.45:8000/v1`, a private LAN vLLM box. Measured: 0.0s to connect here,
+     silently dropped from a runner. `LLMClient` passed no `timeout`/`max_retries`, and the
+     `dependency_state` fixture set no `llm_config`, so nodes fell back to the real production
+     config — i.e. the "mocked at the DB/LLM boundary" integration tests had been making live
+     model calls on any machine that could reach that box.
+  *Evidence:* run 35696022433 — `All 10 check(s) passed.`, job 3m32s (lint 0.2s, format 0.2s,
+  arch 1.1s, docs 0.1s, portability 0.0s, types 49.0s, frontend 10.9s, test 67.7s, eval 1.1s,
+  prompts 2.3s), read back from `gh run view --log`, not from a success message. Prior runs
+  35691851365 (test hung, killed at 1800s by the new per-stage cap) and 35694979555 (3
+  `TestFieldMappingNodeIntegration` tests failed at the new `--timeout=120`, naming themselves)
+  are the intermediate evidence that localised the fault.
+- [x] **OpenWiki workflow no longer fails nightly.** It had failed 10+ consecutive scheduled runs
+  because no repository secrets exist at all, so `OPENROUTER_API_KEY` was empty. Absent
+  credentials is now a skip with a `::notice::`, not a failure. *Evidence:* dispatched run
+  35721689877 — green in 5s, annotation `OPENROUTER_API_KEY is not configured - skipping`.
+  Adding the key is still the maintainer's to do; nothing here supplies it.
+- [ ] **Propagate the fixed CI config to the other branches.** `.github/workflows/`,
+  `scripts/check.py`, `pyproject.toml` pins and the eval/LLM fixes currently live on `fix-v3`
+  only. Note `chore/harness-ratchet` (B5) owns `CLAUDE.md`, `scripts/check.py`,
+  `.pre-commit-config.yaml`, `docs/**` and CI config per the §0 ownership table, and is 2 commits
+  ahead with overlapping edits to `CLAUDE.md` and `scripts/check.py` (Windows-portability hunks,
+  disjoint from these) plus a richer `tests/eval/golden.py` fallback that will conflict with the
+  2-row one here — B5's is the better data fix and should win that merge.
 
 ---
 
