@@ -38,6 +38,12 @@ llm:
     - "qwen3.5-plus-2026-02-15"
   api_key: "${LLM_API_KEY}"
   base_url: "http://10.10.9.45:8000/v1"
+  # Seconds per LLM request, and retries on top. base_url above is a
+  # private LAN address: reachable instantly from this network, but
+  # silently dropped anywhere else (CI), where an unbounded client hung
+  # a test for a full 30 minutes. Never leave these unset.
+  timeout: 60
+  max_retries: 2
   temperature: 0.2      # Deterministic outputs preferred
   structured_output: true         # Request JSON-object response_format (disable if endpoint rejects it)
   entity_resolution_enabled: true # LLM judgment for borderline entity pairs (0.70-0.95 band)

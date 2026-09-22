@@ -516,4 +516,26 @@ def dependency_state(discovered_state: dict[str, Any]) -> dict[str, Any]:
         "person": ["company"],
     }
     state["extraction_order"] = ["company", "country", "person"]
+    # Nodes read their LLM settings from state["llm_config"], and passing None
+    # makes them fall back to the REAL config/config.yaml -- whose base_url is
+    # a private LAN vLLM box (http://10.10.9.45:8000/v1). On a developer
+    # machine that connects in 0.0s, so these "integration, mocked at the
+    # DB/LLM boundary" tests have quietly been issuing live model calls. From
+    # CI the same address is silently dropped rather than refused, and
+    # test_map_fields_node_multiple_entities hung for the full 30-minute stage
+    # budget.
+    #
+    # Port 1 is reserved and never listening, so the connection is refused
+    # immediately on every machine and network. map_fields already degrades
+    # gracefully when the LLM is unavailable -- that is exactly what
+    # test_map_fields_node_handles_llm_failure pins -- so the outcome is
+    # deterministic instead of environment-dependent.
+    state["llm_config"] = {
+        "provider": "openai",
+        "model": "gpt-4",
+        "api_key": "test_api_key",
+        "base_url": "http://127.0.0.1:1/v1",
+        "timeout": 1,
+        "max_retries": 0,
+    }
     return state

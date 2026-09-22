@@ -614,3 +614,36 @@ class TestCreateLLMClient:
             client = create_llm_client(config)
             assert isinstance(client, LLMClient)
             assert client.provider == provider
+
+
+def test_llm_client_always_passes_a_timeout_to_the_model() -> None:
+    """An LLM call must be able to fail rather than hang.
+
+    Regression guard: config's base_url is a private LAN address that is
+    reachable from a developer machine but black-holed from CI. With no
+    explicit timeout the OpenAI/httpx stack waits 600s and then retries, which
+    hung one integration test for the whole 30-minute CI stage budget.
+    """
+    from src.llm.client import LLMClient
+
+    client = LLMClient({"provider": "openai", "model": "m", "api_key": "k"})
+    assert client.timeout > 0
+    assert client.max_retries >= 0
+
+    captured: dict[str, object] = {}
+
+    class _Spy:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    import src.llm.client as mod
+
+    original = mod.ChatOpenAI
+    mod.ChatOpenAI = _Spy  # type: ignore[assignment,misc]
+    try:
+        client._get_model()
+    finally:
+        mod.ChatOpenAI = original  # type: ignore[assignment,misc]
+
+    assert captured["timeout"] == client.timeout, captured
+    assert captured["max_retries"] == client.max_retries, captured

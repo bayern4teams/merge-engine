@@ -80,6 +80,16 @@ class LLMClient:
         self.api_key = config.get("api_key", "")
         self.base_url = config.get("base_url")
         self.temperature = config.get("temperature", 0.0)
+        # An LLM call MUST be able to fail. Without an explicit timeout the
+        # OpenAI/httpx stack defaults to 600s and then retries on top of it,
+        # so an endpoint that accepts no connection and returns no reset just
+        # hangs. config's base_url is a private LAN address
+        # (http://10.10.9.45:8000/v1): reachable in 0.0s from a developer
+        # machine, silently black-holed from GitHub Actions, where it hung one
+        # integration test for the entire 30-minute stage budget and produced
+        # a log of 2026 progress dots and nothing else.
+        self.timeout = float(config.get("timeout", 60))
+        self.max_retries = int(config.get("max_retries", 2))
         self.structured_output = config.get("structured_output", True)
         self.session_name = session_name
         # Phase O.5. Caching is on by default because entity resolution asks
@@ -112,11 +122,12 @@ class LLMClient:
         self.model_chain: list[str] = [self.model_name, *(config.get("fallback_models") or [])]
         self._model_chain_idx = 0
         logger.debug(
-            "Initialized LLMClient (provider=%s, model=%s, base_url=%s, temp=%.1f)",
+            "Initialized LLMClient (provider=%s, model=%s, base_url=%s, temp=%.1f, timeout=%.0fs)",
             self.provider,
             self.model_name,
             self.base_url,
             self.temperature,
+            self.timeout,
         )
         if len(self.model_chain) > 1:
             logger.debug(
@@ -151,6 +162,8 @@ class LLMClient:
             "model": self.model_name,
             "api_key": self.api_key,
             "temperature": self.temperature,
+            "timeout": self.timeout,
+            "max_retries": self.max_retries,
         }
         if self.base_url:
             kwargs["base_url"] = self.base_url
