@@ -10,6 +10,12 @@ verbose. A passing check prints one line; a failing one prints the full
 tool output so it feeds straight back into an agent's context without a
 second round-trip.
 
+Every stage runs under a hard 30-minute timeout and announces itself before
+it starts. Both exist because `eval` once hung inside Splink's DuckDB
+blocking and emitted nothing for 61 minutes, until GitHub killed the runner
+with a bare exit 143 -- the log could not even say which check was stuck.
+A hang is now a normal, named, verbose failure like any other.
+
 Subcommands:
     lint        ruff check (src, tests, scripts)
     format      ruff format --check (src, tests, scripts)
@@ -50,18 +56,37 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PYTHON = sys.executable
 FRONTEND_DIR = ROOT / "src" / "ui" / "frontend"
 
+# No stage may run forever. `eval` once blocked inside Splink's DuckDB
+# blocking on a degenerate record set and produced NO output for 61 minutes,
+# until GitHub killed the runner with exit 143 -- a silent hang is the worst
+# possible CI failure mode, because the log says nothing at all. 30 min is
+# far above the slowest real stage (`test`, ~2.5 min locally) and far below
+# the hosted-runner limit, so a tripped timeout always means a genuine hang.
+_STAGE_TIMEOUT_S = 1800
+
 
 def _run(cmd: list[str], cwd: Path = ROOT, label: str = "") -> bool:
-    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    name = label or " ".join(cmd)
+    try:
+        result = subprocess.run(
+            cmd, cwd=cwd, capture_output=True, text=True, timeout=_STAGE_TIMEOUT_S
+        )
+    except subprocess.TimeoutExpired as exc:
+        print(f"\n=== FAILED: {name} (no exit after {_STAGE_TIMEOUT_S}s - hung) ===")
+        for stream in (exc.stdout, exc.stderr):
+            if stream:
+                print(stream.decode() if isinstance(stream, bytes) else stream)
+        return False
     if result.returncode == 0:
         return True
-    print(f"\n=== FAILED: {label or ' '.join(cmd)} ===")
+    print(f"\n=== FAILED: {name} ===")
     if result.stdout:
         print(result.stdout)
     if result.stderr:
@@ -84,12 +109,17 @@ def check_format() -> bool:
 
 
 def check_types() -> bool:
-    result = subprocess.run(
-        [PYTHON, "-m", "mypy", "src"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [PYTHON, "-m", "mypy", "src"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=_STAGE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"\n=== FAILED: mypy (no exit after {_STAGE_TIMEOUT_S}s - hung) ===")
+        return False
     baseline_path = ROOT / "mypy-baseline.txt"
     baseline = set()
     if baseline_path.exists():
@@ -222,7 +252,16 @@ def main(argv: list[str]) -> int:
 
     failed: list[str] = []
     for name in requested:
-        if not _SUBCOMMANDS[name]():
+        # Progress goes to the log BEFORE the stage runs. Without it a hung
+        # stage is indistinguishable from a slow one: CI showed a 61-minute
+        # blank gap and no way to tell which check was stuck.
+        print(f"--> {name}", flush=True)
+        started = time.monotonic()
+        ok = _SUBCOMMANDS[name]()
+        print(
+            f"    {'ok' if ok else 'FAIL'} {name} ({time.monotonic() - started:.1f}s)", flush=True
+        )
+        if not ok:
             failed.append(name)
 
     if failed:

@@ -132,6 +132,90 @@ class BaseConnector(ABC):
         """
         raise NotImplementedError(f"{type(self).__name__} does not support sample_distinct_values")
 
+    # ── Capability matrix (Part B / P-2, PreSplink §12-14) ──────────────
+
+    def capabilities(self) -> dict[str, bool]:
+        """What this backend can and cannot do — a routing input, not a
+        surprise discovered mid-query.
+
+        The most direct example: ClickHouse and MongoDB report
+        ``supports_declared_fk: False`` because neither engine has a
+        first-class foreign-key constraint. Before this existed, code that
+        assumed "no FK found" meant "no relationship exists" would silently
+        under-discover on those two backends — the honest answer is "this
+        backend cannot declare one," which routes P-6's relationship
+        discovery to inference instead of `discover_schema`'s FK list,
+        rather than routing it to "there is nothing here."
+
+        The conservative default here (everything False except the ones
+        that are safe to assume for any SQL-shaped connector) is
+        deliberate: a connector that hasn't overridden this yet reports
+        "I can't do any of this" rather than a guessed True that a caller
+        might act on incorrectly.
+        """
+        return {
+            "supports_declared_pk": False,
+            "supports_declared_fk": False,
+            "supports_declared_unique_constraints": False,
+            "supports_statistics": False,
+            "supports_sampling": True,
+            "supports_explain": False,
+            "supports_cte": False,
+            "supports_temp_tables": False,
+            "supports_window_functions": False,
+            "supports_pushdown": True,
+            "supports_parallel_queries": False,
+            "supports_column_comments": False,
+            "supports_table_comments": False,
+        }
+
+    async def discover_indexes(self, table_name: str) -> list[dict[str, Any]]:
+        """Every index on ``table_name``, however this backend represents
+        an index (a real secondary index, or a sort/order key that plays
+        the same role — e.g. ClickHouse's `ORDER BY`).
+
+        Returns
+        -------
+        list[dict]
+            ``{"name": str, "columns": list[str], "is_unique": bool,
+            "is_primary": bool, "kind": str}`` per index. ``kind`` names the
+            backend-specific concept (``"btree"``, ``"order_by"``, ...) so a
+            caller comparing indexes across backends doesn't mistake one
+            kind of structure for another.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support discover_indexes")
+
+    async def discover_statistics(self, table_name: str) -> dict[str, Any]:
+        """Table-level statistics this backend already tracks (row count
+        estimate, size on disk, last-analyzed time) — read from the
+        backend's own catalog, never computed by scanning the table.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support discover_statistics")
+
+    async def profile_column(
+        self, table_name: str, column: str, mode: str = "SAMPLED", sample_size: int = 10_000
+    ) -> dict[str, Any]:
+        """Null/distinct/min/max and a bounded top-values list for one
+        column, computed database-side.
+
+        ``mode`` is one of ``FULL`` (scan the whole table),
+        ``SAMPLED`` (bounded to ``sample_size`` rows), or ``APPROXIMATE``
+        (a backend-native approximate aggregate, e.g. ClickHouse's
+        ``uniq`` instead of ``uniqExact``) — the caller always knows which
+        one produced a given number (PreSplink §46), because the returned
+        dict echoes ``mode`` back rather than leaving it implicit.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support profile_column")
+
+    async def estimate_query_cost(
+        self, table_name: str, filter: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """This backend's own query planner's cost estimate for reading
+        ``table_name`` under ``filter`` — the preview PreSplink §55/§56
+        require before any expensive discovery run, not a guess.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support estimate_query_cost")
+
     # ── Lifecycle ─────────────────────────────────────────────────────
 
     async def close(self) -> None:

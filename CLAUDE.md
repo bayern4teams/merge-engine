@@ -61,9 +61,12 @@ was obeyed, and the destination schema grew from 14 columns to 43).
   bypassed.
 - **`sample_databases/` must never be committed** (6 GB of dumps nearly were).
   Enforced by `no-sample-databases-commit`.
-- **A bare `*.json` line in `.gitignore` is forbidden** — one silently
-  untracked `src/ui/frontend/package.json`, breaking every fresh clone's
-  `npm install`. Enforced by `no-blanket-json-ignore`.
+- **A bare `*.json`/`*.csv`/`*.tsv` line in `.gitignore` is forbidden** — one
+  silently untracked `src/ui/frontend/package.json`, breaking every fresh
+  clone's `npm install`; `*.csv` then did it again to
+  `tests/eval/pagila_staff.csv`, degrading the eval set to a 2-row stub whose
+  3 distinct names hung `check.py eval` (and every CI run) forever. Enforced
+  by `no-blanket-data-ignore`.
 
 ## Live verification is mandatory, per task
 
@@ -109,3 +112,11 @@ obeys it mechanically, not by memory:
 
 `docs/INDEX.md` for the full map. `TODO.md` for live task status (changes far
 more often than anything in `docs/`, kept separate on purpose).
+
+<!-- OPENWIKI:START -->
+
+## OpenWiki
+
+See [AGENTS.md](AGENTS.md) for OpenWiki agent instructions.
+
+<!-- OPENWIKI:END -->

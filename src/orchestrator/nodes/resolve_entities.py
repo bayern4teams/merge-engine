@@ -15,6 +15,7 @@ from typing import Any
 
 from src.mcp_server.tools.resolve_entities import (
     _PROCESS_POOL_MIN_RECORDS,
+    build_relationship_index,
     resolve_entities_impl,
 )
 from src.orchestrator.spool import (
@@ -36,6 +37,72 @@ logger = logging.getLogger("merge-engine.orchestrator.resolve_entities")
 # this machine's cores during a run. 4 is the same conservative default
 # Part 1.5 B.2's design discussion used for a comparable fan-out.
 _MAX_POOL_WORKERS = 4
+
+
+def _matching_connector_and_config(state: dict[str, Any]) -> tuple[Any | None, dict[str, Any]]:
+    """The destination connector + ``matching.*`` config for B.1.3's pg_trgm
+    trigram blocking, best-effort (never what stops a merge — same ethos as
+    ``_inject_subject_destination_rows``). ``resolve_entities_impl`` itself
+    stays disabled (``trigram_blocking_enabled`` defaults False) unless
+    config.yaml turns it on, so a connector failure here just means that
+    flag has no effect, not a broken run.
+    """
+    matching_config: dict[str, Any] = {}
+    try:
+        from src.utils.config_loader import load_config
+
+        cfg = load_config()
+        matching_config = cfg.matching.model_dump()
+    except Exception as exc:
+        logger.debug("Could not load matching config (%s); trigram blocking stays off.", exc)
+
+    connector = None
+    destination = state.get("destination")
+    if isinstance(destination, dict) and matching_config.get("trigram_blocking_enabled"):
+        try:
+            from src.mcp_server.tools.load_data import _get_destination_connector
+
+            candidate = _get_destination_connector(destination)
+            if hasattr(candidate, "execute_sql"):
+                connector = candidate
+        except Exception as exc:
+            logger.warning(
+                "Could not open destination connector for trigram blocking (%s); "
+                "falling back to the existing blocking pass alone.",
+                exc,
+            )
+    return connector, matching_config
+
+
+def _relationship_index_for_companies(
+    state: dict[str, Any], extracted_data: dict[str, Any]
+) -> dict[str, set[str]]:
+    """B.5.1: the relational-agreement signal's index, built once per run
+    from every extracted table the ``company_relation`` concept matches
+    (pooled the same way target-entity records already are above) — best-
+    effort, never what stops a merge if this data isn't present.
+    """
+    try:
+        relation_records: list[dict[str, Any]] = []
+        for key in list(extracted_data):
+            if concept_matches("company_relation", key):
+                relation_records.extend(entity_rows(state, key))
+        if not relation_records:
+            return {}
+        index = build_relationship_index(relation_records)
+        logger.info(
+            "Relationship index built from %d relation row(s): %d compan(y/ies) indexed.",
+            len(relation_records),
+            len(index),
+        )
+        return index
+    except Exception as exc:
+        logger.warning(
+            "Could not build relationship index (%s); relational-agreement signal off "
+            "for this run.",
+            exc,
+        )
+        return {}
 
 
 def _matching_rules_for(
@@ -171,6 +238,15 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
             )
             process_pool = None
 
+    connector, matching_config = _matching_connector_and_config(state)
+
+    # B.5.1: only worth building when "company" is actually being
+    # resolved this run -- the relational-agreement signal is scoped to
+    # company_relation data, not every entity type.
+    relationship_index: dict[str, set[str]] = {}
+    if any(concept_matches("company", et) for et, _records in prepared):
+        relationship_index = _relationship_index_for_companies(state, extracted_data)
+
     try:
         logger.debug("Dispatching %d entity resolution(s) concurrently", len(prepared))
         results = await asyncio.gather(
@@ -185,6 +261,11 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
                     matching_rules=_matching_rules_for(state.get("matching_rules"), entity_type),
                     subject=(state.get("merge_scope") or {}).get("subject") or None,
                     process_pool=process_pool,
+                    connector=connector,
+                    matching_config=matching_config,
+                    relationship_index=(
+                        relationship_index if concept_matches("company", entity_type) else None
+                    ),
                 )
                 for entity_type, records in prepared
             ),

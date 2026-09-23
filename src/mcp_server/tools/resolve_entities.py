@@ -258,12 +258,16 @@ def _resolve_core(
     blocking_keys: list[str] | None,
     matching_rules: dict[str, Any] | None,
     subject: str | None,
+    extra_candidate_pairs: list[tuple[str, str]] | None = None,
+    relationship_index: dict[str, set[str]] | None = None,
 ) -> dict[str, Any]:
     """The CPU-bound heart of resolve_entities_impl: blocking, model fit, and
     scoring — no LLM calls, no clustering. Synchronous and module-level, and
     every argument and return value is plain data (str/list/dict/tuple), so
     it can run either inline or dispatched to a ProcessPoolExecutor worker
-    (Part 1.5 B.3) with no other change.
+    (Part 1.5 B.3) with no other change. ``relationship_index`` (B.5.2) is
+    likewise plain data (dict of str -> set[str]) — safe across that same
+    process boundary.
 
     ``subject`` (a plain string) crosses the process boundary rather than
     the closure ``_subject_stripped_normalize`` builds from it — closures
@@ -288,7 +292,9 @@ def _resolve_core(
     # rather than as separate child-span bars.
     t_blocking_start = time.monotonic()
     blocking_stats: dict[str, int] = {}
-    candidate_pairs = _generate_candidate_pairs(records, blocking_keys, stats=blocking_stats)
+    candidate_pairs = _generate_candidate_pairs(
+        records, blocking_keys, stats=blocking_stats, extra_pairs=extra_candidate_pairs
+    )
     t_fit_start = time.monotonic()
 
     record_cache: RecordCache = {}
@@ -318,6 +324,7 @@ def _resolve_core(
             normalise,
             record_cache,
             precomputed_vector,
+            relationship_index,
         )
         if auto_exclude < conf < auto_match:
             borderline.append((id1, id2, rec1, rec2, conf))
@@ -378,6 +385,9 @@ async def resolve_entities_impl(
     matching_rules: dict[str, Any] | None = None,
     subject: str | None = None,
     process_pool: Any | None = None,
+    connector: Any | None = None,
+    matching_config: dict[str, Any] | None = None,
+    relationship_index: dict[str, set[str]] | None = None,
 ) -> dict[str, Any]:
     """Cluster matching records for an entity type (hybrid heuristic + LLM).
 
@@ -412,6 +422,28 @@ async def resolve_entities_impl(
         default) always runs inline — every existing caller is unaffected
         unless it opts in. LLM adjudication and clustering always run here,
         in this process, regardless.
+    connector : optional
+        B.1.3. A live destination connector exposing
+        ``execute_sql(sql, params=None)`` (e.g.
+        ``PostgreSQLDestinationConnector``). When given, and
+        ``matching_config`` enables it, pg_trgm trigram candidate pairs are
+        generated and UNIONED with the existing blocking pass. ``None``
+        (the default) skips this entirely — every existing caller is
+        unaffected unless it opts in.
+    matching_config : dict, optional
+        ``{"trigram_blocking_enabled": bool, "trigram_blocking_min_records":
+        int, "trigram_similarity_threshold": float}`` — the ``matching.*``
+        section of ``config.yaml`` (``MatchingConfig``), passed as a plain
+        dict the same way ``llm_config`` already is.
+    relationship_index : dict, optional
+        B.5.2. ``{company_native_id: {related_native_id, ...}}`` from
+        ``build_relationship_index`` — built ONCE per entity-resolution
+        call by the caller (from the ``company_relation`` entity family's
+        own extracted rows) and threaded down as plain data, never
+        rebuilt or cached at module scope. Feeds
+        ``_compute_heuristic_confidence``'s bounded relational-agreement
+        boost. ``None`` (the default) disables the signal entirely —
+        every existing caller is unaffected unless it opts in.
 
     Returns
     -------
@@ -548,6 +580,42 @@ async def resolve_entities_impl(
         )
         return resolve_cache.apply_known_cluster_ids(cached, entity_type, known_cluster_ids)
 
+    # B.1.3: pg_trgm trigram blocking, UNIONED (never replacing) the
+    # existing Python blocking pass below. Off by default; only attempted
+    # with a live destination connector and enough records to be worth a
+    # staging round-trip. A destination read must never be what stops a
+    # merge — caught and logged, same ethos as
+    # _inject_subject_destination_rows in the orchestrator node.
+    extra_candidate_pairs: list[tuple[str, str]] | None = None
+    mcfg = matching_config or {}
+    if (
+        connector is not None
+        and mcfg.get("trigram_blocking_enabled")
+        and len(records) >= int(mcfg.get("trigram_blocking_min_records", 1000))
+    ):
+        name_field = _best_name_field(records[0]) if records else None
+        if name_field:
+            try:
+                extra_candidate_pairs = trigram_candidate_pairs(
+                    connector,
+                    records,
+                    name_field,
+                    threshold=float(mcfg.get("trigram_similarity_threshold", 0.6)),
+                )
+                logger.info(
+                    "Entity '%s': pg_trgm trigram blocking proposed %d pair(s), "
+                    "unioned with the existing blocking pass.",
+                    entity_type,
+                    len(extra_candidate_pairs),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Entity '%s': pg_trgm trigram blocking skipped (%s); "
+                    "falling back to the existing blocking pass alone.",
+                    entity_type,
+                    exc,
+                )
+
     # ── Steps 1+2: Blocking + probabilistic scoring ────────────────────
     # Part 1.5 B.3: this used to be inline here, as 3 separate async spans
     # (blocking / fit_model / scoring) yielding every 1,000 pairs so a
@@ -570,10 +638,26 @@ async def resolve_entities_impl(
         if dispatched_to_pool:
             loop = asyncio.get_running_loop()
             core = await loop.run_in_executor(
-                process_pool, _resolve_core, entity_type, records, blocking_keys, rules, subject
+                process_pool,
+                _resolve_core,
+                entity_type,
+                records,
+                blocking_keys,
+                rules,
+                subject,
+                extra_candidate_pairs,
+                relationship_index,
             )
         else:
-            core = _resolve_core(entity_type, records, blocking_keys, rules, subject)
+            core = _resolve_core(
+                entity_type,
+                records,
+                blocking_keys,
+                rules,
+                subject,
+                extra_candidate_pairs,
+                relationship_index,
+            )
         obs.update(
             output={
                 "blocking_stats": core["blocking_stats"],
@@ -920,10 +1004,64 @@ def _blockable_fields(records: list[dict[str, Any]]) -> list[str]:
     return sorted(found)
 
 
+def trigram_candidate_pairs(
+    connector: Any,
+    records: list[dict[str, Any]],
+    name_field: str,
+    *,
+    staging_table: str = "merge_engine_trigram_staging",
+    threshold: float = 0.6,
+) -> list[tuple[str, str]]:
+    """pg_trgm GIN-indexed candidate-pair blocking (audit §13 #13, B.1.3).
+
+    Stages ``(rec_id, name)`` into a session-scoped TEMP table on the
+    destination, GIN-indexes it with ``gin_trgm_ops``, and returns pairs
+    whose names are similar under pg_trgm's ``%`` operator — an indexed SQL
+    alternative to this module's O(n^2) in-Python blocking pass for large
+    entities. The caller UNIONS the result with the existing blocking pairs
+    (``_generate_candidate_pairs``'s ``extra_pairs``) — never a
+    replacement, so recall on non-Postgres origins can't regress.
+
+    ``connector`` is duck-typed: anything exposing
+    ``execute_sql(sql, params=None) -> list[tuple]`` (e.g.
+    ``PostgreSQLDestinationConnector``) works, so this is unit-testable
+    with a fake connector that just records the SQL it was asked to run. A
+    TEMP table is connection-scoped by Postgres itself — no manual
+    staging-table CREATE/TRUNCATE/DROP lifecycle to get wrong; the session
+    owning ``connector`` cleans it up when it ends.
+    """
+    rows = [(_record_id(r), r.get(name_field)) for r in records]
+    rows = [(rid, name) for rid, name in rows if name]
+    if len(rows) < 2:
+        return []
+
+    connector.execute_sql("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+    connector.execute_sql(
+        f"CREATE TEMP TABLE IF NOT EXISTS {staging_table} (rec_id text PRIMARY KEY, name text)"
+    )
+    connector.execute_sql(f"TRUNCATE {staging_table}")
+    placeholders = ", ".join(["(%s, %s)"] * len(rows))
+    params = tuple(v for pair in rows for v in pair)
+    connector.execute_sql(
+        f"INSERT INTO {staging_table} (rec_id, name) VALUES {placeholders}", params
+    )
+    connector.execute_sql(
+        f"CREATE INDEX IF NOT EXISTS idx_{staging_table}_name_trgm "
+        f"ON {staging_table} USING gin (name gin_trgm_ops)"
+    )
+    connector.execute_sql("SELECT set_limit(%s)", (threshold,))
+    result = connector.execute_sql(
+        f"SELECT a.rec_id AS l, b.rec_id AS r FROM {staging_table} a "
+        f"JOIN {staging_table} b ON a.name % b.name AND a.rec_id < b.rec_id"
+    )
+    return [(str(left), str(right)) for left, right in result]
+
+
 def _generate_candidate_pairs(
     records: list[dict[str, Any]],
     blocking_keys: list[str] | None = None,
     stats: dict[str, int] | None = None,
+    extra_pairs: list[tuple[str, str]] | None = None,
 ) -> list[tuple[str, str, dict, dict]]:
     """Generate candidate record pairs via multi-pass blocking.
 
@@ -934,6 +1072,13 @@ def _generate_candidate_pairs(
     compared. The union of intra-block pairs is scored. Records with no
     usable key land in a shared fallback block so missing data never
     silently excludes a record. Enforces ``_MAX_COMPARISONS``.
+
+    ``extra_pairs`` (B.1.3): additional ``(record_id, record_id)`` pairs
+    from an external source (e.g. ``trigram_candidate_pairs``'s pg_trgm
+    SQL blocking) — UNIONED into the result, deduped against the ordinary
+    blocking pairs, never a replacement. A pair naming an id not present in
+    ``records`` is silently ignored (the caller may have sampled a
+    superset).
 
     ``stats``, when given, is filled with this call's blocking outcome
     (``uncompared_pairs``, ``candidate_pairs``, ``blocks_used``,
@@ -1006,6 +1151,26 @@ def _generate_candidate_pairs(
 
     pairs: list[tuple[str, str, dict, dict]] = []
     seen_pairs: set[tuple[str, str]] = set()
+
+    # B.1.3: seed with the external (e.g. pg_trgm) pairs first, so they
+    # win any tie against the block loop below and are cheap to dedupe
+    # against (block-derived pairs just skip anything already in
+    # seen_pairs).
+    if extra_pairs:
+        records_by_id = {_record_id(r): r for r in records}
+        for raw_id1, raw_id2 in extra_pairs:
+            if raw_id1 == raw_id2 or len(pairs) >= _MAX_COMPARISONS:
+                continue
+            rec1 = records_by_id.get(raw_id1)
+            rec2 = records_by_id.get(raw_id2)
+            if rec1 is None or rec2 is None:
+                continue
+            pair_key = (raw_id1, raw_id2) if raw_id1 < raw_id2 else (raw_id2, raw_id1)
+            if pair_key in seen_pairs:
+                continue
+            seen_pairs.add(pair_key)
+            pairs.append((raw_id1, raw_id2, rec1, rec2))
+
     # Smallest blocks first: they are the most discriminating, so if the
     # budget does run out it is the weakest evidence that gets dropped.
     # The block key breaks size ties, so two runs over the same records
@@ -1298,6 +1463,7 @@ def _score_pair(
     normalise: Any = _normalize,
     record_cache: RecordCache | None = None,
     precomputed_vector: dict[str, tuple[str, str | None]] | None = None,
+    relationship_index: dict[str, set[str]] | None = None,
 ) -> float:
     """Confidence that two records are the same entity.
 
@@ -1313,6 +1479,8 @@ def _score_pair(
     comparison vector as already built by ``_fit_match_model`` — reused here
     instead of rebuilt, since it is a pure function of ``(rec1, rec2,
     normalise)`` and both call sites use the same ``normalise``.
+    ``relationship_index`` (B.5.2) feeds ``_compute_heuristic_confidence``'s
+    bounded relational-agreement boost — see there for the guard.
     """
     fields1 = {k: v for k, v in rec1.items() if not k.startswith("_")}
     fields2 = {k: v for k, v in rec2.items() if not k.startswith("_")}
@@ -1327,7 +1495,9 @@ def _score_pair(
     ):
         return 1.0
 
-    heuristic = _compute_heuristic_confidence(rec1, rec2, extra_unique_ids, record_cache)
+    heuristic = _compute_heuristic_confidence(
+        rec1, rec2, extra_unique_ids, record_cache, relationship_index
+    )
     if conflicting:
         # A disagreeing deterministic field (different domain, different
         # ticker, ...) is proof of non-identity even when the names look
@@ -1782,11 +1952,99 @@ def _subject_stripped_normalize(subject_tokens: frozenset[str]):
     return normalise
 
 
+def build_relationship_index(relation_records: list[dict[str, Any]] | None) -> dict[str, set[str]]:
+    """RELATER-style relational-matching signal, adopted natively rather
+    than from RELATER's own unmaintained code (ADR 0018), B.5.1.
+
+    Maps a company's own origin-native id -> the set of other companies'
+    ids it asserts a relationship with, from the ``company_relation``
+    entity family's own extracted rows — real origin columns
+    ``companyid``/``relatedcompanyid`` (``relationtype``/``confidence``
+    exist on the same rows but aren't needed for the set-membership check
+    below). Symmetric: a relation asserted from A's side also indexes B
+    as related to A, since a candidate pair can be checked in either
+    order. Built once per entity-resolution call and threaded down as a
+    parameter (like ``matching_rules``) — never module state
+    (``scripts/lint_arch.py``'s no-module-mutable-state rule).
+    """
+    index: dict[str, set[str]] = {}
+    for row in relation_records or []:
+        a = row.get("companyid")
+        b = row.get("relatedcompanyid")
+        if a is None or b is None:
+            continue
+        a_key = str(a).strip().lower()
+        b_key = str(b).strip().lower()
+        if not a_key or not b_key:
+            continue
+        index.setdefault(a_key, set()).add(b_key)
+        index.setdefault(b_key, set()).add(a_key)
+    return index
+
+
+def _company_native_id(rec: dict[str, Any]) -> str | None:
+    """A record's own origin-native company id, normalized the same way
+    ``build_relationship_index`` normalizes its keys — the join key
+    between a resolve_entities record and its company_relation rows."""
+    for key, value in rec.items():
+        if key.startswith("_") or value is None:
+            continue
+        if key.lower().replace("_", "") == "companyid":
+            text = str(value).strip().lower()
+            if text:
+                return text
+    return None
+
+
+def _shared_neighbors_beyond_common_parent(
+    relationship_index: dict[str, set[str]],
+    rec1: dict[str, Any],
+    rec2: dict[str, Any],
+) -> set[str]:
+    """The pair's shared asserted-relationship neighbors — guarded
+    against the audit's own §00a2 Airbus-blob failure mode (B.5.2).
+
+    Two subsidiaries of the same parent share exactly ONE neighbor (that
+    parent) purely because of where they sit in an org chart — that is
+    evidence they are SIBLINGS, not evidence they are the SAME entity,
+    and boosting on it is exactly what reproduced the Airbus "Defence and
+    Space" blob. Requires >= 2 distinct shared neighbors — never just the
+    one common parent — before this counts as relational agreement.
+    """
+    id1 = _company_native_id(rec1)
+    id2 = _company_native_id(rec2)
+    if id1 is None or id2 is None:
+        return set()
+    n1 = relationship_index.get(id1, set())
+    n2 = relationship_index.get(id2, set())
+    shared = (n1 & n2) - {id1, id2}
+    if len(shared) < 2:
+        return set()
+    return shared
+
+
+def _relational_agreement(
+    rec1: dict[str, Any],
+    rec2: dict[str, Any],
+    relationship_index: dict[str, set[str]],
+) -> float:
+    """Bounded additive confidence boost from shared asserted
+    relationships (RELATER-style, B.5.2) — never sole justification for
+    an auto-merge (see ``_compute_heuristic_confidence``'s weighted sum,
+    the same discipline ``_has_discriminating_agreement`` already uses:
+    a boost alone can never reach ``_AUTO_MATCH`` on its own)."""
+    shared = _shared_neighbors_beyond_common_parent(relationship_index, rec1, rec2)
+    if not shared:
+        return 0.0
+    return min(0.15 * len(shared), 0.3)
+
+
 def _compute_heuristic_confidence(
     rec1: dict[str, Any],
     rec2: dict[str, Any],
     extra_unique_ids: set[str] | None = None,
     record_cache: RecordCache | None = None,
+    relationship_index: dict[str, set[str]] | None = None,
 ) -> float:
     """Compute a match confidence based on field comparison.
 
@@ -1797,6 +2055,13 @@ def _compute_heuristic_confidence(
 
     ``record_cache`` (Part 1.5 A.1) memoizes the per-record projection —
     see ``_cached_projection``.
+
+    ``relationship_index`` (B.5.2, RELATER-style), when given, adds
+    ``_relational_agreement``'s bounded additive boost — shared asserted
+    relationships to the same third parties, guarded against the
+    common-parent trap (``_shared_neighbors_beyond_common_parent``).
+    Applied AFTER the identity-conflict cap below, so it can never
+    override a contradicting unique identifier.
 
     Returns confidence between 0.0 and 1.0.
     """
@@ -1849,6 +2114,9 @@ def _compute_heuristic_confidence(
 
     field_score = score / total if total > 0 else 0.0
     confidence = max(field_score, _cross_name_similarity(rec1, rec2, record_cache))
+
+    if relationship_index:
+        confidence = min(1.0, confidence + _relational_agreement(rec1, rec2, relationship_index))
 
     # Use original records (not projections) for identity conflict check,
     # since _has_conflicting_identity needs the raw fields.

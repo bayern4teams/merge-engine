@@ -12,11 +12,20 @@ import logging
 from typing import Any
 
 from src.llm import PROMPT_TEMPLATES, LLMClient
+from src.mcp_server.tools.join_graph import _DEFAULT_SAMPLE_SIZE, JoinGraph, build_join_graph
+from src.orchestrator.fingerprint import origins_fingerprint, stage_fingerprint
+from src.orchestrator.profiles import stage_cache_get
 from src.orchestrator.utils.dependency_sort import topological_sort
 from src.orchestrator.utils.entity_aliases import ALIAS_GROUPS, concept_matches
 from src.orchestrator.utils.retry_hints import apply_retry_hint
 
 logger = logging.getLogger("merge-engine.orchestrator.analyze_dependencies")
+
+# Edge confidences the join graph itself stands behind -- "heuristic"
+# (a name-pattern guess build_join_graph couldn't verify against live
+# data, no origin connector, or the check failed) is explicitly NOT here;
+# an entity resting on only heuristic edges still needs the LLM.
+_VERIFIED_CONFIDENCES = ("declared", "verified", "probable")
 
 
 async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
@@ -76,6 +85,92 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
     # Retrieve entity_tables from state (populated by parse_request or pinned profile)
     entity_tables: dict[str, Any] = state.get("entity_tables") or {}
     table_selection_notes = state.get("table_selection_notes") or ""
+    origins = state.get("origins") or []
+
+    # B.3.2 / audit §14.3: FrugalGPT cascade. A fingerprint match means the
+    # exact same source shape + target entities already produced a
+    # dependency tree (this run's retry, or a pinned profile) -- reuse it
+    # verbatim, zero LLM calls, zero join-graph rebuild. Copied from
+    # parse_request.py's own entity_tables fingerprint-skip pattern.
+    dep_tree_fp = stage_fingerprint(
+        "dependency_tree",
+        origins_fp=origins_fingerprint(origins, schemas),
+        target_entities=sorted(target_entities),
+    )
+    cached_bundle = stage_cache_get(state.get("_profile_cache"), "dependency_tree", dep_tree_fp)
+    if cached_bundle and cached_bundle.get("dependency_tree"):
+        cached_tree = cached_bundle["dependency_tree"]
+        logger.info(
+            "Reusing dependency_tree from profile %r (fingerprint match) -- "
+            "zero LLM calls, zero join-graph rebuild.",
+            state.get("profile_name"),
+        )
+        logger.debug("EXIT analyze_dependencies (reused from profile)")
+        return {
+            "dependency_tree": cached_tree,
+            "column_dependencies": cached_bundle.get("column_dependencies", []),
+            "dependency_analysis_warning": "",
+            "dependency_analysis_origin": "CACHED",
+            "extraction_order": topological_sort(cached_tree) or list(target_entities),
+            "entity_tables": entity_tables,
+            "table_selection_notes": table_selection_notes,
+            "interrupt_data": None,
+            "reused_stages": ["dependency_tree"],
+            "_dependency_tree_fingerprint": dep_tree_fp,
+        }
+
+    # Phase A4: a graph already in THIS run's state wins first (guaranteed
+    # fresh, e.g. a retry after this node failed downstream, or plan_scope
+    # ran before this node for some reason) -- same reuse-then-build shape
+    # plan_scope.py's own join_graph handling already uses.
+    join_graph_fp = stage_fingerprint(
+        "join_graph",
+        origins_fp=origins_fingerprint(origins, schemas),
+        sample_size=(state.get("scope_config") or {}).get("join_graph_sample_size")
+        or _DEFAULT_SAMPLE_SIZE,
+    )
+    graph: JoinGraph | None = state.get("join_graph")
+    if graph is None:
+        graph = await build_join_graph(
+            schemas,
+            origins,
+            sample_size=(state.get("scope_config") or {}).get("join_graph_sample_size")
+            or _DEFAULT_SAMPLE_SIZE,
+        )
+
+    tree_from_graph, fully_covered, confirmed_edges = _join_graph_to_dependency_tree(
+        graph, target_entities, entity_tables
+    )
+
+    if fully_covered:
+        # Every target entity's position is backed by a verified edge (or
+        # it's a legitimate root with no candidate relationship at all) --
+        # the audit's own §14.3 bar for skipping the LLM entirely.
+        column_dependencies = _extract_declared_column_dependencies(schemas) + confirmed_edges
+        extraction_order = topological_sort(tree_from_graph) or list(target_entities)
+        logger.info(
+            "Dependency analysis complete (ALGORITHMIC, 0 LLM calls): tree=%s, order=%s",
+            tree_from_graph,
+            extraction_order,
+        )
+        return {
+            "dependency_tree": tree_from_graph,
+            "column_dependencies": column_dependencies,
+            "dependency_analysis_warning": "",
+            "dependency_analysis_origin": "ALGORITHMIC",
+            "extraction_order": extraction_order,
+            "entity_tables": entity_tables,
+            "table_selection_notes": table_selection_notes,
+            "join_graph": graph,
+            "interrupt_data": None,
+            "_dependency_tree_fingerprint": dep_tree_fp,
+            "_join_graph_fingerprint": join_graph_fp,
+        }
+
+    # Partial coverage: fall through to the LLM, same as before this
+    # phase, but its prompt now leads with what the join graph already
+    # verified -- the LLM only has to reason about the rest.
+    confirmed_block = _format_confirmed_lines(confirmed_edges)
 
     # Build programmatic coverage matrix from schemas & entity tables
     matrix_entries = _build_coverage_matrix(schemas, entity_tables, target_entities)
@@ -106,6 +201,11 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
         .replace("{schema_info}", schema_summary)
         .replace("{coverage_matrix}", coverage_matrix_text)
     )
+    if confirmed_block:
+        # Leads the prompt -- the LLM should treat these as settled, not
+        # re-derive or contradict them; only the remaining, unconfirmed
+        # entities are actually its job here.
+        user_prompt = confirmed_block + "\n\n" + user_prompt
     user_prompt = apply_retry_hint(user_prompt, state, "analyze_dependencies")
     logger.debug("LLM prompt prepared (first 300 chars): %s", user_prompt[:300])
 
@@ -206,10 +306,14 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
             "dependency_tree": dependency_tree,
             "column_dependencies": column_dependencies,
             "dependency_analysis_warning": dependency_analysis_warning,
+            "dependency_analysis_origin": "LLM",
             "extraction_order": extraction_order,
             "entity_tables": entity_tables,
             "table_selection_notes": table_selection_notes,
+            "join_graph": graph,
             "interrupt_data": None,
+            "_dependency_tree_fingerprint": dep_tree_fp,
+            "_join_graph_fingerprint": join_graph_fp,
         }
 
     except Exception as exc:
@@ -225,11 +329,15 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
             "dependency_tree": fallback_tree,
             "column_dependencies": _extract_declared_column_dependencies(schemas),
             "dependency_analysis_warning": warning,
+            "dependency_analysis_origin": "FALLBACK",
             "extraction_order": topological_sort(fallback_tree) or list(target_entities),
             "entity_tables": entity_tables,
             "table_selection_notes": table_selection_notes,
+            "join_graph": graph,
             "errors": errors,
             "interrupt_data": None,
+            "_dependency_tree_fingerprint": dep_tree_fp,
+            "_join_graph_fingerprint": join_graph_fp,
         }
     finally:
         logger.debug("EXIT analyze_dependencies")
@@ -413,6 +521,126 @@ def _matrix_to_dependency_tree(
         ):
             dep_tree[child].append(parent)
     return dep_tree
+
+
+def _join_graph_to_dependency_tree(
+    graph: JoinGraph,
+    target_entities: list[str],
+    entity_tables: dict[str, Any],
+) -> tuple[dict[str, list[str]], bool, list[dict[str, Any]]]:
+    """Walk the real join graph to build a dependency tree directly from
+    verified structure (audit §14.3 — FrugalGPT cascade: the graph, not
+    the LLM, is the primary source of truth; the LLM is a fallback for
+    whatever it can't resolve).
+
+    Returns ``(tree, fully_covered, confirmed_edges)``. An entity is
+    counted "covered" — no LLM needed for it — when either at least one
+    ``_VERIFIED_CONFIDENCES`` edge touches one of its tables (real
+    evidence), or it has no candidate edge in the graph at all (a
+    legitimate root, nothing to verify). An entity resting on ONLY
+    heuristic/unverified candidates is explicitly NOT covered — that is
+    exactly the case the LLM fallback exists for.
+    """
+    table_to_entity: dict[tuple[str, str], str] = {}
+    entity_nodes: dict[str, set[tuple[str, str]]] = {e: set() for e in target_entities}
+    for entity, tbls in (entity_tables or {}).items():
+        if entity not in entity_nodes:
+            continue
+        for t in tbls or []:
+            if not isinstance(t, dict):
+                continue
+            table = t.get("table")
+            if not table:
+                continue
+            node = (str(t.get("origin_id") or t.get("origin") or ""), table)
+            table_to_entity[node] = entity
+            entity_nodes[entity].add(node)
+
+    tree: dict[str, list[str]] = {e: [] for e in target_entities}
+    confirmed: list[dict[str, Any]] = []
+    seen_confirmed: set[tuple[str, str, str, str]] = set()
+    covered: set[str] = set()
+
+    for entity in target_entities:
+        nodes = entity_nodes.get(entity) or set()
+        if not nodes:
+            # entity_tables doesn't (or doesn't yet) name this entity's
+            # tables -- there is nothing to walk, and that is NOT the same
+            # thing as "verified no relationship exists". Left out of
+            # `covered` on purpose: an entity with genuinely zero schema
+            # relationships still reaches `covered` below via
+            # `not has_unverified_edge`, once its tables ARE known and its
+            # graph neighbours (correctly) come back empty. This branch
+            # exists only so that case is distinct from "we don't even
+            # know this entity's tables yet" -- always falls through to
+            # the LLM, the safe default.
+            continue
+
+        has_verified_edge = False
+        has_unverified_edge = False
+        deps: set[str] = set()
+        for node in nodes:
+            for edge in graph.neighbors(node):
+                is_child_side = edge.child_origin == node[0] and edge.child_table == node[1]
+                other = (
+                    (edge.parent_origin, edge.parent_table)
+                    if is_child_side
+                    else (edge.child_origin, edge.child_table)
+                )
+                other_entity = table_to_entity.get(other)
+                if other_entity is None or other_entity == entity:
+                    continue
+                if edge.confidence not in _VERIFIED_CONFIDENCES:
+                    has_unverified_edge = True
+                    continue
+                has_verified_edge = True
+                if is_child_side:
+                    deps.add(other_entity)
+                dedupe_key = (
+                    edge.child_table,
+                    edge.child_column,
+                    edge.parent_table,
+                    edge.parent_column,
+                )
+                if dedupe_key not in seen_confirmed:
+                    seen_confirmed.add(dedupe_key)
+                    confirmed.append(
+                        {
+                            "child_origin": edge.child_origin,
+                            "child_table": edge.child_table,
+                            "child_column": edge.child_column,
+                            "parent_origin": edge.parent_origin,
+                            "parent_table": edge.parent_table,
+                            "parent_column": edge.parent_column,
+                            "rationale": edge.rationale,
+                            "confidence": edge.confidence,
+                            "overlap_ratio": edge.overlap_ratio,
+                        }
+                    )
+
+        tree[entity] = sorted(deps)
+        if has_verified_edge or not has_unverified_edge:
+            covered.add(entity)
+
+    fully_covered = covered == set(target_entities)
+    return tree, fully_covered, confirmed
+
+
+def _format_confirmed_lines(confirmed_edges: list[dict[str, Any]]) -> str:
+    """The ``CONFIRMED (verified against live data): ...`` prompt block
+    (audit §14.3) — real join-graph evidence, presented so the LLM treats
+    it as settled rather than re-deriving or contradicting it."""
+    if not confirmed_edges:
+        return ""
+    lines = ["CONFIRMED (verified against live data):"]
+    for e in confirmed_edges:
+        overlap = e.get("overlap_ratio")
+        overlap_text = f" ({overlap:.0%} overlap)" if isinstance(overlap, (int, float)) else ""
+        lines.append(
+            f"- {e['child_table']}.{e['child_column']} -> "
+            f"{e['parent_table']}.{e['parent_column']}{overlap_text}"
+        )
+    return "\n".join(lines)
 
 
 def _extract_declared_column_dependencies(schemas: dict[str, Any]) -> list[dict[str, Any]]:

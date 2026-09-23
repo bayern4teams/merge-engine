@@ -62,6 +62,17 @@ NAME_COLUMN_CANDIDATES = {
     "last_name",
 }
 
+# Name-hint groups for the GX format-expectation pass (ADR 0008, B.1.4).
+# "numeric" exists specifically to catch §7's historic bug: a column named
+# like a number (revenue, amount, price, ...) holding a human-formatted
+# string ("$1 Million") instead of a parseable one.
+_EMAIL_HINT = "email"
+_PHONE_HINT = "phone"
+_NUMERIC_HINTS = ("revenue", "amount", "price", "cost", "total", "count", "quantity")
+_EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+_PHONE_PATTERN = r"^[+()\-.\s\d]{7,}$"
+_NUMERIC_PATTERN = r"^-?\d+(?:\.\d+)?$"
+
 
 def _detect_name_column(columns: list[str]) -> str | None:
     for col in columns:
@@ -71,6 +82,147 @@ def _detect_name_column(columns: list[str]) -> str | None:
         if "name" in col.lower():
             return col
     return None
+
+
+def _date_shaped_columns(columns: list[str]) -> list[str]:
+    """Same name-shape rule check 4 below already uses — factored out so
+    the GX pass reuses it instead of re-deriving it (B.1.4)."""
+    return [
+        c
+        for c in columns
+        if c.lower().endswith("_year")
+        or c.lower().endswith("_date")
+        or c.lower() == "year"
+        or c.lower() == "date"
+    ]
+
+
+def _dateutil_parseable_columns(columns: list[str]) -> list[str]:
+    """The ``*_date``-shaped subset of ``_date_shaped_columns`` — GX's
+    ``ExpectColumnValuesToBeDateutilParseable`` expects a date STRING.
+    ``*_year``/``year`` columns hold a bare integer (e.g. ``founding_year:
+    1916``), which check 4's own ``_check_sane_date_bounds`` already
+    handles correctly; running the dateutil expectation on those too would
+    "fail" every legitimate year int, so they're deliberately excluded
+    here (found live while B.1.4's own tests flagged this file's
+    pre-existing ``founding_year`` fixture)."""
+    return [c for c in columns if c.lower().endswith("_date") or c.lower() == "date"]
+
+
+def _gx_expectation_entry(batch: Any, column: str, expectation: Any, kind: str) -> dict[str, Any]:
+    """Run one GX expectation, shaped exactly like this file's other
+    ``entity_checks`` entries so it folds into the same report."""
+    result = batch.validate(expectation)
+    success = bool(result.success)
+    detail = result.result or {}
+    unexpected = detail.get("unexpected_count", 0)
+    sample_bad = detail.get("partial_unexpected_list") or []
+    return {
+        "check": f"gx_format:{column}:{kind}",
+        "severity": "fail",
+        "success": success,
+        "details": (
+            f"Column '{column}' passed the {kind}-format expectation (ADR 0008)."
+            if success
+            else (
+                f"Column '{column}' has {unexpected} value(s) failing the {kind}-format "
+                f"expectation (ADR 0008), e.g. {sample_bad[:3]!r}."
+            )
+        ),
+    }
+
+
+def _run_format_expectations(
+    sample: list[dict[str, Any]], columns: list[str]
+) -> tuple[list[dict[str, Any]], bool]:
+    """GX 1.x ephemeral format checks (ADR 0008, B.1.4) — additive only,
+    never replacing the hand-written checks above; folded into the same
+    ``entity_checks`` shape by the caller.
+
+    Returns ``(entries, skipped)``. ``skipped`` is True when
+    great_expectations isn't installed, or the pass itself raised — in
+    both cases ``entries`` is ``[]`` and the caller surfaces this as the
+    report's own ``gx_checks_skipped`` field (never a silent gap, per this
+    project's degradation-must-self-report rule).
+    """
+    email_cols = [c for c in columns if _EMAIL_HINT in c.lower()]
+    phone_cols = [c for c in columns if _PHONE_HINT in c.lower()]
+    numeric_cols = [c for c in columns if any(h in c.lower() for h in _NUMERIC_HINTS)]
+    date_cols = _dateutil_parseable_columns(columns)
+    if not (email_cols or phone_cols or numeric_cols or date_cols):
+        return [], False
+
+    try:
+        import great_expectations as gx
+        import great_expectations.expectations as gxe
+        import pandas as pd
+    except Exception as exc:
+        logger.warning(
+            "Great Expectations unavailable (%s); format checks skipped for this pass.", exc
+        )
+        return [], True
+
+    try:
+        df = pd.DataFrame(sample)
+        context = gx.get_context(mode="ephemeral")
+        data_source = context.data_sources.add_pandas(f"dq-{id(sample)}")
+        asset = data_source.add_dataframe_asset(name="sample")
+        batch_def = asset.add_batch_definition_whole_dataframe("batch")
+        batch = batch_def.get_batch(batch_parameters={"dataframe": df})
+
+        entries: list[dict[str, Any]] = []
+        for col in email_cols:
+            if col in df.columns:
+                entries.append(
+                    _gx_expectation_entry(
+                        batch,
+                        col,
+                        gxe.ExpectColumnValuesToMatchRegex(  # type: ignore[attr-defined]
+                            column=col, regex=_EMAIL_PATTERN
+                        ),
+                        "email",
+                    )
+                )
+        for col in phone_cols:
+            if col in df.columns:
+                entries.append(
+                    _gx_expectation_entry(
+                        batch,
+                        col,
+                        gxe.ExpectColumnValuesToMatchRegex(  # type: ignore[attr-defined]
+                            column=col, regex=_PHONE_PATTERN
+                        ),
+                        "phone",
+                    )
+                )
+        for col in numeric_cols:
+            if col in df.columns:
+                entries.append(
+                    _gx_expectation_entry(
+                        batch,
+                        col,
+                        gxe.ExpectColumnValuesToMatchRegex(  # type: ignore[attr-defined]
+                            column=col, regex=_NUMERIC_PATTERN
+                        ),
+                        "numeric",
+                    )
+                )
+        for col in date_cols:
+            if col in df.columns:
+                entries.append(
+                    _gx_expectation_entry(
+                        batch,
+                        col,
+                        gxe.ExpectColumnValuesToBeDateutilParseable(  # type: ignore[attr-defined]
+                            column=col
+                        ),
+                        "date",
+                    )
+                )
+        return entries, False
+    except Exception as exc:
+        logger.warning("Great Expectations format pass failed (%s); checks skipped.", exc)
+        return [], True
 
 
 def _check_sane_date_bounds(val: Any) -> bool:
@@ -132,6 +284,7 @@ def run_data_quality_checks(
     entity_results: dict[str, Any] = {}
     overall_severity = "pass"
     has_failure = False
+    gx_checks_skipped = False
 
     try:
         for entity, rows in sampled_rows.items():
@@ -253,14 +406,7 @@ def run_data_quality_checks(
                         )
 
                 # 4. Sane bounds on *_year or *_date (Warn), within the sample.
-                date_year_cols = [
-                    c
-                    for c in cols
-                    if c.lower().endswith("_year")
-                    or c.lower().endswith("_date")
-                    or c.lower() == "year"
-                    or c.lower() == "date"
-                ]
+                date_year_cols = _date_shaped_columns(cols)
                 for dy_col in date_year_cols:
                     bad_bounds = 0
                     for r in rows:
@@ -292,6 +438,17 @@ def run_data_quality_checks(
                                 "details": f"Date/year column '{dy_col}' in '{entity}' passed sane bound checks.",
                             }
                         )
+
+                # 5. Great Expectations format checks (ADR 0008, B.1.4) —
+                # additive, folded into this same entity_severity mechanism,
+                # never a second report.
+                gx_entries, gx_skipped = _run_format_expectations(rows, cols)
+                if gx_skipped:
+                    gx_checks_skipped = True
+                if gx_entries:
+                    entity_checks.extend(gx_entries)
+                    if any(not e["success"] for e in gx_entries):
+                        entity_severity = "fail"
 
             entity_results[entity] = {
                 "severity": entity_severity,
@@ -328,6 +485,7 @@ def run_data_quality_checks(
             "status": "completed",
             "severity": overall_severity,
             "entities": entity_results,
+            "gx_checks_skipped": gx_checks_skipped,
         },
         "has_quality_failure": has_failure,
     }

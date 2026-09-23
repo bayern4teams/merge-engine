@@ -298,6 +298,278 @@ class PostgreSQLDestinationConnector:
         finally:
             cursor.close()
 
+    def _fk_targets_for_column(self, table_name: str, column: str) -> list[str]:
+        """Every table a single column has an FK constraint against — unlike
+        ``get_foreign_keys`` (one row per column, last-wins), this keeps all
+        of them. Needed because this project's entity/knowledge-graph schema
+        deliberately gives one column two FKs at once (``company.company_id``
+        references both ``organization`` and ``entity`` directly), and
+        collapsing that to a single target would silently skip the
+        intermediate ``organization`` row on the way to satisfying the chain.
+        """
+        conn = self._ensure_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT ccu.table_name
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.key_column_usage kcu
+                    ON tc.constraint_name = kcu.constraint_name
+                    AND tc.table_schema = kcu.table_schema
+                JOIN information_schema.constraint_column_usage ccu
+                    ON tc.constraint_name = ccu.constraint_name
+                    AND tc.table_schema = ccu.table_schema
+                WHERE tc.constraint_type = 'FOREIGN KEY'
+                    AND tc.table_schema = %s
+                    AND tc.table_name = %s
+                    AND kcu.column_name = %s;
+            """,
+                (self._schema, table_name, column),
+            )
+            return [row[0] for row in cursor.fetchall()]
+        finally:
+            cursor.close()
+
+    def get_entity_supertype_chain(self, table_name: str) -> list[str] | None:
+        """Ancestor tables (top-down, ``entity`` first) whose row must exist
+        before ``table_name``'s own row can be inserted — ``[]`` when
+        ``table_name`` IS ``entity``, ``None`` when it isn't part of an
+        entity/knowledge-graph hierarchy at all (every other destination
+        shape in this project is a normal flat table with no such chain, so
+        this is a no-op for them).
+
+        Walks PK -> FK -> referenced table's own PK -> FK -> ... preferring
+        any target other than ``entity`` at each hop (see
+        ``_fk_targets_for_column``) until it reaches ``entity`` or runs out
+        of FKs to follow.
+        """
+        if table_name == "entity":
+            return []
+        chain: list[str] = []
+        current = table_name
+        seen = {table_name}
+        while True:
+            pk = self.get_table_schema(current).get("primary_key")
+            if not pk:
+                return None
+            targets = self._fk_targets_for_column(current, pk)
+            if not targets:
+                return None
+            parent = next((t for t in targets if t != "entity"), None) or (
+                "entity" if "entity" in targets else None
+            )
+            if parent is None:
+                return None
+            if parent == "entity":
+                chain.append("entity")
+                chain.reverse()
+                return chain
+            if parent in seen:
+                return None  # cycle guard — not a valid entity chain
+            seen.add(parent)
+            chain.append(parent)
+            current = parent
+
+    def ensure_entity_chain(self, entity_id: str, leaf_table: str, chain: list[str]) -> None:
+        """Idempotently insert the ``entity`` row (and any intermediate
+        supertype row, e.g. ``organization``) a leaf table's own insert
+        requires — both to satisfy its FK constraints and the
+        ``assert_entity_type()`` trigger. ``chain`` is ``get_entity_supertype_
+        chain(leaf_table)``'s return value (top-down, ``entity`` first).
+        ``entity_type`` is derived from ``leaf_table``'s own name
+        (``company`` -> ``COMPANY``) — this schema's ``entity_type`` CHECK
+        enum matches its subtype table names exactly, by convention.
+        """
+        if not chain:
+            return
+        conn = self._ensure_connection()
+        cursor = conn.cursor()
+        try:
+            entity_type = leaf_table.upper()
+            for table in chain:
+                if table == "entity":
+                    cursor.execute(
+                        f'INSERT INTO "{self._schema}"."entity" (entity_id, entity_type) '
+                        f"VALUES (%s, %s) ON CONFLICT (entity_id) DO NOTHING",
+                        (entity_id, entity_type),
+                    )
+                else:
+                    pk = self.get_table_schema(table).get("primary_key")
+                    if not pk:
+                        continue
+                    cursor.execute(
+                        f'INSERT INTO "{self._schema}"."{table}" ("{pk}") '
+                        f'VALUES (%s) ON CONFLICT ("{pk}") DO NOTHING',
+                        (entity_id,),
+                    )
+        finally:
+            cursor.close()
+
+    def get_or_create_taxonomy_term(
+        self, taxonomy_code: str, term_code: str, term_name: str
+    ) -> int:
+        """Resolve a controlled-vocabulary term, creating its taxonomy and
+        the term itself on first use — this schema's own design intent
+        (``taxonomy.is_extensible`` defaults to true) for values discovered
+        at load time rather than pre-seeded.
+        """
+        conn = self._ensure_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                f'SELECT taxonomy_id FROM "{self._schema}"."taxonomy" WHERE code = %s',
+                (taxonomy_code,),
+            )
+            row = cursor.fetchone()
+            if row:
+                taxonomy_id = row[0]
+            else:
+                cursor.execute(
+                    f'INSERT INTO "{self._schema}"."taxonomy" (code, name) '
+                    f"VALUES (%s, %s) ON CONFLICT (code) DO UPDATE SET code = EXCLUDED.code "
+                    f"RETURNING taxonomy_id",
+                    (taxonomy_code, taxonomy_code.replace("_", " ").title()),
+                )
+                taxonomy_id = cursor.fetchone()[0]
+
+            cursor.execute(
+                f'SELECT taxonomy_term_id FROM "{self._schema}"."taxonomy_term" '
+                f"WHERE taxonomy_id = %s AND code = %s",
+                (taxonomy_id, term_code),
+            )
+            row = cursor.fetchone()
+            if row:
+                return row[0]
+            cursor.execute(
+                f'INSERT INTO "{self._schema}"."taxonomy_term" (taxonomy_id, code, name) '
+                f"VALUES (%s, %s, %s) ON CONFLICT (taxonomy_id, code) DO UPDATE SET "
+                f"code = EXCLUDED.code RETURNING taxonomy_term_id",
+                (taxonomy_id, term_code, term_name),
+            )
+            return cursor.fetchone()[0]
+        finally:
+            cursor.close()
+
+    def get_or_create_source(self, uri: str, title: str) -> int:
+        """Resolve the shared provenance ``source`` row for one load run
+        (one per ``load_data_impl`` call, reused across all its records —
+        not one per fact; that's what ``source`` vs. ``knowledge_item``
+        each represent)."""
+        conn = self._ensure_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                f'SELECT source_id FROM "{self._schema}"."source" WHERE uri = %s', (uri,)
+            )
+            row = cursor.fetchone()
+            if row:
+                return row[0]
+            source_type_id = self.get_or_create_taxonomy_term("source_type", "DATABASE", "Database")
+            cursor.execute(
+                f'INSERT INTO "{self._schema}"."source" (source_type_term_id, uri, title) '
+                f"VALUES (%s, %s, %s) RETURNING source_id",
+                (source_type_id, uri, title),
+            )
+            return cursor.fetchone()[0]
+        finally:
+            cursor.close()
+
+    def get_or_create_fact_predicate(
+        self, code: str, name: str, subject_entity_type: str, value_kind: str
+    ) -> int:
+        """Resolve a fact predicate, creating it on first use. ``code`` is
+        namespaced per entity type by the caller (e.g. ``company_website``)
+        — ``fact_predicate.code`` is globally unique, and the same source
+        field name can legitimately mean different things for different
+        entity types.
+        """
+        conn = self._ensure_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                f'SELECT predicate_id FROM "{self._schema}"."fact_predicate" WHERE code = %s',
+                (code,),
+            )
+            row = cursor.fetchone()
+            if row:
+                return row[0]
+            cursor.execute(
+                f'INSERT INTO "{self._schema}"."fact_predicate" '
+                f"(code, name, subject_entity_type, value_kind) "
+                f"VALUES (%s, %s, %s, %s) ON CONFLICT (code) DO UPDATE SET code = EXCLUDED.code "
+                f"RETURNING predicate_id",
+                (code, name, subject_entity_type, value_kind),
+            )
+            return cursor.fetchone()[0]
+        finally:
+            cursor.close()
+
+    def write_entity_name(
+        self,
+        item_id: str,
+        entity_id: str,
+        name: str,
+        name_type_term_id: int,
+        language_code: str = "en",
+    ) -> None:
+        """Insert one ``entity_name`` row. ``item_id`` is caller-supplied and
+        deterministic (derived from ``entity_id``) so a re-run of the same
+        merge doesn't insert a duplicate name every time."""
+        conn = self._ensure_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                f'INSERT INTO "{self._schema}"."entity_name" '
+                f"(item_id, entity_id, name, normalized_name, language_code, name_type_term_id) "
+                f"VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (item_id) DO NOTHING",
+                (item_id, entity_id, name, name.strip().lower(), language_code, name_type_term_id),
+            )
+        finally:
+            cursor.close()
+
+    def write_knowledge_fact(
+        self,
+        item_id: str,
+        entity_id: str,
+        predicate_id: int,
+        value_kind: str,
+        value: Any,
+        source_id: int,
+    ) -> None:
+        """Insert one ``knowledge_item`` + ``knowledge_fact`` pair.
+        ``item_id`` is caller-supplied and deterministic (derived from
+        ``entity_id`` + the predicate code) so a re-run of the same merge
+        doesn't duplicate historical facts. Only TEXT/NUMERIC/DATE/BOOLEAN
+        are supported.
+        # ponytail: ENTITY/CODE/MONEY value kinds need extra reference data
+        # (a controlled code taxonomy, currency + exchange-rate lookups) this
+        # writer doesn't resolve yet — a value that would need one of those
+        # is coerced to TEXT by the caller instead of raising.
+        """
+        value_column = {
+            "TEXT": "value_text",
+            "NUMERIC": "value_numeric",
+            "DATE": "value_date",
+            "BOOLEAN": "value_boolean",
+        }[value_kind]
+        conn = self._ensure_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                f'INSERT INTO "{self._schema}"."knowledge_item" (item_id, item_type, source_id) '
+                f"VALUES (%s, 'FACT', %s) ON CONFLICT (item_id) DO NOTHING",
+                (item_id, source_id),
+            )
+            cursor.execute(
+                f'INSERT INTO "{self._schema}"."knowledge_fact" '
+                f'(item_id, subject_entity_id, predicate_id, value_kind, "{value_column}") '
+                f"VALUES (%s, %s, %s, %s, %s) ON CONFLICT (item_id) DO NOTHING",
+                (item_id, entity_id, predicate_id, value_kind, value),
+            )
+        finally:
+            cursor.close()
+
     def list_tables(self) -> list[str]:
         """List all tables in the target schema.
 
@@ -363,6 +635,40 @@ class PostgreSQLDestinationConnector:
         finally:
             cursor.close()
 
+    async def sample_distinct_values(
+        self, table_name: str, column: str, limit: int = 500
+    ) -> list[Any]:
+        """Bounded random DISTINCT sample from a destination column
+        (map_fields' Valentine Phase 0, B.3.1).
+
+        Same duck-typed name/shape as the origin connectors'
+        ``sample_distinct_values`` (e.g. ``PostgresConnector``) — join_graph's
+        inclusion-dependency check and map_fields' Phase 0 can treat either
+        kind of connector identically. Declared ``async def`` to match that
+        shape; the work itself is synchronous psycopg2, same as every other
+        method on this class. Best-effort: a missing table/column degrades
+        to ``[]``, never an error — this is an enhancement over the
+        heuristic tiers, not a prerequisite for mapping to work at all.
+        """
+        conn = self._ensure_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                f'SELECT "{column}" FROM ('
+                f'SELECT DISTINCT "{column}" FROM "{self._schema}"."{table_name}" '
+                f'WHERE "{column}" IS NOT NULL LIMIT %s'
+                f") t ORDER BY random() LIMIT %s",
+                (limit * 5, limit),
+            )
+            return [row[0] for row in cursor.fetchall()]
+        except Exception as exc:
+            logger.debug("sample_distinct_values failed for %s.%s: %s", table_name, column, exc)
+            with suppress(Exception):
+                conn.rollback()
+            return []
+        finally:
+            cursor.close()
+
     def column_exists(self, table_name: str, column_name: str) -> bool:
         """Check if a column exists in a table.
 
@@ -391,6 +697,33 @@ class PostgreSQLDestinationConnector:
                 (self._schema, table_name, column_name),
             )
             return cursor.fetchone()[0]
+        finally:
+            cursor.close()
+
+    def execute_sql(self, sql: str, params: tuple[Any, ...] | None = None) -> list[Any]:
+        """Run one ad hoc SQL statement, returning its rows (or ``[]`` for
+        a statement with no result set, e.g. DDL).
+
+        A minimal, generic escape hatch for callers that need destination
+        SQL with no dedicated typed method (e.g. resolve_entities.py's
+        pg_trgm trigram-blocking pass, B.1.3) — every upsert/write still
+        goes through its own typed method above; this is for one-off
+        reads/DDL only. Same cursor/commit/rollback idiom as
+        ``read_entity_rows``/``column_exists`` above.
+        """
+        conn = self._ensure_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(sql, params)
+            if cursor.description is None:
+                self._commit(conn)
+                return []
+            rows: list[Any] = cursor.fetchall()
+            self._commit(conn)
+            return rows
+        except Exception:
+            self._rollback(conn)
+            raise
         finally:
             cursor.close()
 

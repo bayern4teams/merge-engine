@@ -108,7 +108,7 @@ def _build_connector(postgres_config, *conn_list):
 
 @pytest.fixture
 def mock_cursor():
-    """Mock synchronous cursor for Databricks connector."""
+    """Mock synchronous cursor for the destination connector."""
     cursor = MagicMock()
     cursor.fetchall.return_value = []
     cursor.rowcount = 0
@@ -490,6 +490,103 @@ class TestDiscoverSchema:
 
 
 # =============================================================================
+# _resolve_schema_qualified() tests
+# =============================================================================
+
+
+class TestResolveSchemaQualified:
+    """Live regression: a bare table name used to default straight to
+    "public" everywhere (extract/sample_distinct_values/profile_column/
+    estimate_query_cost) -- testdiffbot's entire `diffbot` schema has zero
+    tables in `public`, so every one of those queries failed with
+    "relation public.<table> does not exist". This is now a real lookup
+    against information_schema.tables, cached per connector instance.
+    """
+
+    @pytest.mark.asyncio
+    async def test_already_qualified_name_is_returned_unchanged_no_query(self) -> None:
+        from src.mcp_server.connectors.postgres import PostgresConnector
+
+        connector = PostgresConnector({"connection": {"database": "d"}})
+        engine = MagicMock()
+        engine.connect = MagicMock(side_effect=AssertionError("must not query the DB"))
+        connector._engine = engine
+
+        resolved = await connector._resolve_schema_qualified("diffbot.company")
+
+        assert resolved == "diffbot.company"
+
+    @pytest.mark.asyncio
+    async def test_bare_name_resolves_to_its_real_non_public_schema(self) -> None:
+        from src.mcp_server.connectors.postgres import PostgresConnector
+
+        connector = PostgresConnector({"connection": {"database": "d"}})
+        engine = MagicMock()
+        conn = AsyncMock()
+        result = MagicMock()
+        result.fetchone.return_value = ("diffbot",)
+        conn.execute = AsyncMock(return_value=result)
+        conn.commit = AsyncMock()
+        engine.connect = MagicMock(return_value=make_async_cm(conn))
+        connector._engine = engine
+
+        resolved = await connector._resolve_schema_qualified("company")
+
+        assert resolved == "diffbot.company"
+
+    @pytest.mark.asyncio
+    async def test_bare_name_falls_back_to_public_when_not_found_anywhere(self) -> None:
+        from src.mcp_server.connectors.postgres import PostgresConnector
+
+        connector = PostgresConnector({"connection": {"database": "d"}})
+        engine = MagicMock()
+        conn = AsyncMock()
+        result = MagicMock()
+        result.fetchone.return_value = None
+        conn.execute = AsyncMock(return_value=result)
+        conn.commit = AsyncMock()
+        engine.connect = MagicMock(return_value=make_async_cm(conn))
+        connector._engine = engine
+
+        resolved = await connector._resolve_schema_qualified("widgets")
+
+        assert resolved == "public.widgets"
+
+    @pytest.mark.asyncio
+    async def test_result_is_cached_per_instance_not_requeried(self) -> None:
+        from src.mcp_server.connectors.postgres import PostgresConnector
+
+        connector = PostgresConnector({"connection": {"database": "d"}})
+        engine = MagicMock()
+        conn = AsyncMock()
+        result = MagicMock()
+        result.fetchone.return_value = ("diffbot",)
+        conn.execute = AsyncMock(return_value=result)
+        conn.commit = AsyncMock()
+        engine.connect = MagicMock(return_value=make_async_cm(conn))
+        connector._engine = engine
+
+        first = await connector._resolve_schema_qualified("company")
+        second = await connector._resolve_schema_qualified("company")
+
+        assert first == second == "diffbot.company"
+        conn.execute.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_a_lookup_failure_falls_back_to_public_rather_than_raising(self) -> None:
+        from src.mcp_server.connectors.postgres import PostgresConnector
+
+        connector = PostgresConnector({"connection": {"database": "d"}})
+        engine = MagicMock()
+        engine.connect = MagicMock(side_effect=RuntimeError("connection lost"))
+        connector._engine = engine
+
+        resolved = await connector._resolve_schema_qualified("widgets")
+
+        assert resolved == "public.widgets"
+
+
+# =============================================================================
 # extract() tests
 # =============================================================================
 
@@ -522,6 +619,7 @@ class TestExtract:
         )
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
+        connector._resolve_schema_qualified = AsyncMock(return_value="public.users")
 
         result = await connector.extract("users", ["id", "name"], batch_size=1000)
 
@@ -549,6 +647,7 @@ class TestExtract:
         )
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
+        connector._resolve_schema_qualified = AsyncMock(return_value="public.users")
 
         result = await connector.extract(
             "users",
@@ -576,6 +675,7 @@ class TestExtract:
         )
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
+        connector._resolve_schema_qualified = AsyncMock(return_value="public.users")
 
         result = await connector.extract(
             "users",
@@ -608,6 +708,7 @@ class TestExtract:
         )
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
+        connector._resolve_schema_qualified = AsyncMock(return_value="public.users")
 
         result = await connector.extract(
             "users",
@@ -637,6 +738,7 @@ class TestExtract:
         )
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
+        connector._resolve_schema_qualified = AsyncMock(return_value="public.users")
 
         result = await connector.extract(
             "users",
@@ -665,6 +767,7 @@ class TestExtract:
         )
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
+        connector._resolve_schema_qualified = AsyncMock(return_value="public.users")
 
         result = await connector.extract("users", ["id"])
 
@@ -675,7 +778,10 @@ class TestExtract:
 
     @pytest.mark.asyncio
     async def test_extract_defaults_to_public_schema(self, postgres_config):
-        """extract should prefix table with 'public' when schema-qualified."""
+        """extract should resolve a bare table name through
+        _resolve_schema_qualified (unit-tested separately in
+        TestResolveSchemaQualified for the real fallback-to-public
+        behavior; here just verifying extract() uses its result)."""
         from src.mcp_server.connectors.postgres import PostgresConnector
 
         count_result = make_query_result([], total=5)
@@ -691,6 +797,7 @@ class TestExtract:
         )
         connector = PostgresConnector(postgres_config)
         connector._engine = engine
+        connector._resolve_schema_qualified = AsyncMock(return_value="public.users")
 
         await connector.extract("users", ["id"])
 
@@ -847,6 +954,10 @@ class TestSampleDistinctValues:
         assert params == {"limit": 500}
 
     async def test_bare_table_name_defaults_to_public_schema(self) -> None:
+        """sample_distinct_values resolves a bare table name through
+        _resolve_schema_qualified (unit-tested separately in
+        TestResolveSchemaQualified for the real fallback-to-public
+        behavior; here just verifying this method uses its result)."""
         from src.mcp_server.connectors.postgres import PostgresConnector
 
         connector = PostgresConnector({"connection": {"database": "d"}})
@@ -858,6 +969,7 @@ class TestSampleDistinctValues:
         conn.commit = AsyncMock()
         engine.connect = MagicMock(return_value=make_async_cm(conn))
         connector._engine = engine
+        connector._resolve_schema_qualified = AsyncMock(return_value="public.companies")
 
         await connector.sample_distinct_values("companies", "id")
 
@@ -910,3 +1022,31 @@ class TestSampleDistinctValues:
         params = conn.execute.call_args.args[1]
         assert " IN " in sql_text
         assert params["values"] == ["c1", "c2", "c3"]
+
+    async def test_unfiltered_sample_randomizes_order_via_a_subquery(self) -> None:
+        """Live-caught (BP-B2, 2026-08-19): an unfiltered LIMIT with no
+        ordering returns the planner's arbitrary scan order, not a random
+        sample, biasing inclusion-coverage estimates the same way the
+        identical ClickHouse bug did. PostgreSQL also rejects `SELECT
+        DISTINCT col ... ORDER BY random()` directly ("ORDER BY expressions
+        must appear in select list" -- confirmed against the real
+        global_warehouse destination DB), so the DISTINCT must be computed
+        in a subquery before randomizing its order."""
+        from src.mcp_server.connectors.postgres import PostgresConnector
+
+        connector = PostgresConnector({"connection": {"database": "d"}})
+        engine = MagicMock()
+        conn = AsyncMock()
+        result = MagicMock()
+        result.fetchall.return_value = [("a",), ("b",)]
+        conn.execute = AsyncMock(return_value=result)
+        conn.commit = AsyncMock()
+        engine.connect = MagicMock(return_value=make_async_cm(conn))
+        connector._engine = engine
+
+        await connector.sample_distinct_values("companies", "id", limit=500)
+
+        sql_text = str(conn.execute.call_args.args[0])
+        assert "ORDER BY random()" in sql_text
+        assert sql_text.index("DISTINCT") < sql_text.index("ORDER BY random()")
+        assert sql_text.index("ORDER BY random()") < sql_text.index("LIMIT")

@@ -131,6 +131,36 @@ class ScopeConfig(BaseModel):
     # Distinct values sampled per column when verifying a candidate join
     # edge's inclusion dependency (join_graph.py's build_join_graph).
     join_graph_sample_size: int = 500
+    # "v2" (the original per-(subject-table, dependent-table) find_paths
+    # heuristic) or "v3_discovery" (P-9's policy-capped subgraph traversal,
+    # entity_extraction_v3.traverse_subgraph -- reaches every entity within
+    # max_hops of the subject in one BFS pass, not just the ones an LLM
+    # happened to name). v3_discovery is strictly additive and never
+    # raises out to the caller (plan_scope.py's own try/except falls back
+    # to the v2 floor on any exception), so it's the default: live-
+    # reproduced this session, v2-plus-LLM alone left 11 of 14 Boeing
+    # entity families at zero rows (join paths needing 2+ hops -- company
+    # financials/industry/investors/relations/... -- that the LLM's answer
+    # didn't happen to cover and the one-hop v2 floor doesn't reach).
+    engine: str = "v3_discovery"
+
+
+class MatchingConfig(BaseModel):
+    """Entity-resolution blocking/matching tuning knobs (fix-v3 B.1.3)."""
+
+    # pg_trgm GIN-indexed candidate-pair blocking (audit §13 #13). Off by
+    # default: it UNIONS with, never replaces, resolve_entities.py's
+    # existing Python blocking pass (recall-safe to turn on), but needs
+    # pg_trgm available on the destination, so it stays opt-in rather than
+    # assumed.
+    trigram_blocking_enabled: bool = False
+    # Below this many records the existing O(n^2) Python blocking pass is
+    # already fast enough — not worth a staging round-trip to the
+    # destination for a small entity.
+    trigram_blocking_min_records: int = 1000
+    # pg_trgm's `%` operator threshold (`set_limit`). 0.6 is conservative —
+    # this only *proposes* candidate pairs; scoring is unchanged.
+    trigram_similarity_threshold: float = 0.6
 
 
 class Config(BaseModel):
@@ -141,6 +171,7 @@ class Config(BaseModel):
     retry: RetryConfig = Field(default_factory=RetryConfig)
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
     scope: ScopeConfig = Field(default_factory=ScopeConfig)
+    matching: MatchingConfig = Field(default_factory=MatchingConfig)
 
 
 # ---------------------------------------------------------------------------

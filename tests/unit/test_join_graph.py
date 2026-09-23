@@ -54,6 +54,35 @@ class TestResolvePrimaryKey:
         table = {"name": "weird", "columns": [{"name": "a"}, {"name": "b"}]}
         assert _resolve_primary_key(table) == []
 
+    def test_falls_back_to_the_tables_own_natural_key_column(self) -> None:
+        """Live regression: testdiffbot's `diffbot` schema has zero declared
+        PKs across all 13 tables, so a table like "company" (columns:
+        companyid, entityname, ...) used to resolve to no primary key at
+        all -- making it impossible to ever be a candidate-edge PARENT, and
+        every multi-hop entity behind it (financials, industry, investors,
+        ...) got silently zero rows. A "{table}id" column, following this
+        module's own child-column-matching convention, is now the fallback."""
+        table = {
+            "name": "company",
+            "columns": [{"name": "companyid"}, {"name": "entityname"}],
+        }
+        assert _resolve_primary_key(table) == ["companyid"]
+
+    def test_natural_key_fallback_is_case_insensitive_and_singularises(self) -> None:
+        table = {
+            "name": "Companies",
+            "columns": [{"name": "CompanyID"}, {"name": "name"}],
+        }
+        assert _resolve_primary_key(table) == ["CompanyID"]
+
+    def test_declared_pk_still_wins_over_the_natural_key_fallback(self) -> None:
+        table = {
+            "name": "company",
+            "primary_key": ["surrogate_pk"],
+            "columns": [{"name": "surrogate_pk"}, {"name": "companyid"}],
+        }
+        assert _resolve_primary_key(table) == ["surrogate_pk"]
+
 
 class TestFindCandidateEdges:
     def test_matches_id_style_column_to_real_pk(self) -> None:
@@ -72,6 +101,53 @@ class TestFindCandidateEdges:
         assert matches[0].parent_table == "Company"
         # The parent's ACTUAL pk, never a hard-coded "id".
         assert matches[0].parent_column == "companyID"
+
+    def test_candidate_carries_schema_qualified_names_for_verification(self) -> None:
+        """Live regression: sample_distinct_values is called with only the
+        bare table name (matching discover_schemas' "name" field), and
+        silently defaults to the "public" schema when the name has no dot
+        in it. testdiffbot's real tables all live in "diffbot" -- every
+        verification query failed with "relation public.<table> does not
+        exist", caught by _verify_inclusion's own try/except, and every
+        candidate this correctly found (10 of them) came back unverified.
+        _EdgeCandidate must carry each side's schema-qualified full_name so
+        _verify_inclusion can actually query the right schema."""
+        tables = [
+            {
+                "name": "company",
+                "full_name": "diffbot.company",
+                "primary_key": [],
+                "columns": [{"name": "companyid"}],
+            },
+            {
+                "name": "companyfinancials",
+                "full_name": "diffbot.companyfinancials",
+                "primary_key": [],
+                "columns": [{"name": "companyid"}],
+            },
+        ]
+        candidates = _find_candidate_edges(tables)
+        assert len(candidates) == 1
+        c = candidates[0]
+        assert c.child_full_table == "diffbot.companyfinancials"
+        assert c.parent_full_table == "diffbot.company"
+
+    def test_candidate_full_table_falls_back_to_the_bare_name(self) -> None:
+        """A hand-built table dict with no "full_name" key (or a real
+        origin whose discover_schema never sets one) must not crash --
+        the candidate just uses the bare name, matching today's already-
+        working behaviour."""
+        tables = [
+            {"name": "Company", "primary_key": ["companyID"], "columns": [{"name": "companyID"}]},
+            {
+                "name": "Experience",
+                "primary_key": ["experienceID"],
+                "columns": [{"name": "experienceID"}, {"name": "companyID"}],
+            },
+        ]
+        candidates = _find_candidate_edges(tables)
+        assert candidates[0].child_full_table == "Experience"
+        assert candidates[0].parent_full_table == "Company"
 
     def test_does_not_match_via_bare_startswith(self) -> None:
         """The exact bug this removal fixes: a column that merely starts
@@ -495,7 +571,7 @@ class TestBuildJoinGraph:
 
     async def test_all_nodes_present_even_with_no_edges(self) -> None:
         graph, _ = await self._run_with_overlaps({})
-        assert graph.nodes == {
+        assert set(graph.nodes) == {
             ("origin_2", "Company"),
             ("origin_2", "Experience"),
             ("origin_2", "Person"),
@@ -528,6 +604,31 @@ class TestJoinGraphDataStructure:
     def test_neighbors_of_unknown_node_is_empty(self) -> None:
         graph = JoinGraph()
         assert graph.neighbors(("o1", "Nonexistent")) == []
+
+    def test_survives_langgraph_checkpoint_round_trip(self) -> None:
+        """Regression: a JoinGraph stored in orchestrator state must survive
+        a real LangGraph checkpoint save/load (e.g. across a HITL gate).
+        `nodes` used to be a bare `set[Node]`; LangGraph's msgpack
+        checkpoint serializer decodes a set's tuple elements as lists
+        (unhashable), so `set(...)` reconstruction threw and was silently
+        swallowed to None -- plan_scope.py then crashed on
+        `node not in graph.nodes` with a NoneType. `nodes` is now a dict
+        used as an ordered set, whose tuple *keys* round-trip correctly.
+        """
+        from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+        graph = JoinGraph()
+        graph.add_node(("o1", "Isolated"))  # no edges -- must still survive
+        graph.add_edge(_edge("Experience", "companyID", "Company", "companyID"))
+
+        serializer = JsonPlusSerializer()
+        typ, data = serializer.dumps_typed(graph)
+        restored = serializer.loads_typed((typ, data))
+
+        assert restored.nodes is not None
+        assert set(restored.nodes) == set(graph.nodes)
+        assert ("o1", "Isolated") in restored.nodes
+        assert restored.neighbors(("o1", "Experience"))
 
 
 def _edge(
@@ -835,6 +936,58 @@ class TestBuildJoinGraphHeuristicTier:
         assert len(edges) == 1
         assert edges[0].confidence == "heuristic"
         assert edges[0].overlap_ratio is None
+
+    async def test_verify_inclusion_queries_the_schema_qualified_table(self) -> None:
+        """End-to-end regression for the real Boeing bug: a PK-less,
+        schema-qualified origin (testdiffbot's "diffbot" schema) used to
+        build a join graph with 0 edges -- not because the candidates
+        weren't found, but because sample_distinct_values was called with
+        the bare table name ("company"), silently defaulted to "public",
+        and every verification query failed. Both must now be right: the
+        natural-key PK fallback finds the candidate, AND the connector is
+        called with "diffbot.company" / "diffbot.companyfinancials", not
+        the bare names."""
+        tables = [
+            {
+                "name": "company",
+                "full_name": "diffbot.company",
+                "columns": [{"name": "companyid"}],
+            },
+            {
+                "name": "companyfinancials",
+                "full_name": "diffbot.companyfinancials",
+                "columns": [{"name": "companyid"}],
+            },
+        ]
+        schemas = {"origin_1": {"tables": tables}}
+        calls: list[tuple[str, str]] = []
+
+        async def fake_sample(table_name, column, limit=500, filter_values=None):
+            calls.append((table_name, column))
+            return ["c1"]
+
+        fake_connector = AsyncMock()
+        fake_connector.sample_distinct_values = AsyncMock(side_effect=fake_sample)
+        fake_connector.close = AsyncMock()
+
+        with patch(
+            "src.mcp_server.tools.join_graph.create_connector",
+            return_value=fake_connector,
+        ):
+            graph = await build_join_graph(
+                schemas, [{"id": "origin_1", "type": "postgresql", "connection": {}}]
+            )
+
+        assert ("diffbot.companyfinancials", "companyid") in calls
+        assert ("diffbot.company", "companyid") in calls
+        assert not any(t == "company" for t, _c in calls)  # never the bare, unqualified name
+        edges = [
+            e
+            for e in graph.neighbors(("origin_1", "companyfinancials"))
+            if e.parent_table == "company"
+        ]
+        assert len(edges) == 1
+        assert edges[0].confidence == "verified"
 
 
 def _path_hop(

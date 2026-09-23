@@ -13,9 +13,11 @@ enough record sets that training completes in well under a second.
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
-from src.mcp_server.tools.resolve_entities import _record_id
+from src.mcp_server.tools.resolve_entities import _domain_of, _project_to_canonical, _record_id
 from src.mcp_server.tools.splink_matcher import (
     _HAS_SPLINK,
     resolve_with_splink,
@@ -233,6 +235,89 @@ async def test_engine_builtin_default_is_unaffected() -> None:
 
 
 @pytest.mark.asyncio
+async def test_score_pairs_blocks_on_domain_even_when_names_disagree() -> None:
+    """The blocking-rule union fix (§00b): a pair whose names share no
+    4-character prefix at all — so the loosened name blocking rule alone
+    would never propose it — must still be BLOCKED (proposed for scoring)
+    when the two records share a registrable domain. Before this fix,
+    `name` being present meant no other field's blocking rule was ever
+    added at all (`if not blocking_rules`), so this pair would never even
+    reach the scorer regardless of how strong the domain agreement was.
+    """
+    records = [
+        *_fixture_records(),
+        _company(
+            "origin1",
+            "Company",
+            "11",
+            "Umbrella Aerodyne Holdings",
+            "info@umbrella-test.example",
+            website="https://shared-domain-test.example/about",
+        ),
+        _company(
+            "origin2",
+            "company_profile",
+            "12",
+            "Zenith Sky Ventures",
+            "hi@zenith-test.example",
+            website="www.shared-domain-test.example",
+        ),
+    ]
+    scored = await score_pairs_with_splink("company", records)
+    assert scored is not None
+
+    umbrella_id = _record_id(records[-2])
+    zenith_id = _record_id(records[-1])
+    scores_by_pair = {(a, b) if a < b else (b, a): conf for a, b, conf in scored}
+    key = (umbrella_id, zenith_id) if umbrella_id < zenith_id else (zenith_id, umbrella_id)
+    assert key in scores_by_pair, (
+        "a pair sharing a registrable domain but no 4-char name prefix must "
+        "still be blocked together — the blocking-rule union, not just the "
+        "loosened name rule alone"
+    )
+
+
+@pytest.mark.asyncio
+async def test_score_pairs_blocks_on_shared_name_token_even_with_different_prefix() -> None:
+    """B.6.2: a pair whose names share a real word but neither the first
+    4 characters nor a registrable domain (e.g. word order flipped, or a
+    qualifier inserted at the front) must still be BLOCKED via the new
+    token-overlap rule. Before this change, only a shared 4-char *prefix*
+    or a shared domain could propose a pair — reordered/qualified names
+    that share a real token but no prefix were invisible to blocking no
+    matter how strong the eventual field agreement would be.
+    """
+    records = [
+        *_fixture_records(),
+        _company(
+            "origin1",
+            "Company",
+            "13",
+            "Satellite Systems Boeing",
+            "info@boeing-sat-test-a.example",
+        ),
+        _company(
+            "origin2",
+            "company_profile",
+            "14",
+            "Boeing Satellite Division",
+            "info@boeing-sat-test-b.example",
+        ),
+    ]
+    scored = await score_pairs_with_splink("company", records)
+    assert scored is not None
+
+    a_id = _record_id(records[-2])
+    b_id = _record_id(records[-1])
+    scores_by_pair = {(a, b) if a < b else (b, a): conf for a, b, conf in scored}
+    key = (a_id, b_id) if a_id < b_id else (b_id, a_id)
+    assert key in scores_by_pair, (
+        "names sharing a real token ('boeing', 'satellite') but no 4-char "
+        "prefix or domain must still be blocked together via token overlap"
+    )
+
+
+@pytest.mark.asyncio
 async def test_engine_splink_dispatches_and_merges_the_duplicate() -> None:
     from src.mcp_server.tools.resolve_entities import resolve_entities_impl
 
@@ -244,3 +329,124 @@ async def test_engine_splink_dispatches_and_merges_the_duplicate() -> None:
     matches = [c for c in res["clusters"] if boeing_ids <= set(c["record_ids"])]
     assert len(matches) == 1
     assert set(matches[0]["record_ids"]) == boeing_ids
+
+
+# ── B.6.3: train-once wiring (matching_rules.model_profile) ──────────────
+
+
+def _train_and_save_profile(store_root: str, model_name: str, records: list[dict]) -> None:
+    """Test-only: train a tiny real Splink model over ``records`` (same
+    projection `score_pairs_with_splink` uses) and freeze it as v1 in
+    ``store_root`` — the fixture a real workbench training run would have
+    already produced, stood up locally so the test never touches
+    ``logs/splink_models``.
+    """
+    import pandas as pd
+    import splink.comparison_library as cl
+    from splink import DuckDBAPI, Linker, SettingsCreator, block_on
+
+    from src.mcp_server.tools import splink_model as sm
+
+    rows = []
+    for rec in records:
+        proj, _ = _project_to_canonical(rec)
+        row = {"_record_id_str": str(_record_id(rec))}
+        for k, v in proj.items():
+            if v is not None:
+                row[k] = _domain_of(v) if k == "domain" else str(v)
+        rows.append(row)
+    df = pd.DataFrame(rows)
+
+    settings = SettingsCreator(
+        link_type="dedupe_only",
+        unique_id_column_name="_record_id_str",
+        comparisons=[cl.JaroWinklerAtThresholds("name", [0.9, 0.7]), cl.ExactMatch("email")],
+        blocking_rules_to_generate_predictions=[
+            'substr(lower(l."name"), 1, 4) = substr(lower(r."name"), 1, 4)',
+            block_on("email"),
+        ],
+    )
+    linker = Linker(df, settings, DuckDBAPI())
+    linker.training.estimate_u_using_random_sampling(max_pairs=1_000_000, seed=42)
+    linker.training.estimate_probability_two_random_records_match([block_on("email")], recall=0.7)
+    linker.training.estimate_parameters_using_expectation_maximisation(
+        'substr(lower(l."name"), 1, 4) = substr(lower(r."name"), 1, 4)',
+        fix_probability_two_random_records_match=True,
+    )
+    sm.save_version(store_root, model_name, linker, df=df, status="trained")
+
+
+@pytest.mark.asyncio
+async def test_model_profile_predict_only_makes_zero_em_calls(tmp_path) -> None:
+    """B.6.3 accept criterion: the model_profile path makes zero EM calls."""
+    from splink.internals.linker_components.training import LinkerTraining
+
+    store_root = str(tmp_path / "models")
+    records = _fixture_records()
+    _train_and_save_profile(store_root, "profile_test", records)
+
+    with (
+        patch.object(LinkerTraining, "estimate_u_using_random_sampling") as mock_u,
+        patch.object(LinkerTraining, "estimate_probability_two_random_records_match") as mock_prior,
+        patch.object(
+            LinkerTraining, "estimate_parameters_using_expectation_maximisation"
+        ) as mock_em,
+    ):
+        scored = await score_pairs_with_splink(
+            "company",
+            records,
+            matching_rules={"engine": "splink", "model_profile": "profile_test/v1"},
+            store_root=store_root,
+        )
+
+    mock_u.assert_not_called()
+    mock_prior.assert_not_called()
+    mock_em.assert_not_called()
+
+    assert scored is not None
+    id_boeing_1 = _record_id(records[0])
+    id_boeing_2 = _record_id(records[1])
+    key = (id_boeing_1, id_boeing_2) if id_boeing_1 < id_boeing_2 else (id_boeing_2, id_boeing_1)
+    scores_by_pair = {(a, b): conf for a, b, conf in scored}
+    assert key in scores_by_pair, "the saved model must still score the known duplicate pair"
+
+
+@pytest.mark.asyncio
+async def test_default_path_still_trains_with_em_when_no_model_profile(tmp_path) -> None:
+    """Regression guard for the other half of B.6.3's accept criterion:
+    the default (no model_profile) path is byte-identical to before —
+    it still trains (calls EM), it is not accidentally short-circuited."""
+    from splink.internals.linker_components.training import LinkerTraining
+
+    with patch.object(
+        LinkerTraining,
+        "estimate_parameters_using_expectation_maximisation",
+        autospec=True,
+    ) as mock_em:
+        await score_pairs_with_splink("company", _fixture_records())
+
+    mock_em.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_model_profile_malformed_falls_back_to_none(tmp_path) -> None:
+    store_root = str(tmp_path / "models")
+    scored = await score_pairs_with_splink(
+        "company",
+        _fixture_records(),
+        matching_rules={"model_profile": "not-a-valid-format"},
+        store_root=store_root,
+    )
+    assert scored is None
+
+
+@pytest.mark.asyncio
+async def test_model_profile_missing_version_falls_back_to_none(tmp_path) -> None:
+    store_root = str(tmp_path / "models")
+    scored = await score_pairs_with_splink(
+        "company",
+        _fixture_records(),
+        matching_rules={"model_profile": "nonexistent_model/v1"},
+        store_root=store_root,
+    )
+    assert scored is None

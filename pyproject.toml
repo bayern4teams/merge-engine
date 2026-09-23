@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "merge-engine"
 version = "0.1.0"
-description = "Multi-source data migration, deduplication, and unification into Databricks with human oversight"
+description = "Multi-source data migration, deduplication, and unification into a relational destination with human oversight"
 requires-python = ">=3.11"
 dependencies = [
     # LangGraph orchestration
@@ -23,7 +23,6 @@ dependencies = [
     "psycopg2-binary>=2.9.0",
     "asyncpg>=0.29.0",
     "pymongo>=4.6.0",
-    "databricks-sql-connector>=3.0.0",
     "clickhouse-connect>=0.7.0",
     # Configuration & validation
     "pydantic>=2.0.0",
@@ -36,7 +35,6 @@ dependencies = [
     "python-dotenv>=1.0.0",
     # Utilities
     "tenacity>=8.2.0",
-    "uuid-utils>=0.8.0",
     # UI (FastAPI serves the built React frontend)
     "fastapi>=0.115.0",
     "uvicorn>=0.30.0",
@@ -52,6 +50,11 @@ dependencies = [
     "structlog>=24.0.0",
     # Per-run extraction spool: rows live here instead of in graph state.
     "duckdb>=1.0.0",
+    # ADR 0009: in-process traversal over P-1's metadata tables (P-8 graph
+    # view, P-9 entity subgraph traversal) -- core V3 discovery
+    # functionality, not an optional accelerator like the Valentine/
+    # Desbordante/datasketch/Great Expectations extras above.
+    "networkx>=3.0",
 ]
 
 [project.optional-dependencies]
@@ -60,8 +63,18 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=5.0.0",
     "pytest-xdist>=3.5.0",
-    "mypy>=1.8.0",
-    "ruff>=0.4.0",
+    # pytest has no per-test timeout of its own. Without one, a single hung
+    # test takes the whole suite down in silence: CI emitted 2026 progress
+    # dots and then nothing for 30 minutes, with no way to say which test was
+    # stuck. This names the test and prints the line it is stuck on.
+    "pytest-timeout>=2.3.0",
+    # Pinned to a minor series, not floated. `ruff>=0.4.0` let CI resolve the
+    # newest release (0.16.8) while local envs sat on 0.15.x, so lint rules
+    # differed between them -- exactly the "passes locally, fails in CI"
+    # discrepancy check.py's docstring says must never exist. Both tools gate
+    # `check.py`, so a rule change in either is a CI break with no code change.
+    "mypy~=2.3.1",
+    "ruff~=0.16.8",
     "pre-commit>=3.6.0",
 ]
 # Phase 0 §0.1: every branch's dependency is pre-declared here so no branch
@@ -74,7 +87,20 @@ splink = ["splink>=4.0.0"]
 dq = ["great-expectations>=1.0.0"]
 lineage = ["sqlglot>=25.0.0"]
 swarm = ["langgraph-swarm>=0.0.11"]
-perf = ["numpy>=1.26", "pandas>=2.2"]
+# numpy<2.5: 2.5.0's bundled __init__.pyi started using PEP 695 `type X = ...`
+# syntax, which mypy refuses to parse under this project's `python_version =
+# "3.11"` target -- it halts the ENTIRE `mypy src` run at that stub's parse
+# error, checking nothing beyond import resolution (verified live 2026-09-14:
+# 93 source files went unchecked, only surfaced when a stale Windows-path
+# mypy-baseline.txt was independently found needing a refresh anyway). Not a
+# fix-v3 change; pinned narrowly here so a fresh clone doesn't silently lose
+# type coverage the same way. Revisit once mypy targets >=3.12 or this
+# project's own minimum Python does.
+perf = ["numpy>=1.26,<2.5", "pandas>=2.2"]
+# ADR 0005 (docs/decisions/0005-adopt-valentine-schema-matching.md): P-7's
+# first-pass schema matcher, ahead of the deterministic heuristic pass and
+# the LLM.
+schema_matching = ["valentine>=0.2", "pandas>=2.2"]
 
 [project.scripts]
 merge-engine = "src.main:main"
@@ -151,4 +177,9 @@ markers = [
     "live: requires real Docker containers or a live LLM endpoint; excluded by default",
     "slow: takes non-trivial wall time even without live infra",
 ]
-addopts = "-m \"not live\""
+# --timeout: no single test may hang the suite. The slowest test in this repo
+# finishes in well under a second (the whole integration suite runs in ~8s), so
+# 120s only ever fires on a genuine hang, never on a slow-but-working test --
+# including on a 2-core CI runner. On failure pytest-timeout prints the stack
+# of the offending test rather than leaving a blank log.
+addopts = "-m \"not live\" --timeout=120"

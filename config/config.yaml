@@ -23,7 +23,7 @@ destination:
 # ── LLM Configuration ──────────────────────────────────────────────────────
 llm:
   provider: "openai"      # "openai" | "azure" | "anthropic"
-  model: "qwen3.5-122b-a10b"
+  model: "Qwen/Qwen3.6-35B-A3B-FP8"
   # Tried in this exact order (LLMClient.call) whenever the active model
   # hits a quota/billing error — a same-account retry can't recover from
   # that, so the client advances to the next entry instead of failing.
@@ -37,7 +37,13 @@ llm:
     - "qwen3.5-plus-2026-04-20"
     - "qwen3.5-plus-2026-02-15"
   api_key: "${LLM_API_KEY}"
-  base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+  base_url: "http://10.10.9.45:8000/v1"
+  # Seconds per LLM request, and retries on top. base_url above is a
+  # private LAN address: reachable instantly from this network, but
+  # silently dropped anywhere else (CI), where an unbounded client hung
+  # a test for a full 30 minutes. Never leave these unset.
+  timeout: 60
+  max_retries: 2
   temperature: 0.2      # Deterministic outputs preferred
   structured_output: true         # Request JSON-object response_format (disable if endpoint rejects it)
   entity_resolution_enabled: true # LLM judgment for borderline entity pairs (0.70-0.95 band)
@@ -71,6 +77,39 @@ scope:
   # Distinct values sampled per column when verifying a candidate join
   # edge's inclusion dependency.
   join_graph_sample_size: 500
+
+# ── Entity Resolution: Splink engine (B.4) ──────────────────────────────────
+# The default engine is NOT declared here. The promotion surface is the
+# per-entity `matching_rules` (currently none), and the code falls back to
+# "builtin" when an entity declares no engine — so the effective default is
+# builtin until a BP-B4 measured gate pass is recorded in
+# tests/eval/last_gate.json. tests/unit/test_splink_default_invariant.py
+# enforces that: setting default_engine: splink here while the last measured
+# gate outcome is not a pass fails the suite. See ADR 0004 addendum.
+splink:
+  # Workbench model versions live under this root:
+  # <model_store>/<model_name>/v<N>/{model.json,metadata.json}
+  model_store: logs/splink_models
+  # A prediction-blocking rule that would generate more candidate pairs than
+  # this is flagged "⚠ Too broad" by splink_blocking.recommend_prediction_
+  # blocking (S-E). 600,000 ≈ a quarter of the 2.4M figure that silently
+  # truncated a real run before costed blocking existed (ADR 0014).
+  pair_budget: 600000
+  # S-P review-band defaults (a *view* over the predictions, not the model's
+  # output; the UI can override per request).
+  predict:
+    match_threshold: 0.5    # score >= this → auto-match band
+    exclude_threshold: 0.2  # score <= this → auto-keep-apart band
+    review_limit: 200       # review queue rows returned (counts are whole-band)
+
+# ── Entity-resolution blocking/matching tuning (fix-v3 B.1.3) ──────────────
+matching:
+  # pg_trgm GIN-indexed candidate-pair blocking (audit §13 #13). Off by
+  # default: unions with, never replaces, resolve_entities.py's own Python
+  # blocking pass. Needs `pg_trgm` available on the destination.
+  trigram_blocking_enabled: false
+  trigram_blocking_min_records: 1000
+  trigram_similarity_threshold: 0.6
 
 # ── Tracing (self-hosted Langfuse) ─────────────────────────────────────────
 # Tracing is configured purely via environment variables in .env:

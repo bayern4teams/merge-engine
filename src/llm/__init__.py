@@ -26,6 +26,8 @@ _STAGE_NAMES = (
     "scope_planning",
     "entity_resolution",
     "field_mapping",
+    "semantic_type_inference",
+    "schema_matching",
 )
 
 

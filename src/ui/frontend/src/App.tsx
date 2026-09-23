@@ -4,6 +4,8 @@ import SetupScreen from "./components/SetupScreen";
 import PipelineScreen from "./components/PipelineScreen";
 import SettingsScreen from "./components/SettingsScreen";
 import InvestigateScreen from "./components/InvestigateScreen";
+import MetadataGraphScreen from "./components/MetadataGraphScreen";
+import SplinkWorkbenchScreen from "./components/SplinkWorkbenchScreen";
 import {
   loadOriginsFromStorage,
   saveOriginsToStorage,
@@ -13,7 +15,7 @@ import {
   saveActiveTabToStorage,
 } from "./store";
 
-type Tab = "setup" | "pipeline" | "settings" | "investigate";
+type Tab = "setup" | "pipeline" | "settings" | "investigate" | "graph" | "splink";
 type Theme = "light" | "dark";
 
 export default function App() {
@@ -95,6 +97,18 @@ export default function App() {
         >
           Investigate
         </button>
+        <button
+          className={`tab ${tab === "graph" ? "active" : ""}`}
+          onClick={() => setTab("graph")}
+        >
+          Graph
+        </button>
+        <button
+          className={`tab ${tab === "splink" ? "active" : ""}`}
+          onClick={() => setTab("splink")}
+        >
+          Splink
+        </button>
       </div>
 
       <div style={{ display: tab === "setup" ? "block" : "none" }}>
@@ -113,6 +127,12 @@ export default function App() {
       </div>
       <div style={{ display: tab === "investigate" ? "block" : "none" }}>
         <InvestigateScreen />
+      </div>
+      <div style={{ display: tab === "graph" ? "block" : "none" }}>
+        <MetadataGraphScreen />
+      </div>
+      <div style={{ display: tab === "splink" ? "block" : "none" }}>
+        <SplinkWorkbenchScreen />
       </div>
     </div>
   );

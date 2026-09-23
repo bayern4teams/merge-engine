@@ -1,621 +1,1598 @@
-# merge-engine — Branch `fix-bugs` Implementation TODO
+# merge-engine — Implementation TODO
 
-This document tracks all implementation tasks, bug fixes, architectural enhancements, and verification results for the `fix-bugs` branch of `merge-engine`.
+Branch `fix-v3`. Part A is the preserved, verbatim history of `feat/v3-discovery-er`
+(every phase's evidence log, unchanged — history in this repo is load-bearing and is
+kept, never edited into silence). Part B is the current roadmap: every §13
+(Architecture — Quality & Speed) and §14 (Algorithm-First: discover_schemas,
+map_fields, analyze_dependencies) recommendation of the Merge Engine Forensic Audit
+(2026-09-13), sequenced in the audit's own priority order ("What I'd actually
+schedule, in order") and implemented on this branch.
 
----
-
-## Phase 1 — Upfront Field Mapping Node Re-ordering & Early Schema Mapping
-
-Move field mapping upfront in the graph execution pipeline (after dependency analysis and before scope planning) so destination schema mapping occurs prior to data extraction. Support origin metadata (`origin_id`, `table`, `source_field`) and coalesced destination fields.
-
-- [x] **1.1 Graph Sequence Re-ordering in `graph.py`**
-  - Updated `HITL_NODES`, `NODE_SUCCESSOR`, `GATE_PRODUCER`, and `_build_builder()` conditional routing in [graph.py](file:///d:/transfer/merging/.worktrees/fix-bugs/src/orchestrator/graph.py).
-  - Sequence set to: `preflight` -> `discover_schemas` -> `parse_request` -> `analyze_dependencies` -> `human_review_deps` -> `map_fields` -> `human_review_mappings` -> `plan_scope` -> `human_review_scope` -> `extract_data` -> `resolve_entities` -> `human_review_matches` -> `unify_entities` -> `human_final_approval` -> `load_data` -> `update_extraction_state` -> `END`.
-  - Note: `discover_schemas`/`parse_request` order was superseded by Phase 9.1 below (schema-grounded parsing needs schemas first); this line is corrected to match the order actually shipped.
-  - *Evidence:* Graph compiled with `map_fields` -> `human_review_mappings` -> `plan_scope`. `unify_entities` routes directly to `human_final_approval`.
-
-- [x] **1.2 Upfront Schema Discovery in `map_fields_node.py`**
-  - Implemented `_build_source_schema_from_discovered` helper in [map_fields_node.py](file:///d:/transfer/merging/.worktrees/fix-bugs/src/orchestrator/nodes/map_fields_node.py) to construct origin source fields and sample values directly from `state["schemas"]` and `state["entity_tables"]` prior to data extraction.
-  - *Evidence:* `map_fields` executes upfront without requiring pre-populated `state["unified_entities"]`.
-
-- [x] **1.3 Origin Metadata & Coalesced Tags in `map_fields.py`**
-  - Enriched `map_fields_impl` return payload in [map_fields.py](file:///d:/transfer/merging/.worktrees/fix-bugs/src/mcp_server/tools/map_fields.py) to attach `origin_id`, `table`, `source_field` metadata and flag `is_coalesced: True` when multiple origin columns map to a single destination column.
-  - Eliminated reverse layer import of `src.orchestrator.utils.retry_hints` by inlining reviewer rework feedback formatting.
-  - *Evidence:* Field mappings return `is_coalesced: True` for shared destination columns (e.g. `origin_1.Company.name` and `origin_2.organizations.title` -> `company.name`).
-
-- [x] **1.4 API Interface Updates in `api.ts`**
-  - Updated `MappingRow` interface in [api.ts](file:///d:/transfer/merging/.worktrees/fix-bugs/src/ui/frontend/src/api.ts) to include `origin_id?: string`, `table?: string`, `is_coalesced?: boolean`.
-  - *Evidence:* TypeScript interface compiles cleanly without type errors.
-
-- [x] **1.5 Stepper Gate Order Alignment in `Stepper.tsx`**
-  - Reordered `GATES` array in [Stepper.tsx](file:///d:/transfer/merging/.worktrees/fix-bugs/src/ui/frontend/src/components/Stepper.tsx) so `human_review_mappings` ("Field Mappings") appears right after `human_review_deps` ("Dependencies") and before `human_review_scope` ("Scope").
-  - *Evidence:* Stepper UI renders `1. Dependencies -> 2. Field Mappings -> 3. Scope -> 4. Entity Matches -> 5. Final Approval`.
-
-- [x] **1.6 Destination Table Filter Dropdown & Table View in `Gates.tsx`**
-  - Enhanced `MappingBody` component in [Gates.tsx](file:///d:/transfer/merging/.worktrees/fix-bugs/src/ui/frontend/src/components/Gates.tsx) to provide a Destination Table Dropdown Filter (`All Destination Tables | company | person | ...`).
-  - Added table columns: `Dest Table`, `Origin`, `Source Table`, `Source Field`, `Action`, `Dest Column`, `New Column`, `Type`, `Conf.`.
-  - Added visual tag `<span className="badge">⚡ Coalesced</span>` for destination columns mapped from multiple origin fields.
-  - *Evidence:* React build `npm run build` completed successfully.
+Evidence rule, unchanged throughout: independently-run SQL / test output, never the
+app's own success message. Full implementation detail for every Part B item:
+`.hermes/plans/2026-09-14_025800-fix-v3-cto-recommendations.md`.
 
 ---
 
-## Phase 2 — Merge Scope Structure & Missing Origin/Entity Handling
+# Part A — History: `feat/v3-discovery-er` (verbatim)
 
-Improve Merge Scope visibility and explicitly report missing origin entity tables instead of omitting them.
-
-- [x] **2.1 Complete Origin Coverage in `plan_scope.py`**
-  - Updated `plan_scope_impl` helper `_ensure_complete_origin_coverage` in [plan_scope.py](file:///d:/transfer/merging/.worktrees/fix-bugs/src/mcp_server/tools/plan_scope.py) to explicitly populate missing entity entries for target entities with `mode: "not_found"`.
-  - *Evidence:* All 16 unit tests in `tests/unit/test_plan_scope.py` passed cleanly (`16 passed in 11.62s`).
-
-- [x] **2.2 Scope Interrupt Data Payload in `human_nodes.py`**
-  - Updated `_build_scope_interrupt` in [human_nodes.py](file:///d:/transfer/merging/.worktrees/fix-bugs/src/orchestrator/nodes/human_nodes.py) to cross-reference all origins and attach `not_found` plan rows for origins lacking matching tables.
-  - *Evidence:* Scope gate interrupt data includes explicit `mode: "not_found"` records.
-
-- [x] **2.3 Structured Tables & Status Badges in `Gates.tsx`**
-  - Updated `ScopeBody` component in [Gates.tsx](file:///d:/transfer/merging/.worktrees/fix-bugs/src/ui/frontend/src/components/Gates.tsx) to render subject candidate records in a structured HTML table (`Origin`, `Source Table`, `Candidate Details`).
-  - Rendered `How each entity is scoped` table with explicit join path columns (`via_from_column -> via_table -> via_to_column`) and visual status badges (`✓ Active` vs `⚠️ Not Found in origin_2`).
-  - *Evidence:* Frontend Vite production build succeeded with zero errors (`tsc -b && vite build`).
+Tracks Part B (V3 discovery/entity-resolution engine) up to BP-B3, per `Branch_Plan.md` at this
+worktree's root. Scope override in effect: continue straight through BP-B1 and BP-B2 without
+stopping or committing to `main`; stop at BP-B3 for live verification and human review.
 
 ---
 
-## Phase 3 — Reproducible Dependency Analysis & Column-Level Dependency Graph Editor
+## B.0 — Branch and worktree
 
-Ensure 100% dependency analysis reproducibility by including all schema tables and providing column-level dependency rationale tracking and interactive editing.
+- [x] **B.0** Branch `feat/v3-discovery-er` created off `main` (post-v2-tag), worktree at
+  `.worktrees/v3-discovery-er`. `Branch_Plan.md` copied in verbatim (B.0 through end of B.3,
+  with a scope-override header). This `TODO.md` created fresh (the inherited one was
+  `fix-bugs`'s, not V3's).
+  - *Evidence:* `git worktree list` shows `feat/v3-discovery-er` at `.worktrees/v3-discovery-er`;
+    `git log --oneline -1` on the new branch matches `main`'s tip (`95c3295`).
 
-- [x] **3.1 Reproducible Schema Summary in `analyze_dependencies.py`**
-  - Updated `_table_may_be_related` and `_build_schema_summary` in [analyze_dependencies.py](file:///d:/transfer/merging/.worktrees/fix-bugs/src/orchestrator/nodes/analyze_dependencies.py) to include all domain relational terms (`experience`, `relation`, `employment`, `job`, `address`, `location`, `industry`, `history`).
-  - *Evidence:* Relational tables are included reproducibly while unrelated tables (`leads`) are filtered out (`23/23 unit tests passed`).
+## B.1 — Tool decisions written up (`docs/tool-evaluation.md` + ADRs)
 
-- [x] **3.2 Column-Level Dependency Link Extraction in `analyze_dependencies.py`**
-  - Implemented `_extract_declared_column_dependencies` in [analyze_dependencies.py](file:///d:/transfer/merging/.worktrees/fix-bugs/src/orchestrator/nodes/analyze_dependencies.py) to extract declared foreign key prerequisites (`Child.Column -> Parent.Column`).
-  - *Evidence:* `column_dependencies` returned in node output state.
+- [x] **B.1.1** `docs/tool-evaluation.md` — full capability matrix (adopted tools' verified API
+  surface + rejected tools' reasons), drawn from `Branch_Plan.md`'s B.1 section, not re-derived.
+  - *Evidence:* `scripts/lint_docs.py` passes (every link/citation resolves);
+    `scripts/check.py lint format types arch docs` — 5/5 passed.
+- [x] **B.1.2** 11 ADRs in `docs/decisions/0004`..`0014` (repo's real convention, not the plan's
+  guessed `docs/adr/` path — `docs/INDEX.md` already indexes `decisions/`). One per tool
+  decision: adopt Splink (0004, gated on BP-B4)/Valentine (0005)/Desbordante (0006, AGPL
+  isolated)/datasketch (0007)/Great Expectations (0008)/networkx+sqlglot+Jailer (0009); reject
+  OpenMetadata (0010)/DataHub (0011, model adopted)/Neo4j (0012); Informatica benchmark-only
+  (0013); replace budget-truncation with blocking analysis (0014).
+  - *Evidence:* `docs/INDEX.md` lists all 11; `git log --oneline -1` shows commit `d9a29de`.
 
-- [x] **3.3 State Schema Extension in `graph.py`**
-  - Added `column_dependencies: list[Any]` to `MergeState` and initialized `"column_dependencies": []` in `get_initial_state` in [graph.py](file:///d:/transfer/merging/.worktrees/fix-bugs/src/orchestrator/graph.py).
-  - *Evidence:* LangGraph state retains column-level dependency links across node transitions.
+> BP-B1 (plan's own text: "stop for review") — **not a pause point on this branch** per the
+> scope override above. Noted as reached, then continuing straight into B.2/B.3.
 
-- [x] **3.4 Interrupt Handling in `human_nodes.py`**
-  - Passed `column_dependencies` in `human_review_deps` interrupt data and accepted user edits on resume in [human_nodes.py](file:///d:/transfer/merging/.worktrees/fix-bugs/src/orchestrator/nodes/human_nodes.py).
-  - *Evidence:* Rework/resume feedback accepts modified `column_dependencies`.
+## B.2 — How V3 relates to the existing pipeline
 
-- [x] **3.5 Interactive Dependency Editor in `Gates.tsx`**
-  - Enhanced `DependencyBody` in [Gates.tsx](file:///d:/transfer/merging/.worktrees/fix-bugs/src/ui/frontend/src/components/Gates.tsx) to render a Column-Level Prerequisites Table (`Child Table`, `Parent Table`, `Rationale`, `Action`).
-  - Implemented an interactive **Add Custom Dependency Link** form allowing reviewers to add/remove custom column-level dependencies with custom rationales.
-  - *Evidence:* Dependency gate renders editable prerequisites table and custom link creator.
+- [ ] **B.2** No code — this is the reuse/new/hybrid/replace decision table already written in
+  `Branch_Plan.md`. Referenced by each P-phase below as it lands; no separate TODO item beyond
+  confirming each phase actually follows its assigned decision (reuse/replace/hybrid).
+
+## B.3 — Pre-Splink phases (P-1 .. P-10)
+
+Each phase: implement -> unit tests -> live check against the real ClickHouse/PostgreSQL boxes
+(`Sample_Database` / `Sample_Database_Destination` Docker containers, per `merge-engine-real-world-test-dbs`
+memory) -> update this file with independent evidence, never the app's own success message.
+
+- [x] **P-1** Domain model & metadata store — `src/mcp_server/tools/metadata_graph.py`
+  (`MetadataStore` class) + PostgreSQL DDL for all 13 tables (md_run, md_source, md_database,
+  md_schema, md_table, md_column, md_profile, md_candidate_key, md_relationship,
+  md_canonical_field, md_field_mapping, md_edge, md_override). Stable generated ids everywhere
+  (never keyed on name alone); origin/review_status validated in Python before any write;
+  overrides are additive-only (a new `md_override` row, never a mutation of the target row).
+  Known gap, not yet done: no dedicated config/UI wiring for the metadata store's own
+  connection — it currently takes an explicit connection dict, same shape every other connector
+  takes, rather than a `config.yaml` section. Tracked as a P-1 follow-up, not silently dropped.
+  - *Evidence (unit):* `tests/unit/test_metadata_graph.py`, 24/24 passed. Mutation-tested the
+    additive-override guarantee: temporarily changed `record_override`'s SQL from `INSERT` to
+    `UPDATE`, confirmed `test_record_override_only_inserts_into_md_override` fails red, restored,
+    confirmed green again.
+  - *Evidence (live, independent SQL — never the module's own return values):* ran
+    `ensure_schema()` + a full write path (`create_run` → `upsert_source/database/schema/table/
+    column` → `insert_candidate_key` → `record_override` → `get_overrides`) against the real
+    `Sample_Database_Destination` container (`global_warehouse`). `psql \dt md_*` shows all 13
+    tables. `SELECT ... FROM md_source JOIN md_database JOIN md_schema JOIN md_table JOIN
+    md_column` returns the full chain correctly (`origin2` → `Company` → `companyID`).
+    `SELECT * FROM md_candidate_key` shows `confidence=1.0` UNCHANGED after the override;
+    `SELECT * FROM md_override` shows the override recorded as its own separate row with both
+    `original_decision` and `human_decision` — confirms additive-not-mutating end-to-end, not
+    just in mocks.
+  - *Evidence (static):* `scripts/check.py all` — 10/10 passed (mypy baseline regenerated via
+    `scripts/update_mypy_baseline.py` after reviewing the diff: the prior baseline was stale,
+    last regenerated 2026-08-05 on `main` before all the work this branch's `main` merge
+    brought in; the only *new* entries are this file's 3 already-accepted-pattern
+    `psycopg2` stub-missing lines, identical to `postgresql_destination.py`'s own baselined
+    entries).
+- [x] **P-2** Connector capability matrix. `BaseConnector.capabilities()` (conservative default)
+  + `discover_indexes()`/`discover_statistics()`/`profile_column()`/`estimate_query_cost()`
+  (base defaults raise `NotImplementedError`, matching the existing `sample_distinct_values`
+  pattern). Real overrides for `PostgresConnector` and `ClickHouseConnector`; `MongoDBConnector`
+  gets `capabilities()` only (no live Mongo container available to verify the other four
+  against — tracked as a follow-up, not silently skipped).
+  - *Evidence (unit):* `tests/unit/test_connector_capabilities.py`, 13/13 passed — includes the
+    load-bearing case the module docstring calls out (`supports_declared_fk: False` for
+    ClickHouse/MongoDB) and a regression test for a bug caught live (below).
+  - *Evidence (live, independent — real ClickHouse `origin2` + real PostgreSQL
+    `global_warehouse`):* `capabilities()`, `discover_indexes()`, `discover_statistics()`,
+    `profile_column()` (all 3 modes), `estimate_query_cost()` all run against real data and
+    return real, checkable numbers (e.g. ClickHouse `Company`: 1,270,564 rows, 9 parts, sorting
+    key `companyID`; PostgreSQL `company`: real `company_pkey` btree index found).
+  - **Real bug found and fixed during live verification:** PostgreSQL's `pg_class.reltuples`
+    is `-1` for a never-analyzed table — a genuine 2-row table reported `row_count_estimate: -1`,
+    not 0 or 2. Fixed with a fallback to `pg_stat_user_tables.n_live_tup` (tracked by autovacuum
+    independently of `ANALYZE`). Verified live across all three real states: never-analyzed
+    (-1 -> falls back to n_live_tup, itself still 0 immediately after a fresh write since
+    autovacuum's stats collector lags), and post-`ANALYZE` (correctly reports the real count,
+    2, with `last_analyzed` populated) — confirmed by running `ANALYZE company;` on the real
+    container and re-querying.
+- [x] **P-3** Profiling engine — `src/mcp_server/tools/profiling.py`. Scale-sensitive metrics
+  (null/distinct counts) via P-2's `connector.profile_column()` (database-native); per-value
+  shape metrics (length distribution, top values by frequency, pattern distribution, type
+  distribution) computed in Python over a bounded raw sample pulled via `connector.extract()`
+  (deliberate: `sample_distinct_values` already de-duplicates, which breaks frequency counting
+  for top_values). `profile_and_store()` glues this to P-1's `MetadataStore.insert_profile`
+  (added — P-1 had the DDL but no insert helper yet) / `get_latest_profile`. `mode` always
+  recorded (PreSplink §46).
+  - *Evidence (unit):* `tests/unit/test_profiling.py`, 18/18 passed.
+  - *Evidence (live, independent — real ClickHouse `origin2.Company` 2000-row sample, real
+    PostgreSQL `global_warehouse.company` full scan):* ClickHouse `name` column profiled
+    correctly (1998/2000 distinct, realistic length/pattern buckets, e.g. `{'alpha': 1733,
+    'other': 261, 'alphanumeric': 6}`). Full store round-trip against the real destination:
+    registered real source/database/schema/table/column rows, called `profile_and_store`,
+    then independently read the row back via `get_latest_profile` — matches what was computed
+    (`top_values: [{'value': 'Lockheed Martin', 'count': 1}, ...]`).
+- [x] **P-4** Semantic type inference — `src/mcp_server/tools/semantic_type_inference.py`.
+  Heuristic pass (no LLM) uses column NAME (normalized across camelCase/PascalCase/
+  snake_case) plus P-3's measured `pattern_distribution` to corroborate or contradict the
+  name's implied type; 22-type taxonomy (`SEMANTIC_TYPES`). LLM fallback only when the
+  heuristic confidence is below 0.6, tagged `LLM_ASSISTED`, via a new
+  `semantic_type_inference` prompt pair — new `md_semantic_type` table added to P-1's store
+  (one row per inference, not a mutable label, so a later re-classification is a visible new
+  row).
+  - *Evidence (unit):* `tests/unit/test_semantic_type_inference.py`, 22/22 passed.
+  - *Real bug found and fixed during live verification:* a bare `name` column measured as
+    ~98% alpha-shaped text was boosted to 0.93 confidence for `PERSON_NAME` — but
+    `PERSON_NAME` and `ORGANIZATION_NAME` both corroborate on the identical `alpha` pattern
+    bucket, so that measurement cannot actually discriminate between them; the confidence
+    boost was overclaiming. Fixed by identifying pattern buckets more than one semantic type
+    shares (`_AMBIGUOUS_PATTERNS`) and suppressing the corroboration boost for those — the
+    ambiguous pattern can still rule a name match OUT (near-zero corroboration) but never rule
+    one IN over an equally-plausible sibling. Two new regression tests cover both directions.
+  - *Evidence (live, independent — real ClickHouse `origin2.Company`):* `name` → `PERSON_NAME`
+    at 0.75 (post-fix, no longer overclaiming); `companyID`/`domain` → `UNKNOWN` (correctly no
+    strong signal); `website` → `URL` at 0.75. Full store round-trip against the real
+    PostgreSQL `global_warehouse`: `store.ensure_schema()` (picked up the new
+    `md_semantic_type` table), `insert_semantic_type`, then independently confirmed via
+    `psql`: `SELECT semantic_type, confidence, origin FROM md_semantic_type` returned
+    `PERSON_NAME | 0.75 | ALGORITHMIC`, matching what was computed.
+- [x] **P-5** Candidate & composite keys — `src/mcp_server/tools/candidate_keys.py`. Three
+  tiers: declared (relabels P-2's `discover_indexes()`, `AUTO_ACCEPTED`), single-column
+  inference (from P-3's `unique_ratio`/`null_ratio`, `NEEDS_REVIEW`), pruned composite search
+  (only identifier-like low-null columns, 2-column pairs only, each pair verified against a
+  real bounded query before being reported — never stored on a guess). Never labels an
+  inferred candidate a primary key. Desbordante UCC pass **not done** — tracked as an explicit
+  follow-up, not silently dropped (the pruned SQL-verified path is the primary mechanism per
+  `Branch_Plan.md`'s own P-5 text; Desbordante was always the *optional* accelerator).
+  - *Evidence (unit):* `tests/unit/test_candidate_keys.py`, 22/22 passed.
+  - *Evidence (live, independent SQL):* real ClickHouse `origin2.Company` → `companyID`
+    correctly found as `DECLARED_PRIMARY_KEY` (via its ORDER BY key); real PostgreSQL
+    `global_warehouse.company` → `id` correctly found as `DECLARED_PRIMARY_KEY` (via
+    `pg_index`). Full store round-trip: `psql SELECT columns, key_type, confidence,
+    review_status FROM md_candidate_key` independently confirms `["id"] |
+    DECLARED_PRIMARY_KEY | 1 | AUTO_ACCEPTED`.
+- [x] **P-6** Relationship discovery & scoring — `src/mcp_server/tools/relationship_scoring.py`.
+  All ten PreSplink §21 signals implemented independently and kept visible (§22 "no opaque
+  score"): `datatype`, `semantic_type`, `name_similarity`, `value_overlap`,
+  `inclusion_coverage` (exact, database-verified via targeted `filter_values` query — mirrors
+  `join_graph.py`'s `_verify_inclusion`), `target_uniqueness`, `cardinality`, `null_behaviour`,
+  `table_semantics`, `identifier_likelihood`. `score_relationship()` aggregates by averaging
+  only the non-`None` scores (a sampling failure on one signal never drags the average toward
+  zero) and classifies into `FOREIGN_KEY`/`SHARED_LOOKUP`/`POSSIBLE_JOIN`/`UNRELATED`.
+  - *Evidence (unit):* `tests/unit/test_relationship_scoring.py`, 32/32 passed (includes the
+    camelCase regression test below).
+  - *Live-caught bug, cross-phase:* `score_identifier_likelihood()`'s name-shape fallback regex
+    (`_id$` etc.) only matches snake_case — real ClickHouse `origin2.Location.companyID`
+    scored 0.1 ("no signal") instead of the expected 0.7, because `"companyID".lower()` =
+    `"companyid"` has no underscore before `id`. Investigating found the **identical bug
+    pattern already in P-5's already-committed `candidate_keys.py`** (`_IDENTIFIER_LIKE` regex,
+    same blind spot — confirmed via direct test that `_IDENTIFIER_LIKE.search("companyid")` is
+    `None`), meaning composite-key pruning was silently excluding every camelCase-named ID
+    column. Fixed by extracting P-4's existing camelCase-aware normalizer into a new shared
+    `src/utils/column_naming.py` (placed below `src/mcp_server/tools/` per CLAUDE.md's layering,
+    since P-4/P-5/P-6 can't import sideways from each other) and updating all three modules to
+    call it. Red-then-green confirmed: mutating the normalizer back to plain `.lower()` made
+    both new regression tests (`test_camelcase_identifier_columns_are_recognized_too` in P-5,
+    `test_camelcase_id_columns_get_the_name_shape_signal_too` in P-6) fail as expected;
+    restoring the fix made all 77 tests across P-4/P-5/P-6 pass again.
+  - *Evidence (live, independent SQL — real ClickHouse `origin2`):* `discover_indexes("Company")`
+    confirms real `companyID` primary key; `Location` table genuinely has camelCase
+    `companyID`/`locationID` columns. Post-fix, `score_identifier_likelihood(None, "companyID")`
+    returns `{"score": 0.7, "source": "name_shape"}` (was 0.1 pre-fix). Full end-to-end
+    `Location.companyID → Company.companyID` scoring: `name_similarity=1.0` (exact match),
+    `inclusion_coverage=0.258` (sampled). Independently verified against ground truth via direct
+    SQL aggregate (not the app's own numbers): `SELECT count() FROM origin2.Location WHERE
+    companyID IN (SELECT companyID FROM origin2.Company)` = 472,898 / 1,861,119 total Location
+    rows = 0.254 — matches the sampled 0.258 within sampling noise, confirming the
+    `filter_values`-based exact-coverage technique is correct (a naive independent "sample both
+    sides and intersect" check was tried first and wrongly reported 0.0, because ClickHouse's
+    string-sorted `Company.companyID` sample of the first ~100K distinct values out of 1.27M
+    total is not representative — this is exactly why P-6's implementation deliberately filters
+    the parent query by the child's own sampled values instead of independent sampling).
+  - *Full suite:* `scripts/check.py all` — 10/10 passed (one `ruff format` violation caught and
+    fixed in the new test file before this pass).
+  - **Follow-up fix (found while starting P-8, 2026-08-19):** re-reading `Branch_Plan.md`'s own
+    P-6 text ("each stored as evidence with the coverage formula") while building P-8's graph
+    reader surfaced that P-6, as originally committed, computed all ten signals but **never
+    persisted them** — no call to `store.insert_relationship()` anywhere in
+    `relationship_scoring.py`. This is a real completeness gap, not optional (unlike this same
+    module's already-documented, correctly-deferred `datasketch MinHashLSHEnsemble` pruning
+    step, which ADR 0007 itself calls "optional accelerator" and notes "a schema small enough
+    that exhaustive exact checking is already fast does not need this path exercised" — true at
+    this project's current real scale, so still not implemented, and still fine not to be).
+    Added `store_relationship()`: persists via `insert_relationship`, skips storage entirely for
+    `UNRELATED` (a non-relationship is not evidence worth keeping), `AUTO_ACCEPTED` at
+    `confidence >= 0.7` (the same bar `_classify_relationship_type` already uses for
+    `FOREIGN_KEY`) else `NEEDS_REVIEW`.
+    - *Evidence (unit):* 3 new tests in `test_relationship_scoring.py`, 35/35 passed for the file.
+    - *Evidence (live, independent SQL — real ClickHouse `origin1` + real PostgreSQL
+      `global_warehouse`):* computed all ten real signals for `origin1.CompanyExperience.companyID
+      -> origin1.Company.companyID` (1230 rows/482 distinct child, 3940/3940 distinct parent, 0
+      nulls — all real numbers from direct SQL, not fabricated) — `FOREIGN_KEY` at confidence
+      0.91. Stored via `store_relationship`; independently confirmed via `psql` join across
+      `md_relationship`/`md_column`: `companyID | companyID | FOREIGN_KEY | coverage=1 |
+      confidence=0.91 | ALGORITHMIC | AUTO_ACCEPTED` — matches the script's own output exactly.
+    - *mypy fix alongside:* `store_relationship` returning `Any` from a `str | None`-annotated
+      function (`store` is typed `Any`, matching every other `store_*` function in this
+      codebase) — fixed with an explicit `relationship_id: str = store.insert_relationship(...)`
+      before the return, same pattern `metadata_graph.py`'s own `upsert_canonical_field` already
+      uses. Also fixed two pre-existing mypy errors in P-7's `schema_matching.py` surfaced by the
+      same `scripts/check.py types` run (pandas has no stubs — added the same
+      `# type: ignore[import-untyped]` `splink_matcher.py` already uses for the identical import;
+      an unannotated list-comprehension made mypy infer `object` instead of `float` for a sort
+      key). `scripts/check.py all`: 10/10 passed after the fix.
+
+> **BP-B2** (plan's own text: "🚩 Commit to main if clean") — **do not commit to main** per the
+> scope override above. Live-check both ClickHouse origins per the plan's own definition, note
+> the result here, and continue straight into P-7.
+>
+> **Done, live-verified, not committed to main.** Ran `join_graph.py`'s real `build_join_graph()`
+> against both real ClickHouse origins (`origin1`: 13 tables, `origin2`: 7 tables). Before the
+> fix below: 11 edges found, 10 real (origin1, all `overlap=1.0`) + 1 false positive
+> (`origin2.CompanyIndustry.companyID -> Company.companyID`, claimed `probable` at
+> `overlap=0.646`).
+>
+> **Live-caught bug (out-of-plan, fixed now — not deferred, since it directly fails BP-B2's own
+> bar):** `sample_distinct_values()`'s unfiltered branch — shared by `join_graph.py`'s V2
+> inclusion-dependency check AND P-6's brand-new `score_inclusion_coverage` — issued
+> `SELECT DISTINCT col ... LIMIT N` with no ordering. ClickHouse returns the first N distinct
+> values in MergeTree scan order (not a random sample), which silently biased confidence
+> numbers. Independently confirmed via direct SQL aggregate:
+> `SELECT count() FROM origin2.CompanyIndustry WHERE companyID IN (SELECT companyID FROM
+> origin2.Company)` → 673,855 / 2,656,247 = **0.254** true ratio, vs. the biased sample's 0.646 —
+> a false `probable` edge (>`_PROBABLE_THRESHOLD`=0.5) that a genuine random sample does not
+> produce. Fixed in all three connectors for consistency (same shared interface method):
+> - `clickhouse.py`: added `ORDER BY rand()` before `LIMIT`.
+> - `postgres.py`: PostgreSQL rejects `SELECT DISTINCT col ... ORDER BY random()` directly
+>   (`ORDER BY expressions must appear in select list` — live-caught against the real
+>   `global_warehouse` destination DB), so the fix wraps the `DISTINCT` in a subquery before
+>   randomizing order.
+> - `mongodb.py`: added a `$sample` stage (20x oversampled) before `$group`, for a genuine
+>   random sample of documents instead of natural scan order.
+>
+> Post-fix, re-ran the exact same live check: `CompanyIndustry.companyID -> Company.companyID`
+> sampled overlap dropped to 0.216 (close to the 0.254 ground truth, within `n=500` sampling
+> noise) — correctly below the `probable` threshold and no longer asserted.
+> `build_join_graph()` re-run: **10 edges, all origin1, all real, all still found** — independently
+> spot-confirmed two more via direct SQL (`CompanyFinancials.companyID`: 29/29 matched;
+> `origin2.PersonContact.personID -> Person.personID`, correctly NOT asserted: true ratio
+> 1,082,811/4,321,730 = 0.250, consistent with `origin2`'s other ~25%-overlap columns, none of
+> which cross the `probable` bar). **Bar met exactly: every relationship V2 found is still found
+> (10/10), and no relationship is now asserted that hand-written SQL cannot confirm.**
+>
+> ClickHouse fix live-verified against real `origin2` data (above). PostgreSQL fix live-verified
+> as a functional smoke test against the real `global_warehouse` destination DB (`company.id`
+> sample returns valid rows post-fix; table too small — 2 rows — to reproduce the bias
+> dramatically, but confirms the subquery-wrapped SQL is syntactically correct against real
+> PostgreSQL). MongoDB fix could not be live-verified — no mflix-style Mongo container is
+> currently running in this environment (best-effort, consistent with BP-A2's own precedent) —
+> covered by a unit-test regression instead (`test_mongodb_connector.py`, pipeline shape
+> assertion).
+>
+> New regression tests (red-then-green confirmed for all three): unit tests, all passing.
+> `scripts/check.py all`: 10/10 passed.
+>
+> **Honest finding on the plan's own worked example (checked 2026-08-19, while completing P-6's
+> persistence follow-up above):** the plan text names `Company↔Experience↔Person↔PersonContact`
+> as a chain that should be "present with measured coverage." Checked directly against the real
+> schema: `origin2.Experience` has NO `personID` column at all (`experienceID`, `companyID`,
+> `tags`, `title`, `role`, `created_at` only — confirmed via `DESCRIBE TABLE`), so this exact
+> 4-node chain cannot be formed from `origin2` alone. `origin1` has `CompanyExperience` WITH a
+> real `personID` column (linking to `Person`), but `origin1` has no `PersonContact` table at
+> all. Since `join_graph.py`'s edges are strictly intra-origin by design (cross-origin "same
+> entity" links are Phase 3's `entity_grouping` job, not a join-graph edge — see the module's own
+> docstring), no single origin in the real seed data can produce this literal 4-node chain today.
+> What DOES exist and IS verified: `origin1.CompanyExperience.personID -> Person.personID`
+> (98%+ overlap, part of the 10 real edges above) and, separately in `origin2`,
+> `PersonContact.personID -> Person.personID` (a real but weak ~25% relationship, correctly not
+> asserted as a strong edge per the sampling-bias fix above) — two genuine but disconnected
+> fragments, not the single connected chain the plan's text describes. Recorded here rather than
+> fabricated or silently ignored, per this project's own standing rule that a plan's worked
+> examples are verification targets, not automatic truths.
+
+- [x] **P-7** Schema matching & canonical schema — `src/mcp_server/tools/schema_matching.py`
+  (ADR 0005). Three tiers: Valentine (`Coma`+`DistributionBased`+`JaccardDistanceMatcher`, merged
+  by max score across matchers, each matcher's own vote kept as evidence — `pip install
+  valentine`, added as pyproject.toml's new `schema_matching` optional group), the deterministic
+  heuristic pass (reuses `map_fields.py`'s own `_heuristic_match` rather than a second copy), the
+  LLM (new `schema_matching` stage/prompt pair) for what remains ambiguous after both. The
+  canonical schema is *discovered*, not preset like V2's fixed destination contract: the first
+  table for an entity type seeds canonical fields 1:1; later tables match against that seed;
+  no-match becomes a NEW canonical field.
+  - *Evidence (unit):* `tests/unit/test_schema_matching.py`, 18/18 passed.
+  - *Live-caught bug #1 (in V2's already-shipped `map_fields.py`, not new code):*
+    `_heuristic_match("ceoName", "name")` returned 0.8 (auto-accept under `_apply_heuristic_tier`'s
+    own `>= 0.5` bar) via the blanket `s in d or d in s` substring shortcut, silently contradicting
+    that very function's own adjacent comment ("`ceoName` and `founderName` ... must NOT be mapped
+    onto it") — the token-overlap check the comment describes was never reached because the
+    substring shortcut returns first. Fixed with a narrow, precedented gate
+    (`_has_unsafe_role_prefix`, mirroring the existing `_safe_coalesce_target`/
+    `_SAFE_COALESCE_QUALIFIERS` pattern already in the file) blocking only role-qualifier prefixes
+    (ceo/founder/cofounder/owner/manager/contact) that name a DIFFERENT entity — confirmed it does
+    NOT affect the existing, intentionally-passing `email_address<->email`, `full_name<->name`
+    cases (158 tests across every `map_fields`-adjacent suite still pass). Red-then-green
+    confirmed via a new regression test in `test_map_fields_detail.py`.
+  - *Live-caught bug #2 (new, in this module):* real `origin2.Person`'s `firstName`/`lastName`/
+    `middleName` each independently scored 0.8 against a bare `name` seed column (all contain
+    "name" as a substring) — without a guard, all three would silently "accept" onto the SAME
+    canonical field, with whichever is stored last winning in any consumer that treats a
+    canonical field as single-valued. Fixed with a "one winner per target column" rule: only the
+    first (highest-scoring, here `fullName`) source column may accept a given target; later
+    claims on an already-taken target (below 1.0) are marked `ambiguous` instead. Red-then-green
+    confirmed.
+  - *Evidence (live, independent — real ClickHouse `origin1`/`origin2`):* seeded canonical
+    `company` schema from `origin1.Company` (24 real columns), matched real `origin2.Company` (14
+    columns) against it: `companyID`/`description`/`website`/`created_at` exact Valentine matches
+    (1.0); `name` -> `entityName` (0.8, heuristic); `type` -> `types` (1.0, Valentine); 8 genuinely
+    new concepts (`domain`, `employeeCount`, `phone`, `revenue`, `rank`, `alexaRank`,
+    `revenueRange`, `ticker`) correctly became new canonical fields, zero ambiguous. Separately,
+    `origin1.Person`/`origin2.Person` exercised the one-winner-per-target fix live (`fullName`
+    accepted onto `name`, `firstName`/`lastName`/`middleName` correctly `ambiguous`).
+  - *Evidence (live, independent SQL — real PostgreSQL `global_warehouse`):* full storage
+    round-trip via `MetadataStore` — `store_mappings` wrote 25 seed canonical fields + 8 new ones
+    from origin2 (33 total, `psql SELECT entity_type, field_name FROM md_canonical_field`
+    independently confirms the count and exact field names) and 14 `md_field_mapping` rows for
+    `origin2.Company` (`psql` join across `md_field_mapping`/`md_column`/`md_canonical_field`
+    independently confirms every source_column/canonical_field/confidence/origin/review_status
+    pair matches what the script printed).
+  - *Gap, honestly noted:* the LLM tier (3) could not be live-verified end-to-end — no
+    `LLM_API_KEY` is configured in this environment (no `.env`, only `.env.example`) — covered
+    instead by mocked unit tests exercising both the LLM-accept and LLM-failure paths. In the two
+    live pairs tested, tiers 1+2 alone resolved everything with zero ambiguous columns reaching
+    tier 3 for Company, and the Person pair's ambiguous columns correctly fell back to
+    `NEEDS_REVIEW` per the tested no-LLM-configured path.
+  - *Full suite:* `scripts/check.py all` — 10/10 passed.
+- [x] **P-8** Metadata graph + graph UI (ADR 0009) — `src/mcp_server/tools/metadata_graph_view.py`
+  (backend) + `src/ui/frontend/src/components/MetadataGraphScreen.tsx` (frontend), wired through
+  a new `POST /api/metadata-graph` endpoint (`query_metadata_graph` in `db_discovery.py`, same
+  connect-and-catch pattern as the existing lineage lookup). `build_metadata_graph()` reads every
+  P-1 table via 8 new `MetadataStore.list_*` bulk readers and builds one `networkx.DiGraph`:
+  containment edges (source→database→schema→table→column, confidence 1.0) plus P-6
+  `relationship` and P-7 `field_mapping` semantic edges. Strictly the METADATA graph — no code
+  path here can produce an entity node (P-9's job, a different graph object per ADR 0009's own
+  consequence). Four filters (`filter_by_min_confidence`/`_node_type`/`_source`/`_depth`), all
+  server-side and reused by the frontend's confidence slider / type checkboxes / focus feature.
+  UI: SVG lane layout (one lane per node type), pan (drag) + zoom (wheel/buttons), search
+  (highlights matching labels), type/confidence filters, per-node expand/collapse (hides
+  `contains` descendants), click node → metadata panel, click edge → evidence panel, double-click
+  node → server-side depth-bounded focus.
+  - *Evidence (unit):* `tests/unit/test_metadata_graph_view.py` (12 tests) +
+    `tests/unit/test_metadata_graph.py`'s new `TestBulkReaders` (5 tests) — 41/41 passed.
+    Frontend: `npm run typecheck` clean, `npm run build` clean.
+  - *Evidence (live, independent SQL — real PostgreSQL `global_warehouse`):* `build_metadata_graph`
+    against the metadata accumulated by every earlier P-1–P-7 live-verification run in this
+    session produced 104 nodes / 101 edges (10 sources, 5 databases, 6 schemas, 7 tables, 43
+    columns, 33 canonical fields, 61 `contains` + 39 `field_mapping` + 1 `relationship` edges).
+    Independently confirmed via a direct `psql` count across all 8 tables: `10 | 5 | 6 | 7 | 43 |
+    33 | 1 | 39` — exact match, no silent drops or duplicates.
+  - *Evidence (live, real browser — full interactive verification, not just the API):* found and
+    fixed a real environment issue first — `preview_start` was launching the dev server from the
+    wrong git worktree (`fix-bugs`, this session's original directory) rather than
+    `v3-discovery-er`, so the new endpoint 404/405'd against completely unrelated code; fixed by
+    starting the server directly in the correct worktree and attaching the Browser pane via
+    `url`. With that fixed: `POST /api/metadata-graph` against the real destination returned the
+    same 104/101 verified above. In the actual rendered UI: node click shows the real `Company`
+    table's metadata (id/schema_id/name/row_count_estimate); edge click shows the real
+    `FOREIGN_KEY` relationship stored during P-6's follow-up (confidence 0.91, coverage 1,
+    `AUTO_ACCEPTED`) — exact match to what was persisted. Search for "companyID" highlighted
+    exactly 3 matching nodes. Unchecking the "column" type filter dropped 104→61 nodes, 101→18
+    edges (only non-column containment survives, as expected). Raising the confidence slider to
+    0.85 dropped 101→49 edges without touching node count (confidence filters edges only, never
+    nodes, by design). Collapsing the `Company` table node hid its columns (104→79 nodes,
+    101→50 edges) and showed "Company (collapsed)". Double-clicking `Company` and using "Focus
+    here" narrowed the graph via the real depth-2 server-side traversal (104→55 nodes/edges), and
+    "Clear focus" correctly restored the full 104/101.
+  - *Full suite:* `scripts/check.py all` — 10/10 passed.
+- [x] **P-9** Entity anchors, subgraph, coverage, extraction — `src/mcp_server/tools/entity_extraction_v3.py`
+  (ADR 0015). `discover_anchors()`: ranked candidates with evidence, never auto-picks a winner
+  on name equality (§31). `TraversalPolicy` + `traverse_subgraph()`: policy-capped BFS
+  (`max_depth`/`max_nodes`/`max_edges`/`min_edge_confidence`/`allowed_edge_types`/
+  `blocked_edge_types`/`allowed_sources`) over the real `JoinGraph`, cycle-preventing by
+  construction, per-path provenance via direction-aware `PathHop`s (the same type
+  `join_graph.find_paths` already returns). `compute_context_score()` (§33): confidence-tier
+  product, decayed by hop count. `build_coverage_matrix()` (§34): table- and field-level.
+  `plan_extraction()`/`execute_extraction()` (§35, §55, §56): cost-estimate preview via each
+  connector's real `estimate_query_cost` (P-2), then a fixpoint hop-walk extraction mirroring
+  `extract_data.py`'s own `_resolve_link_path` shape. Wired into `plan_scope_impl` as an
+  in-function `scope_config.engine == "v3_discovery"` branch (ADR 0015), following the
+  `resolve_entities.py` Splink-flag precedent exactly: falls through silently to the V2
+  heuristic floor on any failure or empty result. `extract_data.py` needs zero changes, since
+  the new engine's output is adapted into the identical wire shape.
+  - *Evidence (unit):* `tests/unit/test_entity_extraction_v3.py` (25 tests) +
+    `tests/unit/test_plan_scope.py`'s new `TestV3DiscoveryPlan`/`TestPlanScopeImplV3EngineFlag`
+    (7 tests) — 64/64 passed for the two files together, zero regressions in the other 32
+    pre-existing `plan_scope` tests.
+  - *Live-caught bug #1:* `execute_extraction` called `connector.extract(table, [], ...)` —
+    `[]` isn't this codebase's "all columns" convention (confirmed: `clickhouse.py` only
+    special-cases `columns == ["*"]`), producing a malformed query with no SELECT list — a real
+    ClickHouse syntax error on the very first live call against `origin1.Company`. Fixed by
+    passing `["*"]`.
+  - *Live-caught bug #2 (found after fixing #1 — every downstream hop still returned 0 rows):*
+    propagated join-column values were being run through `join_graph.normalize_val()`
+    (lowercases + strips URL prefixes — correct for its actual job, cross-column equality
+    *comparison* during inclusion-dependency verification) before being used as real query
+    filter values. A genuine case-sensitive id like `E-xSjHM5bMJmwwRfrYLwwkw` filtered on its
+    lowercased form matched zero rows in the real, case-sensitive database. Fixed by using seed
+    values verbatim. Red-then-green confirmed via a new regression test
+    (`test_propagated_filter_values_keep_their_original_case`).
+  - *Evidence (live, independent — real ClickHouse `origin1`/`origin2`):* `discover_anchors`
+    for "Boeing" against real `origin1.Company` found 36 ranked candidates, including **three
+    separate rows literally named "Boeing" exactly** — concrete confirmation of why §31 matters
+    (not theoretical). `traverse_subgraph` from `(origin1,Company)`+`(origin2,Company)` with
+    `min_edge_confidence="verified"` reached exactly the 10 real edges / 12 nodes BP-B2 already
+    established, `Person` correctly reached at depth 2 with `context_score=0.7671`.
+    `plan_extraction`'s real cost estimate for `origin2.Company` (1,270,564 rows) exactly
+    matches the direct SQL count BP-B2 already confirmed independently.
+  - *Evidence (live, cross-checked against the golden baseline):* `execute_extraction` seeded
+    with `entityName ILIKE '%Boeing%'`/`'%Airbus%'` against real `origin1` pulled real rows
+    across all 10-11 reached tables. **Financials matched the golden baseline exactly both
+    times** — 20/20 for Boeing, 28/28 for Airbus (the cleanest apples-to-apples number
+    available: one source table, no dedup/entity-resolution step in between). `Person` count
+    (39, origin1-only) is consistent with golden's combined total (539 = ~500 from origin2 + 39
+    from origin1). The flagged `plan_scope_impl` (`scope_config={"engine": "v3_discovery"}`)
+    produced a valid, wire-compatible `scope_plan` for a real Boeing run against real schemas:
+    `company` matched in both origins, `person` linked via a real 2-hop `origin1` path,
+    `origin2`'s `Person` correctly excluded (no edge there clears the `verified` bar,
+    consistent with BP-B2's finding that `origin2`'s relationships are mostly weak ~25%
+    overlap).
+  - *Scope decision, honestly narrower than the plan's literal text (see ADR 0015):* the flag
+    replaces V2's **planning** step only; `extract_data.py`'s actual row-pulling execution
+    (watermarks, incremental extraction, chunked/scratch-table `IN` filters — 1000+ lines,
+    heavily battle-tested) is untouched. `entity_extraction_v3.execute_extraction` is proven,
+    directly-callable, and live-verified on its own (above) but not wired into the live
+    pipeline's extraction step; its single-batch-per-hop fetch doesn't paginate the way
+    `extract_data.py` does, a real gap if it were wired in directly — exactly why that wiring
+    is deferred to a future ADR rather than done partially now.
+  - *Full suite:* `scripts/check.py all` — 10/10 passed.
+- [x] **P-10** Canonical matching dataset — `src/mcp_server/tools/canonical_matching_dataset.py`.
+  The Splink handoff artefact: `build_dataset_rows()` assembles P-9's raw extraction output plus
+  P-7's real field mappings into one row per source record — `record_id`, `source_id`,
+  `entity_type`, `entity_anchor_id`, `canonical_entity_id` (deliberately `NULL` — Splink's own
+  job in B.4, not yet reached), `source_table`, `source_record_id`, `canonical_fields`,
+  `original_fields`, `context_score`, `graph_path`, `provenance`, `discovery_evidence`,
+  `quality_diagnostics`. `materialize()` writes it into the run's own DuckDB spool file as a real
+  typed table (never one opaque JSON blob) via an `ON CONFLICT (record_id) DO UPDATE` upsert.
+  Never imports `src/orchestrator/spool.py` directly (layering) — the caller passes the spool's
+  own file path in, same pattern P-9's modules already use.
+  - *Evidence (unit):* `tests/unit/test_canonical_matching_dataset.py`, 10/10 passed.
+  - *Live-caught bug #1:* the very first real `materialize()` call against real Boeing data hit
+    silent data loss — 2447 rows built, but only 144 landed. Root cause: my live-verification
+    script supplied `"companyID"` (a foreign key) as `CompanyExperience`'s own `record_id_column`;
+    every experience row for the same company collapsed onto the same `record_id`, and the
+    upsert silently overwrote all but the last one. Fixed in the **module itself**, not just the
+    script: `build_dataset_rows()` now verifies the supplied `pk_column`'s values are actually
+    unique across the batch per table, and falls back to positional record ids (already the
+    established fallback for "no pk_column given") the moment they aren't — logging a warning
+    rather than silently colliding. Red-then-green confirmed via
+    `test_a_non_unique_pk_column_falls_back_to_positional_ids_not_a_collision`.
+  - *Live-caught bug #2 (found immediately after fixing #1):* the DuckDB schema declared
+    `source_record_id TEXT NOT NULL`, but the module's own docstring already documented that a
+    table with no known PK column legitimately produces `source_record_id=NULL` — the fallback
+    from bug #1 triggered exactly that path and hit the constraint on the very next real
+    `materialize()` call. Fixed by making the column nullable. Red-then-green confirmed via
+    `test_a_row_with_no_source_record_id_is_still_materialized`.
+  - *Evidence (live, independent SQL — real Boeing extraction, real P-7 field mappings from the
+    metadata store):* 2447 rows built and materialized (matching P-9's own extraction row counts
+    exactly, table by table: `Company` 18, `CompanyContact` 39, `CompanyEmployeeCategory` 188,
+    `CompanyExperience` 39, `CompanyFinancials` 20, `CompanyIndustry` 18, `CompanyInvestmentRound`
+    6, `CompanyRelation` 559, `CompanyTechnographics` 1503, `Location` 18, `Person` 39).
+    Independently confirmed via `duckdb` CLI-style queries against the materialized file:
+    `SELECT count(*), count(DISTINCT record_id)` = `(2447, 2447)` — zero collisions, zero loss.
+    A `Company` record's `canonical_fields` shows the real P-7 mapping applied correctly
+    (`entity_name`, `full_name`, `website`, ... populated from the real ClickHouse row). A
+    `CompanyExperience` record (the table that exposed bug #1) has `source_record_id=NULL`
+    (honest — it has no genuine single-column key) but its full `original_fields` and
+    `provenance` are intact, so "where did this come from" is still answerable by SQL alone —
+    just not addressable by a single id column, which is a true fact about that table, not a gap
+    in the dataset.
+  - *Full suite:* `scripts/check.py all` — 10/10 passed.
+
+> **BP-B3** — the handoff contract is provable: for a given Airbus run, every canonical record
+> answers "where did this come from?" by SQL alone. Live-verify, report back, **stop here** —
+> do not proceed into B.4 (Splink phases) or touch `main` without explicit go-ahead.
+>
+> **Done, live-verified 2026-08-22, not committed to main.** Ran the full P-9 -> P-10 pipeline
+> end to end for a real Airbus run against real ClickHouse `origin1`: `discover_anchors` +
+> `traverse_subgraph` (policy: `max_depth=3`, `min_edge_confidence="verified"`) reached 10 real
+> tables from the `Company` anchor; `execute_extraction` pulled 2840 real rows scoped to
+> `entityName ILIKE '%Airbus%'`; `build_dataset_rows` + `materialize` assembled them (with P-7's
+> real, already-stored field mappings) into a real DuckDB `canonical_matching_dataset` table.
+>
+> Independently confirmed via direct SQL against the materialized file (not the script's own
+> printed output): `SELECT count(*), count(DISTINCT record_id)` = `(2840, 2840)` — zero
+> collisions, zero silent loss (the exact failure mode P-10's own live-caught bug #1 could have
+> produced, now guarded against). Per-table row counts match P-9's own extraction exactly
+> (`Company` 7, `CompanyContact` 16, `CompanyEmployeeCategory` 138, `CompanyExperience` 33,
+> `CompanyFinancials` 28, `CompanyIndustry` 7, `CompanyRelation` 572, `CompanyTechnographics`
+> 2000, `Location` 7, `Person` 32).
+>
+> The bar itself, checked directly: the real `Company` record for "Airbus" (`full_name` "Airbus
+> SAS") has every real column correctly mapped to its canonical field (24 columns, each with its
+> own `discovery_evidence` entry naming the source column, canonical field, confidence, and
+> origin — `ALGORITHMIC`, from P-7's real live-verified mapping run). A real `Person` record two
+> hops from the anchor (Bernard Lathière, "French politician & former Airbus CEO") answers
+> "where did this come from" with nothing but its own row: `graph_path` shows the exact join
+> chain (`Company.companyID -> CompanyExperience.companyID`, then
+> `CompanyExperience.personID -> Person.personID`, each hop's real confidence tier and
+> verification rationale intact), `provenance` names the origin/table/key-column, and
+> `original_fields` preserves the untouched raw row. All of this is one `SELECT` against real,
+> materialized columns — never a JSON blob requiring app code to interpret, never something
+> requiring the pipeline to be re-run.
+>
+> **Handoff contract: provable.** Continuing into B.4 (Splink) or committing this branch to
+> `main` both require the user's explicit go-ahead, per the standing scope for this work.
+
+## B.4 — Splink workbench (S-A..S-P): user-authored, then remediated
+
+The B.4 workbench (`splink_common/compat/blocking/recommender/training/inference/evaluation/
+model/workbench.py`, ~4,350 lines, plus `src/api/main.py`'s `/api/splink/*` delegators and
+`src/ui/frontend/src/components/SplinkWorkbenchScreen.tsx`) was written by the user directly,
+picking up exactly where an earlier agent session stopped at BP-B3. A senior-review pass
+(same conversation, before this remediation) found the design sound — layering clean, no module
+state, no bare except, comparator catalog verified against the installed 4.0.16 API surface —
+but flagged 2 live-reproduced bugs, 20 mechanical lint/type gate failures, and a handful of
+design/doc gaps. This section is that remediation, itself entirely live-verified, never taken on
+the app's own success message.
+
+- [x] **Bug 1** `splink_recommender.field_stats` crashed (`AttributeError: 'Counter' object has
+  no attribute 'head'`) on any all-empty column — the ternary `values.value_counts() if
+  non_null else Counter()` then unconditional `.head(5)`; `Counter` has no `.head()`.
+  - *Fix:* drop the ternary — `value_counts()` on an empty Series still returns a Series.
+  - *Evidence (live):* a standalone script with a genuinely all-empty column reproduced the
+    crash pre-fix, then confirmed `completeness=0.0, top_values=[]` with no exception post-fix.
+- [x] **Bug 2** `splink_inference.explain_candidate` hardcoded `row.get("id_l")`/`row.get("id_r")`,
+  but installed 4.0.16's `compare_two_records` actually names those columns
+  `{unique_id_column_name}_l/_r` — every caller got `id_l=None, id_r=None`.
+  - *Fix:* read the real column names via `splink_common.unique_id_column_of(linker)`, the same
+    helper 3 other call sites already used correctly.
+  - *Evidence (live):* a hand-built linker + `compare_two_records` call returned real ids
+    (`pg:t:1`/`pg:t:2`) post-fix, confirmed twice (isolated script, then the full workbench
+    `train`→`explain` path).
+- [x] **Bug 3 (found during this remediation's own live verification, not on the original list)**
+  `splink_workbench.explain()` passed the caller's *raw* `record_a`/`record_b` (original field
+  names, `_origin_*` lineage keys, no unique-id column) straight into `compare_two_records` — the
+  exact same visible symptom as Bug 2 (unusable ids) but one layer up: Splink didn't see the
+  configured unique-id column on either dict at all, and silently substituted its own internal
+  `_left`/`_right` placeholders instead of raising.
+  - *Fix:* run `record_a`/`record_b` through the same `records_to_dataframe` transform the
+    training records already went through before calling `infer.explain_candidate`.
+  - *Evidence (live):* an end-to-end script through `wb.train()` → `wb.explain()` with realistic
+    (raw, lineage-keyed) records returned `id_l="_left", id_r="_right"` before the fix and real
+    ids (`pg:t:1`/`pg:t:2`) after — confirmed again independently through the live browser UI
+    and against real ClickHouse data (see below).
+- [x] **Lint gate** `scripts/check.py lint` — 19 ruff errors (RUF002 en-dashes in docstrings,
+  I001 unsorted imports, B905 `zip()` without `strict=`, RUF046 redundant `int()` cast, F401
+  unused imports) across 8 files, all fixed (`strict=True` chosen deliberately — every flagged
+  `zip()` pairs same-length sequences derived from the same source).
+  - *Evidence:* `scripts/check.py lint` — 1/1 passed.
+- [x] **Types gate** `scripts/check.py types` — 20 new mypy errors against the ratchet baseline
+  (zero pre-existing baseline noise touched). Notable ones: a shared `LinkType = Literal[
+  "link_only", "link_and_dedupe", "dedupe_only"]` alias added to `splink_common.py` (previously
+  four separate `link_type: str` parameters across `splink_common`/`splink_blocking`); the
+  `splink_training._session_to_record` trajectory dict's key type corrected from a wrong-arity
+  `tuple[str, str, int]` to the real `tuple[str, str, Any, str]` (4 elements, not 3 — an
+  undetected type-checking gap, not a runtime bug, since Python itself never enforced the
+  declared type); a `val`/`param_val` rename to resolve a "Name already defined" redefinition
+  mypy caught between two independent loops in the same function; `# type: ignore[import-
+  untyped]`/`[no-untyped-call]` applied at the same call sites `splink_matcher.py` (the existing,
+  pre-B.4 engine) already uses for the identical Splink-internals pattern.
+  - *Evidence:* `scripts/check.py types` — 1/1 passed.
+- [x] **Format gate** `scripts/check.py format` — genuinely a hard gate (its own docstring:
+  "a real, enforced gate from here on... not a warning"), not report-only as an earlier
+  assumption in this session's carried-over context had it. `ruff format` reformatted 12 files
+  (all of B.4's own new modules/tests plus one pre-existing eval test it touched).
+  - *Evidence:* `scripts/check.py format` — 1/1 passed.
+- [x] **Design gap: duplicated comparator-building logic.** `splink_recommender.
+  comparison_to_settings_hit` (semantic-type-driven, S-B) and `splink_workbench.
+  _config_comparison`'s explicit-comparator branch each independently mapped comparator *name*
+  to a Splink comparison object — two if-chains that had already started to diverge (the
+  workbench's used `getattr`-based dispatch reaching the whole installed `comparison_library`;
+  S-B's used a fixed list of direct `cl.XComparison` references). Extracted the single
+  `splink_recommender.build_comparator(name, field, *, extra_fields, thresholds)` both now
+  delegate to — `getattr`-based (superset of what either had), so a hand-picked comparator and
+  an AUTO-recommended one can never construct differently again.
+  - *Evidence:* all 84 pre-existing B.4 unit tests still pass unchanged post-refactor, including
+    `test_settings_hit_builds_real_comparators` / `test_settings_hit_refuses_mismatched_columns`;
+    re-verified live via the full `train()` path using the explicit `{comparator, field}` shape.
+- [x] **Doc gap: `run_prediction`'s docstring** claimed a fixed `id_l`/`id_r` naming; corrected to
+  name the real `{unique_id_column}_l/_r` convention (the same fact Bug 2/3 were about).
+- [x] **Doc gap: "Splink.txt" spec source.** Every new module cites `Splink.txt §NN` by section
+  number; confirmed via repo-wide search that no such file exists in this repository. Not a gap
+  to fix — `Branch_Plan.md`'s own B.1 table already reproduces the section-to-verified-API
+  mapping in full (`| Spec need (Splink.txt §) | Verified API |`), so the content those citations
+  point to is already in-repo; `Splink.txt` itself is external planning input, never meant to be
+  committed.
+- [x] **Doc gap: no ADR for S-N's model-versioning design.** Added
+  [0016-splink-model-versioning-file-store.md](docs/decisions/0016-splink-model-versioning-file-store.md)
+  (file-store-per-version, immutability, activation-as-pointer, round-trip-verify gating
+  activation) and indexed it in `docs/INDEX.md`.
+  - *Evidence:* `scripts/check.py docs` — 1/1 passed (every citation resolves).
+- [x] **Second KNOWN LIMITATION documented (found during this remediation's live verification,
+  not on the original list).** `splink_inference.run_clustering`'s `compute_graph_metrics` call
+  always raises `TypeError: 'numpy.float64' object cannot be interpreted as an integer` against
+  the installed splink 4.0.16 + igraph 1.0.0 pair — reproduced with a plain Python `float`
+  threshold and a `numpy.float64` alike (ruling out our call site), traced to
+  `edge_metrics.compute_igraph_metrics` → `igraph.Graph.DataFrame` → `igraph.Graph.__init__`
+  receiving a numpy-typed vertex count where installed `igraph` requires a native `int`. Already
+  gracefully handled (caught, surfaced as `graph_metrics: {"error": ...}`, does not fail
+  clustering) — documented in the module docstring next to the existing `cluster_using_
+  single_best_links` limitation so the next Splink/igraph upgrade re-tests both instead of
+  rediscovering either.
+- [x] **Frontend built** — `src/ui/frontend/src/components/SplinkWorkbenchScreen.tsx` (new,
+  ~700 lines) wired to all 14 `/api/splink/*` endpoints (status/recommend/train/predict/explain/
+  cluster/evaluate/models list/get-version/get-active-config/activate/rollback/archive/compare),
+  a new "Splink" tab in `App.tsx`, matching this project's existing card-per-concern component
+  style (`InvestigateScreen.tsx`'s pattern) and CSS classes (no new styling introduced).
+  - *Live-caught bug (frontend) #1:* the field-roles table read `f.matching_stars`/
+    `f.blocking_stars`/`f.tf_stars` — the real API response nests them as `f.matching.stars`/
+    `f.blocking.stars`/`f.tf.stars`. Fixed; live-reverified showing real star ratings
+    (`★★★★★`) instead of blank cells.
+  - *Live-caught bug (frontend) #2:* the predict summary read `result.review`/`result.queue` for
+    the review-queue count; the real field is `result.review_count`. Fixed.
+  - *Evidence (live, `scripts/check.py frontend` + real browser session against the app served
+    from this worktree, not the stale build a misconfigured preview server had briefly served
+    from a different checkout):* every one of the 14 endpoints exercised through actual UI
+    clicks/inputs, each confirmed via `read_network_requests` showing its real HTTP call and
+    status code — `train` → "Saved version 1 (round-trip verified: true)", `predict` →
+    561/2/34-shaped real numbers depending on dataset, `explain` → real ids end to end,
+    `cluster` → the known-limitation warning rendering correctly instead of crashing the screen,
+    `evaluate` → a real accuracy report, `activate` → independently confirmed by reading
+    `logs/splink_models/<model>/active.json` directly off disk (never the app's own success
+    banner), `rollback` on a model with only one activation → a clean 422 surfaced as a banner,
+    not a crash (correct: "nothing to roll back to" is the documented behavior for that case).
+- [x] **Live-verified against real Docker databases** (`Sample_Database` ClickHouse, port 8190,
+  per this file's own standing rule — never synthetic seed data for a final check). Pulled 36 raw
+  `Company` rows matching `%boeing%` from real `origin1`+`origin2` (18 each); the live pull itself
+  surfaced a real data-quality fact worth noting, not a bug: `origin2.Company` has genuine
+  duplicate `companyID`s (3 rows sharing one id) — `records_to_dataframe`'s existing "duplicate
+  unique id" refusal caught it correctly, exactly as designed; the 2 duplicates were dropped
+  before building the test set, same as a real caller's own dedup pass would.
+  - Ran `recommend` → `train` (`NameComparison` + `ExactMatch` on `website`, no blocking — N=34
+    is small enough for a full 561-pair pairwise EM pass) → `predict` (561 pairs scored, matching
+    `34×33/2` exactly) → `explain` the top-scored real pair (`'Boeing' <-> 'Boeing'`, two distinct
+    origin1 rows, `match_probability=0.191`, real per-field Bayes factors) → `cluster` (the known
+    igraph limitation degraded gracefully again) → `evaluate` (a real accuracy report) →
+    `list_models`/`activate`, all against this real external data, all round-trip-verified
+    (`round_trip_verified: True`), with a regression assertion that `explain`'s returned ids
+    exactly match the `predict` table's own id columns for the same pair.
+  - *Evidence:* full script output in this session's scratch directory; independently confirmed
+    the trained model files exist on disk under `logs/splink_models/clickhouse_boeing_company/`.
+- [x] **Full suite:** `scripts/check.py all` — 10/10 passed (lint, format, arch, docs,
+  portability, types, frontend, test, eval, prompts) after every fix above; the pre-existing
+  `tests/eval/test_matcher_recall.py` BP-B4 promotion gate (which measures the *old*
+  `splink_matcher.py` engine, untouched by this remediation) was unaffected and still records
+  the same `gate_passed: false` outcome ADR 0004's addendum already documents — promoting Splink
+  to the default engine remains blocked on that separate, pre-existing gate, not on anything
+  fixed here.
+
+> **What this remediation did not do, on purpose:** it did not touch `tests/eval/
+> test_matcher_recall.py`'s A/B gate or attempt to make Splink win it — that gate tests the old
+> Phase-7.4 engine (`splink_matcher.py`), a different code path from the B.4 workbench entirely,
+> and closing that particular recall gap (the exact-match blocking rule on `name` never scoring
+> near-miss variants, per ADR 0004's addendum) was never on this remediation's list. It also did
+> not wire the workbench's trained models into the production `matching_rules` promotion surface
+> — the workbench today is a standalone tuning/training tool; making its output selectable as an
+> entity's actual matching engine is a separate, not-yet-scoped piece of future work.
+>
+> Never committed to `main` — this branch's own discipline applies throughout, same as B.0-B.3.
+
+## Repo publish: GitHub mirror + CI (2026-08-27)
+
+- [x] **Published to GitHub.** `git.n4t.com` (`origin`) remains unreachable for both push/pull
+  and any server-side CI (ADR 0003). Added a second remote, `github`, pointing at the user's own
+  private repo (`https://github.com/Reza-Sh83/merge-engine.git`), and pushed all 8 local branches
+  as-is: `main`, `feat/v3-discovery-er`, `fix-bugs`, `fix-bugs-backup`, `chore/harness-ratchet`,
+  `feat/dspy-prompt-layer`, `feat/matching-precision`, `feat/planner-swarm`,
+  `feat/quality-lineage`. *Evidence:* each `git push github <branch>` returned `[new branch]`;
+  `git ls-remote github` round-tripped cleanly beforehand to confirm the stored credential helper
+  authenticates non-interactively.
+- [x] **Added `.github/workflows/ci.yml`**, invoking exactly `python scripts/check.py all` on
+  `push`/`pull_request`/`workflow_dispatch` — per ADR 0003's own revisit guidance ("whichever CI
+  config eventually gets added should invoke exactly that command and nothing else"). Landed on
+  `feat/v3-discovery-er` only in this pass, since every other branch is already checked out in a
+  sibling worktree (`D:\transfer\merging` for `main`; `.worktrees\B1-B5`/`fix-bugs` for the rest)
+  and this session's hard constraint is to work only inside its own worktree root — never check
+  out or commit to a branch live in another worktree. Propagating the same file to the other 7
+  branches is a small follow-up left for the user (or a future session working in that specific
+  worktree) to pick up; the identical file is ready to copy from this branch.
+- [x] **CI run outcome independently confirmed — and CI made green for the first time
+  (2026-09-22).** `gh` is now authenticated, so the Actions tab was read directly rather than
+  guessed at. Every run in the repo's history had failed. Four independent causes, each read out
+  of a run log, not inferred:
+  1. 47 ruff errors in `scripts/ground_truth/` (8 files, never linted; `src/`+`tests/` clean).
+  2. `check.py eval` hung forever: a blanket `*.csv` in `.gitignore` silently untracked
+     `tests/eval/pagila_staff.csv`, so `load_staff()` fell back to a 2-row stub, the 204 eval
+     records carried 3 distinct names, and Splink's blocking never returned. Same bug class the
+     repo already documents for `*.json`; the hook is now `no-blanket-data-ignore` and covers
+     csv/tsv too.
+  3. CI installed 5 of 8 extras while `mypy-baseline.txt` was generated with all of them (it
+     holds zero `import-not-found` lines) — 6 phantom `great_expectations` errors.
+  4. `check.py test` hung 30 min: `config/config.yaml` (tracked) points `base_url` at
+     `http://10.10.9.45:8000/v1`, a private LAN vLLM box. Measured: 0.0s to connect here,
+     silently dropped from a runner. `LLMClient` passed no `timeout`/`max_retries`, and the
+     `dependency_state` fixture set no `llm_config`, so nodes fell back to the real production
+     config — i.e. the "mocked at the DB/LLM boundary" integration tests had been making live
+     model calls on any machine that could reach that box.
+  *Evidence:* run 35696022433 — `All 10 check(s) passed.`, job 3m32s (lint 0.2s, format 0.2s,
+  arch 1.1s, docs 0.1s, portability 0.0s, types 49.0s, frontend 10.9s, test 67.7s, eval 1.1s,
+  prompts 2.3s), read back from `gh run view --log`, not from a success message. Prior runs
+  35691851365 (test hung, killed at 1800s by the new per-stage cap) and 35694979555 (3
+  `TestFieldMappingNodeIntegration` tests failed at the new `--timeout=120`, naming themselves)
+  are the intermediate evidence that localised the fault.
+- [x] **OpenWiki workflow no longer fails nightly.** It had failed 10+ consecutive scheduled runs
+  because no repository secrets exist at all, so `OPENROUTER_API_KEY` was empty. Absent
+  credentials is now a skip with a `::notice::`, not a failure. *Evidence:* dispatched run
+  35721689877 — green in 5s, annotation `OPENROUTER_API_KEY is not configured - skipping`.
+  Adding the key is still the maintainer's to do; nothing here supplies it.
+- [ ] **Propagate the fixed CI config to the other branches.** `.github/workflows/`,
+  `scripts/check.py`, `pyproject.toml` pins and the eval/LLM fixes currently live on `fix-v3`
+  only. Note `chore/harness-ratchet` (B5) owns `CLAUDE.md`, `scripts/check.py`,
+  `.pre-commit-config.yaml`, `docs/**` and CI config per the §0 ownership table, and is 2 commits
+  ahead with overlapping edits to `CLAUDE.md` and `scripts/check.py` (Windows-portability hunks,
+  disjoint from these) plus a richer `tests/eval/golden.py` fallback that will conflict with the
+  2-row one here — B5's is the better data fix and should win that merge.
 
 ---
 
-## Phase 4 — Frontend State Persistence Store & Interactive UX Tooltips
-
-Implement a central frontend state store synced with `localStorage` and provide explanatory `(i)` tooltips across gates.
-
-- [x] **4.1 Central Persistence Store in `store.ts`**
-  - Created [store.ts](file:///d:/transfer/merging/.worktrees/fix-bugs/src/ui/frontend/src/store.ts) with local storage sync helpers: `loadOriginsFromStorage`, `saveOriginsToStorage`, `loadDestinationFromStorage`, `saveDestinationToStorage`, `loadRunIdFromStorage`, `saveRunIdToStorage`, `loadStatusFromStorage`, `saveStatusToStorage`, `loadActiveTabFromStorage`, `saveActiveTabToStorage`.
-  - *Evidence:* Local storage helpers persist active tabs, origins, destination, run ID, and workflow status.
-
-- [x] **4.2 Tab Display Toggling & Mounting in `App.tsx`**
-  - Updated [App.tsx](file:///d:/transfer/merging/.worktrees/fix-bugs/src/ui/frontend/src/App.tsx) to mount all tab screens (`SetupScreen`, `PipelineScreen`, `SettingsScreen`, `InvestigateScreen`) using CSS `display: tab === name ? 'block' : 'none'`.
-  - *Evidence:* Navigating between tabs preserves in-flight pipeline state, edits, and active workflow polling without unmounting components.
-
-- [x] **4.3 Explanatory Tooltip Component in `Tooltip.tsx`**
-  - Created reusable `<Tooltip text="..." />` component in [Tooltip.tsx](file:///d:/transfer/merging/.worktrees/fix-bugs/src/ui/frontend/src/components/Tooltip.tsx).
-  - *Evidence:* Hovering or clicking `(i)` displays a sleek, styled explanatory popup with zero external dependencies.
-
-- [x] **4.4 Contextual Gate Tooltips in `Gates.tsx`**
-  - Added tooltips next to key section labels in [Gates.tsx](file:///d:/transfer/merging/.worktrees/fix-bugs/src/ui/frontend/src/components/Gates.tsx) (Extraction Order, Scope Rules, Field Mapping Filters, Reconciliation).
-  - *Evidence:* Tooltips render next to gate headers.
-
----
-
-## Phase 5 — MCP SDK Compatibility & Comprehensive Verification
-
-- [x] **5.1 MCP Server SDK Compatibility in `server.py`**
-  - Added decorator compatibility methods (`list_tools`, `call_tool`, and `inputSchema` property alias) to `Server` and `Tool` in [server.py](file:///d:/transfer/merging/.worktrees/fix-bugs/src/mcp_server/server.py).
-  - *Evidence:* 100% of MCP unit tests in `tests/unit/test_mcp_server.py` passed (`12 passed in 4.83s`).
-
-- [x] **5.2 Targeted Unit Test Suite**
-  - Executed targeted unit tests:
-    - `tests/unit/test_map_fields_node.py` (Passed)
-    - `tests/unit/test_mapping_gate.py` (Passed)
-    - `tests/unit/test_plan_scope.py` (Passed)
-    - `tests/unit/test_analyze_dependencies_node.py` (Passed)
-    - `tests/unit/test_mcp_server.py` (Passed)
-  - *Evidence:* All targeted unit tests passed with 100% success.
-
-- [x] **5.3 Dedicated Worktree Environment Bootstrap**
-  - Ran `python scripts/bootstrap.py` in worktree [d:\transfer\merging\.worktrees\fix-bugs](file:///d:/transfer/merging/.worktrees/fix-bugs) to construct the worktree's isolated `.venv` and build frontend bundle.
-  - *Evidence:* `.venv` created, dependencies installed (`langchain_anthropic`, `fastapi`, `vite`, `mcp`), and frontend built cleanly (`dist/index.html`, `dist/assets/index-HSWXv1z9.css`, `dist/assets/index-CdRgmV20.js`).
-
-- [x] **5.4 Worktree Full Verification Suite**
-  - Executed `.venv\Scripts\python.exe scripts/check.py all` inside `.worktrees/fix-bugs`.
-  - Reformatted Python code with `.venv\Scripts\python.exe -m ruff format .` (197 files clean).
-  - *Evidence:* 1,337+ unit and integration tests passed (`1337 passed, 83 skipped`), frontend TypeScript build (`tsc -b && vite build`) passed 100% cleanly.
-
----
-
-## Phase 6 — .env Loading & Settings Environment Overrides
-
-Fix `.env` file loading across all entry points and implement interactive session environment overrides in the Settings UI.
-
-- [x] **6.1 Explicit `.env` Path Resolution in `src/api/main.py`**
-  - Added `_ROOT_DIR = Path(__file__).resolve().parents[2]` and `_ENV_FILE = _ROOT_DIR / ".env"` after imports.
-  - Created `_init_env()` helper that calls `load_dotenv(dotenv_path=_ENV_FILE, override=True)` with explicit project-root path.
-  - *Evidence:* Ruff linting passes; `.env` file is found regardless of working directory.
-
-- [x] **6.2 Explicit `.env` Path Resolution in `src/main.py`**
-  - Added `_ENV_FILE = Path(__file__).resolve().parent.parent / ".env"` and `load_dotenv(_ENV_FILE, override=True)`.
-  - *Evidence:* `.env` default variables are loaded cleanly regardless of launch directory.
-
-- [x] **6.3 Explicit `.env` Path Resolution in `src/utils/config_loader.py`**
-  - Added `_ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"` and `load_dotenv(_ENV_FILE, override=True)`.
-  - *Evidence:* `${ENV_VAR}` placeholders in `config.yaml` resolve cleanly.
-
-- [x] **6.4 Session Environment Overrides — Backend Endpoints**
-  - Added `_SESSION_ENV_OVERRIDES` dict, `_ENV_EXPECTED` tuple (11 keys), `_mask_env_val()`, `_build_env_details()` helper.
-  - Added `GET /api/config` → returns `env_details` with per-key status/source/masked_value.
-  - Added `POST /api/config/env` → accepts `{ overrides: { KEY: VALUE } }`, updates `os.environ` in-memory.
-  - Added `POST /api/config/env/reset` → clears `_SESSION_ENV_OVERRIDES`, reloads `.env` via `_init_env()`.
-  - *Evidence:* Ruff + mypy pass. Overrides take effect immediately in runtime; reset clears to `.env` defaults.
-
-- [x] **6.5 Session Environment Overrides — Frontend API Layer**
-  - Added `EnvDetail` interface and `env_details` property on `EffectiveConfig` in [api.ts](file:///d:/transfer/merging/.worktrees/fix-bugs/src/ui/frontend/src/api.ts).
-  - Added `updateEnvOverrides()` and `resetEnvOverrides()` API helpers.
-  - *Evidence:* TypeScript compiles cleanly.
-
-- [x] **6.6 Session Environment Overrides — Settings UI**
-  - Updated [SettingsScreen.tsx](file:///d:/transfer/merging/.worktrees/fix-bugs/src/ui/frontend/src/components/SettingsScreen.tsx) Environment card:
-    - Renders interactive text input fields for each environment variable.
-    - Shows status badges: `✓ set (.env default)` (green), `⚡ overridden (session)` (blue), `not set` (red).
-    - "Apply Session Overrides" button → `POST /api/config/env`.
-    - "Reset to .env Defaults" button → `POST /api/config/env/reset`.
-  - Fallback: if `env_details` is absent, falls back to `env_present` map.
-  - *Evidence:* Frontend build passes. Status badges display correctly.
-
-- [x] **6.7 Verification — Full Check Suite**
-  - Executed `.venv\Scripts\python.exe scripts/check.py all`.
-  - *Evidence:* All 10 verification steps passed 100% cleanly.
-
----
-
-## Phase 7 — UI Polish & Structured Data Display
-
-Fix visual issues, add structured data presentations, and improve interactive gate components.
-
-### 7.1 — Tooltip Font Fix (Bug #1)
-
-- [x] **7.1.1 Override inherited text-transform in tooltip popup**
-  - In [Tooltip.tsx](file:///d:/transfer/merging/.worktrees/fix-bugs/src/ui/frontend/src/components/Tooltip.tsx), added `textTransform: "none"`, `fontWeight: "normal"`, `letterSpacing: "normal"`, `fontSize: 12` to popup `<span>`.
-  - *Evidence:* Tooltip text renders in normal sentence case, matching body font.
-
-### 7.2 — Cascading Dropdowns for Dependency Link Form (Bug #2)
-
-- [x] **7.2.1 Pass origin schemas to dependency gate interrupt data**
-  - Updated [human_nodes.py](file:///d:/transfer/merging/.worktrees/fix-bugs/src/orchestrator/nodes/human_nodes.py) `human_review_deps()` to attach `origin_schemas` in `interrupt_data["data"]`.
-  - *Evidence:* `interrupt_data` includes origin schema mappings.
-
-- [x] **7.2.2 Populate `origin_schemas` in workflow state**
-  - Updated `_build_origin_schemas()` in `human_nodes.py` to restructure schema discovery into `{origin_id: {table_name: [columns]}}`.
-  - *Evidence:* `origin_schemas` passed to dependency gate.
-
-- [x] **7.2.3 Add `origin_schemas` to `MergeState` in `graph.py`**
-  - Added `origin_schemas: dict[str, Any]` to `MergeState` in [graph.py](file:///d:/transfer/merging/.worktrees/fix-bugs/src/orchestrator/graph.py).
-  - *Evidence:* LangGraph state tracks origin schemas.
-
-- [x] **7.2.4 Replace free-text inputs with cascading `<select>` dropdowns in `Gates.tsx`**
-  - Implemented `SchemaCascade` component in [Gates.tsx](file:///d:/transfer/merging/.worktrees/fix-bugs/src/ui/frontend/src/components/Gates.tsx) to render Origin -> Table -> Column dropdowns.
-  - *Evidence:* Dependency form uses cascading dropdowns.
-
-- [x] **7.2.5 Verify cascading dropdown behavior**
-  - Tested with schema discovery payloads. Dropdowns cascade cleanly.
-
-### 7.3 — Extraction Order as Structured Table (Bug #3)
-
-- [x] **7.3.1 Compute extraction tiers from dependency tree**
-  - Added `computeTiers()` helper in [Gates.tsx](file:///d:/transfer/merging/.worktrees/fix-bugs/src/ui/frontend/src/components/Gates.tsx).
-  - *Evidence:* Tier 1 (no deps), Tier 2 (deps on Tier 1) computed accurately.
-
-- [x] **7.3.2 Replace `<ol>` with `<table>` grouped by tier**
-  - Replaced plain list with `<table className="data-table">` grouped by tier headers in `Gates.tsx`.
-  - *Evidence:* Extraction order renders as a structured table with tier headers and root/has deps badges.
-
-- [x] **7.3.3 Verify extraction order table renders correctly**
-  - Frontend TypeScript build compiled clean.
-
-### 7.4 — Field Mappings: Origin/Source Table + New Column Fix (Bug #4)
-
-- [x] **7.4.1 Investigate `map_fields_node.py` for origin_id/table population**
-  - Updated `_build_source_schema_from_discovered()` in `map_fields_node.py` to attach `origin_id` and `table` on source fields.
-  - *Evidence:* Mapping rows contain origin metadata.
-
-- [x] **7.4.2 Backfill `origin_id` and `table` on mapping rows (if missing)**
-  - Attached origin metadata in `map_fields.py` and `map_fields_node.py`.
-  - *Evidence:* Field Mappings table displays Origin and Source Table columns.
-
-- [x] **7.4.3 Add placeholder hint text for disabled New Column / Type inputs**
-  - Added `NEW_COL_HINT` placeholder in `Gates.tsx`: `placeholder="Change action to 'new_column' to enable"`.
-  - *Evidence:* Input fields display helpful placeholder hints when disabled.
-
-- [x] **7.4.4 Verify field mappings table displays Origin and Source Table**
-  - Verified in `Gates.tsx`.
-
-### 7.5 — Matching Company Records: Collapsible Key-Value Cards (Bug #5)
-
-- [x] **7.5.1 Replace inline key=value string with collapsible cards in `ScopeBody`**
-  - Implemented `CandidateCard` component in [Gates.tsx](file:///d:/transfer/merging/.worktrees/fix-bugs/src/ui/frontend/src/components/Gates.tsx).
-  - *Evidence:* Record candidates render as collapsible cards.
-
-- [x] **7.5.2 Add expand/collapse toggle state**
-  - Added `open` toggle state with `▾` / `▸` indicators.
-  - *Evidence:* Click toggles expanded key-value table.
-
-- [x] **7.5.3 Style the collapsible cards**
-  - Compact padding, monospace font for fields and values.
-  - *Evidence:* Clean card design.
-
-- [x] **7.5.4 Verify matching records display**
-  - Frontend build passed.
-
-### 7.6 — Explanatory Tooltips for Summary Sections (Bug #6)
-
-- [x] **7.6.1 Add ⓘ Tooltip to "Reconciliation (pre-load)" header**
-  - Added `<Tooltip text="..." />` in `SummaryBody` in `Gates.tsx`.
-  - *Evidence:* Section header displays ⓘ tooltip.
-
-- [x] **7.6.2 Add ⓘ Tooltip to "Conflicts resolved by" header**
-  - Added `<Tooltip text="..." />` in `SummaryBody` in `Gates.tsx`.
-  - *Evidence:* Survivorship rules header displays ⓘ tooltip.
-
-- [x] **7.6.3 Add ⓘ Tooltip to "Field mappings (N)" header**
-  - Added `<Tooltip text="..." />` in `SummaryBody` in `Gates.tsx`.
-  - *Evidence:* Final mappings header displays ⓘ tooltip.
-
-- [x] **7.6.4 Verify tooltips render correctly**
-  - All summary headers include explanatory tooltips.
-
-### 7.7 — Data-Quality Scorecard Explanation Panel (Bug #7)
-
-- [x] **7.7.1 Add expandable explanation panel to `RunScorecard`**
-  - Added `showExplanation` toggle state and `📊 Why this score?` button in [PipelineScreen.tsx](file:///d:/transfer/merging/.worktrees/fix-bugs/src/ui/frontend/src/components/PipelineScreen.tsx).
-  - *Evidence:* Scorecard includes interactive explanation panel.
-
-- [x] **7.7.2 Explain Grade criteria**
-  - Documented Grade A (no red flags), B (minor red flags), C (type coercion/skipped mappings), F (rollback/zero auto-merges).
-  - *Evidence:* Active red flags listed in breakdown card.
-
-- [x] **7.7.3 Explain Completeness percentage**
-  - Rendered formula `Families Loaded / Families Requested × 100`.
-  - *Evidence:* Loaded and zero-row entities listed.
-
-- [x] **7.7.4 Show dropped entities breakdown**
-  - Listed dropped inferred entities when present with explanation.
-  - *Evidence:* Inferred entity types rendered in code block.
-
-- [x] **7.7.5 Style the explanation panel**
-  - Styled with border, background, and structured bullet lists.
-  - *Evidence:* High-contrast card layout.
-
-- [x] **7.7.6 Verify scorecard explanation panel**
-  - Frontend TypeScript build and Vite bundle succeeded.
-
----
-
-## Phase 8 — Build, Lint & Final Verification
-
-- [x] **8.1 Ruff Format & Lint**
-  - Executed `.venv\Scripts\python.exe -m ruff format .` and `ruff check .`.
-  - *Evidence:* 0 files need fixing, all 197 python files clean.
-
-- [x] **8.2 Mypy Type Check**
-  - Executed `.venv\Scripts\python.exe -m mypy src/ --config-file pyproject.toml`.
-  - *Evidence:* 0 new errors against baseline.
-
-- [x] **8.3 Frontend Build**
-  - Executed `.venv\Scripts\python.exe scripts/check.py frontend`.
-  - *Evidence:* TypeScript compilation + Vite production bundle (`dist/`) built 100% cleanly.
-
-- [x] **8.4 Unit Test Suite**
-  - Executed `.venv\Scripts\python.exe -m pytest tests/ -x -q`.
-  - *Evidence:* 1,337 unit & integration tests passed cleanly (`1337 passed, 83 skipped`).
-
-- [x] **8.5 Full Check Suite**
-  - Executed `.venv\Scripts\python.exe scripts/check.py all`.
-  - *Evidence:* All 10/10 verification checks passed cleanly.
-
-- [x] **8.6 Manual End-to-End Verification**
-  - Verified UI rendering, tooltips, cascading dropdowns, scorecard explanations, and session environment overrides.
-
----
-
-## Phase 9 — Schema-Grounded Request Parsing, Coverage Matrix Dependencies & Enriched Preset Prompt
-
-Re-order graph execution so `discover_schemas` precedes `parse_request`, ground entity parsing in actual origin database schemas, extract entity tables in a single merged `parse_request` step, introduce a programmatic FK coverage matrix with automatic validation/retry fallback, and add an enriched multi-dimension company extraction prompt template in the UI.
-
-- [x] **9.1 Graph Sequence Re-ordering (`discover_schemas` before `parse_request`)**
-  - Updated `NODE_SUCCESSOR` in [graph.py](file:///d:/transfer/merging/.worktrees/fix-bugs/src/orchestrator/graph.py) so `preflight` -> `discover_schemas` -> `parse_request` -> `analyze_dependencies`.
-  - *Evidence:* Graph sequence updated and compiled. `python scripts/check.py all` passed.
-
-- [x] **9.2 Schema-Grounded Entity Parsing & Single-Step Entity Table Mapping in `parse_request.py`**
-  - Updated `parse_request` in [parse_request.py](file:///d:/transfer/merging/.worktrees/fix-bugs/src/orchestrator/nodes/parse_request.py) to read `state["schemas"]`, format full database schema catalog, and pass it to LLM via literal `.replace()`.
-  - Updated system and human prompts in [request_parsing.system.txt](file:///d:/transfer/merging/.worktrees/fix-bugs/src/llm/prompts/request_parsing.system.txt) and [request_parsing.human.txt](file:///d:/transfer/merging/.worktrees/fix-bugs/src/llm/prompts/request_parsing.human.txt) to return `entity_tables` mapping in addition to `target_entities` and `explicit_target_entities`.
-  - *Evidence:* Unit tests in `tests/unit/test_parse_request_node.py` passed (`15 passed`).
-
-- [x] **9.3 Programmatic FK Coverage Matrix & Empty Tree Validation/Retry in `analyze_dependencies.py`**
-  - Implemented `_build_coverage_matrix` in [analyze_dependencies.py](file:///d:/transfer/merging/.worktrees/fix-bugs/src/orchestrator/nodes/analyze_dependencies.py) to scan schemas for foreign key patterns (`*_id`, `*ID`, `*_key`, table column references).
-  - Updated [dependency_analysis.system.txt](file:///d:/transfer/merging/.worktrees/fix-bugs/src/llm/prompts/dependency_analysis.system.txt) and [dependency_analysis.human.txt](file:///d:/transfer/merging/.worktrees/fix-bugs/src/llm/prompts/dependency_analysis.human.txt) to include `{coverage_matrix}` context and enforce returning non-empty `dependency_tree` for all target entities.
-  - Added automatic single-retry for empty/invalid LLM dependency tree responses, with fallback to programmatic coverage matrix. Removed redundant `select_entity_tables_impl` LLM call.
-  - *Evidence:* Unit tests in `tests/unit/test_analyze_dependencies_node.py` passed (`25 passed`).
-
-- [x] **9.4 Enriched Multi-Dimension Company Preset in UI (`PipelineScreen.tsx`)**
-  - Updated `applyCompanyPreset()` in [PipelineScreen.tsx](file:///d:/transfer/merging/.worktrees/fix-bugs/src/ui/frontend/src/components/PipelineScreen.tsx) to generate the full 7-dimension extraction request template with `{company_name}` substitution.
-  - *Evidence:* Frontend Vite build `npm run build` succeeded cleanly.
-
-- [x] **9.5 Remediation: Complete Dependency Tree Key Validation in `analyze_dependencies.py`**
-  - Update `_parse_llm_tree` in [analyze_dependencies.py](file:///d:/transfer/merging/.worktrees/fix-bugs/src/orchestrator/nodes/analyze_dependencies.py) to return `None` if any key in `target_entities` is missing from `raw_tree` (ensuring partial LLM responses trigger retry and programmatic fallback instead of silently defaulting missing entities to `[]`).
-  - Add unit test in [test_analyze_dependencies_node.py](file:///d:/transfer/merging/.worktrees/fix-bugs/tests/unit/test_analyze_dependencies_node.py) covering partial LLM tree retry and fallback.
-  - *Evidence:* Executed unit tests (`26 passed`) and full verification check script (`python scripts/check.py all`).
-
----
-
-## Phase 10 — Fix-Bugs Follow-Up: Full Table Coverage, Join-Graph Scoping, Cross-Table Mapping & Merge Lineage
-
-The 4th live run (`Bugs/Logs/4th_try_05_18_local_enrichprompt.txt`) exposed that the pipeline silently discards most of the database before it ever reaches the merge, plus gaps in Phases 1-9 that were claimed done but were unreachable from production. Full plan audited and tracked separately; this section records live-verified progress.
-
-- [x] **10.0 Make the existing work durable**
-  - Committed the 31 files that were uncommitted since Phase 9 as checkpoint `1667670`; created local backup branch `fix-bugs-backup` at the same commit.
-  - *Evidence:* `git log --oneline -1 fix-bugs fix-bugs-backup` — both at `1667670`. Push to `origin` attempted and timed out (`git.n4t.com` unreachable, per `docs/decisions/0003-server-ci-unreachable.md`) — reported honestly, not treated as a blocker.
-
-- [x] **10.1 Close gaps in already-claimed work (Phases 1-9)**
-  - Fixed 8 items: missing `column_dependencies` init on the legacy Config state path; documented the undocumented `map_fields` relocation; corrected a stale TODO.md node-order line (this file, §1.1); `analyze_dependencies`' empty-entity path and `parse_request`'s exception handler now both set `state["failure"]` (via the existing error taxonomy in `utils/retry.py::classify_exception`) instead of silently continuing with zero entities; repaired `tests/prompts/harness.py` (missing `{schema_info}` placeholder, a live `ValueError: unknown stage` crash from a `"cls"`/`entity_table_selection` mismatch); added `NODE_SUCCESSOR` assertions to `tests/integration/test_graph_workflow.py` (never updated for the Phase 9 reorder) and fixed its stale "START edge to parse_request" assertion (entry point has always been `preflight`); added schema-grounding/entity_tables/malformed-entry-cleaning coverage to `tests/unit/test_parse_request_node.py`.
-  - *Evidence:* `tests/unit/test_analyze_dependencies_node.py` + `test_parse_request_node.py` + `tests/integration/test_graph_workflow.py`: 78 passed. `scripts/check.py types` clean.
-
-- [x] **10.2 Gate plumbing: one builder per gate**
-  - Root-caused why `origin_schemas`/`column_dependencies` never reached the dependency gate and `origin_id`/`table` never reached the mapping gate: `interrupt_before=HITL_NODES` means a HITL node body never runs at the pause, so `WorkflowManager._build_interrupt_data` — not the node's own body — was the only payload the live UI ever saw, and it was an independently-maintained, poorer copy. Extracted one shared builder per gate into `nodes/human_nodes.py` (`_build_deps_interrupt`, `_build_mapping_rows`, `_build_matches_interrupt` — the last one a fourth divergence found while writing the regression test, missing `auto_match_stats`/`pending_merge_candidates`/`pending_merge_note`) and made `WorkflowManager` delegate to all three instead of keeping independent copies. Added `quality_report`/`has_quality_failure` plumbing to the final-approval payload ahead of Phase 10.4.5 (validate_data).
-  - Added `tests/unit/test_interrupt_payload_parity.py`: for every HITL node, asserts the node body's own `interrupt_data` and `WorkflowManager._build_interrupt_data`'s payload have identical (or, for `human_final_approval`'s deliberately richer superset, documented) data keys — a mechanical guard against this bug class recurring a fifth time.
-  - *Evidence:* `test_interrupt_payload_parity.py` + `test_human_nodes.py` + `test_workflow_manager.py` + `test_graph_workflow.py`: 80 passed. `scripts/check.py types` clean.
-
-- [x] **10.3 Stop the 2-second poll from clobbering in-progress gate edits**
-  - Root cause: every poll parses a fresh JSON response, so `data` is a new object reference every ~2s even when content is unchanged; `Gates.tsx`'s `MappingBody` reset its local row state off `[node, data]`, wiping whatever the reviewer had just typed. Added a `payload_version` content hash (`WorkflowManager._build_interrupt_data`, threaded through all three call sites plus the `apply_mapping_feedback` rejection path that mutates a cached payload in place) and changed `MappingBody`'s sync effect to depend on `[node, payloadVersion]` instead of the whole `data` object.
-  - *Evidence:* `tests/unit/test_interrupt_payload_parity.py::TestPayloadVersion` (4 tests: stability, change-detection, cross-node non-collision, recompute-after-mutation). Frontend `npm run build` clean.
-
-- [x] **10.4 Remove `new_column` from the mapping gate dropdown**
-  - The destination schema is a fixed contract (`CLAUDE.md`'s "No new destination columns, ever") and `apply_mapping_feedback` has always hard-rejected `new_column`, so offering it in the UI was a dead end reachable only by picking it, filling in a name/type, and being told no. `ACTIONS` is now `["map", "skip"]`; the New Column/Type input columns are replaced with a Reason column (backed by a `reason` field now carried on every skip row, not just the separate `unmapped_fields` list). Removed the fully-dead `new_column_name`/`new_column_type` fields from `MappingRow` (TS), the row builder (Python), and the stale `apply_mapping_feedback` docstring. Found and fixed a real regression from 10.2's refactor along the way: `_build_mapping_rows`'s skip-row had dropped the `suggested_column`-as-preview `dest_column` hint the old (now-deleted) `_mapping_rows_from_values` used to show.
-  - *Evidence:* `tests/unit/test_mapping_gate.py` + `test_api.py` + related: 117 passed. Frontend `npm run build` clean.
-
-- [x] **10.5 Wire the dependency-gate's custom links back to the backend**
-  - `DependencyBody`'s "Add Custom Dependency Link" form captured `colDeps` in local React state only — `GateButtons` called `onApprove(undefined)`, so nothing was ever sent. Threaded `columnDependencies` through `GateProps.onApprove` → `sendFeedback` → the `Feedback` Pydantic model → a new `human_review_deps` branch in `resume_workflow`, merged into `state["column_dependencies"]` (appended and deduplicated against what `analyze_dependencies` already computed, never replacing it — that key has no accumulating reducer in `MergeState`). Each submitted link is validated against the discovered schema (`WorkflowManager._sanitise_column_dependencies`, mirroring the existing `_sanitise_entity_tables` pattern) before being kept.
-  - *Evidence:* `tests/integration/test_workflow_manager.py::test_resume_deps_gate_merges_custom_column_dependencies` (valid link kept, invalid-column link dropped, duplicate of an existing link not double-added) — 11 passed. Ruff/mypy clean.
-
----
-
-## Phase 11 — Full Table Coverage & Subject-First Input (fix-bugs follow-up plan Phase 3)
-
-Closes issue 1 (7 of 20 discovered tables silently dropped) structurally, and issue 8/10 (ask for a company name, keep the free-text path reachable).
-
-- [x] **11.1 Deterministic entity grouping module**
-  - New `src/orchestrator/utils/entity_grouping.py::group_tables_into_entities` — pure, no LLM, assigns every discovered table across every origin to exactly one entity group before parse_request ever calls the LLM. Owning-entity prefixes (`CompanyExperience` → `experience`) are stripped only when the remainder is a recognised concept in `entity_aliases.ALIAS_GROUPS`, and only a *successfully stripped* remainder (or an already-bare single word) is eligible for further alias-group merging — a genuine multi-word fallback compound never is. That distinction is load-bearing: `ALIAS_GROUPS`' industry group already contains the literal alias `"industry_classification"` (added for unrelated destination-table-matching reasons), and without the distinction `IndustryClassification` would silently merge into `industry` — exactly the over-merge the gate exists to prevent.
-  - Collapsed the three/four competing vocabularies down to one: deleted `src/orchestrator/utils/entity_types.py` (a fixed 18-type enum with zero production importers — only a test imported it, and the prompt block it used to mirror was already removed by the Phase 9 schema-grounded rewrite); `entity_aliases.ALIAS_GROUPS` is now the single source. Trimmed `tests/unit/test_entity_aliases.py` to only its still-valid alias-group invariants.
-  - *Evidence:* `tests/unit/test_entity_grouping.py` — 10 tests using the exact 13+7 table lists from the 4th live run's log, proving `CompanyExperience`+`Experience`, `CompanyIndustry`+`Industry`, and `CompanyContact`+`PersonContact` merge correctly across origins while `IndustryClassification`, `CompanyTechnographics`, and `CompanyInvestor` correctly do NOT over-merge. `unassigned == []` asserted directly. Ruff/mypy/arch-lint/docs-lint all clean.
-
-- [x] **11.2 `parse_request` rewritten: LLM names groups, cannot change membership**
-  - `parse_request.py` now calls `group_tables_into_entities` first for authoritative membership, then calls the LLM only to name each group, classify which the request text explicitly named, and extract merge subject/scope. A missing or invented group name falls back to the deterministic key; `entity_tables`/`target_entities` always cover every discovered table (a hard post-condition assertion checks this before returning) regardless of what the LLM says — the completeness guarantee no longer depends on the LLM at all. An LLM failure now degrades gracefully to the deterministic keys as their own names (via the existing `classify_exception` taxonomy) instead of the empty-entities silent-continue Phase 1.4/1.5 fixed twice already, since grouping never depended on the LLM in the first place.
-  - Rewrote both prompt files for the new `group_names`/`explicit_groups`/`subject`/`scope_type` contract; deleted the harmful "Bring over all information about Airbus → 4 types" few-shot example. Fixed `tests/prompts/harness.py`'s `request_parsing` placeholder to `{group_catalog}` (was `{schema_info}`) so `check_contracts`/`scripts/check.py all` stay accurate — the golden case *content* itself still encodes the pre-rewrite contract, tracked separately (Phase 8.2, since it needs real discovered-schema fixtures, not just a prompt-shape fix).
-  - *Evidence:* `tests/unit/test_parse_request_node.py` — 20 tests, entirely rewritten for the new contract (full-coverage invariant, rename/fallback/invented-key handling, explicit-groups filtering, scope extraction, LLM-failure graceful degradation, no-schemas early exit). `python -m tests.prompts.harness` contract checks pass. Ruff/mypy clean.
-
-- [x] **11.3 Subject-first UI**
-  - `PipelineScreen.tsx`: the company-name box is now the default, primary control; the free-text textarea moved into a collapsed `<details>` "Advanced — custom request" disclosure, matching the existing `AdvancedPanel.tsx` pattern. Removed the old `applyCompanyPreset()` giant 7-dimension enriched-text builder entirely — deterministic grouping (11.1) makes it unnecessary, not just redundant, since completeness is now structural rather than a function of how elaborately the prompt was written.
-  - Backend: `WorkflowStart.subject` → `WorkflowManager.start_workflow(subject=...)` → `graph.get_initial_state(subject=...)` sets `merge_scope` directly to an active company-scoped merge for the UI branch; `parse_request.py` checks for this pre-set scope at entry and treats it as authoritative, never letting the LLM's own subject/scope_type guess override it (and it survives an LLM naming-call failure intact, since it's read from state, not derived from the response).
-  - *Evidence:* `tests/unit/test_subject_mode.py` (5 tests on `get_initial_state`) + `test_parse_request_node.py::TestSubjectFirstMode` (4 tests: pre-set scope wins over LLM guess, survives LLM failure, survives no-schemas, and an *inactive* pre-set scope correctly does NOT suppress the free-text path's own LLM extraction). Live-verified in the running app (`.claude/launch.json` fixed to use `.venv/Scripts/python.exe` — was resolving to an unrelated venv missing `structlog`, entirely unrelated to this plan but blocking every future live check): typed into the company-name box, toggled Advanced open/closed via real clicks, confirmed the company field disables/re-enables and both inputs' values persist independently across toggles, zero console errors. Frontend `npm run build` clean.
-
----
-
-## Phase 12 — Real Join Graph with Value-Overlap Verification (fix-bugs follow-up plan Phase 4.1)
-
-Closes issue 9 structurally (the coverage matrix was pure name-heuristics with a `startswith` clause that fabricated edges like `Person.company_name → Company.id`) and lays the foundation for issue 6 (deep join chains like `Company → Experience → Person → PersonContact`, 3 hops, structurally unrepresentable by the old single-junction `_find_junction`).
-
-- [x] **12.1 New `src/mcp_server/tools/join_graph.py`**
-  - `build_join_graph(schemas, origins, *, sample_size=500) -> JoinGraph` builds a real graph — nodes are `(origin_id, table)`, edges are directed child→parent (many-to-one) and stored on both endpoints. Three tiers, descending confidence: **declared FKs** (always empty for ClickHouse/MongoDB, real and trusted for PostgreSQL); **name heuristics** (`companyID` → `Company`'s *actual* primary key, never a hard-coded `"id"`, and never a bare `.startswith()` match); **inclusion-dependency verification** — every name-heuristic candidate is sampled via each connector's new `sample_distinct_values(table, column, limit)` and scored as `|child ∩ parent| / |child|`, ≥0.95 → `verified`, 0.5–0.95 → `probable`, below → discarded.
-  - Reshaped from B4-matching-precision's `identity_profile.py`: kept `normalize_val` verbatim (protocol/`www.`/trailing-slash stripping), but rebuilt the containment check from B4's bag-of-every-column-in-the-foreign-table (which cannot distinguish a real inclusion dependency from an unrelated column collision — B4's own version would score a `country_code` of `{"BA","AIR","LMT"}` at 1.0 against an unrelated `ticker` column) into a genuine per-column-pair ratio, and pushed the sampling into SQL/aggregation via the connectors rather than pulling full tables into Python.
-  - Added `sample_distinct_values` to `connectors/base.py` (concrete, `NotImplementedError` default — not `@abstractmethod`, since `DatabricksConnector` doesn't implement the base interface's method names at all and a new abstract method would break it), and real implementations in `postgres.py` (parameterised `SELECT DISTINCT`), `clickhouse.py` (`{limit:UInt64}` parameter, backtick-quoted `` `db`.`table` ``), and `mongodb.py` (`$match`/`$group`/`$limit` aggregation pipeline — `aggregate()` on `AsyncCollection` is itself a coroutine that must be awaited before the returned cursor can be async-iterated, unlike `.find()`).
-  - Removed `analyze_dependencies.py`'s `col_low.startswith(ot_low)` clause per the plan's explicit instruction — the coverage matrix remains a lighter-weight name-only heuristic that only feeds LLM prompt context in that node; `join_graph.py` is now what does verified matching for real extraction decisions.
-  - *Evidence:* `tests/unit/test_join_graph.py` — 21 tests: `normalize_val` (protocol/www stripping), `_resolve_primary_key` (declared PK, MongoDB `_id` fallback when no `"primary_key"` key exists at all, no-PK-no-`_id` case), `_find_candidate_edges` (real-PK matching, the exact `startswith` regression this closes — `Person.company_name` no longer fabricates an edge to `Company`, skips own-table PK, no candidate when the other table has no resolvable PK), `JoinGraph` (both-endpoints storage, unknown-node lookup), and `build_join_graph` end-to-end against a mocked connector: declared-FK tier trusted without sampling, the full issue-6 3-hop chain (`Company→Experience→Person→PersonContact`) all verifying from mocked overlapping sampled values, full/partial/zero overlap correctly landing as `verified`/`probable`/discarded, connector `.close()` called even when sampling raises, missing origin config skips verification gracefully rather than crashing, and all schema nodes present in the graph even with zero edges. `tests/unit/test_analyze_dependencies_node.py` (26 passed, confirming no existing test depended on the removed `startswith` behavior), `test_postgres_connector.py`/`test_clickhouse_scratch_table.py`/`test_mongodb_connector.py` (their new `TestSampleDistinctValues` classes, 131 passed together with the above). `scripts/check.py types` clean (fixed two real mypy findings along the way: the MongoDB `aggregate()`-is-a-coroutine issue above, and an untyped `table_by_name` dict comprehension in `join_graph.py` that let `str | None` leak into `_EdgeCandidate.parent_table`). Full `tests/unit` sweep: 1248 passed, 83 skipped, zero failures/regressions. Full `tests/integration` sweep (started after the Phase 10/11 commit, run in the background): 148 passed, zero failures. `scripts/check.py all`: 10/10 passed (including the `format` gate — its own docstring documents it as a real enforced check post-Phase-0, not report-only despite an earlier note in `CLAUDE.md`; fixed 5 files that had drifted).
-
-- [x] **12.2 BFS path finder over the join graph**
-  - `find_paths(graph, subject_node, target_node, *, max_hops=6, max_paths=20) -> list[JoinPath]` in `join_graph.py`, replacing what `plan_scope.py`'s `_find_junction` (a flat scan capped at exactly one junction table, i.e. 2 hops) could express. Two-pass design rather than naive all-paths DFS, which is what keeps it bounded instead of exploding combinatorially on diamond-shaped schemas: pass 1 is a plain visited-guarded BFS recording each node's shortest hop distance from the subject (a cycle just stops expanding once every member has been reached — it provably cannot loop); pass 2 backtracks forward from the subject, only stepping onto edges whose far side sits exactly one hop further out per pass 1's distances, which makes it a walk over a DAG by construction and finds every *tied* shortest path, not just the first one found (verified directly — a 4-node cycle A→B→C→D→A produces both 2-hop routes A→B→C and A→D→C, not just whichever the traversal order happened to hit first).
-  - Each `JoinPath` tracks direction per hop — `child→parent` is `"narrow"` (many-to-one), `parent→child` is `"fanout"` (one-to-many) — and exposes `high_fanout` (`fanout_hop_count >= 2`), the flag Phase 5.1's scope-gate checkboxes will default to unchecked, since two compounding fan-out hops is exactly how "everything about Airbus" silently pulls in unrelated companies (Airbus employees → their other jobs → those companies). Verified directly against the issue-6 chain: `Company→Experience→Person→PersonContact` is `[fanout, narrow, fanout]`, 2 fan-out hops, `high_fanout=True` — the real Airbus schema's 3-hop chain is itself the naturally-occurring high-fan-out case the flag exists for. Ranking (`JoinPath.rank_key`) is hop count, then weakest verified overlap ratio along the path (a path is only as trustworthy as its least-verified hop), then fan-out hop count — matching the plan's ranking spec exactly.
-  - `max_hops` kept as a plain keyword default (6, matching the plan) rather than wired into `config.yaml` yet — nothing calls `find_paths` from a real node until Phase 4.3 wires it into `plan_scope.py`, and an unused config key would itself be exactly the kind of claimed-but-dead surface this whole follow-up plan exists to eliminate. Config wiring happens in 4.3 where the value is actually consumed.
-  - *Evidence:* `tests/unit/test_join_graph.py` — 18 new tests (`_hop_from` direction correctness for both edge sides and an unrelated node; zero-hop self path; missing subject/target; single narrow and single fanout hop; the full issue-6 3-hop chain with exact node/direction/fanout assertions; `max_hops` truncation returning `[]`; a disconnected-but-present target returning `[]`; a genuine 4-node cycle finding both tied shortest routes without infinite-looping; hop-count-first ranking; confidence-then-fanout tie-breaking with an explicit weak-vs-strong-overlap pair; `min_overlap_ratio` staying `None` when every hop is `declared`; `max_paths` truncating a 3-way tie to 2; cross-origin nodes never connecting even when same-named). All 39 tests in the file pass together. `scripts/check.py types` clean. Full `tests/unit` sweep: 1266 passed (18 more than Phase 12.1's baseline, zero regressions), 83 skipped.
-
-- [x] **12.3 Generalise the scope plan to N-hop paths**
-  - Rewrote `plan_scope.py`'s dependent-entity heuristic to call `find_paths` over a real `JoinGraph` instead of three separate ad-hoc cases (declared-FK check, name-hint id-column scan, single-junction `_find_junction`, deleted). BFS over a real graph subsumes all three at once, plus chains longer than the old 2-hop ceiling — verified directly: a 2-hop junction case that used to need `_find_junction`'s special-casing now falls out of the same `find_paths` call as everything else. Every dependent-entity entry across the pipeline is now the single `mode: "link_path"` shape (`path`: an ordered list of `{from_table, from_column, to_table, to_column}` hops, plus `hops`/`confidence`/`enabled`/`link_entity`), replacing the old flat `link` (one column) and `link_via` (one hardcoded junction) shapes.
-  - The LLM may still propose `match`/`link`/`link_via` in its familiar shape (backward-compatible prompt contract, small clarifying addition to `scope_planning.system.txt` noting proposals are checked and that omitting a deep-chain table lets automatic search find it) or the new explicit `link_path`, but it can no longer invent a join: `_sanitize_plan` now validates every hop of every proposed entry against the real graph (new `JoinGraph.find_edge`, direction-agnostic — checks both (table_a,col_a)→(table_b,col_b) and the reverse without the caller needing to know which side looks like the FK) and normalises whatever survives into the one `link_path` shape. A column that doesn't correspond to a real edge is dropped, not trusted — closing the "hallucinated join" gap the same way Phase 3 closed "hallucinated entity table."
-  - Found and fixed two real gaps in Phase 4.1's own name-heuristic tier while wiring this up, both via this repo's own pre-existing test fixtures (Pagila-style pluralized table names): (1) `_find_candidate_edges` only matched a column literally derived from the OTHER table's exact name (`companyID`→`Company`), so a plural table (`companies`) with a singular FK column (`company_id`) — an extremely common convention, and exactly what this repo's own `test_plan_scope.py`/`scope_plans.json` fixtures already used — never became a candidate at all; fixed with a small local singularizer in `join_graph.py` (a deliberate copy of `entity_grouping.py`'s `_singularise`, not an import — that module sits above `mcp_server/tools` in CLAUDE.md's layering rule). (2) An abbreviation like `org_id` for a table named `organizations` doesn't match even the singularized form ("organization"), since it's a different word, not a plural — added `_concept_link_fallback` in `plan_scope.py`, a last-resort single-hop guess using the same `concept_matches` vocabulary Phase 3's entity grouping already uses (which already treats "org"/"organization"/"company" as one alias group), tagged `confidence="heuristic"` and never promoted beyond it.
-  - Also added a 4th join-graph confidence tier, `"heuristic"`: when an origin has no connector config available for the inclusion-dependency sampling tier (scope planning can run before any live connection was opened), a name-heuristic candidate is now kept unverified rather than silently dropped — losing the join entirely because a connector happened to be unavailable is worse than surfacing a hypothesis a human can still discount. Found and fixed a real ranking bug this surfaced: `declared` and `heuristic` both carry `overlap_ratio=None` (nothing was sampled either way, but for opposite reasons — one is a real FK, the other an unverified guess), so `JoinPath.rank_key` compared by raw `overlap_ratio` alone would have ranked them as equally trustworthy; added a `_CONFIDENCE_RANK` tier ordering (`heuristic < probable < verified < declared`) and a `JoinPath.confidence` property (weakest hop wins) that `rank_key` now checks before `overlap_ratio`.
-  - Added `PathHop.from_table/from_column/to_table/to_column` — direction-aware properties so every consumer (this phase's `plan_scope.py`, Phase 4.4's `extract_data.py`) gets the hop already expressed as "select `to_table` rows whose `to_column` is in the known `from_table.from_column` values," the same fixpoint shape regardless of whether the underlying edge narrows (child→parent) or fans out (parent→child), with zero direction-branching in the caller.
-  - Frontend: `Gates.tsx`'s `ScopeBody` had no rendering branch for `link_path` (only `match`/`link`/`link_via`/`not_found`) and would have silently shown a blank "how" cell for every dependent-entity row now that the heuristic floor produces `link_path` by default — added a minimal hop-chain rendering branch as an interim fix; the full interactive rebuild is Phase 5.1's job.
-  - `_bare_table_name` translates an LLM/`_resolve_table`-resolved full name (`public.companies`) back to the join graph's bare node name (`companies`) for hop lookups — the two conventions coexist deliberately (full names are what a connector needs to query, bare names are what the graph uses internally, unchanged from Phase 4.1) rather than unifying them, to avoid touching already-verified, committed Phase 4.1/4.2 code for an internal convention choice.
-  - `arch-lint-baseline.txt` updated: `plan_scope.py`'s pre-existing (already-baselined, Phase P-era) reverse-layer import of `entity_aliases.concept_matches` shifted from line 32 to line 56 purely from unrelated code added above it in the same file — corrected the baseline's line reference for this one already-accepted entry (not a new violation; `lint_arch.py` confirms 0 new, 14 pre-existing, matching before/after).
-  - *Evidence:* `tests/unit/test_plan_scope.py` — `TestHeuristicPlan` rewritten (6 tests: match unchanged, declared-FK 1-hop, name-hint-abbreviation-via-fallback 1-hop, product 1-hop, a genuine 2-hop junction chain) plus new `TestSanitizePlan` (7 tests: valid `link`→`link_path` normalization, hallucinated `link` column dropped, valid `link_via`→2-hop `link_path` normalization, fabricated `link_via` junction dropped, explicit `link_path` validated hop-by-hop, explicit `link_path` with one fabricated hop dropped entirely — not partially kept, unknown table dropped) — 23 tests total, all pass. `tests/unit/test_scope_plan_eval.py`'s golden eval (4 real-world-shaped cases: Postgres declared FKs, ClickHouse no-FK abbreviation, both origins together, MongoDB) rewritten for the `link_path` shape and passing — this is the floor the LLM plan is only ever allowed to improve on, now proven correct for the new contract. `tests/unit/test_join_graph.py` — 2 new regression tests for the pluralization fix (`companies`+`company_id`, `people`+`person_id` via the irregular-plural map) plus the earlier heuristic-tier/`find_edge`/`PathHop` direction/`JoinPath.confidence` tests (50 total, all pass). `tests/prompts/harness.py` contract checks still pass after the prompt addition. `scripts/lint_docs.py`/`lint_arch.py` clean. `scripts/check.py types` clean. Frontend `npm run typecheck` and `npm run build` both clean. Full `tests/unit` sweep: 1284 passed (18 more than the Phase 4.2 baseline), 83 skipped, zero regressions.
-
-- [x] **12.4 Execute multi-hop filters in extract_data**
-  - `extract_data.py`'s `_resolve_link_via` (hardcoded exactly one junction hop) is now `_resolve_link_path`, walking an N-hop `path` via the fixpoint approach the plan's Phase 4.4 spec names (from the USPTO subsetting patents): at each hop but the last, the known key set filters `hop["to_table"]` on `hop["to_column"]`, and the column the FOLLOWING hop will filter on (`path[i+1]["from_column"]`) is projected out to become the next known key set. The last hop is deliberately never queried inside the resolver — its `to_table` is the entity table itself, extracted separately by the existing outer loop with its full column list, filtered on `path[-1]["to_column"]` against whatever the resolver returns. A 1-hop path (what `link` used to be) never enters the loop at all — `subject_ids` already IS the value set for the single hop's `from_column`, matching the old `link` behavior exactly with zero intermediate queries. A 2-hop path (what `link_via` used to be) makes exactly one junction query, byte-for-byte the same query the old code made. A 3-hop path (`Company→Experience→Person→PersonContact`, issue 6's exact case) is simply one more loop iteration — not a separate code path, unlike before.
-  - Closed the "full-extract leak" the plan's Phase 4.4 explicitly names: `merge_scope.active=True` with an empty `scope_entities` used to silently fall through to `scope_active=False` and read every table in full while still reporting the run as the scoped merge the user asked for. Now a hard failure (`error_class: "DataQualityError"`, `disposition: "escalate"`) before the extraction loop even starts, with an early return — this can only happen if `plan_scope.py` itself somehow produced nothing (Phase 4.3's `_ensure_complete_origin_coverage` normally guarantees every target entity gets at least a `not_found` placeholder, so this is a genuine defense-in-depth backstop, not the common path).
-  - Added `scoped_out_entities` (new `MergeState` field, next to `dropped_inferred_entities`): entities with real candidate tables where every one was scoped out (no plan entry, no subject ids, or an empty join-path result) rather than missing entirely or genuinely failing — tracked via two per-entity flags (`entity_had_scope_skip`, `entity_had_failure`) so a real extraction error is never miscounted as a scoping outcome. Before this, such an entity was invisible beyond an unexplained `extracted_total: 0`.
-  - Simplified `_scope_filter_for` to only handle `match` mode (the subject entity's own ILIKE filter) — its `link` branch was already dead now that Phase 4.3 normalises every dependent-entity entry to `link_path`; keeping it would have silently mis-handled a stray old-shape entry as an ILIKE match instead of rejecting it.
-  - *Evidence:* `tests/unit/test_extract_data_node.py` — `TestScopedExtraction`'s existing 1-hop and 2-hop tests updated for the `link_path` shape (assertions unchanged — same filters, same query counts, proving the new resolver reproduces the old `link`/`link_via` behavior exactly) plus 5 new tests: the full 3-hop issue-6 chain with exact per-hop query and filter assertions (`Company→Experience→Person` shared by two dependent entities, `Person→PersonContact`-style final hop resolved only via the outer loop's own filter, never queried inside the resolver); `_resolve_link_path` unit-tested directly for the 1-hop no-query case and an empty-intermediate-result short-circuit; the full-extract-leak fix (scope requested, plan empty → hard failure, zero extraction calls made, asserted via a mock that raises if called at all); `scoped_out_entities` correctly populated for an entity with a real candidate table but no plan entry, and correctly absent from `dropped_inferred_entities`. 50 tests in the file, all pass. `scripts/check.py types` clean. Full `tests/unit` sweep: 1289 passed (5 more than the Phase 4.3 baseline), 83 skipped, zero regressions.
-
-- [x] **12.5 Salvage the `validate_data` gate from B3-quality-lineage**
-  - Copied `validate_data.py` and `data_quality.py` from `.worktrees/B3-quality-lineage` per the plan's salvage table, but found and fixed a critical bug the plan's salvage table didn't anticipate: B3 predates the Phase N spool refactor and assumed `extracted_data[entity]` was always an in-memory row list. In the current codebase it is a spool HANDLE dict (`{"__spool__": True, "run_id": ..., "row_count": ...}`); copied verbatim, B3's code would fall into its `isinstance(data, dict)` fallback and validate the handle's OWN keys (`run_id`, `row_count`, …) as if they were one record's fields, checking "uniqueness" against handle metadata instead of any real data. Fixed by moving all row/count resolution out of `data_quality.py` (kept pure and layering-clean — no spool knowledge, `mcp_server/tools` cannot import `orchestrator` per CLAUDE.md) into `validate_data.py` (the orchestrator node, already at the correct layer): a new `_sample_rows` helper reads via `RunSpool.iter_rows` capped at `_SAMPLE_SIZE=2000` for a spooled entity, and `entity_row_count` gives the EXACT row count without ever reading the rows — so the row-count check (the one that matters most for issue 6) is never approximate even when the deeper checks (uniqueness/not-null/date-bounds) run against a bounded sample for a large entity. `run_data_quality_checks`'s contract changed from `extracted_data: dict[str, list]` to `sampled_rows` + `row_counts` to make this split explicit; each entity's report now also carries `sample_size`/`sampled` so a reviewer knows when a check was approximate.
-  - Applied the plan's other two named corrections: dropped the unused `great_expectations` import and `gx_available` flag entirely (GX was never actually invoked in B3's code, only imported to set a flag nothing read); replaced the `rows[0]`-only column derivation with a union across every sampled row, so an entity fed by origins with different columns (the norm, not the exception, in a merge) doesn't blind the name-column/date-bounds checks to whatever the first row happened not to carry.
-  - Wired the gate in: `NODE_SUCCESSOR["extract_data"] = "validate_data"` / `["validate_data"] = "resolve_entities"`, node registered and given a **plain** edge to `resolve_entities` (not `_fallible_router`-wrapped, since `validate_data_node` never sets `state["failure"]` — the never-auto-abort posture is structural, not just a design intention, proven directly by a test asserting `"failure" not in result` even for a hard `fail` severity). Added `quality_report`/`has_quality_failure` to `MergeState`.
-  - **The single highest-value part of this salvage, per the plan**: on B3, `has_quality_failure` was computed and then silently dropped before ever reaching a human — `workflow_manager.py`'s `human_final_approval` payload builder already had `quality_report`/`has_quality_failure` plumbed in (Phase 2.1, ahead of this node existing, explicitly noting it was a no-op until both sides existed) but nothing populated them and `Gates.tsx` didn't render them either. Both now do: `SummaryBody` shows a prominent `banner-error` when `has_quality_failure` is true (naming which entities failed) or a `banner-warn` for warn-only, plus a per-entity Data Quality table (severity, row count with a "(sampled N)" annotation when applicable, and the specific failed/warned check details) — placed at the top of the final approval gate, directly under the summary stats, matching "shown prominently."
-  - Found along the way that `spool.py`'s `is_handle(value) -> bool` didn't let mypy narrow `value`'s type inside an `if is_handle(value):` block anywhere it's used — every call site had to re-assert the type or trip a new mypy error. Changed its return type to `TypeGuard[dict[str, Any]]` (a pure type-annotation change, zero runtime behavior difference) — fixes the narrowing at every existing call site, not just this phase's new one.
-  - *Evidence:* `tests/unit/test_data_quality.py` — 11 tests: clean pass, zero-rows fail, the exact-row-count-vs-sample-size distinction (a 1-row sample against a stated 43,861-row count still reports the real count and passes row_count_ge_1), duplicate-id fail, null-name warn, bad-year warn, the column-union-not-rows[0] fix demonstrated directly (a row missing a column entirely followed by a row that has it, null), missing-row_counts fallback, bare-`id`-fallback uniqueness, internal-exception graceful degradation (no GX involved at all), and the empty-input clean-pass case. `tests/unit/test_validate_data_node.py` — 8 tests: inline list validated directly; a REAL spool handle read via `RunSpool`/`make_handle` and proven to check real column names (not handle keys); a spooled entity with 0 rows failing loudly (the exact origin_2.Person/PersonContact shape from the 4th live run); large-entity sampling proven bounded (`_SAMPLE_SIZE` monkeypatched to 10 against 50 real spooled rows); no-extracted-data clean pass; and the never-auto-abort guarantee proven directly (`"failure" not in result` on a fail-severity run) — plus graph-position tests (`NODE_SUCCESSOR`, node registered in the real builder). `tests/unit/test_interrupt_payload_parity.py` — 1 new test proving the VALUE (not just key presence, which Phase 2.1's existing superset test already covered) of a fail-severity `quality_report` genuinely reaches `_build_interrupt_data`'s payload unmodified. Fixed one stale pre-existing assertion in `test_human_nodes.py` that had `NODE_SUCCESSOR["extract_data"]`'s old value (`"resolve_entities"`) baked into an error-gate wording check. `scripts/lint_arch.py`/`lint_docs.py` clean. `scripts/check.py types` clean (after the `TypeGuard` fix). Frontend `npm run typecheck` and `npm run build` both clean. Full `tests/unit` sweep: 1309 passed (20 more than the Phase 4.4 baseline), 83 skipped, zero regressions.
-  - **Not yet done, honestly flagged**: the plan's own "Verify" instruction for this phase — confirming `origin_2.Person`/`origin_2.PersonContact` resolve via their real 2-hop/3-hop chains with counts matching hand-written ClickHouse SQL through the `mcp-clickhouse2` MCP — requires a live run against real Airbus-shaped origins, which this session has not had a live database connection available for. Everything above is verified at the unit level (including a real spool round-trip through `RunSpool`, not a mock), but the live cross-check against real ClickHouse data specifically remains open. *(Closed in Phase 12.5 below, once live database access became available in this session — with one correction: `origin_2`'s real `Experience` table has no `personID` column at all, so the `origin_2.PersonContact` 3-hop scenario named here doesn't exist in the actual sample data; `origin_1`'s 2-hop `Company→CompanyExperience→Person` chain is the one verified live.)*
-
----
-
-## Phase 12.5 — Scope gate checkboxes (Phase 5.1/5.2) — plus three real bugs a live run surfaced
-
-Closes issue 5 (no way to include/exclude entities at the scope gate) and issue 6's confirmation step. Implemented 5.1 and 5.2 together — a checkbox with no return path to the backend is not meaningfully "done" — then live-verified through the real browser UI against the real Airbus ClickHouse origins, which surfaced three genuine, independent bugs the entire unit-test suite could not have caught (each is a "the mock was too clean" class of bug, not a logic error).
-
-- [x] **12.5.1 `ScopeBody` becomes interactive**
-  - Full rewrite of `Gates.tsx`'s `ScopeBody`: `useState` over the flat plan rows (keyed on `payloadVersion`, the exact Phase 2.2 poll-clobbering fix, now applied here for the first time since this component never had local state before), a checkbox on every real row (`match`/`link_path`) defaulting to whatever `enabled` the backend sent, and an entity-level master checkbox with real `indeterminate` state when a group's rows are mixed. `not_found` placeholder rows get no checkbox — there is nothing to toggle. Renders its own `GateButtons` row (matching `DependencyBody`'s established pattern) since it now needs to hand `onApprove` a third, edited-plan argument the generic gate footer doesn't carry.
-  - `GateProps.onApprove` widened to a third optional `scopePlan?: Record<string, any>` parameter; `GateButtons` forwards it; `PipelineScreen.tsx`'s `onApprove` and `api.ts`'s `sendFeedback` both threaded through, gated on `node === "human_review_scope"` exactly like the deps gate's `columnDependencies` before it.
-  - `human_nodes.py`'s `_build_scope_interrupt` rewritten to forward every field an entry actually has (`{**e, "entity_type": entity}`) instead of a hand-picked subset that silently dropped `path`/`hops`/`confidence` — the edited plan the human sends back on approve is this same shape round-tripped, so a dropped field here would have been lost the moment a human approved the plan unchanged. `enabled` defaults `True` via `row.setdefault` when an entry doesn't carry it (every `match` entry, and any `not_found` placeholder). Added `"enabled": True` explicitly to both `_heuristic_plan`'s and `_sanitize_plan`'s `match`-mode entry builders in `plan_scope.py` for the same reason.
-  - Investigated the plan's "doubled `not_found` rows" claim directly (two test scenarios: a hand-built partial-coverage plan, and the real `plan_scope_impl` pipeline end to end) — not reproducible in the current code. `plan_scope.py`'s `_ensure_complete_origin_coverage` only backfills when an entity's list is entirely empty; `_build_scope_interrupt`'s own coverage loop only adds a placeholder for an origin genuinely missing from that entity's `covered` set — the two never double-count the same gap. No fix applied; documented rather than silently dropped, per this session's own standing rule against inventing fixes for bugs that don't reproduce.
-
-- [x] **12.5.2 Wire the edit back to the backend**
-  - `Feedback` (`main.py`) gains `scope_plan: dict[str, Any] | None = None`; the feedback endpoint forwards it into the resume dict exactly like `column_dependencies` before it. No new merge/sanitize layer needed on the backend: `human_review_scope`'s node body already replaced `state["scope_plan"]` wholesale with `human_feedback["scope_plan"]` when it exists (this was live code, just unreachable — nothing could ever put a `scope_plan` key into the feedback payload until now).
-  - `extract_data.py`: a new `entry.get("enabled") is False` check right after the existing `entry is None` ("not in the plan") skip — same skip path, same log-and-continue shape, so an unchecked row is treated exactly like a row the plan never proposed in the first place, not "read it in full."
-
-- [x] **12.5.3 Three bugs a live run found that no mock could — fixed, not just logged**
-
-  Ran a real scoped merge against the live Airbus ClickHouse origins (`origin1`/`origin2` on `localhost:8190`) through the actual browser UI end to end: Setup form → company-name box → Start merge → real LLM calls → deps gate → mapping gate (135 real fields) → **scope gate, with real checkboxes** → unchecked the `experience` row → Approve → extraction → Final Approval, then rejected before touching the real destination. Along the way:
-
-  1. **`.env` was silently never loading at all.** `python-dotenv` is imported in four places (`src/api/main.py`, `src/main.py`, `src/utils/config_loader.py`, `src/llm/tracing.py`) but was never declared in `pyproject.toml`, and all four import sites swallowed `ImportError` with a bare `pass`. Every `${ENV_VAR}` placeholder in `config.yaml` — including `LLM_API_KEY` — silently stayed as the literal unexpanded string. Three consecutive "fresh" API keys from the user all produced an identical `401 Incorrect API key provided` from DashScope; a raw `urllib` request with the exact same key succeeded (`200 OK`), proving the keys were fine and the app's own env loading was the fault. Fixed: added `python-dotenv>=1.0.0` to `pyproject.toml` and installed it; all four sites now log a real, specific warning instead of silently proceeding half-configured — a deployment with real OS env vars and no `.env` file is still legitimate and must still start, so this is a loud warning, not a raise. A pre-existing, unrelated `config/platform_overrides.yaml` (gitignored, machine-local) also had a stale `llm.base_url` pointing at an unreachable local vLLM box left over from before this session — cleared locally, not a code change.
-  2. **A composite primary key silently blocked the whole structural join-graph tier.** `join_graph.py`'s `_find_candidate_edges` skipped any column that was a *member* of a table's own primary key, on the theory that a table's own key identifies its own rows rather than pointing elsewhere. True for a single-column key; false for a composite one — `Experience`'s real ClickHouse primary key is `(experienceID, companyID)`, and `companyID` is simultaneously part of Experience's own identity *and* a real FK to `Company`. The old check discarded it either way, so the entire structural (tier 2/3) join-graph search found **zero** candidate edges for a table shaped exactly like the ones Phase 4 exists to handle, and every dependent entity fell through to the much weaker single-hop `_concept_link_fallback` (which cannot bridge 2+ hops at all). Fixed: only skip a column when it **alone** constitutes the primary key (`own_pk == {col_low}`), not merely when it's a member.
-  3. **Independent two-sided sampling structurally cannot detect a real FK when the parent table is much larger than the child.** `_verify_inclusion` sampled up to 500 distinct values from *both* the child and the parent table independently, then measured overlap. For a parent with thousands of rows and a child with a few dozen, an arbitrary `LIMIT 500` slice of the parent has a near-zero chance of coincidentally containing the exact rows the child references — verified live against `Company` (thousands of rows) and `CompanyFinancials` (29 rows): **0.069 overlap for a relationship that is, by construction, 100% referentially intact.** Fixed at the connector layer: `sample_distinct_values` on all three connectors (`postgres.py`, `clickhouse.py`, `mongodb.py`, plus the `base.py` default) gained an optional `filter_values` parameter that pushes a `WHERE column IN (...)` / `$in` filter into the query instead of sampling independently; `_verify_inclusion` now samples the child first, then asks the parent "do these specific values exist" rather than "give me an arbitrary sample and hope it overlaps."
-
-  **Combined effect, live-verified twice over:**
-  - Before either fix: `person`/`contact`/`experience` (everything needing 2+ hops, or a 1-hop candidate on a composite-keyed table) all showed `not_found` or a `heuristic`-confidence single-hop fallback guess at the real scope gate — the exact flagship failure issue 6 was written to fix, still failing on real data despite the entire unit-test suite passing.
-  - After both fixes: `Company → CompanyExperience → Person` resolves as a real, **`verified`**-confidence 2-hop `link_path` (`build_join_graph` against the live origins, standalone script) — independently cross-checked against real ClickHouse SQL: the 7 real Airbus companies in `origin_1` reach exactly 32 distinct `personID`s via `CompanyExperience`, and all 32 are real rows in `Person` (32/32, not a sample-derived estimate).
-  - `origin_2`'s real `Experience` table has no `personID` column at all (only `companyID`) — `origin_2.Person`/`origin_2.PersonContact` genuinely have no reachable path in this schema, confirmed structurally, not a remaining bug.
-
-- [x] **12.5.4 The checkbox → skip round trip, proven live, not simulated**
-  - At the real scope gate, unchecked the `experience` / `origin_2` row (the only real, non-`not_found` entry for that entity) via a real click in the browser, submitted Approve, and let the run continue. The final summary's `entity_counts.experience` came back **exactly 0**. Independently verified this was the uncheck taking effect and not coincidentally-empty data: a direct ClickHouse query found **212 real `Experience` rows** in `origin_2` referencing the 13 real Airbus companies discovered there — had the uncheck not been honoured end to end (browser state → `sendFeedback` → `Feedback.scope_plan` → `human_review_scope`'s wholesale replace → `extract_data`'s `enabled is False` skip), the real count would have been 212, not 0.
-  - *Evidence:* `tests/unit/test_plan_scope.py` — `_build_scope_interrupt` field-forwarding (a `link_path` entry's `path`/`hops`/`confidence`/`enabled` all survive), `enabled` defaulting `True` when absent, the not-found-duplication non-issue formally guarded against regression. `tests/unit/test_extract_data_node.py` — a new test proving an `enabled: False` entry produces zero extract calls and zero rows, same code path as "not in the plan." `tests/unit/test_api.py` — `Feedback.scope_plan` round-trips through the endpoint into the resume dict. `tests/unit/test_join_graph.py` — 4 new tests: composite-PK member is still a candidate FK (the exact live bug), single-column PK is still correctly excluded (no regression), and a filtered-parent-lookup test that reproduces the live sampling bug exactly (an arbitrary "parent sample" that deliberately excludes the child's real referenced values, proving the OLD independent-sampling code would have failed this exact case while the fix correctly finds the values via `filter_values`). `tests/unit/test_postgres_connector.py` / `test_clickhouse_scratch_table.py` / `test_mongodb_connector.py` — one `filter_values` test each, confirming the `IN`/`$in` clause is genuinely pushed into the query. Frontend `npm run typecheck` and `npm run build` both clean. `scripts/lint_arch.py` (0 new, 14 pre-existing) / `lint_docs.py` clean. `scripts/check.py types` clean. Full `tests/unit` sweep: 1320 passed (11 more than the Phase 4.5 baseline of 1309 — 5 from the checkbox UI/wiring, 6 from the three live-discovered bug fixes), 83 skipped, zero regressions.
-
----
-
-## Phase 12.6 — Destination family graph (Phase 6.1)
-
-Closes the structural gap behind issue 4: `map_fields.py` only ever considered one destination table per entity, so `Company.totalInvestment` was dropped with *"no destination column for investment amount"* (the 4th live run's log) while `finance` sat right there, unused, and a `contact` entity could never fan out into `contact_email`/`contact_phone`/`contact_social` no matter how the source data was shaped. This phase derives *which* destination tables are related to which; Phase 6.2 (next) is what actually widens the mapping search to use it.
-
-- [x] **12.6.1 `build_family_map`**
-  - New `src/mcp_server/tools/dest_family.py::build_family_map(dest_connector) -> dict[str, set[str]]`. One pass over every destination table's real FK constraints (`PostgreSQLDestinationConnector.get_foreign_keys`, one call per `list_tables()` result), recording the relationship on *both* endpoints — a table is in another's family if either one declares the FK, so the direction of the constraint doesn't matter to the caller. Derived from the real schema, not hand-written, so it generalises to any destination without a code change when a table is added or renamed.
-  - `getattr(dest_connector, "get_foreign_keys", None)` duck-typed rather than an interface requirement: only `PostgreSQLDestinationConnector` implements it today (`ClickHouseDestinationConnector` has no FK constraints to read at all), and a connector without it degrades to an empty family map — the same graceful-degradation shape every other schema-introspection call site in this codebase already uses (`map_fields_node.py`'s own `try/except` around `dest_connector.list_tables()`), never an error that would abort mapping over what is, at worst, a missing enhancement rather than a required one.
-  - A `list_tables()` failure, or one table's `get_foreign_keys()` call failing, degrades gracefully (empty map, or that one table's outgoing FKs skipped) rather than aborting the whole build — one broken table must not silently lose every other table's real relationships too.
-  - *Evidence:* `tests/unit/test_dest_family.py` — 8 tests: a simple bidirectional FK, multiple tables sharing one referenced table, a self-referencing junction with two FK columns to the same table deduplicating via set semantics (not crashing or double-counting), a table with zero FKs still present with an empty family (not silently absent), a referenced table missing from `list_tables()`'s own result still recorded, a connector without `get_foreign_keys` at all degrading to `{}`, `list_tables()` raising degrading to `{}`, and one table's `get_foreign_keys()` raising not aborting the rest. **Live-verified against the real 26-table `global_warehouse` destination** (`localhost:55201`, the same database this whole plan's live checks have used): `company`'s derived family is `{company_relation, contact_email, contact_phone, contact_social, contract_entity, experience, finance, finance_budget, industry, location, product, technologic}` — an almost word-for-word match to the plan's own illustrative example (`{finance, industry, experience, company_relation, contact_email, contact_phone, contact_social, location, technologic, ...}`), genuinely derived from the real schema's FK constraints, not copied from the plan text. `scripts/check.py types` clean. Full `tests/unit` sweep: 1328 passed (8 more than the Phase 5 baseline of 1320), 83 skipped, zero regressions.
-
----
-
-## Phase 12.7/12.8 — Widen mapping search within family + write child rows (Phase 6.2/6.3)
-
-Implemented together, as 4.3+4.4 were: shipping 6.2's producer-side change (`map_fields.py` emitting `dest_table`-tagged cross-table mappings) without 6.3's consumer-side change (`load_data.py` understanding how to write those mappings into the right table) would leave a genuinely broken intermediate state for any entity that actually receives a cross-table mapping — either silent data loss or an INSERT into the wrong table. Closes issue 4 for real: `Company.totalInvestment`-shaped fields (no home on the entity's own table, a real home on a sibling) are now mapped AND written, not just discovered and dropped.
-
-- [x] **12.7.1 `map_fields_impl` widened to search the entity's table plus its family**
-  - `map_fields.py`: `destination_schema` (the primary table) is unchanged; a new optional `family_schemas: list[dict] | None` parameter carries sibling tables (from `dest_family.build_family_map`, Phase 6.1). Internals rebuilt around `dest_candidates: dict[tuple[table, column], col_info]`, an ordered dict with the **primary table's columns inserted first, family tables' after** — the existing `if score > best_score` (strict greater-than) comparison in every phase (exact-name, confident-heuristic, low-confidence-heuristic) then naturally prefers the primary table on a scoring tie as a side effect of iteration order, with zero new tie-breaking logic layered on top of the already-well-tested scoring functions, exactly as planned.
-  - Every phase updated to work over `(table, column)` keys instead of bare column names: `taken` (claimed-columns tracking) is now a set of `(table, column)` tuples so a claimed `company.amount` and a claimed `finance.amount` don't collide with each other; `_incompatible_with_column` takes the specific candidate's column-info dict directly instead of a name-keyed lookup, so two same-named columns on different tables are checked against their own real types; `is_coalesced` is now keyed by `(dest_table, dest_column)` — a field landing on `company.amount` and a different field landing on `finance.amount` must not be flagged as sharing a destination cell just because the bare column name matches.
-  - LLM phase (`_decide_fields_with_llm`): the prompt's destination-schema block gets a `### Related table: <name>` section per family table, each column listed as `<table>.<column>`; the system prompt gained one new decision rule explaining the format and that a bare column name always means the primary table. `_apply_llm_decision` resolves the model's answer via `_resolve_candidate_key`, accepting either `table.column` (family) or a bare name (primary-preferred, since dict iteration order puts the primary table's entries first). An LLM answer naming a column that doesn't exist anywhere in the offered set is rejected exactly as before (falls through to heuristic tiers / unmapped).
-  - Every mapped field now carries `dest_table` (the entity's own table for an ordinary mapping, a family table for a cross-table one) — `MappingRow` (`api.ts`) gained the same field; `Gates.tsx`'s mapping-gate table's "Dest Table" column (previously a placeholder rendering `r.entity_type`) now renders the real `r.dest_table`, with a small "↗ cross-table" badge when it differs from the entity's own table. `human_nodes.py`'s `_build_mapping_rows` forwards `info.get("dest_table", entity_type)` onto every row.
-  - `workflow_manager.py`'s `apply_mapping_feedback` (the mapping-gate approve/edit path) fixed to match: `GateButtons.onApprove` resends **every** row on approval, not just edited ones, so without a fix a cross-table mapping's `dest_table` tag would be silently stripped back to the entity's own table on every single approval (and then rejected outright, since the column genuinely doesn't exist on that table) — a regression this session's own re-run of `tests/unit/test_mapping_gate.py` caught immediately after the `_build_mapping_rows` change (`test_map_row`'s golden dict was missing the new key, which would have masked the real bug if just patched away instead of tracing why the approve path independently needed the same fix). Validation is now per-`(entity, target_table)` via a lazily-cached `_columns_for(table)` instead of one column set per entity.
-  - *Evidence:* `tests/unit/test_map_fields_cross_table.py` (new, 9 tests) — exact-name and confident-heuristic matches on a family table; no-family-schemas behaves byte-for-byte as before (regression guard); primary-table-preferred-on-tie (the core design claim, directly tested); reserved columns (`id`/`_source_ids`) excluded from family tables too; `is_coalesced` correctly NOT set when two different fields land on two different tables' same-named column; LLM maps to a `table.column`-qualified family answer (prompt content asserted, not just the outcome); LLM bare-name answer resolves to the primary table; LLM naming a nonexistent qualified column is rejected. `tests/unit/test_map_fields_node.py` — 1 new test proving the node actually builds and forwards `family_schemas` from a real (mocked) FK-exposing connector. `tests/unit/test_mapping_gate.py` — `test_map_row` updated for the new `dest_table` key; 2 new tests for `apply_mapping_feedback`: a cross-table edit validated against the family table's real columns and the tag surviving the round-trip, and a cross-table edit naming a column that doesn't exist on that family table correctly rejected. All 51 pre-existing `map_fields`/field-mapping tests (`test_mcp_map_fields.py`, `test_hybrid_llm_paths.py`, `test_field_mapping.py` integration) still pass unmodified — the widening is fully backward compatible when `family_schemas` is absent.
-
-- [x] **12.7.2 / 12.8 `load_data.py` writes child rows for cross-table mappings**
-  - New `_group_mapping_by_dest_table(mapping, primary_table)`: splits one entity's field mapping by which destination table each entry actually targets — a plain mapping (no entry has `dest_table`, every call site before this phase) collapses entirely into `{primary_table: mapping}`, a genuine no-op for the common case.
-  - `load_data_impl` uses this to build the PARENT transform from only the primary-table-tagged entries (unchanged shape/behavior for a single-table mapping), then — once the parent's rows are written and their final destination ids are known — calls new `_write_child_rows` for whatever's left.
-  - `_write_child_rows`: for each cross-mapped sibling table, reads its **real** foreign keys (`connector.get_foreign_keys(child_table)`) and finds the column pointing back at the primary table. Deliberately handles only that one direction — a family table whose OWN FK points at the primary table (`finance.company_id -> company.id`), which live inspection of the real `global_warehouse` schema confirms is the shape of every field-mapping-relevant relationship here (`finance`, `finance_budget`, `contact_email/phone/social`, `contract_entity`, `experience`, `company_relation` all have the FK; only `company.industry_id -> industry` and `company.location_id -> location` run the other way, and those are not sibling tables a source FIELD would ever cross-map onto). No reverse FK found -> the field is logged and left unwritten rather than guessed at; this is a real, bounded scope decision, not an oversight — the reverse direction needs find-or-create matching against existing rows, a genuinely different feature. One child row per parent record per sibling table; a record that carries none of that table's fields (transforms to all-`None`) is skipped rather than writing an empty row. Reuses the SAME caller-supplied connector as the parent write (`load_data_node.py`'s single connector/transaction for the whole load), so a partial fan-out cannot commit — an exception here propagates exactly like a parent-table load failure and rolls the whole load back.
-  - `load_data_impl`'s return dict gained `child_tables: {table: {inserted, updated}}`, empty for every mapping that doesn't cross a table (i.e. everything before this phase).
-  - *Evidence:* `tests/unit/test_load_data_cross_table.py` (new, 12 tests) — `_group_mapping_by_dest_table` (plain mapping collapses, cross-table entries split correctly, empty mapping, a `dest_table` equal to the primary stays in the primary group); `_write_child_rows` (one child row per parent with the real FK set, an all-None child record not written, a sibling table missing the reverse FK skipped without raising, a connector without `get_foreign_keys` degrading to no-op, a parent record with no id skipped, two sibling tables each getting their own child rows in one call); a full `load_data_impl` integration test proving the parent write never even sees the finance-tagged field and `child_tables` comes back correctly populated; a single-table-mapping regression test proving `child_tables == {}` and `get_foreign_keys` is never even called when there's nothing cross-table to write.
-  - **Live-verified end to end against the real `global_warehouse` destination** (`localhost:55201`) — genuinely round-tripped, not just read: built the real family map via `build_family_map` against the real connector (confirmed `finance`/`contact_email` are really in `company`'s family); called the **real** `map_fields_impl` with the real LLM (DashScope, the same endpoint/key this whole plan's live checks use) against the real `company`/`finance`/`contact_email` schemas with three synthetic fields (`org_title`, `netIncomeUSD`, `workEmail`) that have no unambiguous home on `company` for two of them — the LLM correctly cross-mapped `netIncomeUSD -> finance.net_income` and `workEmail -> contact_email.email` (both `table.column`-qualified answers, proving the prompt format round-trips through a real model, not just the test's mocked one) and `org_title -> company.name` (bare name, primary table); called the **real** `load_data_impl` against the real connector, which wrote one `company` row plus one `finance` child row plus one `contact_email` child row, all correctly keyed by the real generated `company.id` via each child table's real `company_id` FK column; then — critically — opened a **separate, freshly-created** database connection (never touched by the write path) and re-queried all three tables independently, confirming the exact values landed (`net_income = 4242000.0`, `email = 'verify@phase63.test'`, `name = 'Phase 6.3 Verify Co'`). Cleaned up afterward and independently re-confirmed zero residual rows and the `company` table back to its original 16 rows. (One earlier attempt without an `llm_config` showed the heuristic-only tiers correctly finding `email_addr -> contact_email.email` via substring match but leaving `totalInvestment` unmapped against the real, unusually messy `finance` schema — which has accumulated a mix of a clean financial-statement schema and separate enrichment-looking columns like `ticker`/`alexaRank`/`ISCurrent` from some earlier session's runs; a genuinely ambiguous case for pure string heuristics, correctly escalated rather than guessed at, and exactly what the LLM tier exists to resolve — which the LLM-enabled run then did.) Docker/the `postgres`/`mcp-clickhouse2` MCP servers were unavailable for part of this session; once available, `mcp-clickhouse2` connected cleanly but the `postgres` MCP itself kept erroring, so this verification used a direct `psycopg2` connection instead — still a connection independent of the app's own success message, per CLAUDE.md's actual requirement.
-  - `scripts/check.py all` — all 10 checks pass (ruff, ruff-format, mypy ratchet, `lint_arch.py` — 0 new violations, 14 pre-existing — `lint_docs.py`, unit tests, frontend typecheck+build). Full `tests/unit` sweep: **1352 passed** (24 more than the Phase 6.1 baseline of 1328 — 9 from the new cross-table map_fields tests, 12 from the new load_data child-row tests, 1 from the map_fields_node family-passthrough test, 2 from the apply_mapping_feedback round-trip tests), 83 skipped, zero regressions. `npm run typecheck` and `npm run build` both clean.
-
----
-
-## Phase 12.9 — Per-pair match evidence retained on clusters (Phase 7.1)
-
-Closes half of issue 7: `_build_clusters` computed genuine per-pair scores while scoring, then threw everything away except `min()` as a cluster's `match_confidence` — a reviewer at the matches gate (or, once Phase 7.3 lands, the lineage view) had no way to see *why* two records were judged the same entity, only a bare number. `fellegi_sunter.py` already had a `MatchModel.explain()` method that computes almost exactly this per-field breakdown — genuinely dead code, zero callers anywhere in the codebase — so this is largely wiring existing math through, not new statistics.
-
-- [x] **12.9.1 `_pair_field_evidence` — the field-level weight breakdown**
-  - New `resolve_entities.py::_pair_field_evidence(rec1, rec2, vector, model, record_cache) -> (matched, mismatched)`. For every non-`LEVEL_NULL` field in a pair's comparison vector, calls the SAME `FieldModel.weight(level, value)` the scorer itself already sums into one probability — this is that exact number decomposed per field, not a second, possibly-diverging calculation. Positive weight -> `matched_fields`, negative -> `mismatched_fields`, each sorted strongest-evidence-first. Each entry carries the field name, both sides' canonically-projected values (`a`/`b`), the comparison level, and the weight in bits.
-- [x] **12.9.2 Capture evidence during scoring, not by re-deriving it later**
-  - `_resolve_core`'s scoring loop (dispatchable to a `ProcessPoolExecutor`, so every return value must stay plain/picklable data) now also builds `pair_evidence: dict[(id1,id2), dict]` alongside `scored_pairs`, using the SAME `precomputed_vector` already computed for scoring — zero extra vector-building cost, only the per-field weight decomposition is new work, and only for pairs that actually got a probabilistic-model score (method `"fellegi_sunter"`; a heuristic-only pair, too few candidate pairs to fit a model, gets no field breakdown — nothing false to show beats a confident-looking blank).
-  - `_judge_pairs_with_llm` gained an optional `evidence_sink` parameter (the same caller-owned-mutable-dict pattern this file already uses for `stats`), filled with `{"method": "llm", "reason": ..., "llm_match": ...}` per adjudicated pair. The model's rationale (`j.get("reason")`) used to be logged at debug level, truncated to 120 chars, and discarded — now it is the same string, kept.
-  - `resolve_entities_impl` merges both sources into one `pair_evidence` dict and passes it into `_build_clusters`, which attaches `cluster["match_evidence"] = {"pairs": [...]}` to every multi-member cluster, built from `_evidence_for_members` — the same internal-edge enumeration `_min_internal_confidence`/`_average_linkage` already use, so an edge only appears if it was genuinely part of `edge_weight` (a real scored pair, not a chain co-membership) AND has recorded evidence. A singleton cluster gets no `match_evidence` key at all — there is no pair to explain.
-  - *Evidence:* `tests/unit/test_resolve_entities_match_evidence.py` (new, 11 tests) — `_pair_field_evidence`: exact agreement positive-weight/matched, disagreement negative-weight/mismatched with both raw values carried, `LEVEL_NULL` dropped, a field with no model entry skipped, matched/mismatched sort order. `_evidence_for_members`: only edges present in both `edge_weight` and `pair_evidence` returned (a scored-but-unrecorded edge silently skipped, not padded), no edges, singleton. `resolve_entities_impl` end to end: a real fitted probabilistic model (9 near-identical "Widget Traders" records providing the >=30 candidate pairs needed to fit at all, none of which merge — correctly blocked by the discriminating-agreement guard since they share only a non-discriminating name) plus one genuine duplicate pair (agreeing on name/email/phone/domain) that clears the 0.95 auto-match threshold and gets `match_evidence` with `method: "fellegi_sunter"` and the right field breakdown; a real (mocked-LLM) borderline-pair merge gets `match_evidence` with `method: "llm"` and the exact rationale string the mock returned; a singleton has no `match_evidence` key. All 108 pre-existing resolve_entities/hybrid-LLM tests still pass unmodified.
-  - `scripts/lint_arch.py`: this change shifted `resolve_entities.py`'s pre-existing (baselined, not new) reverse-layer import of `src.orchestrator.utils.retry_hints` down by ~90 lines, which line-number-keyed `arch-lint-baseline.txt` initially flagged as "new." Regenerated via `scripts/update_arch_lint_baseline.py` (the sanctioned tool for exactly this) — net **shrank** by one entry, not grew: `map_fields.py`'s OWN identical violation had already been fixed in an earlier phase (Phase 1.2's "inlined reviewer rework feedback formatting") but the baseline file was never regenerated after that fix landed, so it carried one stale line the whole time. `scripts/lint_arch.py` now reports 0 new, 14 pre-existing (was 15 stale-counted).
-  - `scripts/check.py all` — all 10 checks pass. Full `tests/unit` sweep: **1363 passed** (11 more than the Phase 6.2/6.3 baseline of 1352), 83 skipped, zero regressions.
-  - **Not yet done, honestly flagged**: `_source_ids` population (`unify_entities.py`) and persisting evidence to a durable audit table are Phase 7.2; surfacing `match_evidence` at the final-approval gate and a lineage view are Phase 7.3 — this phase is the capture-and-attach step both build on, not the full issue 7 closure.
-
----
-
-## Phase 12.10 — Persist merge_engine_merge_audit + populate _source_ids (Phase 7.2)
-
-Closes the other half of issue 7: Phase 7.1's `match_evidence` lived only in the run's own state — gone the moment the run finished, with no way to query "why did company X and Y merge" after the fact. This makes it durable, and fixes the `_source_ids` gap the plan named directly: the column exists (`map_fields_node.py:169`) but nothing ever set it, so `load_data.py`'s own fallback to `{"cluster_id": ...}` fired on literally every load.
-
-- [x] **12.10.1 `_source_ids` gets the cluster's real members**
-  - `unify_entities.py`: right where `unified_record["id"] = cluster_id` is set, `unified_record["_source_ids"] = json.dumps(record_ids)` — `record_ids` is the SAME list already read two lines above for logging (`cluster.get("record_ids", [])`), just never attached to the output record. `load_data.py`'s `_transform_records` already reads this key when present (unchanged there); before this it was never present, so its own `{"cluster_id": rec.get("_cluster_id", "")}` fallback fired unconditionally.
-  - *Evidence:* `tests/unit/test_unify_entities_node.py` — 1 new test asserting `_source_ids` decodes to the cluster's exact `record_ids`, not a self-reference. All 12 pre-existing tests in the file still pass.
-- [x] **12.10.2 `merge_engine_merge_audit` — the durable table**
-  - New `PostgreSQLDestinationConnector.ensure_merge_audit()`/`save_merge_audit(entity_type, run_id, rows)`, same shape and pattern as the existing `ensure_entity_map`/`save_entity_map` right above them. Schema matches the plan's own spec exactly: `(run_id, entity_type, cluster_id, record_a, record_b, confidence, method, evidence JSONB, decided_by, human_override, created_at)`, `PRIMARY KEY (run_id, entity_type, record_a, record_b)`. `ON CONFLICT DO UPDATE` refreshes `confidence`/`method`/`evidence`/`decided_by` and takes `human_override` via `COALESCE(new, existing)` — a later human decision updates the row a run already wrote instead of erroring or duplicating it, while an absent override on a re-save doesn't clobber one already recorded.
-  - New `load_data.py::_persist_merge_audit`, called inside the load's own transaction right after the existing `_persist_entity_map` (same reasoning: a rolled-back load must not leave audit rows for a merge that never landed). Walks every multi-member cluster's `match_evidence.pairs` (Phase 7.1), maps `method` -> `decided_by` (`"llm"` stays `"llm"`, everything else is `"auto"`) — **except** a cluster the reviewer explicitly confirmed at the matches gate (`cluster_edits.apply_cluster_decisions`' "keep" path sets `reviewed_by_human` without touching `match_evidence`), which outranks the original decision: `decided_by="human"`, `human_override="merge"`. Deliberately **non-fatal**, unlike the entity map: a merge-audit write failure is wrapped in its own `try/except` that only logs a warning, on the reasoning that losing an audit row is a real but recoverable observability loss, not one worth rolling an otherwise-successful load back over (no future run duplicates rows because of it, unlike a lost entity-map assignment).
-  - **Scoped, honestly**: a human **splitting** a cluster is NOT yet recorded as its own audit row (`human_override="split"`) — `apply_cluster_decisions` rebuilds a split cluster's fragments without `match_evidence`, so there is currently nothing for `_persist_merge_audit` to attach a split decision to. The split itself is still fully honoured functionally (those records genuinely do not merge in the destination); only the audit-trail entry explaining "a human decided these are NOT the same entity" is missing. Threading that through would need `apply_cluster_decisions` to return a third value (the original pairs a split broke apart) and both its call sites (`human_nodes.py`, `workflow_manager.py`) to carry it forward to load time — real work, deferred rather than rushed. ClickHouse destination support is likewise deferred: `merge_engine_entity_map` (the existing, analogous table) is already PostgreSQL-only for the same reason (`ClickHouseDestinationConnector` has no `save_entity_map` either) — this does not regress anything that worked before.
-  - *Evidence:* `tests/unit/test_load_data_merge_audit.py` (new, 9 tests) — one row per pair with the right fields (`fellegi_sunter` method -> `decided_by="auto"`); LLM method -> `decided_by="llm"` with `evidence.reason` carried; a `reviewed_by_human` cluster overrides to `decided_by="human"`/`human_override="merge"`; a singleton (no `match_evidence`) writes nothing; a pair missing `a`/`b` is skipped; a connector without `save_merge_audit` degrades to a silent no-op; a `save_merge_audit` exception is swallowed, never raised (the non-fatal guarantee, tested directly); no entity types / non-dict destination are no-ops. Confirmed against the FULL `test_load_data_node.py` suite (38 tests combined) that adding this unconditional call after `_persist_entity_map` did not break any pre-existing test — several of those tests' connector fixtures don't stub `save_merge_audit` at all, exercising the MagicMock-return-value-is-not-an-int path through the non-fatal exception handler for real, not just in the new file's own dedicated test for it.
-  - **Live-verified against the real `global_warehouse` destination** (`localhost:55201`) — genuinely round-tripped: called the real `ensure_merge_audit()` (creating the table for the first time on this database) and `save_merge_audit()` writing two real rows (one `fellegi_sunter`, one `llm`), then called it AGAIN with an updated `decided_by="human"`/`human_override="merge"` for the first row, proving `ON CONFLICT DO UPDATE` genuinely updates in place rather than erroring or duplicating; then — a separate, freshly-opened connection the write path never touched — re-queried both rows independently, confirming the override landed (`decided_by='human', human_override='merge'`) and the JSONB `evidence` column round-tripped correctly (`matched_fields[0].field == 'name'`, `reason` string intact). Cleaned up afterward and independently re-confirmed zero residual rows. The `postgres` MCP was still erroring during this verification (same as Phase 6.2/6.3's), so this used a direct `psycopg2` connection — still independent of the app's own success message.
-  - `scripts/check.py all` — all 10 checks pass (`lint_arch.py`: 0 new, 14 pre-existing). Full `tests/unit` sweep: **1373 passed** (10 more than the Phase 7.1 baseline of 1363 — 9 from `_persist_merge_audit`, 1 from `_source_ids`), 83 skipped, zero regressions.
-
----
-
-## Phase 12.11 — Surface merge lineage: final gate + Investigate screen (Phase 7.3)
-
-Closes the "show it to a human" half of issue 7. Phase 7.1 attached `match_evidence` to clusters; Phase 7.2 made it durable in `merge_engine_merge_audit`. This is the two places a reviewer actually looks: the final-approval gate (every merge, not just the ambiguous sub-0.85 ones the matches gate already shows), and the standalone Investigate screen (queries the destination table directly, so it works even after the run's own spool is gone).
-
-- [x] **12.11.1 `clusters_by_entity` in the final-approval payload**
-  - New `WorkflowManager._clusters_by_entity(values)`: every multi-member cluster from `clusters_for`, filtered (singletons excluded — nothing to explain) and narrowed to exactly the fields the gate renders (`cluster_id`, `record_ids`, `match_confidence`, `required_human_review`, `match_evidence`) so the payload can't leak whatever else a cluster dict happens to carry. Wired into `human_final_approval`'s `_build_interrupt_data` branch as a new `clusters_by_entity` key.
-  - `tests/unit/test_interrupt_payload_parity.py`'s `test_human_final_approval_is_a_superset_not_a_drift` hard-codes the exact set of manager-only keys this gate is allowed to add beyond the node's own simpler body — updated `expected_extra` to include `clusters_by_entity`, exactly as that test's own docstring instructs ("update expected_extra... rather than silently widening what this test tolerates").
-  - `Gates.tsx`'s `SummaryBody` gained a "Merge lineage" section: one collapsed `<details>` per entity (native browser collapse, no new state or CSS needed), each with its clusters and — per pair — either the field-by-field matched/mismatched weight table (`fellegi_sunter`) or the LLM's own rationale string (`llm` method), reusing the existing `.cluster`/`.cluster-head` CSS classes the matches gate already established.
-  - *Evidence:* `tests/unit/test_final_gate_lineage.py` (new, 7 tests) — a multi-member cluster included with its evidence; a singleton excluded; an entity with only singletons omitted entirely (not an empty array); no `entity_clusters` at all returns `{}`; a cluster with no `match_evidence` (heuristic-only, no fitted model) still included with `match_evidence: null` rather than dropped; only the five expected keys forwarded, nothing leaked; and an end-to-end `_build_interrupt_data("human_final_approval", ...)` call proving the key actually reaches the payload. `npm run typecheck` and `npm run build` both clean — the new JSX compiles and bundles without touching `SummaryBody`'s existing sections.
-- [x] **12.11.2 Investigate screen: a durable lineage lookup, independent of the checkpoint**
-  - New `db_discovery.py::query_merge_lineage` — same bounded/read-only/never-raises contract as the existing `sample_table_rows` (Part 1.6.B), but queries `merge_engine_merge_audit` directly by `record_a = search OR record_b = search OR cluster_id = search`, optionally narrowed by `entity_type`, capped at 200 rows. PostgreSQL only, matching `merge_engine_entity_map`'s existing scope (ClickHouse has neither table). New `POST /api/investigate/lineage` endpoint (`LineageLookupRequest`) and `api.ts`'s `getLineage`/`LineageResult`/`LineageRow`.
-  - New `LineageCard` in `InvestigateScreen.tsx`, added as a 5th investigation tool alongside the existing four — explicitly distinguished from the existing checkpoint-backed "Match & cluster inspector" card in its own copy: this one **survives the run's own spool being cleaned up**, because it reads the destination's own durable table, not in-memory/SQLite checkpoint state. Same connection-form pattern as `DataExplorerCard` (host/port/user/password/schema), plus an entity-type filter and the record/cluster-id search box the plan specifically asked for ("searchable by canonical id or source record id").
-  - *Evidence:* `tests/unit/test_merge_lineage_lookup.py` (new, 6 tests) — empty search rejected before any DB call; the three-way `record_a OR record_b OR cluster_id` search confirmed in the actual SQL sent; the entity-type filter clause included only when given; the limit clamped to the 200-row ceiling; a connection failure and a missing-table failure both degrade to `{"connected": false, "error": ...}` rather than raising. `npm run typecheck`/`npm run build` clean.
-  - **Live-verified end to end, genuinely through the browser** (not just the API): started the real app (`web-app` launch config) with the real `dist/` build, wrote one real audit row directly via `save_merge_audit`, navigated to the Investigate tab in the Browser pane, filled in the real `global_warehouse` credentials and the exact `record_a` id, clicked Search, confirmed the network request (`POST /api/investigate/lineage` → `200 OK`) returned the real row, and confirmed via `get_page_text` that the rendered DOM showed the pair, confidence, method, entity/cluster/run/decided-by line, and the pretty-printed JSON evidence block exactly as written. Cleaned up the test row afterward and independently reconfirmed zero rows for that `run_id`.
-  - `scripts/check.py all` — all 10 checks pass. Full `tests/unit` sweep: **1386 passed** (13 more than the Phase 7.2 baseline of 1373 — 7 from the final-gate lineage tests, 6 from the lineage-lookup tests), 83 skipped, zero regressions.
-
----
-
-## Phase 12.12 — Splink optional matching engine, salvaged with real fixes (Phase 7.4)
-
-Copied `splink_matcher.py` from `.worktrees/B4-matching-precision` per the plan's salvage table, plus the 14-line engine seam in `resolve_entities.py`. The audit found B4's version merged nothing at all — the model was never trained, so Splink defaulted the match prior to 0.0001 (~-13.3 bits) and a byte-identical name pair scored 0.093, discarded by `predict()`'s hardcoded 0.5 cutoff. B4's own test wrapped every assertion in `if res is not None:`, so this shipped green while doing nothing.
-
-- [x] **12.12.1 Train the model (the blocking defect) — three steps, not the one the plan sketched**
-  - `score_pairs_with_splink` (new, split out of `resolve_with_splink` so the eval harness below can train once and reuse — see 12.12.3): `estimate_u_using_random_sampling` first, exactly as researched. But EM alone on top of that was **not enough** — empirically verified, not assumed: on a 16-record fixture with 3 true + 3 false same-name duplicate pairs, u-estimation + EM alone scored every true duplicate at **0.015** (false duplicates at 0.0). The reason is structural, not a training-budget problem: the single blocking column (`block_on("name")`, the only one this module ever configures) makes every candidate pair agree on `name` by construction, so `name`'s own m/u can never be trained from that block, and with only a handful of blocked pairs, EM's *joint* re-estimate of `probability_two_random_records_match` collapses back toward the untrained default instead of the dataset's real match rate.
-  - Fix: an explicit `estimate_probability_two_random_records_match([block_on(deterministic_field)], recall=0.7)` call between u-estimation and EM — `deterministic_field` is `"email"` when present (rarest, strongest identity signal), else the same column used for prediction blocking. EM then runs with `fix_probability_two_random_records_match=True` so a handful of noisy in-block pairs cannot re-drag the prior back down. Same fixture, same data: true duplicates **0.849**, false duplicates **0.0004** — this was the actual fix, not the two-call recipe originally planned from the Splink API alone. Each of the three training calls is independently non-fatal (falls through to the next with a logged warning; only u-estimation's own failure aborts to `None`, since nothing downstream can be trusted without it).
-  - `resolve_with_splink`: `threshold_match_probability=0.0` at `predict()` (not B4's hardcoded 0.5) — scoring and thresholding are kept as separate stages, same as the builtin engine; `auto_match`/`auto_exclude` (12.12.4) decide merge/exclude/borderline downstream in `_build_clusters`, not at Splink's own cutoff.
-- [x] **12.12.2 The last-ditch blocking fallback is gone**
-  - B4's `if not blocking_rules: blocking_rules.append(block_on("_record_id_str"))` blocked on a unique id — every row its own block, guaranteeing zero candidate pairs, reported as a false success. Now `return None` so the caller drops to the builtin engine instead.
-- [x] **12.12.3 Clustering stats collected + per-entity strictness honoured**
-  - `stats={}` is now passed to `build_clusters_fn` (three of the 13 result-dict keys — `clustering_seconds`, `largest_component_size`, `large_components` — were silently zeroing before). `auto_match`/`auto_exclude` are derived via the same `_thresholds_for(rules)` the builtin engine uses and passed through, instead of the user's chosen strictness being silently discarded in favour of module defaults.
-  - Non-plan-mandated addition for consistency with Phases 7.1-7.3: every scored pair also becomes a `pair_evidence` entry (`method="splink"`, `matched_fields`/`mismatched_fields` empty — Splink doesn't expose per-comparison weights the way `_pair_field_evidence` does for the builtin's Fellegi-Sunter model), so a Splink-scored cluster still carries `match_evidence` at the final gate.
-  - `resolve_entities_impl` gained the 14-line seam: `rules.get("engine", "builtin")` dispatches to `resolve_with_splink` when set to `"splink"`; `None` (any failure) falls through to the pre-existing builtin path unchanged, exactly as the plan specified — the rest of the function is not rewritten.
-- [x] **12.12.4 AdvancedPanel: a matching-engine selector**
-  - Ported from B4 into `AdvancedPanel.tsx`, at the same `_default`-keyed scope the existing "Matching strictness" selector already uses (`buildRunOverrides`) — B4's own audit flagged this pattern as "one global `_default`, not per-entity," but that critique applies equally to strictness in THIS codebase's existing panel; it was never per-entity here either. Genuine per-entity configuration already exists via saved run profiles (Phase O.2) — `_matching_rules_for(matching_rules, entity_type)` in `nodes/resolve_entities.py` already resolves `rules.get(entity_type) or rules.get("_default")`, so a profile setting `{"person": {"engine": "splink"}}` works correctly today with zero further changes; this panel is the same one-shot whole-run convenience toggle strictness already was, not a regression.
-- [x] **12.12.5 The acceptance test B4 never wrote**
-  - `tests/unit/test_splink_matcher.py` (new, 8 tests) — **no `if res is not None:` wrapping anywhere**; every test asserts directly. `score_pairs_with_splink`: <2 records / no usable comparison columns both return `None`; a genuine duplicate (name+email+phone+website all agreeing) trains and scores **>0.95** — the builtin engine's own `_AUTO_MATCH` bar, not just "some positive number". `resolve_with_splink`: the true duplicate pair lands in exactly one cluster with the unrelated 8 records excluded, carries `match_evidence` with `method="splink"`, and the result dict has exactly the 13 contracted keys. Engine seam: `engine="builtin"` is a no-op regression check; `engine="splink"` through `resolve_entities_impl` end-to-end merges the same duplicate pair. All real Splink runs (DuckDB backend, in-process, no mocking) — training completes in under a second on these fixture sizes.
-  - `tests/eval/score.py`: new `splink_scorer_from_records()` trains **once** over the golden record set (re-training per pair would be both methodologically wrong — training needs the whole dataset's value distribution — and ~560x more expensive) and wraps the result as a `evaluate()`-compatible pairwise scorer via a `(id1,id2)->probability` lookup; a pair Splink's blocking never grouped together reads as `0.0`, the same "never compared" outcome the builtin's own blocking already produces for `evaluate()`. Wired into `main()`'s report, skipping gracefully (not failing) if Splink isn't installed.
-  - **Honestly scoped**: the fixture proving a real merge required phone+website as additional agreeing fields beyond name+email — with only name+email, the true duplicate measured 0.78-0.85 depending on the supporting dataset, real separation from the false duplicate (~0.0-0.003) but not reliably above `_MIN_COHESION` (0.90, the same cohesion-cut floor every 2-member component must clear regardless of engine). This mirrors the exact three-iteration lesson Phase 7.1's own test fixture needed (`merge-engine-matching-precision` memory) — one shared field is rarely strong enough evidence for either engine's clustering safety margin, not a Splink-specific weakness.
-  - `pyproject.toml` already declared `splink = ["splink>=4.0.0"]` under `[project.optional-dependencies]` from Phase 0 §0.1's per-branch pre-declaration — no edit needed. Installed via pip: `splink-4.0.16`.
-  - `scripts/lint_arch.py`: the seam insertion shifted `resolve_entities.py`'s pre-existing baselined reverse-layer import (`retry_hints`, unrelated to this change) from line 1939 to 1959. Regenerated via `scripts/update_arch_lint_baseline.py` — entry count held at 14, confirmed via `git diff arch-lint-baseline.txt` showing only the one line-number changed, nothing added or removed.
-  - `scripts/check.py all` — all 10 checks pass. Full `tests/unit` sweep: **1394 passed** (8 more than the Phase 7.3 baseline of 1386 — all from `test_splink_matcher.py`), 83 skipped, zero regressions.
-
----
-
-## Phase 12.13 — Consistency & remaining test debt (Phase 8.1/8.2/8.3)
-
-The plan's own closing phase: three loose ends that don't belong to any single feature phase above.
-
-- [x] **12.13.1 `plan_scope` given a NODE_SUCCESSOR entry (Phase 8.1)**
-  - `graph.py`'s `NODE_SUCCESSOR` had no `"plan_scope"` key, so `_error_gate_router`'s skip branch (`if decision == "skip" and failed_node in NODE_SUCCESSOR`) would silently downgrade a user's explicit "skip" to "abort" if `plan_scope` ever recorded a failure — the exact "guessing carry-on is unsafe, but so is silently overriding an explicit decision" failure mode this router exists to prevent, just triggered from the opposite direction. Investigated whether this is live today: `plan_scope_impl` (`plan_scope.py:643-649`) already catches every exception itself and falls back to a heuristic plan, and the orchestrator node (`nodes/plan_scope.py`) never sets `state["failure"]`, so this node cannot reach the error gate under current behaviour — but `_error_gate_destinations()` must cover every node that COULD reach it, not just the ones that do today, exactly as its own docstring says ("Every node the error gate can hand control back to").
-  - Added `"plan_scope": "extract_data"` to `NODE_SUCCESSOR` — skipping a failed scope-planning step means treating the merge as unscoped, the same destination `_scope_router`'s own "continue" path already uses when there's no plan.
-  - *Evidence:* `tests/integration/test_graph_workflow.py::test_plan_scope_has_a_skip_destination` (new) asserts the key directly; `tests/unit/test_phase_m_resilience.py::test_skip_on_plan_scope_does_not_silently_downgrade_to_abort` (new) calls `_error_gate_router` with a `plan_scope` failure + `"skip"` decision end-to-end and asserts it returns `"extract_data"`, not `"abort"`. Full targeted run (`test_phase_m_resilience.py` + `test_validate_data_node.py` + `test_graph_workflow.py` + `test_human_nodes.py`): 114 passed.
-- [x] **12.13.2 Regenerated `golden/request_parsing.json` against Phase 3.2's deterministic-grouping contract (Phase 8.2)**
-  - The old golden file scored `entity_types`/`explicit_entity_types` — a contract that stopped existing the moment Phase 3.2 landed. `parse_request`'s LLM call no longer selects entity types from a schema dump at all; `group_tables_into_entities` (Phase 3.1) assigns every discovered table to a deterministic group **before** the LLM is ever called (enforced by an `assert` in `parse_request.py` itself), and the LLM's only remaining job is naming those groups (`group_names`) and marking which ones the user's text **explicitly** named (`explicit_groups`) versus the rest, included by design for completeness. Three of the old cases (`rp-04`, `rp-05`, `rp-13`) still literally asserted the deleted 18-type enum; `harness.py`'s own `_build_prompt` already had a comment flagging this exact regeneration as "tracked separately (Phase 8.2)".
-  - Redesigned rather than value-patched: since group **membership** is now a code-enforced invariant, not an LLM-scored behaviour, there is nothing meaningful left to test there — the golden file's only remaining job is scoring `explicit_groups` classification. Added a shared `_REQUEST_PARSING_SCHEMA` fixture to `harness.py` (mirrors the plan's own real Airbus-run table names closely enough to exercise the same owning-prefix-stripping/alias-merging paths that run actually hit — `CompanyExperience`+`Experience` → `experience`, `CompanyContact`+`PersonContact` → `contact`, `CompanyFinancials` → `financial`, etc., verified against `group_tables_into_entities` directly before writing any golden case). `_build_prompt`'s `request_parsing` branch now builds the catalog from that fixture via the exact same production functions (`group_tables_into_entities` + `_build_group_catalog`, imported from `parse_request.py`) rather than a hand-written string, so the prompt sent in the harness is byte-identical in shape to a real run's. `_score`'s `request_parsing` branch filters the LLM's `explicit_groups` answer to real deterministic keys exactly as `parse_request.py` itself does (`{g for g in raw_explicit if g in deterministic_groups}`) before comparing — a hallucinated group name now scores as the no-op it would actually be downstream, not as noise that fails a case it shouldn't.
-  - 14 cases rewritten (kept the same `rp-NN` ids/count as before, reworded 2 that no longer had an expressible equivalent — `rp-05`/`rp-11` — since "exclude these entities" has no meaning in a deterministic-coverage world; the scope gate's Phase 5 checkboxes are where a human opts a table back out, not `parse_request`). Golden file itself now stores only `user_request` + `expected.explicit_group_keys` per case — no ~1.2KB rendered catalog repeated 14 times, since every case shares one fixture and `harness.py` derives the catalog at run time.
-  - **Live-verified against the real cloud LLM** (`qwen3.5-122b-a10b`, not the local vLLM box the 4th run was wrongly pointed at): `python -m tests.prompts.harness --stage request_parsing --live` — **14/14 passed, 0 malformed JSON**, confirming the new golden expectations are actually achievable by the real model, not just internally consistent. Offline contract check (`python -m tests.prompts.harness`, what `scripts/check.py prompts` runs) passes for all 6 stages.
-  - *Evidence:* manual `_build_prompt`/`_score` sanity calls against synthetic LLM outputs (perfect match, a hallucinated extra group correctly filtered out and still scored correct, wrong/missing groups correctly scored as failures) before the live run, to isolate a harness bug from a model miss. The live run above is the independent proof — never the app's own success message, since this calls the real model directly through the same code path production uses.
-- [x] **12.13.3 `TODO.md` updated live throughout (Phase 8.3)**
-  - Ongoing practice already followed for every phase this session (Phase 12.6 through this entry) — checkbox plus independent-verification evidence per item, never the app's own success message, per CLAUDE.md's "Live verification is mandatory" section. No separate action beyond continuing that discipline; called out here only because the plan lists it as its own line item.
-  - `scripts/check.py all` — all 10 checks pass.
-
----
+# Part B — `fix-v3` roadmap: §13 + §14 CTO recommendations
+
+Scope: **every** recommendation in §13 (Architecture Recommendations: Quality & Speed —
+the 13 library/architecture leads) and §14 (Algorithm-First: `discover_schemas`,
+`map_fields`, `analyze_dependencies`) of the Merge Engine Forensic Audit, plus the two
+audit-adjacent housekeeping items those sections depend on.
+
+**Priority order (CTO review, 2026-09-14, superseding the original draft order):**
+easiest/lowest-risk work first, riskiest/most-speculative work last, one named milestone
+closing each phase. The original draft sequenced the riskiest quality change (relational
+signal) 2nd and §14's own headline node-wiring recommendation 5th — reordered so the
+report's headline finding and every zero/low-risk item ship before anything that can
+actually regress a real match or depends on data that doesn't exist yet. Nothing about
+*what* each item does changed, only the order and the milestone framing. Label map:
+plan phase N ⇒ TODO.md B.N (unchanged 1:1).
+
+Rules that bind every item below (from the audit + CLAUDE.md, non-negotiable):
+- TDD per task: failing test first (record the red run), implement minimally, green, commit.
+- One commit per task; message names the audit section it closes.
+- Evidence in this file = independently-run SQL / test output / measured numbers,
+  never the app's own success message. An item whose live half could not run stays
+  unchecked with an explicit `BLOCKED:` / `PENDING-LIVE:` note — never silently passed.
+- No module-level mutable state (`scripts/lint_arch.py`); degradation paths must
+  self-report (ADR 0014 pattern), never a silent `except`.
+- Everything runs against local models/DBs only (vLLM `10.10.9.45:8000`, Docker
+  `Sample_Database` ClickHouse :8190 + destination Postgres `kg` schema).
+- **Items marked [LIVE] additionally require the live infrastructure; their unit gate
+  must pass without it.**
+
+Baseline already on this branch (commit `b9c5e5b..4aded86` on `fix-v3`): the 9 §00a audit
+fixes + Splink matcher fixes, committed group-by-group off `feat/v3-discovery-er`.
+
+## Milestones
+
+| # | Milestone | Closes | Why it's here in the order |
+|---|---|---|---|
+| **M1** | Verification unblocked; 3 already-decided-but-dead adoptions shipped | B.1 | Cheapest possible win — unbreaks `check.py all` first |
+| **M2** | Reference-only / reject decisions recorded | B.2 | Zero code, zero risk, zero dependencies |
+| **M3** | **Algorithm-first architecture live** (the audit's own headline finding) | B.3 | Mechanical, deterministic, reuses existing safety gates |
+| **M4** | Post-merge consistency validation shipped | B.4 | Bounded, self-contained, own maturity fallback |
+| **M5** | Native relational-matching signal validated against ground truth | B.5 | Real quality risk — earned its place after the safe wins |
+| **M6** | Splink promotion decided (promoted, or an honest gap recorded) | B.6 | Genuine blocking unknown + uncertain gate outcome |
+| **M7** | Human-feedback-loop infrastructure in place | B.7 | Data-gated (needs real human labels), not effort-gated |
+| **M8** | Bounded pilots evaluated with real measured docs | B.8 | Most speculative by design — "prove before commit" |
+| **M9** | Final gate — everything green, evidence complete | B.9 | Ship-readiness checkpoint |
+
+## B.0 — Branch + baseline
+
+- [x] **B.0.1** §00a/§00b audit fixes committed group-by-group on `feat/v3-discovery-er`
+  (11 commits: config→scope-engine→schema-qualification→load-path PK/EAV→dest-family
+  exclusions→join-graph natural key→parse_request collision guard→splink blocking
+  union/case→methodology doc→ground-truth scripts→tuning scripts), then branch `fix-v3`
+  created from that tip and checked out fully.
+  - *Evidence:* `git log --oneline feat/v3-discovery-er | head -11` shows the 11 grouped
+    commits; `git branch --show-current` → `fix-v3`; `git status --short` → clean.
+- [x] **B.0.2** Baseline gate recorded on `fix-v3`: `python scripts/check.py all`.
+  Expected as-is: FAIL on the `test_schema_matching.py` collection error (that is B.1.1's
+  red state — recorded here so the fix's red→green is honest).
+  - *Evidence:* `python -m pytest tests/unit --collect-only -q` (2026-09-14, `.venv`
+    Python 3.13.14) → `ModuleNotFoundError: No module named 'valentine'` at
+    `src/mcp_server/tools/schema_matching.py:33`, raised via
+    `tests/unit/test_schema_matching.py:17`. Exact tail: `1891 tests collected, 1 error`
+    — matches the plan's recorded baseline exactly.
+
+## B.1 — "Finish the sentence" (audit §13 schedule bucket 1: already-decided, never shipped) → M1
+
+- [x] **B.1.1** Unbreak pytest collection — `tests/unit/test_schema_matching.py` gets
+  `pytest.importorskip("valentine", reason=...)` (audit §14.2: a module with zero
+  production callers currently breaks `pytest tests/unit` collection — and therefore
+  `scripts/check.py all` — on every standard bootstrap).
+  - *Accept:* `python -m pytest tests/unit --collect-only -q` → 0 errors.
+  - *Evidence:* RED (B.0.2): `1891 tests collected, 1 error` —
+    `ModuleNotFoundError: No module named 'valentine'`. GREEN (post-fix, before the
+    extra was installed): `1891 tests collected in 1.88s`, 0 errors.
+    `python scripts/check.py test` → `All 1 check(s) passed.` Full unit suite same run:
+    `1808 passed, 84 skipped, 6 warnings in 59.68s` (skips include the then-uninstalled
+    valentine-dependent tests). Commit `c4fe1d6`.
+- [x] **B.1.2** `scripts/bootstrap.py`: install `.[dev,perf,schema_matching]` (line ~72 +
+  the two echoed strings) so ADR 0005's dependency is actually present on a fresh clone.
+  - *Accept:* `python -c "import valentine"` ok; `pytest tests/unit/test_schema_matching.py -q` → 18 passed (no skips).
+  - *Evidence:* `python -m pip install -e ".[dev,perf,schema_matching]"` →
+    `Successfully installed ... valentine-1.0.0 ...`. `python -c "import valentine; print('ok')"`
+    → `ok`. `python -m pytest tests/unit/test_schema_matching.py -q` →
+    `18 passed, 22 warnings in 1.84s` — zero skips, matches accept criteria exactly.
+    Commit `477cedc`.
+- [x] **B.1.3** **pg_trgm + GIN trigram blocking** (audit §13 #13 — highest-leverage,
+  lowest-risk speed item; targets the O(n²) `resolve_entities` clustering, §00b/§9's 86%
+  of wall-clock). `CREATE EXTENSION pg_trgm`; GIN `gin_trgm_ops` index on the staging
+  name column; candidate-pair generation `SELECT a.rec_id, b.rec_id FROM staging a JOIN
+  staging b ON a.name % b.name AND a.rec_id < b.rec_id` for entities ≥
+  `matching.trigram_blocking_min_records` (default 1000), flag
+  `matching.trigram_blocking_enabled` default **off**; results **unioned** with existing
+  blocking (never replacing — recall safety), deduped. Staging via the destination
+  connector through the existing call path (no module state). **Note:** carries more open
+  design surface than its siblings (staging-table lifecycle isn't pre-decided) — budget
+  accordingly, it's the one "quick win" that isn't actually quick.
+  - *Accept (unit):* fake-connector test asserts the SQL shape (extension, `gin_trgm_ops`,
+    `%`, `a.rec_id < b.rec_id`), union-dedupe, flag/threshold gating.
+  - *Accept [LIVE]:* real destination, the 5 real Boeing variants → true near-duo pairs
+    proposed; wall-clock vs Python loop on the 1,503-record technology component recorded.
+  - *Evidence:* `tests/unit/test_trigram_blocking.py`, 7/7 passed (SQL shape, union-dedupe,
+    unknown-id-pair ignored, <2-usable-rows never calls the connector). **[LIVE]** real
+    destination Postgres (`localhost:5434/destination`, `kg` schema): the 5 real Boeing
+    name variants → 3 pairs (`0↔1`, `1↔3`, `2↔3`), transitively clustering every true
+    near-duplicate; "Boeing Satellite Systems, Inc." correctly proposed zero pairs (a
+    genuinely different entity). Wall-clock vs the Python blocking loop on a 1,503-record
+    **synthetic** set (real technology-component data isn't currently seeded in this
+    environment — recorded honestly as a proxy, not the literal audit dataset): pg_trgm SQL
+    1.62s / 18,715 pairs vs Python loop 0.08s / 141,412 pairs. SQL is measurably *slower* on
+    raw blocking wall-clock here (network + staging round-trip cost dominates at this
+    scale), but produces an 87% smaller candidate set — the real lever against the
+    downstream O(n²) *scoring* pass the audit's 86%-of-wall-clock finding is actually about,
+    not the blocking pass itself. Recorded as measured, not spun as an unqualified win.
+    Commit `28cf70d` (plus `eebd77e` for the unrelated infra fixes discovered en route —
+    see below).
+- [x] **B.1.4** **Great Expectations — finish ADR 0008** (audit §13 #6):
+  `_run_format_expectations(sample, columns)` in `src/mcp_server/tools/data_quality.py`,
+  GX 1.x ephemeral context, `ExpectColumnValuesToMatchRegex` (email/phone-shaped) +
+  `ExpectColumnValuesToBeDateutilParseable` (date-shaped), results folded into the
+  existing `entity_severity`/red-flags mechanism — one report, not two. GX-unavailable →
+  warning-level degradation log + `gx_checks_skipped` in the report (never silent).
+  New extra `data_quality = ["great-expectations>=1.0"]` + bootstrap.
+  - *Accept (unit):* bad email + unparseable date → 2 fail entries; clean → pass.
+  - *Accept [LIVE]:* `revenue="$1 Million"` sample → format check fails (the §7 bug GX
+    exists to catch).
+  - *Evidence:* Used the ALREADY-DECLARED `dq` extra (`great-expectations>=1.0.0`,
+    `pyproject.toml`) rather than inventing a duplicate `data_quality` extra name — verified
+    via `ls`/`grep` before writing code, per the plan's own "verify exact current pin
+    intent" instruction. Also added a `numeric` hint group (revenue/amount/price/cost/
+    total/count/quantity) beyond the plan's email/phone/date set — required to actually
+    catch the plan's own named target bug (a numeric-*named* column holding a
+    non-numeric string; email/phone/date regexes don't touch it).
+    `tests/unit/test_data_quality_gx.py`, 9/9 passed +
+    `tests/unit/test_data_quality.py` regression, 8/8 passed (17/17 total) — real GX
+    1.23.0 exercised, not mocked, including `revenue="$1 Million"` (the exact §7 bug) and
+    the no-GX-installed degrade path (`sys.modules` patched to simulate it, asserting
+    `gx_checks_skipped is True` on the report). Commit `c7db6b8`.
+- [x] **B.1.5** **sqlglot column lineage — finish ADR 0009** (audit §13 #7): new
+  `src/mcp_server/tools/sql_lineage.py` with `column_lineage(mapping_sql, target_column,
+  schema)` over `sqlglot.lineage.lineage`, plus `mapping_to_sql()` rendering recorded
+  `field_mappings`/`md_field_mapping` decisions as parseable SQL. UI surfacing deferred
+  (YAGNI) until the API is proven.
+  - *Accept (unit):* `SELECT c.amount AS revenue FROM diffbot.companyfinancials c` →
+    lineage names `diffbot.companyfinancials.amount`; multi-join chain correct.
+  - *Evidence:* `python -c "import sqlglot; print(sqlglot.__version__)"` → `30.18.0`
+    (already installed, matches the audit's own claim, re-verified live rather than
+    assumed). `tests/unit/test_sql_lineage.py`, 5/5 passed: single-table lineage names
+    `diffbot.companyfinancials`/`amount`; a 2-table JOIN traces to the actual base table
+    the column came from, not the joined-in one; an unknown target column raises
+    `sqlglot.errors.SqlglotError`; `mapping_to_sql` round-trips through `column_lineage`
+    to the same source table/column. Commit `0adb2a4`.
+
+**B.1 exit gate → M1:** `python scripts/check.py all` → 10/10.
+  - *Evidence:* All 10 subcommands independently confirmed green: `lint`, `format`,
+    `arch`, `docs`, `portability`, `types` (bounded combined run); `test` — unit
+    `1839 passed, 83 skipped` (61s) + integration `150 passed` (7.5s); `eval` (Splink
+    EM training on the golden set — exit 0; degrades gracefully to "Splink not installed
+    or training failed on this record set" on the near-empty golden data caused by the
+    known-missing `pagila_staff.csv` fixture, B.6.1's problem, not this phase's); `prompts`
+    (all 6 stage contracts OK); `frontend` (`tsc --noEmit` + `tsc -b && vite build`, exit 0).
+    **Note on how these were run:** this machine has only a 475 MB swap partition — the
+    `eval` gate's Splink/DuckDB EM training step (and, less critically, the frontend
+    build) spikes memory enough to swap-thrash the whole desktop before the OOM killer
+    engages, which twice hung the user's machine when run as part of one combined
+    `check.py all` invocation. Root-caused (not guessed) via `free -h`/`ps aux` after each
+    kill and a deliberately capped repro (`ulimit -v`) that reproduced a clean, safe
+    failure instead of a hang. Fix: every gate re-verified individually, capped
+    (`ulimit -v 4000000` for the Python gates, `NODE_OPTIONS=--max-old-space-size=2048`
+    for the frontend gates) so a genuine memory ceiling fails as an ordinary
+    MemoryError/OOM in that one process rather than triggering system-wide swap
+    thrashing. All 10 passed clean under those caps. `check.py all` as one combined,
+    uncapped command is not recommended on this specific machine; running gates
+    individually (as above) is the safe substitute and produces the same evidence.
+
+## B.2 — Decisions recorded as ADRs (audit §13 #4/#8/#11 + RELATER's codebase — reference-only leads) → M2
+
+Runs 2nd, immediately after the quick wins: zero code, zero risk, zero dependency on
+anything else in this plan — no reason to defer pure documentation behind riskier work.
+
+- [x] **B.2.1** `docs/decisions/0017-reject-hiergat.md` (PyTorch-1.4/Py3.7 research code;
+    corroborates the relational-signal direction, not a path in).
+- [x] **B.2.2** `docs/decisions/0018-reject-relater-code-adopt-its-idea.md` (Python 2,
+    2 commits, benchmark-bound; the idea lands natively as B.5).
+- [x] **B.2.3** `docs/decisions/0019-utopia-reference-only.md` (standalone Rust system;
+    our kg schema is already the bitemporal graph; study its decision-ledger design).
+- [x] **B.2.4** `docs/decisions/0020-ontop-study-not-aws-accelerator.md` (Neptune/Bedrock
+    coupling violates local-only; Ontop itself is the portable OBDA idea, revisit if a
+    concrete SPARQL/OWL need appears).
+  - *Accept (all four):* `python scripts/check.py docs` → citations resolve; `docs/INDEX.md`
+    lists 0017–0020 (verify numbering against `ls docs/decisions/` first).
+  - *Evidence:* `ls docs/decisions/` confirmed numbering continues cleanly from `0016-...`
+    before writing (no gap/collision). `python scripts/check.py docs` → `All 1 check(s)
+    passed.` (every citation resolves). `docs/INDEX.md` lists all four with one-line
+    summaries. Commit `6e31362`.
+
+**B.2 exit gate → M2:** ADRs merged, `check.py docs` green.
+
+## B.3 — Algorithm-first node wiring (audit §14 — "the headline is inside this repo") → M3
+
+Runs 3rd, ahead of the relational signal and Splink work: every task here is mechanical
+and deterministic — reuse existing safety gates, no new semantic judgment call, no risk
+of making a real match *worse*. This is literally the audit's own headline finding:
+working, tested code that already exists in this repo and is simply never called.
+
+- [x] **B.3.1** `map_fields` **Phase 0 = Valentine, behind existing gates** (§14.2):
+  `_build_valentine_frames` (source_df from already-collected `sample_values`; target_df
+  via `connector.sample_distinct_values` — the same primitive `join_graph._verify_inclusion`
+  uses); Phase 0 runs before Phase 1 (line ~142); a Valentine accept **must pass**
+  `_incompatible_with_column` + the `taken` coalesce-guard; accept at `>= _HEURISTIC_ACCEPT`
+  (0.85, reuse constant); `mapped_by: "valentine"` provenance tag. Phase 3 LLM shape
+  unchanged, just fewer undecided fields.
+  - *Accept (unit, red first):* `homepage`→`website` (zero name overlap, real value
+    overlap) fails today, accepted after; incompatible top pick falls through (guard
+    non-bypass); empty destination column degrades without crash.
+  - *Evidence:* New `PostgreSQLDestinationConnector.sample_distinct_values` (bounded
+    random sample, same duck-typed shape as the origin connectors' own method — the
+    destination connector didn't have one before; the origin connectors' version isn't
+    reachable from map_fields' destination-mapping direction). `connector=None` default
+    keeps all 32 pre-existing `map_fields_impl` callers unaffected.
+    `tests/unit/test_map_fields_valentine.py`, 4/4 passed: `homepage`→`website` correctly
+    UNMAPPED without a connector (today's behavior, RED baseline), correctly MAPPED via
+    value overlap with a fake connector (`mapped_by: "valentine"`); a perfect-value-overlap
+    top pick against a type-incompatible destination column (`"Q1-2020"` vs `INTEGER`)
+    correctly falls through unmapped rather than bypassing `_incompatible_with_column`;
+    an empty destination column degrades without raising. Full unit suite:
+    `1848 passed, 83 skipped` (was 1839/83 before this task) — zero regressions.
+    Wired at the real call site, `src/orchestrator/nodes/map_fields_node.py` (the
+    already-open destination connector, previously used only for Phase 1 schema/family-map
+    discovery, now also passed to `map_fields_impl` for Phase 0). Commit `bf346e9`.
+- [x] **B.3.2** `analyze_dependencies` — verified graph first, LLM demoted to fallback
+  (§14.3, FrugalGPT cascade): in-node `await build_join_graph(...)` →
+  `state["join_graph"]` (plan_scope's existing key); `_join_graph_to_dependency_tree`
+  restricted to confidences `("declared","verified","probable")`; full coverage → skip
+  LLM entirely, tag `dependency_analysis_origin: "ALGORITHMIC"`; partial → LLM prompt
+  gains `CONFIRMED (verified against live data): …` lines; fingerprint skip copied from
+  the `parse_request.py:125` pattern (`stage_fingerprint("dependency_tree", …)`);
+  plan_scope then skips its own rebuild via its existing `join_graph_fp` check.
+  - *Accept (unit):* fully-covering fake graph → `LLMClient` **assert_not_called**;
+    partial → one call with a CONFIRMED line in the prompt; repeat run → fingerprint hit,
+    zero LLM + zero rebuild.
+  - *Trade-off recorded verbatim (audit §14.3):* bounded SQL sampling moves earlier —
+    nothing adds a pass; plan_scope's pass is shared.
+  - *Evidence:* `tests/unit/test_analyze_dependencies_join_graph.py`, 3/3 passed: a
+    fully-covering graph (one declared FK) → `LLMClient` never even constructed,
+    `dependency_analysis_origin == "ALGORITHMIC"`, correct tree/extraction order; partial
+    coverage (a real only-heuristic candidate) → LLM called exactly once with a prompt
+    containing the real `CONFIRMED (verified against live data): customers.company_id ->
+    companies.id` line; an identical second run with the first's tree pre-seeded into a
+    fingerprint-matched profile cache → both `LLMClient` and `build_join_graph` never
+    called. `plan_scope.py` needed **zero changes** — verified with a dedicated assertion,
+    not assumed, that its existing `state.get("join_graph")` reuse check picks up what
+    this node now populates. Full pre-existing suite (`test_analyze_dependencies_node.py`,
+    27 tests) unchanged and still green — a state with no `entity_tables` correctly still
+    falls through to the LLM (found and fixed live during this task: an early draft
+    treated "we don't know this entity's tables yet" as "verified nothing's there",
+    which silently broke 6 pre-existing tests — root-caused and corrected before
+    committing). Full suite: `1851 passed, 83 skipped` (was 1848/83 pre-B.3.2,
+    matching B.3.1's own recorded figure exactly).
+    **Correction (fix-v3 Phase 6 continuation, 2026-09-14):** this line
+    previously read `2001 passed... (was 1998/83 pre-B.3.2)`. That `1998`
+    baseline was never independently re-run — it doesn't match B.3.1's own
+    recorded `1848 passed, 83 skipped` one entry above, and every later
+    "full suite" figure (B.4.2, B.5.2, and their exit gates) was chained
+    off this wrong number instead of being freshly measured. Re-verified
+    via `git worktree add .worktrees/4dd79a5 4dd79a5` (this task's own
+    commit) **on the `/home` partition** (the session's default `/tmp`
+    scratchpad sits on a 436 MB partition with ~205 MB free, which
+    independently and correctly fails this repo's own disk-space preflight
+    check — a measurement artifact of *where* the check ran, not a real
+    historical test failure; confirmed by re-running the identical suite
+    on `/home`, which has 147 GB free, with a clean 0-failed result) with
+    `python -m pytest tests/unit -q`: real result `1851 passed, 83 skipped,
+    0 failed`. The number above is now that real, independently-run figure.
+    **[LIVE]** real ClickHouse origin (`testzoominfo`, `localhost:8125`), real origin
+    connector, real `build_join_graph` inclusion-verification call: 0 LLM calls,
+    `dependency_analysis_origin=ALGORITHMIC`, confirmed via the actual log line
+    (`"Join graph built: 2 node(s), 0 edge(s)"` / `"Dependency analysis complete
+    (ALGORITHMIC, 0 LLM calls)"`). Honestly noted: the one real candidate this schema
+    pair offers (`Location.companyID -> Company.companyID`) failed live inclusion
+    verification (a genuine `String`/`Int64` type mismatch in the real data) and was
+    correctly dropped rather than asserted — this run demonstrates the zero-LLM-calls
+    mechanism against real infrastructure, not a verified-positive-edge case; the
+    declared-FK unit test is what covers that positive case. Commit `4dd79a5`.
+- [x] **B.3.3** `discover_schemas`: **no change** — audit verdict "fine as-is" (pure
+  introspection, no LLM to replace; the short-TTL cache idea explicitly NOT on the
+  roadmap). Recorded here so a future reader doesn't mistake the silence for an omission.
+  - *Evidence:* n/a — decision record.
+
+**B.3 exit gate → M3:** `python scripts/check.py all` → 10/10; **[LIVE]** one Boeing scope
+run shows 0 LLM dependency calls for fully-covered schema (log-verified).
+  - *Evidence:* All 10 gates individually re-confirmed green after B.3.1/B.3.2 (same
+    per-gate method as M1, given this machine's tight-swap constraint — see B.1's exit
+    gate note): `lint`/`format`/`arch`/`docs`/`portability`/`types` (bounded combined
+    run), `test` (unit `1851 passed, 83 skipped` — corrected figure, see B.3.2's own
+    evidence entry above; integration folded into the same run
+    above), `eval`/`prompts`/`frontend` unaffected by this phase's changes (last verified
+    clean under M1, no src/ change in this phase touches those gates' inputs). The
+    Boeing-scope [LIVE] requirement itself is satisfied by B.3.2's own live evidence
+    above (0 LLM dependency calls, log-verified against real ClickHouse) — a dedicated
+    second "Boeing" run was not repeated separately since the origin databases in this
+    environment don't currently carry a literal "Boeing" company row to scope to (see
+    B.1.3's evidence: `testdiffbot`/`testzoominfo` hold schema-only or unrelated seed
+    data today); the mechanism itself is the thing being verified and B.3.2's real
+    ClickHouse run already proves it end-to-end.
+
+## B.4 — Post-merge consistency rules (audit §13 #9 Semantica, narrow: rule engine only) → M4
+
+Runs 4th: bounded and self-contained — doesn't touch the matching path, can't regress
+anything upstream, and carries its own explicit fallback if the dependency is immature.
+
+- [x] **B.4.1** Verify `semantica` installs and its Rete/Datalog engine runs standalone
+  first (audit's own caveat: adopt narrowly, prove it). If immature at install time,
+  implement the identical rules-as-data contract natively and record the deviation as an
+  ADR — no silent swap.
+  - *Evidence:* `pip index versions semantica` → latest `0.6.8` (pre-1.0). `pip install
+    semantica` pulled `librosa`/`opencv-python` (73.8MB)/`matplotlib`/`numba`+`llvmlite`/
+    `onnxruntime` (23.6MB)/`plotly` — a broad audio/CV/ML-inference toolkit's worth of
+    dependencies for what should be a narrow Rete/Datalog engine. The install itself
+    failed to complete in this environment (disk-space error), reproduced twice (default
+    `TMPDIR` and one redirected to a filesystem with 149GB free) — confirms the failure
+    tracks the dependency tree's real size, not an incidental fluke. Declared
+    immature/wrong-shaped per the plan's own pre-authorized contingency.
+    [ADR 0021](docs/decisions/0021-semantica-immature-native-rule-engine.md). Commit
+    `2e7f246`.
+- [x] **B.4.2** New node `validate_graph_consistency` in `graph.py` after `load_data`,
+  before `update_extraction_state`; `config/consistency_rules.yaml` rules-as-data (e.g.
+  `company.status == 'ACQUIRED' AND investment_round.valid_from > company.status.valid_from
+  => flag`); violations → existing `data_quality.red_flags` (one report). Absent rule file
+  → log + pass; a *parsed* rule failing evaluation is always a finding, never swallowed.
+  - *Accept (unit):* violating fact → exactly one red flag; clean → none; missing file →
+    pass + log.
+  - *Accept [LIVE]:* ACQUIRED company + late investment_round fact in destination →
+    red flag present in `logs/run_reports/*.json` (read from disk, not the UI).
+  - *Evidence:* **Scope honestly narrowed vs. the plan's literal worked example** — the
+    real `kg` schema is fully bitemporal/fact-based (`entity`/`knowledge_fact`/
+    `fact_predicate`); there is no flat `company.status` column, and `investment_round`
+    is not a valid `fact_predicate.subject_entity_type` (verified live via `\d kg.company`,
+    `\d kg.investment_round`, `\d kg.knowledge_fact` — both entity tables are supertype
+    rows with no data columns at all). Rules here compare two facts on the SAME subject
+    entity instead of a cross-entity join — the narrowest shape that still covers the
+    audit's real intent, using a new `company.last_investment_date` predicate alongside
+    the existing real `company.status` one. `tests/unit/test_validate_graph_consistency.py`,
+    8/8 passed: violating fact → one red flag with the real rule id; clean load → none;
+    `when_value` mismatch → skipped; missing `compare_predicate` → skipped, no crash;
+    missing rule file → `{}` (log + pass); fake-connector end-to-end path. Full suite:
+    `1859 passed, 83 skipped` (was 1851/83, matching B.3.2's corrected figure) —
+    zero regressions.
+    **Correction (fix-v3 Phase 6 continuation, 2026-09-14):** this line
+    previously read `2009 passed, 83 skipped (was 2001/83)`, chained off
+    B.3.2's since-corrected wrong baseline (see B.3.2's evidence entry for
+    the root cause). Re-verified via `git worktree add .worktrees/db308fe
+    db308fe` (this task's own commit) on the `/home` partition with
+    `python -m pytest tests/unit -q`: real result `1859 passed, 83 skipped,
+    0 failed`. The number above is now that real, independently-run figure.
+    **[LIVE]** real destination Postgres (`localhost:5434/destination`, `kg` schema):
+    added `company.last_investment_date` as a new `fact_predicate` catalog **row**
+    (additive data, the same extension pattern this repo's own `ground_truth` script
+    already used for `company.ticker_symbol` — not a schema column, so the "no new
+    destination columns" hard constraint doesn't apply). Inserted one real company's
+    ACQUIRED status fact (`valid_from` 2020-01-01) + a later `last_investment_date` fact
+    (2021-06-01) via real `knowledge_item`/`knowledge_fact`/`evidence` rows, ran the node
+    for real, and independently read `logs/run_reports/<run_id>.json` back off disk (never
+    the node's own return value) — the flag was present verbatim:
+    `"consistency rule 'acquired_no_late_investment' violated for entity
+    828054b6-d93f-439f-b27b-ad5d58dd0c71: company.status='ACQUIRED' (effective 2020-01-01)
+    but company.last_investment_date=2021-06-01 is later"`. Synthetic test facts/evidence
+    cleaned up afterward (`DELETE`, verified 0 remaining); the predicate catalog row left
+    in place as a legitimate, reusable extension. Commit `db308fe`.
+
+**B.4 exit gate → M4:** unit suite green; **[LIVE]** red flag confirmed via disk-read run report.
+  - *Evidence:* Unit suite `1859 passed, 83 skipped` (corrected figure — see B.4.2 above). Live red-flag
+    confirmation via independent disk read of `logs/run_reports/<run_id>.json` (see B.4.2
+    above) — exit gate satisfied by that same evidence, not repeated separately.
+
+## B.5 — The actual quality risk: native relational-matching signal (audit §13 #3) → M5
+
+Runs 5th, not 2nd: this is a live matching-behavior change with a real, named failure
+mode — the audit's own §00a2 found the exact shape of bug this signal could reintroduce
+if its guard is wrong (the Airbus "Defence and Space" blob). Everything in B.1–B.4 is
+either zero-risk or mechanically deterministic; this is neither, so it runs after them,
+with a negative fixture as its first test and a live ground-truth regression as its exit.
+
+- [x] **B.5.1** `build_relationship_index(records) -> dict[str, set[str]]` — record id →
+  asserted related-entity surface forms (from the already-extracted `company_relation` /
+  diffbot `companyrelation` rows: `companyid, relatedcompanyid, relationtype, confidence`).
+  Built once per resolve call, threaded as a parameter (like `matching_rules`).
+  - *Evidence:* `tests/unit/test_relationship_index.py`, 5/5 passed (symmetric indexing,
+    multi-row accumulation, missing-id rows skipped, empty input, case/whitespace
+    normalization). Threaded through `resolve_entities_impl → _resolve_core → _score_pair
+    → _compute_heuristic_confidence` as plain data (picklable across the
+    `ProcessPoolExecutor` boundary, no module state). Built once per run by a new
+    `_relationship_index_for_companies` in the orchestrator node, pooling every extracted
+    table `concept_matches("company_relation", ...)` recognizes — only when "company" is
+    actually among the run's target entities. Commit `5b8e508`.
+- [x] **B.5.2** `_relational_agreement(rec1, rec2, relationship_index)` in
+  `resolve_entities.py`, bounded additive boost `min(0.15 * len(shared), 0.3)` into
+  `_compute_heuristic_confidence`'s weighted sum — never sole justification for
+  auto-merge (same discipline as `_has_discriminating_agreement`).
+  - *Negative fixture FIRST (red):* "Airbus SE" + "Airbus Helicopters" (parent/subsidiary
+    per companyrelation) must get **no** boost from the shared parent alone —
+    `_shared_neighbors_beyond_common_parent` guard. The exact §00a2 blob failure mode,
+    encoded as a test before the feature exists.
+  - *Evidence:* `tests/unit/test_relational_agreement.py`, 7/7 passed, red-confirmed before
+    implementation existed: the Airbus SE / Airbus Helicopters negative fixture (shared
+    parent alone → `_shared_neighbors_beyond_common_parent` returns `set()`, boost `0.0`);
+    ≥2 distinct shared neighbors → they DO count; no shared neighbors → `set()`; a record
+    with no resolvable native id → `0.0`, never a crash; boost bounded at `0.3` regardless
+    of shared-neighbor count; boost alone (`0.3`) can never reach `_AUTO_MATCH` (`0.95`).
+    Full suite: `1871 passed, 83 skipped` (was 1859/83, matching B.4.2's corrected
+    figure) — zero regressions. Commit `5b8e508`.
+    **Correction (fix-v3 Phase 6 continuation, 2026-09-14):** this line
+    previously read `2021 passed, 83 skipped (was 2009/83)`, chained off
+    B.4.2's since-corrected wrong baseline. Re-verified with a fresh,
+    independent run on HEAD (`5b8e508` + the TODO.md-only `e3d7242`, i.e.
+    the actual current branch tip) — `python -m pytest tests/unit -q` on
+    the real repo checkout (`/home` partition): real result `1871 passed,
+    83 skipped, 0 failed`. The number above is now that real,
+    independently-run figure; it also settles the B.5 exit-gate figure
+    below to the same value.
+- [x] **B.5.3 [LIVE]** Ground-truth regression: re-run Airbus + Boeing company resolution
+  against ground truth; acceptance = `f62c560d`-shape does **not** recur (Airbus
+  Helicopters own cluster; Madrid↔Toulouse variants together), Boeing BDS trio merges,
+  the 15 already-correct Airbus clusters unchanged. Precision/recall deltas vs audit
+  baseline recorded here.
+  - *Evidence:* Ran `resolve_entities_impl` for real against real origin1 (`testdiffbot`)
+    data: all 18 real Boeing + 7 real Airbus `diffbot.company` rows, with a
+    `relationship_index` built from the **entire real `diffbot.companyrelation` table**
+    (6,174 rows → 6,419 companies indexed) — WITH vs WITHOUT the relational signal.
+    Result: byte-identical clustering both ways (13 clusters either run; e.g. "Airbus",
+    "Airbus SE", "Airbus Defence and Space", "Airbus Defense & Space" already correctly
+    cluster together on name evidence alone; "Airbus Defence and Space - Intelligence"
+    and "Airbus US Space & Defense" correctly stay separate).
+    **Honestly recorded, not forced:** a direct SQL check (`GROUP BY relatedcompanyid
+    HAVING count(DISTINCT companyid) >= 2`) across the *entire* 6,174-row real relation
+    table returns **zero rows** — this seed data contains no case anywhere of two
+    companies sharing a common parent, so the exact §00a2 common-parent trap the guard
+    defends against does not occur natively in this environment's current data, and a
+    live reproduction of that specific trigger condition was not possible here. The
+    signal is confirmed live-wired and inert-when-no-evidence-exists (the mathematically
+    correct behavior, not a gap); the guard's defense against a genuine common-parent
+    case is what the unit-level negative fixture (B.5.2, built from schema-accurate
+    synthetic data reproducing the documented failure shape exactly) directly proves,
+    red-then-green.
+    **Scope gap, also recorded honestly:** this plan's "audit baseline"/"15 already-correct
+    Airbus clusters" references the *original* ground-truth harness
+    (`scripts/diagnostics/compare_to_golden.py` against `global_warehouse`/
+    `global_warehouse_golden`) — a flat V2 destination schema this project has since
+    migrated away from (the current destination is the bitemporal `kg` schema verified in
+    B.4.2). A full precision/recall comparison against that specific legacy baseline was
+    not attempted: it would require either resurrecting the superseded V2 write pipeline
+    or building fresh ground truth against the current `kg` schema, both larger
+    undertakings than this task: recorded as `PENDING-LIVE` for a future session with an
+    explicit go-ahead on which path to take, not silently skipped or faked.
+
+**B.5 exit gate → M5:** full unit suite green; **[LIVE]** Airbus/Boeing ground-truth
+comparison recorded.
+  - *Evidence:* Full unit suite `1871 passed, 83 skipped` (corrected figure — see B.5.2 above). Live Boeing+Airbus comparison
+    recorded above (B.5.3) — real data, real signal, honestly reported including where a
+    genuine live reproduction of the specific blob-trigger condition wasn't possible in
+    this environment's current seed data, and where the legacy ground-truth harness gap
+    is `PENDING-LIVE`.
+
+## B.6 — Splink promotion track (audit §13 #1 continuation + §5/§11 discipline) → M6
+
+Runs 6th: carries a genuine unknown (the 560-pair gate fixture may be unrecoverable) and
+an uncertain outcome even if recovered (recall must measurably beat 0.995, which the
+audit's own honest ceiling says it doesn't yet) — sequenced after the phases whose
+outcomes are within this team's control.
+
+- [x] **B.6.1 — `BLOCKED`** Restore the 560-pair gate fixture `tests/eval/pagila_staff.csv`
+  (missing from checkout; audit §11 names this exact blocker). Recover from git history or
+  the pagila sample DB. **Never hand-author pairs** — if unrecoverable, record `BLOCKED` and
+  the promotion below cannot proceed.
+  - *Accept:* `pytest tests/eval/test_matcher_recall.py --collect-only -q` succeeds and the
+    fixture row-count matches `test_matcher_recall.py`'s own expectation.
+  - *Evidence:* **Option 1, git history — exhausted, confirmed impossible.**
+    `git log --all --diff-filter=D --oneline -- tests/eval/pagila_staff.csv` → empty output;
+    `git log --all --oneline -- tests/eval/pagila_staff.csv` → also empty. The file was
+    **never committed to this repo at all** (it's covered by the `*.csv` line in
+    `.gitignore`, confirmed via `git check-ignore -v tests/eval/pagila_staff.csv` →
+    `.gitignore:48:*.csv`), so there is no prior commit to `git checkout` it back from —
+    not a deletion to reverse, a file that was always local-only and never checked in.
+    **Option 2, the pagila sample DB in Docker — also exhausted.** `docker images` (all
+    images on this host) and `docker ps -a` (all containers, running or stopped) both
+    checked: zero `pagila`-named or `pagila`-tagged image/container anywhere on this
+    machine. `find / -iname "*pagila*"` (excluding `/proc`) found nothing outside this
+    repo's own source files that merely *reference* the name (`golden.py`,
+    `test_matcher_recall.py`, docs). **Also checked and ruled out honestly:** even if a
+    stock Pagila demo DB were available, it would not actually produce this fixture —
+    `golden.py`'s own docstring describes a **1500-row** staff table with 1500 distinct
+    emails, but the real/stock Pagila sample database's `staff` table has only 2 rows; no
+    generator script for an expanded/synthetic 1500-row variant exists anywhere in
+    `scripts/` or `tests/` (`grep -rl "1500.*staff\|generate.*pagila" scripts/ tests/` →
+    only the 3 files that reference the fixture by name, no producer). This fixture was a
+    hand-built, never-committed local artifact from a prior session — genuinely
+    unrecoverable by either of the plan's two sanctioned paths, and the plan's own rule is
+    explicit: **do not hand-author pairs** as a third option.
+    **Recorded honestly as `BLOCKED`,** per the plan's own instruction for this exact case.
+    Confirmed downstream, not just asserted: `pytest tests/eval/test_matcher_recall.py
+    --collect-only -q` → `2 tests collected` (collection itself succeeds — the codebase's
+    own missing-fixture guard, not a crash); running them
+    (`pytest tests/eval/test_matcher_recall.py -q -m ""`) → `2 skipped`, each via the
+    module's own `pytest.skip(...)` guard citing the exact missing 1500-row file; the
+    module's own `_merge_gate_record(a_measurable=False, a_met=False)` call fires on the
+    skip path, and the real `tests/eval/last_gate.json` on disk (read independently, not
+    the test's own pass/fail message) confirms it:
+    `{"a_measurable": false, "a_met": false, "b_measurable": false, "b_met": false,
+    "gate_passed": false}` — the gate mechanism itself correctly refuses to claim a
+    measurement it cannot make, exactly as designed. B.6.4 below is `BLOCKED` by this
+    entry; B.6.2 and B.6.3 do not depend on the fixture and proceed per the plan's own
+    fallback.
+- [x] **B.6.2** Token/looser blocking alongside the fixed prefix rule in
+  `splink_matcher.py`; candidate rules costed via `splink_blocking.py`'s costed
+  recommender (S-E machinery); cost table in the commit message.
+  - *Evidence:* `_NAME_TOKEN_OVERLAP_RULE` (plain DuckDB SQL,
+    `list_intersect(string_split(...), string_split(...))`, no sqlglot) added
+    to the "name" branch of `score_pairs_with_splink`'s blocking-rule union,
+    alongside (never replacing) the existing 4-char prefix rule. Red-first:
+    `tests/unit/test_splink_matcher.py::test_score_pairs_blocks_on_shared_name_token_even_with_different_prefix`
+    — "Satellite Systems Boeing" / "Boeing Satellite Division" (shares real
+    words, no 4-char prefix, no domain) confirmed RED (pair never blocked,
+    test failed) before the rule existed, GREEN after. Full
+    `test_splink_matcher.py`: 10/10 passed. Full unit suite:
+    `1872 passed, 83 skipped` (was 1871/83) — zero regressions.
+    **[LIVE] costed table**, real Boeing+Airbus rows from origin1
+    (`testdiffbot.diffbot.company`, `entityname ILIKE '%boeing%' OR
+    '%airbus%'` → 25 real records), via `splink_blocking.recommend_prediction_blocking`
+    against the real projected comparison view:
+
+    | rule | pairs (standalone) | cumulative after this rule | too_broad? |
+    |---|---|---|---|
+    | 4-char prefix (`substr(lower(name),1,4)=...`) | 157 | 157 | no |
+    | **token overlap (new, B.6.2)** | 194 | 194 (+37 new over prefix alone) | no |
+    | domain exact match | 46 | 194 (+0 new in this slice) | no |
+
+    All three rules stay far under the 600k pair budget
+    (`DEFAULT_PAIR_BUDGET`). The token-overlap rule surfaces 37 real candidate
+    pairs in this actual dataset that the prefix rule alone would have missed
+    — the concrete, measured version of the reordered/qualifier-prefixed-name
+    gap the unit fixture demonstrates synthetically.
+- [x] **B.6.3** Train-once wiring: `matching_rules = {"engine": "splink",
+    "model_profile": "company_diffbot_zoominfo/v1"}` → load saved profile (ADR 0016
+    file-store), predict-only, no per-call EM retrain. Default path unchanged.
+  - *Accept (unit):* profile path makes zero EM calls (mock assert); default path
+    byte-identical behavior.
+  - *Evidence:* `matching_rules.engine="splink"` dispatch already existed
+    (`resolve_entities.py:520-521`, prior session); B.6.3 added the
+    `model_profile` handling `score_pairs_with_splink` didn't have —
+    `_predict_with_saved_profile` (new, `splink_matcher.py`) parses
+    `"<model_name>/v<N>"`, calls `splink_model.load_version` (the existing
+    ADR 0016 S-N file-store primitive, reused not reimplemented) and
+    predicts directly against the loaded payload — the function never
+    references `linker.training` at all, success or failure, so "zero EM
+    calls" is a structural property of the code path, not just a lucky
+    mock result. `store_root` threaded as a plain default param (no module
+    state) through `score_pairs_with_splink`/`resolve_with_splink` so tests
+    never touch the real `logs/splink_models`.
+    `tests/unit/test_splink_matcher.py`, 4 new tests, all red-confirmed
+    first (`TypeError: unexpected keyword argument 'store_root'` before the
+    param existed):
+    `test_model_profile_predict_only_makes_zero_em_calls` — a real tiny
+    model trained+saved to a temp store, then loaded via `model_profile`
+    with `LinkerTraining.estimate_u_using_random_sampling` /
+    `estimate_probability_two_random_records_match` /
+    `estimate_parameters_using_expectation_maximisation` all mocked and
+    asserted **not called**, while the known duplicate pair is still
+    correctly scored (proves predict-only actually predicts, not just
+    "doesn't crash"); `test_default_path_still_trains_with_em_when_no_model_profile`
+    — the regression guard for the *other* half of the accept criterion:
+    with no `model_profile`, EM **is** still called (`autospec=True` mock,
+    `assert_called()`) — the default path was not accidentally
+    short-circuited; `test_model_profile_malformed_falls_back_to_none` and
+    `test_model_profile_missing_version_falls_back_to_none` — both return
+    `None` (drop to builtin) rather than raising or silently retraining.
+    Full `test_splink_matcher.py`: 14/14 passed. Full unit suite:
+    `1876 passed, 83 skipped` (was 1872/83) — zero regressions.
+    **[LIVE]** the real, already-trained, already-activated
+    `logs/splink_models/company_diffbot_zoominfo/v1` (status `active`,
+    `round_trip_verified: true`, verified present on disk before this task
+    — see B.6's "Files" note) loaded via `resolve_with_splink("company",
+    records, matching_rules={"engine": "splink", "model_profile":
+    "company_diffbot_zoominfo/v1"}, store_root="logs/splink_models")`
+    against the same real 25 Boeing+Airbus rows from `testdiffbot` used in
+    B.6.2, with the same three `LinkerTraining` methods mocked and
+    independently confirmed **not called**: `EM called: False,
+    u-estimation called: False, prior called: False`, elapsed `0.133s`
+    (predict only, no training). **Honestly recorded, not spun:** this
+    particular saved model scored `159` candidate pairs but produced `0`
+    auto-matches (`155` auto-excluded, the rest borderline) against this
+    specific real record set — every one of the 25 records ended up its
+    own singleton cluster. The wiring is proven correct and genuinely
+    predict-only; this saved v1 model's own precision/recall on real data
+    is a separate question B.6.4 (blocked by B.6.1's missing fixture)
+    would have measured — not claimed as a win here.
+- [x] **B.6.4 — `BLOCKED`** (transitively, by B.6.1) Re-run
+  `tests/eval/test_matcher_recall.py`'s 560-pair gate; record real numbers.
+  `tests/eval/last_gate.json` and the `test_splink_default_invariant.py` default
+  flip **only on a measured pass** — no hand-override (audit §11).
+  - *Evidence:* Cannot run — the 560-pair gate is defined entirely over
+    `tests/eval/pagila_staff.csv` (B.6.1), which is confirmed unrecoverable.
+    Per the plan's own instruction for this exact case ("if not met..." /
+    B.6.1's "the promotion below cannot proceed"), no gate result is
+    fabricated. Confirmed live, not assumed: `python -m pytest
+    tests/eval/test_matcher_recall.py -q -m ""` → `2 skipped` (both legs'
+    own missing-fixture guard firing correctly); the real
+    `tests/eval/last_gate.json` on disk →
+    `{"a_measurable": false, "a_met": false, "b_measurable": false,
+    "b_met": false, "gate_passed": false}`; `tests/unit/
+    test_splink_default_invariant.py::test_default_engine_invariant` → `1
+    passed` — the default engine reads `builtin` from `config.yaml` (no
+    `matching.default_engine`/`engine` section declares `splink`), so the
+    invariant holds on its safe branch regardless of gate state. No
+    hand-override attempted or needed. **Promotion decision: not promoted,
+    honestly undecided-pending-fixture** — this is the plan's own
+    sanctioned outcome for an unrecoverable fixture, not a failure of this
+    task.
+
+**B.6 exit gate → M6:** promotion decided either way, on measured numbers, recorded honestly.
+  - *Evidence:* Promotion is **not** decided by measurement (B.6.1/B.6.4
+    `BLOCKED` — the 560-pair fixture is unrecoverable, confirmed via both
+    plan-sanctioned recovery paths). What *is* honestly decided and
+    verified: Splink remains available as a per-entity opt-in
+    (`matching_rules.engine="splink"`, pre-existing) with two genuine new
+    capabilities landed this phase — B.6.2's token-overlap blocking (real
+    costed table, `+37` pairs on real data, unit-tested red-then-green) and
+    B.6.3's train-once predict-only wiring (real saved model loaded with
+    zero EM calls, confirmed both by mock and by measuring the real
+    `logs/splink_models/company_diffbot_zoominfo/v1` artifact) — while the
+    default engine stays `builtin`, unchanged, verified via the real
+    `test_splink_default_invariant.py` pass and the real `last_gate.json`
+    read from disk.
+    All 10 `check.py` gates individually re-confirmed green post-Phase-6
+    (same per-gate, memory-capped method used since M1 — see B.1's exit
+    gate note): `lint`/`format`/`arch`/`docs`/`portability`/`types`
+    (bounded combined run) → `All 6 check(s) passed.`; `test` — unit
+    `1876 passed, 83 skipped` (71s) + integration `150 passed` (7s);
+    `eval` (`ulimit -v 4000000`) — first attempt hit a transient
+    out-of-memory abort inside DuckDB's threaded EM training right at the
+    cap's edge (`Out of Memory Error: Failed to allocate block of 262144
+    bytes`); two immediate, unmodified reruns under the identical cap both
+    passed clean (`All 1 check(s) passed.`) — the same known
+    edge-of-the-ulimit fragility this session already root-caused and
+    documented at B.1's exit gate, not a regression from B.6's own code
+    (the eval harness's fallback synthetic golden set has no
+    `model_profile` set, so B.6.3's new code path isn't even exercised by
+    it); `prompts` (`ulimit -v 4000000`) → `All 1 check(s) passed.`;
+    `frontend` (`NODE_OPTIONS=--max-old-space-size=2048`) →
+    `All 1 check(s) passed.`
+
+## B.7 — Human-feedback loop (audit §13 #2 DSPy + #12 dedupe.io) → M7
+
+Runs 7th: most of this phase structurally cannot finish today — the optimizer and the
+dedupe classifier both need real human-override labels that only accumulate once
+non-auto-approved review happens in normal use. Building the infrastructure now is
+right; scheduling the phase this late reflects that its real payoff is data-gated, not
+effort-gated.
+
+- [ ] **B.7.1** Start label collection NOW (audit: the column is schema-ready but empty;
+  both DSPy and dedupe are gated on it): human `human_review_matches` decisions written to
+  `kg.merge_engine_merge_audit.human_override`.
+  - *Accept [LIVE]:* approve one real match manually → `SELECT count(*) … WHERE
+    human_override IS NOT NULL` > 0, read by direct SQL.
+  - *Evidence:* **PENDING-LIVE.** Confirmed live, 2026-09-15: `SELECT count(*) FROM
+    kg.merge_engine_merge_audit WHERE human_override IS NOT NULL` → `0` (118,033 rows
+    total, all `decided_by IN ('auto', 'llm')`). Every gate driven this session (B.9.2
+    included) used blanket per-gate `approve`, not a per-cluster `human_review_matches`
+    override — real, deliberate human review hasn't happened yet in normal use. Not
+    started.
+- [ ] **B.7.2** `src/llm/dspy_lm.py` `configured_lm()` (local vLLM via OpenAI-compatible
+  `api_base`, `max_tokens=4096` — directly closes §6's null-content truncation gap).
+  - *Evidence:* **NOT STARTED.** Confirmed via `codebase-memory-mcp` (`search_graph` for
+    `dspy_lm`/`configured_lm`, project-wide) and `find src -iname '*dspy*'`: no such file
+    anywhere in `src/`. `dspy-ai` is declared as an optional extra in `pyproject.toml`
+    (line 77) but never imported. Correctly deferred behind B.7.1.
+- [ ] **B.7.3** `src/llm/dspy_programs/entity_match.py` — `EntityMatchJudgment` Signature
+  incl. `relationship_context` input (fed from **B.5's** relationship index; the two
+  recommendations share one signature by design). Replace the raw prompt at
+  `resolve_entities`' LLM chunk site (~line 2049) inside `dspy.context(lm=configured_lm())`;
+  same fallback contract + warning-level `llm_fallback_count` reaching reconciliation
+  (audit §00b degradation rule).
+  - *Accept (unit):* stub-LM parsing; fallback on failure still returns heuristic score
+    AND increments the visible counter.
+  - *Evidence:* **NOT STARTED.** No `entity_match.py`/`EntityMatchJudgment` anywhere in
+    `src/`; `resolve_entities.py`'s LLM chunk site (~line 2049) still calls the raw
+    prompt path unchanged. Also gated on the §00b degradation-ledger recommendation
+    (`llm_fallback_count`), itself not built either. Correctly deferred behind B.7.1/B.7.2.
+- [ ] **B.7.4** `scripts/dspy/optimize_entity_match.py`: labelled pairs from
+  `human_override IS NOT NULL`, `match_metric`, `dspy.MIPROv2.compile`, saved to
+  `logs/dspy_programs/entity_match_v1.json` (ADR 0016 versioned-artifact convention).
+  - *Accept (unit):* end-to-end compile against a tiny synthetic labelled set, stub LM.
+  - *Evidence (LIVE, once real labels exist):* **PENDING-LIVE, correctly.** No
+    `scripts/dspy/` directory exists. Structurally cannot start before B.7.1 produces
+    real labels and B.7.3 exists to optimize — this is the plan's own named data-gated
+    (not effort-gated) item, exactly as scheduled.
+- [ ] **B.7.5** `src/mcp_server/tools/dedupe_matcher.py` `train_dedupe_classifier(labelled_pairs)`
+  → score as **one more weighted input** to `_compute_heuristic_confidence` (ensemble
+  member, not a fourth engine); extra `dedupe = ["dedupe>=3.0"]`; default off.
+  - *Accept (unit):* trains on synthetic labelled pairs; monotone sane scores; disabled
+    default changes nothing.
+  - *Evidence:* **NOT STARTED.** No `dedupe_matcher.py` in `src/mcp_server/tools/`; no
+    `dedupe` extra in `pyproject.toml`. Same B.7.1 label dependency as B.7.3-B.7.4.
+
+**B.7 exit gate → M7:** infrastructure built and unit-tested; label collection live;
+optimization itself remains `PENDING-LIVE` until real labels accumulate — an honest,
+expected state, not a blocker.
+
+## B.8 — Bounded pilots (audit §13 #10 Graphiti, #5 LangGraph Swarm — "prove before commit") → M8
+
+Runs 8th, last before the final gate: the most speculative work in the whole plan by the
+audit's own framing — correctly scheduled after everything whose value is already
+well-understood.
+
+- [ ] **B.8.1 [LIVE]** Graphiti + FalkorDB mirror pilot: `mirror_fact_to_graphiti(...)`
+  called **alongside** (never instead of) `write_knowledge_fact`; `pilots.graphiti.enabled`
+  default off; FalkorDB via Docker, Graphiti LLM client → local vLLM. Acceptance =
+  `docs/diagnostics/GRAPHITI_PILOT.md` filled with measured side-by-side numbers for ≥5
+  temporal queries (Graphiti hybrid search vs hand-rolled `valid_from/valid_to` CTEs).
+  No ADR-0012 change without those numbers.
+  - *Evidence:* **NOT STARTED.** No `graphiti`/`falkordb`/`mirror_fact_to_graphiti`
+    anywhere in `src/` (confirmed via `codebase-memory-mcp`); no
+    `docs/diagnostics/GRAPHITI_PILOT.md`; no FalkorDB container in `docker ps`. Correctly
+    last — the plan's own most-speculative item, scheduled after everything
+    well-understood.
+- [ ] **B.8.2** LangGraph Swarm contested-cluster advisor: two-specialist swarm per audit
+  snippet; new node `resolve_contested_cluster` between `resolve_entities` and
+  `human_review_matches`, firing only when heuristic vs **B.5's** relational signal
+  disagree by > `matching.contested_margin` (0.15 — depends on B.5 being live). Output
+  attached to `pending_merge_candidates` as **advisory evidence — can never auto-decide**
+  (hard assertion: node output cannot set a merge decision field; router test: every
+  cluster still reaches `human_review_matches`).
+  - *Accept (unit):* trigger-margin gating (most clusters bypass entirely); advisory-only
+    invariant test; transcript attached, not decisions.
+  - *Evidence:* **NOT STARTED.** No `resolve_contested_cluster`/`cluster_resolution_swarm`
+    anywhere in `src/orchestrator/` (confirmed via `codebase-memory-mcp`); `graph.py`'s
+    node list unchanged from B.9.1's fully-green `check.py all` run. `langgraph-swarm`
+    not in `pyproject.toml`.
+
+**B.8 exit gate → M8:** both pilot docs filled with real measured numbers, or explicitly
+`BLOCKED`/`PENDING-LIVE`.
+
+## B.9 — Final gate → M9
+
+- [x] **B.9.1** `python scripts/check.py all` → 10/10 with everything above merged.
+  - *Evidence:* All 10 subcommands independently confirmed green: `lint`, `format`
+    (one trivial line-wrap fix needed first, in this session's own
+    `scripts/diagnostics/drive_airbus_splink_2026-09-14.py` — not production code),
+    `arch`, `docs`, `portability`, `types` (bounded combined run) →
+    `All 6 check(s) passed.`; `frontend` (`NODE_OPTIONS=--max-old-space-size=2048`)
+    → `All 1 check(s) passed.`; `eval` (`ulimit -v 4000000`) →
+    `All 1 check(s) passed.`; `prompts` (`ulimit -v 4000000`) →
+    `All 1 check(s) passed.`.
+
+    `test` needed a different fix than B.1/B.6's simple per-gate `ulimit -v
+    4000000`, worth recording: this machine currently has ~18GB already
+    committed to unrelated processes (VS Code, Claude Desktop, other
+    projects' own ClickHouse/uvicorn instances — none of this repo's), with
+    swap essentially full — a materially tighter environment than when that
+    cap was set. The single combined `pytest tests/unit tests/integration`
+    invocation (2110 tests, up from 1959 at B.6's exit — this session added
+    the `JoinGraph` checkpoint regression test) failed three different ways
+    as the cap was raised (4GB: a segfault inside one `canonical_matching_
+    dataset` test, confirmed NOT a real bug — it passes clean in isolation;
+    6GB: a cascade of genuine `MemoryError`s starting at ~81% through the
+    run, then a crash in pytest's own teardown; 8GB: silently killed by the
+    OS ~78% through, no traceback — the process's cumulative footprint
+    growing across one giant run was consistently the problem, not any one
+    test). Root cause: memory accrues across a single 2110-test process
+    (held fixtures, un-recycled C-extension buffers) regardless of the cap,
+    and this session's already-thin headroom left no room to just raise the
+    ceiling further without risking the same system-wide OOM this session
+    already hit once (confirmed via `dmesg` before touching anything
+    further). Fix: split into 5 fresh, uncapped processes instead of one
+    capped one — `tests/unit`'s 99 files in 4 roughly-equal chunks
+    (`ls tests/unit/*.py | split -n l/4`) + `tests/integration` on its own
+    — so no single process ever accumulates the full suite's footprint.
+    Memory checked stable after every chunk (`free -h`, ~9GB available
+    throughout, no growth trend). Results: chunk 1 `403 passed, 27
+    skipped`, chunk 2 `531 passed`, chunk 3 `538 passed, 56 skipped`, chunk
+    4 `405 passed` → unit total **1877 passed, 83 skipped** (exactly
+    B.6's `1876` + this session's one new test); integration **150
+    passed**, unchanged from B.6. **2110/2110**, matching the collection
+    count exactly. Docker containers independently reconfirmed unchanged
+    (same 9 containers, unbroken uptime) before and after every gate.
+- [x] **B.9.2 [LIVE]** One full Boeing + one full Airbus run end-to-end (human gates
+  manual where B.7.1 label collection needs them); destination counts re-verified by
+  direct SQL; before/after table vs the audit baselines (Boeing 92.9%/13-of-14, Airbus
+  15-of-16 clusters) recorded.
+  - *Evidence:* Both runs default engine (`builtin`, no `matching_rules` override),
+    `full_remerge=true`, all 5 HITL gates cleared, driven via
+    `scripts/diagnostics/drive_boeing_2026-09-15.py` /
+    `drive_airbus_2026-09-13.py`.
+
+    **Boeing** `wf_02916c5b`, 3.5 min. Read directly off
+    `logs/run_reports/wf_02916c5b.json` (not the app's status message):
+    `families_requested: 14, families_loaded: 13, completeness_pct: 92.9` —
+    **exact match** to the audit baseline (`wf_67044cd3`: 92.9%/13-of-14).
+    `company_investor` still the lone zero-row family (`data_quality.grade:
+    "F"`, same strict all-or-nothing gate, correctly triggered — a known,
+    already-traced gap, see §00b of the audit, not a regression). Note: the
+    first Boeing attempt (`wf_6feef947`) crashed mid-`resolve_entities` when
+    the app process was closed externally mid-run; confirmed via direct SQL
+    (`select count(*) from kg.merge_engine_merge_audit where run_id =
+    'wf_6feef947'` → 0) that nothing partial was written before restarting
+    clean — the app's own restart-detection correctly reported `"App
+    restarted while node 'resolve_entities' was running"` rather than a
+    false success.
+
+    **Airbus** `wf_8bdd63ef`, 3.1 min. `logs/run_reports/wf_8bdd63ef.json`:
+    `families_requested: 14, families_loaded: 12, completeness_pct: 85.7` —
+    **exact match** to the audit baseline (`wf_f18bac1b`: 14/12, 85.7%).
+    `investment_round`/`investor` the two zero-row families (same known gap).
+    Direct SQL, `kg.merge_engine_merge_audit`: `company`/`company_relation`/
+    `technographics` → `fellegi_sunter`, `person` → `llm` — confirms the
+    default engine ran, not Splink (this is the non-forced companion to
+    this session's `wf_4af54ee1` Splink-forced run).
+
+    **Conclusion:** M1–M6's fixes hold steady on both subjects with zero
+    regression against the pre-existing audit baselines, and both runs
+    exercised the same `plan_scope`/HITL-checkpoint path this session's
+    `JoinGraph` fix touched — confirms that fix generalizes beyond the
+    Splink-forced case. Docker containers independently confirmed untouched
+    throughout (same 9 containers, unbroken uptime, before and after).
+- [x] **B.9.3** Every `*Evidence:*` slot above filled, or marked `BLOCKED:`/`PENDING-LIVE:`
+  honestly. No checked box without evidence. **No push / no merge to main** — branch
+  discipline: that call stays with the user.
+  - *Evidence:* Full sweep, 2026-09-15 (`grep -n "_fill in_" TODO.md` → no matches
+    before this pass; 7 slots found and filled — all in B.7/B.8). Filled each honestly
+    against live state, not assumed: `human_override` confirmed `0` rows by direct SQL
+    (B.7.1); every named file (`dspy_lm.py`, `entity_match.py`, `dedupe_matcher.py`,
+    `graphiti`/`falkordb`, `resolve_contested_cluster`) confirmed absent from `src/` via
+    `codebase-memory-mcp` `search_graph` (B.7.2–B.7.5, B.8.1–B.8.2) — none marked done
+    that isn't. B.6.1/B.6.4's pre-existing `BLOCKED` (unrecoverable fixture) and B.6's
+    exit gate's "not promoted, honestly undecided-pending-fixture" stand unchanged; no
+    new attempt made to fabricate a gate result.
+
+**B.9 exit gate → M9:** ship-ready. All milestones M1–M8 closed with evidence.
+  - *Evidence:* **M1–M6 and M9's own mechanics (B.9.1/B.9.2/B.9.3) are closed** — full
+    `check.py all` 10/10, Boeing+Airbus e2e matching the audit baselines exactly, this
+    evidence sweep clean. **M7 and M8 are honestly still open** — correctly, by the
+    plan's own design (§B.7's exit gate: "optimization remains `PENDING-LIVE` until
+    real labels accumulate — an honest, expected state, not a blocker"; §B.8: "prove
+    before commit," scheduled last). Nothing in M7/M8 was started this session; nothing
+    here claims otherwise. **This is not the "all M1–M8 closed" ship-ready state the
+    original sentence above describes** — nine milestones are M1–M9, not eight, and two
+    (M7, M8) are real, scoped future work, not a gap in what was asked for this round.
+    **No push, no merge to `main`** — untouched, per branch discipline; that call stays
+    with the user.

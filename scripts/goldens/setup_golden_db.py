@@ -9,6 +9,18 @@ Warehouse DDL in sample_databases/destination/sql/*.sql. It is never configured 
 app destination, so the standing "exactly one destination at a time" rule on
 `global_warehouse` itself is untouched.
 
+Live-caught (BP-B, 2026-08-19, while populating the golden DB for P-9's regression
+gate): the DDL declares every `id` column as `TEXT PRIMARY KEY` with NO database-side
+default -- confirmed the same is true of the real `global_warehouse` destination, so
+this isn't a stale-DDL mismatch. `boeing_manual_merge.py`/`airbus_manual_merge.py`
+(and, presumably, the real app's own load path) rely on `INSERT ... RETURNING id`
+without ever supplying an id, which fails outright against a freshly-provisioned
+golden DB (`NotNullViolation` on the very first row of the very first table). Fixed
+here, not in the manual-merge scripts, since the golden DB is the one thing this
+script fully controls and re-provisions from scratch every run: after building each
+schema, every `id` column gets `DEFAULT gen_random_uuid()::text` (PostgreSQL 13+
+built-in, no extension needed) so the golden generators can actually complete.
+
 Usage:
     python setup_golden_db.py [--host localhost] [--port 55201] [--user postgres]
                                [--password pass] [--admin-db postgres]
@@ -93,6 +105,19 @@ def main() -> int:
             log(f"  schema '{schema}': {n_tables} tables created")
             if n_tables != 25:
                 log(f"  !! expected 25 tables in '{schema}', got {n_tables}")
+
+            cur.execute(
+                "SELECT table_name FROM information_schema.columns "
+                "WHERE table_schema = %s AND column_name = 'id'",
+                (schema,),
+            )
+            id_tables = [row[0] for row in cur.fetchall()]
+            for table in id_tables:
+                cur.execute(
+                    f'ALTER TABLE "{schema}"."{table}" '
+                    "ALTER COLUMN id SET DEFAULT gen_random_uuid()::text"
+                )
+            log(f"  schema '{schema}': id default added to {len(id_tables)} tables")
     conn.close()
 
     log("\nDone. Golden DB ready:")

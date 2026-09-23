@@ -405,3 +405,175 @@ export function abortWorkflow(threadId: string): Promise<{ ok: boolean }> {
 export function getActive(): Promise<{ active: Array<{ thread_id: string; status: string }> }> {
   return get("/api/workflow/active");
 }
+
+// ── Part B P-8: metadata graph view ─────────────────────────────────────
+
+export type GraphNodeType = "source" | "database" | "schema" | "table" | "column" | "canonical_field";
+export type GraphEdgeType = "contains" | "relationship" | "field_mapping";
+
+export interface GraphNode {
+  id: string;
+  type: GraphNodeType;
+  label: string;
+  data: Record<string, any>;
+}
+
+export interface GraphEdge {
+  source: string;
+  target: string;
+  edge_type: GraphEdgeType;
+  relationship_type: string | null;
+  confidence: number | null;
+  coverage: number | null;
+  origin: string | null;
+  review_status: string | null;
+  evidence: Record<string, any> | null;
+}
+
+export interface MetadataGraphResult {
+  connected: boolean;
+  error: string | null;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export function getMetadataGraph(body: {
+  host: string;
+  port: number;
+  user?: string;
+  password?: string;
+  database?: string;
+  schema_name?: string;
+  run_id?: string;
+  min_confidence?: number;
+  node_types?: string[];
+  source_ids?: string[];
+  focus_node_id?: string;
+  max_depth?: number;
+}): Promise<MetadataGraphResult> {
+  return post("/api/metadata-graph", body);
+}
+
+// ── B.4 Splink workbench ────────────────────────────────────────────────────
+// Thin wrappers over /api/splink/* -- every call takes inline records (the
+// workbench tunes on profiled/sampled data, never a spool reference) and,
+// past `recommend`, a model_name + version identifying a saved model file
+// (S-N): predict/explain/cluster/evaluate all build a fresh linker from that
+// saved payload rather than retraining.
+
+export interface SplinkStatus {
+  available: boolean;
+  version: string | null;
+  reason?: string;
+  required_major?: number;
+  refuse_on_major_mismatch?: boolean;
+}
+
+export function splinkStatus(): Promise<SplinkStatus> {
+  return get("/api/splink/status");
+}
+
+export function splinkRecommend(body: {
+  records: Record<string, any>[];
+  semantic_types?: Record<string, string> | null;
+  pair_budget?: number;
+}): Promise<Record<string, any>> {
+  return post("/api/splink/recommend", body);
+}
+
+export function splinkTrain(body: {
+  model_name: string;
+  records: Record<string, any>[];
+  config: Record<string, any>;
+  parent_version?: number | null;
+}): Promise<Record<string, any>> {
+  return post("/api/splink/train", body);
+}
+
+export function splinkPredict(body: {
+  model_name: string;
+  version: number;
+  records: Record<string, any>[];
+  match_threshold?: number;
+  exclude_threshold?: number;
+  review_limit?: number;
+}): Promise<Record<string, any>> {
+  return post("/api/splink/predict", body);
+}
+
+export function splinkExplain(body: {
+  model_name: string;
+  version: number;
+  records: Record<string, any>[];
+  record_a: Record<string, any>;
+  record_b: Record<string, any>;
+}): Promise<Record<string, any>> {
+  return post("/api/splink/explain", body);
+}
+
+export function splinkCluster(body: {
+  model_name: string;
+  version: number;
+  records: Record<string, any>[];
+  match_probability_threshold?: number;
+}): Promise<Record<string, any>> {
+  return post("/api/splink/cluster", body);
+}
+
+export function splinkEvaluate(body: {
+  model_name: string;
+  version: number;
+  records: Record<string, any>[];
+  labelled_pairs: any[][];
+  current_threshold?: number;
+  recall_floor?: number;
+  precision_floor?: number;
+}): Promise<Record<string, any>> {
+  return post("/api/splink/evaluate", body);
+}
+
+export interface SplinkModelVersionSummary {
+  version: number;
+  status: string;
+  parent_version: number | null;
+  splink_version: string;
+  created_at: string;
+  is_active: boolean;
+}
+
+export function splinkListModels(): Promise<{
+  models: Array<{ model_name: string; versions: SplinkModelVersionSummary[] }>;
+}> {
+  return get("/api/splink/models");
+}
+
+export function splinkGetModelVersion(name: string, version: number): Promise<Record<string, any>> {
+  return get(`/api/splink/models/${encodeURIComponent(name)}/versions/${version}`);
+}
+
+export function splinkGetActiveConfig(name: string): Promise<Record<string, any>> {
+  return get(`/api/splink/models/${encodeURIComponent(name)}/active`);
+}
+
+export function splinkActivate(name: string, version: number): Promise<Record<string, any>> {
+  return post(`/api/splink/models/${encodeURIComponent(name)}/activate`, { version });
+}
+
+export function splinkRollback(name: string): Promise<Record<string, any>> {
+  return post(`/api/splink/models/${encodeURIComponent(name)}/rollback`, {});
+}
+
+export function splinkArchive(name: string, version: number): Promise<Record<string, any>> {
+  return post(`/api/splink/models/${encodeURIComponent(name)}/versions/${version}/archive`, {});
+}
+
+export function splinkCompare(
+  name: string,
+  versionA: number,
+  versionB: number
+): Promise<Record<string, any>> {
+  return post(`/api/splink/models/${encodeURIComponent(name)}/compare`, {
+    version_a: versionA,
+    version_b: versionB,
+  });
+}

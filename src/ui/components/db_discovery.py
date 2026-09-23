@@ -562,3 +562,64 @@ def query_merge_lineage(
         logger.warning("Merge lineage lookup failed for search=%r: %s", search, exc)
         result["error"] = str(exc)
     return result
+
+
+# ── Part B P-8: metadata graph view over the V3 discovery metadata tables ──
+
+
+def query_metadata_graph(
+    host: str,
+    port: int,
+    user: str,
+    password: str,
+    database: str,
+    schema: str = "",
+    run_id: str | None = None,
+    min_confidence: float | None = None,
+    node_types: list[str] | None = None,
+    source_ids: list[str] | None = None,
+    focus_node_id: str | None = None,
+    max_depth: int | None = None,
+) -> dict[str, Any]:
+    """Read the P-1 metadata tables, build the networkx metadata graph
+    (P-8), apply whichever filters the UI asked for, and serialize it for
+    the frontend. PostgreSQL only, same as ``query_merge_lineage`` above --
+    read-only, never used by the merge pipeline itself, degrades to an
+    empty result with an explanatory ``error`` rather than crashing."""
+    result: dict[str, Any] = {"connected": False, "error": None, "nodes": [], "edges": []}
+    try:
+        from src.mcp_server.tools.metadata_graph import MetadataStore
+        from src.mcp_server.tools.metadata_graph_view import (
+            build_metadata_graph,
+            filter_by_depth,
+            filter_by_min_confidence,
+            filter_by_node_type,
+            filter_by_source,
+            graph_to_json,
+        )
+
+        store = MetadataStore(
+            {
+                "host": host,
+                "port": port,
+                "user": user,
+                "password": password,
+                "database": database,
+                "schema": schema or "public",
+            }
+        )
+        graph = build_metadata_graph(store, run_id=run_id)
+        if min_confidence is not None:
+            graph = filter_by_min_confidence(graph, min_confidence)
+        if node_types:
+            graph = filter_by_node_type(graph, set(node_types))
+        if source_ids:
+            graph = filter_by_source(graph, set(source_ids))
+        if focus_node_id and max_depth is not None:
+            graph = filter_by_depth(graph, focus_node_id, max_depth)
+        result.update(graph_to_json(graph))
+        result["connected"] = True
+    except Exception as exc:
+        logger.warning("Metadata graph query failed for %s:%s/%s: %s", host, port, database, exc)
+        result["error"] = str(exc)
+    return result

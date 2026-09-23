@@ -1,0 +1,5933 @@
+{
+  "0": {
+    "top_labels": [
+      "AsyncMongoClient",
+      "MongoDBConnector",
+      "._as_id()",
+      ".capabilities()",
+      ".close()",
+      ".discover_schema()",
+      "._ensure_client()",
+      "._flatten_doc()",
+      ".__init__()",
+      ".mark_imported()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_mongodb_connector.py",
+      "tests/unit/test_connectors.py",
+      "src/mcp_server/connectors/mongodb.py",
+      "tests/unit/test_connector_capabilities.py"
+    ],
+    "size": 117
+  },
+  "1": {
+    "top_labels": [
+      "ABC",
+      "base.py",
+      "BaseConnector",
+      ".__aenter__()",
+      ".__aexit__()",
+      ".capabilities()",
+      ".close()",
+      ".discover_indexes()",
+      ".discover_schema()",
+      ".discover_statistics()"
+    ],
+    "top_files": [
+      "",
+      "tests/integration/test_edge_cases.py",
+      "tests/unit/test_mcp_server.py",
+      "tests/unit/test_resolve_entities_cache_integration.py",
+      "src/mcp_server/connectors/databricks.py"
+    ],
+    "size": 115
+  },
+  "2": {
+    "top_labels": [
+      "clickhouse.py",
+      "_clickhouse_param_type()",
+      ".extract()",
+      "ClickHouse connector for schema discovery, data extraction, and import…",
+      "Extract rows a batch at a time, seeking rather than counting past. ``LIMIT…",
+      "Name the bind type for a keyset value. ClickHouse's parameter syntax carries…",
+      "keyset.py",
+      "advance_boundary()",
+      "assert_key_unique()",
+      "choose_keyset()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_keyset_pagination.py",
+      "src/mcp_server/connectors/clickhouse.py",
+      "src/mcp_server/connectors/mongodb.py",
+      "src/mcp_server/connectors/postgres.py"
+    ],
+    "size": 101
+  },
+  "3": {
+    "top_labels": [
+      "RecordCache",
+      "splink_train_once_predict_many.py",
+      "find_exact()",
+      "load_diffbot_tsv()",
+      "Validate the 'train once on a big representative sample, reuse via predict()'…",
+      "zoominfo_recs()",
+      "resolve_entities.py",
+      "_best_name_field()",
+      "_block_key()",
+      "_blockable_fields()"
+    ],
+    "top_files": [
+      "",
+      "tests/integration/test_resolve_entities.py",
+      "tests/unit/test_matching_performance.py",
+      "src/mcp_server/tools/resolve_entities.py",
+      "scripts/splink/splink_train_once_predict_many.py"
+    ],
+    "size": 98
+  },
+  "4": {
+    "top_labels": [
+      "resolve_entities.py",
+      "_inject_subject_destination_rows()",
+      "resolve_entities node: Clusters matching records across origins. Calls…",
+      "Add existing destination rows for the subject entity to the candidate set.…",
+      "B.5.1: the relational-agreement signal's index, built once per run from every…",
+      "_relationship_index_for_companies()",
+      "validate_data.py",
+      "validate_data node: data quality gate between extract_data and resolve_entities…",
+      "spool.py",
+      "cleanup_old_spools()"
+    ],
+    "top_files": [
+      "",
+      "src/orchestrator/nodes/resolve_entities.py",
+      "tests/unit/test_dest_dedup.py",
+      "src/orchestrator/spool.py",
+      "src/orchestrator/nodes/validate_data.py"
+    ],
+    "size": 97
+  },
+  "5": {
+    "top_labels": [
+      "DatabricksConnector",
+      ".add_column()",
+      ".close()",
+      "._ensure_connection()",
+      ".extend_schema_batch()",
+      ".get_table_schema()",
+      ".__init__()",
+      ".load_batch()",
+      "Any",
+      "Upsert records into a Databricks Delta table using MERGE. Parameters ----------…"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/connectors/databricks.py",
+      "tests/unit/test_databricks_connector.py"
+    ],
+    "size": 94
+  },
+  "6": {
+    "top_labels": [
+      "_bare_config()",
+      "Any",
+      "Keep only entity->table picks that exist in the discovered schema. The user can…",
+      "Strip callbacks/metadata, keeping only ``configurable``. Part 1.5 C.3:…",
+      "Keep only custom dependency links whose origin/table/column all exist in the…",
+      "Resume a paused workflow with user feedback. Parameters ---------- thread_id :…",
+      "Manages multiple concurrent merge workflows with interrupt support. Each…",
+      "Stream the graph from its checkpoint until done or next interrupt.",
+      "Mark a workflow as aborted. Parameters ---------- thread_id : str Workflow…",
+      "List all active (non-completed) workflows. Returns ------- list[dict]…"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_interrupt_payload_parity.py",
+      "src/orchestrator/workflow_manager.py",
+      "tests/integration/test_graph_workflow.py"
+    ],
+    "size": 91
+  },
+  "7": {
+    "top_labels": [
+      "splink_tune_boeing_airbus.py",
+      "diffbot_records()",
+      "main()",
+      "find_id()",
+      "label()",
+      "Live Splink tuning run: real diffbot + zoominfo Boeing/Airbus company records.…",
+      "zoominfo_records()",
+      "_build_clusters()",
+      "find()",
+      "union()"
+    ],
+    "top_files": [
+      "tests/unit/test_mcp_resolve_entities.py",
+      "",
+      "src/mcp_server/tools/splink_matcher.py",
+      "src/mcp_server/tools/resolve_entities.py",
+      "tests/unit/test_resolve_entities_detail.py"
+    ],
+    "size": 87
+  },
+  "8": {
+    "top_labels": [
+      "build_error_interrupt()",
+      "The payload the error gate shows: what failed, where, and how often. Shared…",
+      "Any",
+      "asyncio",
+      "fixture",
+      "Test that human_review_matches returns low-confidence clusters.",
+      "Test that human_review_matches with no low-confidence clusters.",
+      "Test that human_review_matches processes cluster decisions.",
+      "Test with empty entity clusters.",
+      "Tests for the human_review_mappings node."
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_human_nodes.py",
+      "src/orchestrator/nodes/human_nodes.py"
+    ],
+    "size": 75
+  },
+  "9": {
+    "top_labels": [
+      "load_data_node()",
+      "_null_transaction()",
+      "Load unified data into the Databricks destination. Parameters ---------- state…",
+      "Stand-in when the destination cannot give us a real transaction.",
+      "Persist the watermarks observed during extraction this run. Origins are read-…",
+      "update_extraction_state_node()",
+      "test_load_data_node.py",
+      "Any",
+      "asyncio",
+      "fixture"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_load_data_node.py",
+      "src/orchestrator/nodes/load_data.py"
+    ],
+    "size": 75
+  },
+  "10": {
+    "top_labels": [
+      "entity_extraction_v3.py",
+      "build_coverage_matrix()",
+      "compute_context_score()",
+      "discover_anchors()",
+      "execute_extraction()",
+      "_index_by_column()",
+      "ExtractionPlan",
+      ".total_estimated_rows()",
+      "NodeProvenance",
+      "plan_extraction()"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/join_graph.py",
+      "src/mcp_server/tools/entity_extraction_v3.py",
+      "tests/unit/test_entity_extraction_v3.py"
+    ],
+    "size": 72
+  },
+  "11": {
+    "top_labels": [
+      "Random",
+      "slow",
+      "golden.py",
+      "build_golden_pairs()",
+      "load_staff()",
+      "_match_pairs()",
+      "Any",
+      "Pair",
+      "_random_non_match_pairs()",
+      "Labelled record pairs for measuring entity-resolution quality. Built from real…"
+    ],
+    "top_files": [
+      "",
+      "tests/eval/test_matcher_recall.py",
+      "tests/eval/score.py",
+      "tests/eval/golden.py"
+    ],
+    "size": 68
+  },
+  "12": {
+    "top_labels": [
+      "gtbuild.py",
+      "in_chunks()",
+      "log()",
+      "Manual ground-truth build: Stages D (extract), E (entity resolution), F/G…",
+      "Entity resolution -> gt_build.clusters / cluster_members / pair_decisions.",
+      "Extraction: pull every row attached to the closure into gt_build.s_* staging.",
+      "sha_hex()",
+      "stage_d()",
+      "zi_inl()",
+      "stage_e()"
+    ],
+    "top_files": [
+      "",
+      "scripts/ground_truth/gtgates.py",
+      "scripts/ground_truth/gtcore.py",
+      "scripts/ground_truth/gtload.py",
+      "scripts/ground_truth/gtbuild.py"
+    ],
+    "size": 68
+  },
+  "13": {
+    "top_labels": [
+      "join_graph.py",
+      "_EdgeCandidate",
+      ".__post_init__()",
+      "_find_candidate_edges()",
+      "JoinPath",
+      ".confidence()",
+      ".fanout_hop_count()",
+      ".high_fanout()",
+      ".hop_count()",
+      ".min_overlap_ratio()"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/join_graph.py",
+      "tests/unit/test_join_graph.py"
+    ],
+    "size": 66
+  },
+  "14": {
+    "top_labels": [
+      "extract_data.py",
+      "_accepts_pk_columns()",
+      "extract_data_handler()",
+      "extract_data_impl()",
+      "Any",
+      "extract_data tool implementation. Extracts rows from a specific origin…",
+      "MCP tool handler entry point. Parameters ---------- arguments : dict Either…",
+      "Does this connector's extract() take a pk_columns argument?",
+      "Extract rows from an origin with batch pagination. Parameters ----------…",
+      "_annotate_est_rows()"
+    ],
+    "top_files": [
+      "",
+      "tests/integration/test_extract_data.py",
+      "src/mcp_server/tools/extract_data.py",
+      "src/mcp_server/tools/plan_scope.py",
+      "tests/unit/test_mcp_extract_data.py"
+    ],
+    "size": 63
+  },
+  "15": {
+    "top_labels": [
+      "build_join_graph()",
+      "Build the real join graph a subject-first extraction searches over. Parameters…",
+      "plan_scope_impl()",
+      "_ensure_complete_origin_coverage()",
+      "_wrap()",
+      "Build the per-table extraction plan for a scoped (\"Nova\") merge. Returns…",
+      "plan_scope()",
+      "Any",
+      "Populate ``scope_plan`` when the merge is scoped to one subject.",
+      "test_plan_scope.py"
+    ],
+    "top_files": [
+      "",
+      "src/orchestrator/nodes/plan_scope.py",
+      "src/mcp_server/tools/join_graph.py",
+      "src/mcp_server/tools/plan_scope.py",
+      "tests/unit/test_plan_scope.py"
+    ],
+    "size": 61
+  },
+  "16": {
+    "top_labels": [
+      "fellegi_sunter.py",
+      "build_term_frequencies()",
+      "estimate_model()",
+      "FieldModel",
+      ".weight()",
+      "MatchModel",
+      ".explain()",
+      ".__init__()",
+      ".prior_weight()",
+      ".probability()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_phase_l_matching.py",
+      "src/mcp_server/tools/fellegi_sunter.py",
+      "src/mcp_server/tools/resolve_entities.py",
+      "tests/unit/test_resolve_entities_match_evidence.py"
+    ],
+    "size": 60
+  },
+  "17": {
+    "top_labels": [
+      "build_reconciliation_report()",
+      "Write the reconciliation report to logs/run_reports/<run_id>.json.",
+      "Per-entity reconciliation numbers for the finished run. Counts extraction per…",
+      "_write_run_report()",
+      "validate_graph_consistency.py",
+      "check_consistency_rules()",
+      "_fetch_facts()",
+      "_load_consistency_rules()",
+      "Any",
+      "validate_graph_consistency node: post-merge consistency rules over just-written…"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_graph_timing.py",
+      "src/orchestrator/nodes/load_data.py",
+      "src/orchestrator/nodes/validate_graph_consistency.py",
+      "tests/unit/test_reconciliation_report_grading.py"
+    ],
+    "size": 60
+  },
+  "18": {
+    "top_labels": [
+      "drive_airbus_2026-09-13.py",
+      "drive()",
+      "log()",
+      "Drive a live Airbus merge through the real app, this session's actual…",
+      "drive_airbus_splink_2026-09-14.py",
+      "drive()",
+      "log()",
+      "Drive a live Airbus merge through the real app with Splink forced as the…",
+      "drive_boeing_2026-09-15.py",
+      "drive()"
+    ],
+    "top_files": [
+      "scripts/ground_truth/stage_c_expand.py",
+      "scripts/ground_truth/helpers.py",
+      "scripts/update_mypy_baseline.py",
+      "scripts/ground_truth/stage_c_full.py",
+      "scripts/hooks/no_sample_databases_commit.py"
+    ],
+    "size": 58
+  },
+  "19": {
+    "top_labels": [
+      "Cluster matching records for an entity type (hybrid heuristic + LLM).…",
+      "resolve_entities_impl()",
+      "Any",
+      "asyncio",
+      "Test entity resolution tool integrated with heuristic scoring + clustering.",
+      "Test single record results in a single cluster.",
+      "Test that completely different records end up in separate clusters.",
+      "Test that all clusters have required fields.",
+      "TestResolveEntitiesIntegration",
+      ".test_cluster_has_required_human_review_flag()"
+    ],
+    "top_files": [
+      "",
+      "tests/integration/test_resolve_entities.py",
+      "tests/unit/test_resolve_entities_cache_integration.py",
+      "tests/unit/test_phase_l_matching.py",
+      "src/mcp_server/tools/resolve_entities.py"
+    ],
+    "size": 57
+  },
+  "20": {
+    "top_labels": [
+      ".add_column()",
+      ".atomic()",
+      ".clear_extraction_state()",
+      ".column_exists()",
+      "._commit()",
+      "._ensure_connection()",
+      ".ensure_entity_map()",
+      ".ensure_extraction_state()",
+      ".ensure_merge_audit()",
+      ".ensure_table()"
+    ],
+    "top_files": [
+      "src/mcp_server/connectors/postgresql_destination.py",
+      ""
+    ],
+    "size": 54
+  },
+  "21": {
+    "top_labels": [
+      "human_nodes.py",
+      "_auto_match_stats()",
+      "_backfill_mapping_provenance()",
+      "_build_deps_interrupt()",
+      "_build_field_provenance()",
+      "_build_mapping_rows()",
+      "_build_matches_interrupt()",
+      "_build_origin_schemas()",
+      "_build_scope_interrupt()",
+      "handle_error()"
+    ],
+    "top_files": [
+      "",
+      "tests/integration/test_human_in_the_loop.py",
+      "src/orchestrator/nodes/load_data.py",
+      "tests/unit/test_interrupt_payload_parity.py",
+      "src/orchestrator/spool.py"
+    ],
+    "size": 53
+  },
+  "22": {
+    "top_labels": [
+      "Resolve entities across all extracted entity types. Parameters ---------- state…",
+      "resolve_entities()",
+      "clusters_for()",
+      "One entity's clusters, from a handle or an inline list.",
+      "test_resolve_entities_node.py",
+      "Any",
+      "asyncio",
+      "fixture",
+      "Unit tests for resolve_entities node.",
+      "validate_data runs immediately before this node and already set…"
+    ],
+    "top_files": [
+      "src/orchestrator/nodes/resolve_entities.py",
+      "",
+      "src/orchestrator/spool.py",
+      "tests/unit/test_resolve_entities_node.py"
+    ],
+    "size": 53
+  },
+  "23": {
+    "top_labels": [
+      "load_data.py",
+      "_align_identity_column()",
+      "_get_destination_connector()",
+      "_get_timestamp()",
+      "_infer_fact_value()",
+      "load_data_handler()",
+      "load_data_impl()",
+      "_looks_like_name_field()",
+      "_normalize_field_name()",
+      "Any"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_mcp_load_data.py",
+      "src/mcp_server/tools/load_data.py",
+      "tests/integration/test_load_data.py"
+    ],
+    "size": 52
+  },
+  "24": {
+    "top_labels": [
+      "_has_conflicting_identity()",
+      "_normalize()",
+      "Normalised word tokens of a scoped merge's subject name. Empty for an unscoped…",
+      "A ``_normalize``-compatible function with subject tokens removed. In a scoped…",
+      "True when both records carry a unique identifier and they disagree.…",
+      "Normalize a value for comparison.",
+      "The (auto_match, auto_exclude) bar for one entity. An explicit ``auto_match``…",
+      "_subject_stripped_normalize()",
+      "normalise()",
+      "_subject_tokens()"
+    ],
+    "top_files": [
+      "tests/unit/test_resolve_entities_detail.py",
+      "tests/unit/test_matching_rules_and_policy.py",
+      "src/mcp_server/tools/resolve_entities.py"
+    ],
+    "size": 52
+  },
+  "25": {
+    "top_labels": [
+      "_bfs_distances()",
+      "_enumerate_shortest_paths()",
+      "backtrack()",
+      "find_paths()",
+      "_hop_from()",
+      "JoinGraph",
+      ".add_node()",
+      ".find_edge()",
+      ".__len__()",
+      ".neighbors()"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/join_graph.py",
+      "tests/unit/test_join_graph.py"
+    ],
+    "size": 51
+  },
+  "26": {
+    "top_labels": [
+      "PathHop",
+      ".from_column()",
+      ".from_table()",
+      ".to_column()",
+      ".to_table()",
+      "One step of a `JoinPath`: the edge used and which way it was crossed.…",
+      "plan_scope.py",
+      "_bare_table_name()",
+      "_columns_of()",
+      "_concept_link_fallback()"
+    ],
+    "top_files": [
+      "",
+      "src/orchestrator/nodes/plan_scope.py",
+      "src/mcp_server/tools/join_graph.py",
+      "tests/unit/test_join_graph.py",
+      "tests/unit/test_scope_plan_eval.py"
+    ],
+    "size": 50
+  },
+  "27": {
+    "top_labels": [
+      "airbus_manual_merge.py",
+      "ch_query()",
+      "log()",
+      "normalize_domain()",
+      "normalize_name()",
+      "parse_employee_count()",
+      "parse_founding_date()",
+      "parse_revenue()",
+      "Manual Airbus merge -- same 6-step pipeline as the Boeing hand-merge: 1.…",
+      "safe_str()"
+    ],
+    "top_files": [
+      "scripts/goldens/boeing_manual_merge.py",
+      "src/utils/logging_config.py",
+      "src/mcp_server/connectors/clickhouse_destination.py",
+      "scripts/goldens/airbus_manual_merge.py",
+      "tests/unit/test_logging_config.py"
+    ],
+    "size": 49
+  },
+  "28": {
+    "top_labels": [
+      "asyncio",
+      "Edge cases for schema discovery across connectors.",
+      "PostgreSQL connector should handle database with no tables.",
+      "PostgreSQL connector should skip tables that fail to discover.",
+      "MongoDB connector should handle database with no collections.",
+      "PostgreSQL connector should handle VARCHAR with null character_maximum_length.",
+      "Edge cases for data extraction.",
+      "PostgreSQL connector should return empty column_names for empty results.",
+      "MongoDB connector should return empty for empty collection.",
+      "PostgreSQL connector should return None next_cursor when all rows returned."
+    ],
+    "top_files": [
+      "",
+      "tests/integration/test_edge_cases.py",
+      "tests/unit/test_mongodb_connector.py"
+    ],
+    "size": 48
+  },
+  "29": {
+    "top_labels": [
+      "A pandas DataFrame of ``records`` with one added unique-id column.…",
+      "records_to_dataframe()",
+      "Any",
+      "The gate every phase calls at its entry. Returns a small info dict so a phase…",
+      "True when Splink imported cleanly. Used by the UI/engine selector to decide…",
+      "require_splink()",
+      "splink_available()",
+      "splink_workbench.py",
+      "activate()",
+      "archive()"
+    ],
+    "top_files": [
+      "",
+      "src/utils/config_loader.py",
+      "src/mcp_server/tools/splink_common.py",
+      "src/mcp_server/tools/splink_workbench.py",
+      "src/mcp_server/tools/splink_compat.py"
+    ],
+    "size": 47
+  },
+  "30": {
+    "top_labels": [
+      "field_validator",
+      "build_destination_config()",
+      "DestinationConfig",
+      ".validate_type()",
+      "LLMConfig",
+      ".validate_provider()",
+      "Build a DestinationConfig from runtime values (e.g., from the UI). This is the…",
+      "Configuration for the destination database (PostgreSQL or ClickHouse).",
+      "Configuration for the LLM service.",
+      "Test that build_destination_config creates valid config."
+    ],
+    "top_files": [
+      "",
+      "src/utils/config_loader.py",
+      "tests/integration/test_config_resolution.py",
+      "tests/unit/test_config_loader.py"
+    ],
+    "size": 46
+  },
+  "31": {
+    "top_labels": [
+      "splink_common.py",
+      "labels_dataframe()",
+      "make_linker()",
+      "Any",
+      "LinkType",
+      "Shared plumbing for the B.4 Splink workbench (Branch_Plan.md B.4). Every phase…",
+      "A fresh ``Linker`` over in-process DuckDB for the given DataFrame. A new…",
+      "A labels DataFrame in the *installed* 4.0.16 schema. 4.0.x labels tables are…",
+      "The unique-id column *this linker was configured with*. Verified installed…",
+      "Thin re-export so phase modules don't import ``splink_compat`` twice (once…"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/splink_evaluation.py",
+      "tests/unit/test_splink_workbench_helpers.py",
+      "src/mcp_server/tools/splink_common.py"
+    ],
+    "size": 46
+  },
+  "32": {
+    "top_labels": [
+      "_build_source_schema_from_discovered()",
+      "map_fields()",
+      "_schema_for_table()",
+      "Any",
+      "Collect source fields across origins for entity_type when run before extraction.",
+      "Map unified entity fields to destination columns. Parameters ---------- state :…",
+      "Any",
+      "asyncio",
+      "fixture",
+      "Test successful field mapping."
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_map_fields_node.py",
+      "src/orchestrator/nodes/map_fields_node.py"
+    ],
+    "size": 46
+  },
+  "33": {
+    "top_labels": [
+      "cache_store.py",
+      "Persistent (SQLite-backed) LLM response cache — Phase A5.…",
+      "client.py",
+      "LLM client setup using LangChain. Provides a unified async interface for…",
+      "cost.py",
+      "LLM cost controls and accounting — Phase O.5. Two separate jobs, deliberately…",
+      "dest_family.py",
+      "dest_family tool: derive the destination's real table-relationship graph.…",
+      "graph.py",
+      "_get_server_graph()"
+    ],
+    "top_files": [
+      "",
+      "src/llm/cost.py",
+      "src/orchestrator/utils/retry_hints.py",
+      "tests/unit/test_graph_timing.py",
+      "src/orchestrator/nodes/analyze_dependencies.py"
+    ],
+    "size": 45
+  },
+  "34": {
+    "top_labels": [
+      "conftest.py",
+      "dependency_state()",
+      "discovered_state()",
+      "initial_workflow_state()",
+      "mock_config()",
+      "mock_connector_factory()",
+      "_create_mock_connector()",
+      "mock_extract()",
+      "mock_llm_client()",
+      "_score_pair()"
+    ],
+    "top_files": [
+      "",
+      "tests/integration/conftest.py"
+    ],
+    "size": 45
+  },
+  "35": {
+    "top_labels": [
+      "_normalise_rule()",
+      "A user-entered blocking rule to Splink's l./r.-prefixed form. The UI's…",
+      "test_splink_model.py",
+      "Unit tests for the B.4 Splink version store (S-N, `splink_model`). These test…",
+      "Write a version's files directly, bypassing save_version (which needs a Linker).",
+      "_seed()",
+      "TestCompare",
+      ".test_changed_leaf_is_reported_with_both_values()",
+      ".test_identical_payloads_have_zero_diff()",
+      ".test_nested_path_diff()"
+    ],
+    "top_files": [
+      "src/mcp_server/tools/splink_workbench.py",
+      "tests/unit/test_splink_model.py"
+    ],
+    "size": 45
+  },
+  "36": {
+    "top_labels": [
+      "Any",
+      "Unify all entity clusters. Parameters ---------- state : dict MergeState with…",
+      "unify_entity_groups()",
+      "test_unify_entities_node.py",
+      "Any",
+      "asyncio",
+      "fixture",
+      "Unit tests for unify_entities node.",
+      "Phase A6: field_reliability must be measured ONCE from the entity's full record…",
+      "Phase 7.2: _source_ids must be the cluster's real member record ids, not…"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_unify_entities_node.py",
+      "src/orchestrator/nodes/unify_entities.py"
+    ],
+    "size": 45
+  },
+  "37": {
+    "top_labels": [
+      "PersistentLLMCache",
+      ".clear()",
+      ".close()",
+      ".configure()",
+      "._ensure_conn()",
+      "._ensure_schema()",
+      "._evict_if_over_capacity()",
+      ".get()",
+      ".__init__()",
+      ".put()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_llm_cache_store.py",
+      "src/llm/cache_store.py"
+    ],
+    "size": 44
+  },
+  "38": {
+    "top_labels": [
+      "_generate_candidate_pairs()",
+      "Generate candidate record pairs via multi-pass blocking. Pass 1 blocks on the…",
+      "test_mcp_resolve_entities.py",
+      "Unit tests for resolve_entities MCP tool.",
+      "Tests for _generate_candidate_pairs helper.",
+      "Test no pairs generated for single record.",
+      "Test one pair from two records.",
+      "Test three pairs from three records (n*(n-1)/2).",
+      "Test pair format is (id1, id2, rec1, rec2).",
+      "Records whose name-ish field shares no first token are not compared."
+    ],
+    "top_files": [
+      "tests/unit/test_mcp_resolve_entities.py",
+      "tests/unit/test_phase_l_matching.py",
+      "tests/unit/test_trigram_blocking.py",
+      "src/mcp_server/tools/resolve_entities.py"
+    ],
+    "size": 44
+  },
+  "39": {
+    "top_labels": [
+      "test_full_pipeline_manual.py",
+      "check_gradio()",
+      "check_langfuse()",
+      "check_langgraph_server()",
+      "generate_report()",
+      "main()",
+      "next_step()",
+      "Manual full pipeline test script - 30-step human-in-the-loop testing. Run with:…",
+      "Check if Langfuse is running at http://localhost:3000.",
+      "Check if Gradio is running at http://localhost:7860."
+    ],
+    "top_files": [
+      "tests/integration/test_full_pipeline_manual.py"
+    ],
+    "size": 44
+  },
+  "40": {
+    "top_labels": [
+      "dependency_sort.py",
+      "Topological sort for entity dependency graphs. Provides functions to sort…",
+      "Sort entities using Kahn's algorithm for topological ordering. Entities with no…",
+      "topological_sort()",
+      "Single node with no dependencies should work.",
+      "Nodes with no dependencies on each other should sort in any order.",
+      "Deep dependency chain should sort correctly.",
+      "topological_sort_with_groups should return multiple groups.",
+      "Edge cases for dependency analysis and sorting.",
+      "Dependency sort should detect and raise on circular dependencies."
+    ],
+    "top_files": [
+      "tests/integration/test_edge_cases.py",
+      "tests/unit/test_dependency_sort.py",
+      "src/orchestrator/utils/dependency_sort.py"
+    ],
+    "size": 43
+  },
+  "41": {
+    "top_labels": [
+      "flush()",
+      "Flush any buffered spans to Langfuse (call before a short process exits).",
+      "_format_source_fields_block()",
+      "Format the undecided source fields (with samples) for the prompt.",
+      "_format_pairs_block()",
+      "judge_chunk()",
+      "Format numbered pairs (non-null public fields only) for the prompt.",
+      "_build_group_catalog()",
+      "Render each deterministic group with its member tables and a handful of columns…",
+      "load_config()"
+    ],
+    "top_files": [
+      "",
+      "tests/integration/test_config_resolution.py",
+      "src/utils/config_loader.py",
+      "tests/unit/test_config_loader.py",
+      "tests/prompts/harness.py"
+    ],
+    "size": 43
+  },
+  "42": {
+    "top_labels": [
+      "discover_schema_impl()",
+      "Discover schema for a given origin. Parameters ---------- origin_config : dict…",
+      "discover_schemas.py",
+      "discover_schemas()",
+      "_discover_one()",
+      "Any",
+      "discover_schemas node: Calls discover_schema tool for all origins. Gathers…",
+      "Discover schemas from all origin databases. Parameters ---------- state : dict…",
+      "__init__.py",
+      "Orchestrator nodes for the merge workflow. Each module contains an async…"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_discover_schemas_node.py",
+      "src/orchestrator/nodes/discover_schemas.py",
+      "src/mcp_server/tools/discover_schema.py",
+      "src/orchestrator/nodes/__init__.py"
+    ],
+    "size": 43
+  },
+  "43": {
+    "top_labels": [
+      "mock_data_generator.py",
+      "assign_source_ids()",
+      "split_records()",
+      "generate_all()",
+      "generate_companies()",
+      "generate_company_name()",
+      "generate_contact()",
+      "generate_contacts()",
+      "generate_mongodb_companies()",
+      "generate_mongodb_contacts()"
+    ],
+    "top_files": [
+      "tests/fixtures/mock_data_generator.py"
+    ],
+    "size": 43
+  },
+  "44": {
+    "top_labels": [
+      "post()",
+      "splinkActivate()",
+      "splinkArchive()",
+      "splinkCluster()",
+      "splinkCompare()",
+      "splinkEvaluate()",
+      "splinkExplain()",
+      "splinkGetActiveConfig()",
+      "splinkGetModelVersion()",
+      "splinkListModels()"
+    ],
+    "top_files": [
+      "src/ui/frontend/src/api.ts",
+      "src/ui/frontend/src/components/SplinkWorkbenchScreen.tsx"
+    ],
+    "size": 42
+  },
+  "45": {
+    "top_labels": [
+      "asyncio",
+      "A 2-hop path whose FIRST hop is narrow (Company.locationID ->…",
+      "The real bug this guards against: a live Boeing run's link_via filter carried…",
+      "The exact issue-6 chain the old link/link_via shapes could never express:…",
+      "A 1-hop path (what \"link\" used to be) is subject_ids itself --…",
+      "The full-extract-leak fix: merge_scope.active=True but the scope plan produced…",
+      "An entity with a real candidate table that the scope plan simply never reaches…",
+      "`force_full_extraction` re-reads every table, ignoring the watermark. This is…",
+      "A scoped merge extracts the subject's rows first, then only its links.",
+      "A row a human unchecked at the scope gate (Phase 5.1/5.2) -- enabled: False --…"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_extract_data_node.py"
+    ],
+    "size": 42
+  },
+  "46": {
+    "top_labels": [
+      "DiGraph",
+      "metadata_graph()",
+      "metadata_graph_view.py",
+      "build_metadata_graph()",
+      "filter_by_depth()",
+      "filter_by_min_confidence()",
+      "filter_by_node_type()",
+      "filter_by_source()",
+      "graph_to_json()",
+      "Any"
+    ],
+    "top_files": [
+      "",
+      "src/api/main.py",
+      "tests/unit/test_metadata_graph_view.py",
+      "src/mcp_server/tools/metadata_graph_view.py",
+      "src/ui/components/db_discovery.py"
+    ],
+    "size": 41
+  },
+  "47": {
+    "top_labels": [
+      "FastAPI",
+      "main.py",
+      "ConnectionTest",
+      "EnvOverridesUpdate",
+      "ExploreSampleRequest",
+      "Feedback",
+      "_lifespan()",
+      "LineageLookupRequest",
+      "MetadataGraphRequest",
+      "PlatformConfigUpdate"
+    ],
+    "top_files": [
+      "",
+      "src/api/main.py"
+    ],
+    "size": 41
+  },
+  "48": {
+    "top_labels": [
+      "_is_transient()",
+      "Exception",
+      "Retry predicate for LangGraph's RetryPolicy. Classification happens here rather…",
+      "__init__.py",
+      "Utility modules for the LangGraph orchestrator.",
+      "retry.py",
+      "classify_exception()",
+      "DataQualityError",
+      ".__init__()",
+      "MergeEngineError"
+    ],
+    "top_files": [
+      "",
+      "src/orchestrator/utils/__init__.py",
+      "src/orchestrator/utils/retry.py",
+      "src/orchestrator/graph.py",
+      "tests/unit/test_phase_m_resilience.py"
+    ],
+    "size": 41
+  },
+  "49": {
+    "top_labels": [
+      "asyncio",
+      "Tests for BaseConnector abstract base class.",
+      "Should work as async context manager.",
+      "Extract should have correct signature.",
+      "BaseConnector should not be directly instantiable.",
+      "BaseConnector should have all required abstract methods.",
+      "Subclass must implement all abstract methods.",
+      "Subclass implementing all methods should be instantiable.",
+      "Config should be stored in instance.",
+      "Connection pool should be initialized to None."
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_connectors_base.py"
+    ],
+    "size": 41
+  },
+  "50": {
+    "top_labels": [
+      "_has_unsafe_role_prefix()",
+      "_heuristic_match()",
+      "True when ``longer`` is ``shorter`` prefixed by a role qualifier that names a…",
+      "Compute a heuristic match score between a source field and dest column. Returns…",
+      "Empty strings should match.",
+      "One empty and one non-empty - empty normalizes to empty string. After…",
+      "Tests for the _heuristic_match helper.",
+      "Identical field names should return 1.0.",
+      "Case differences should be normalized.",
+      "Spaces and underscores should be treated equivalently."
+    ],
+    "top_files": [
+      "tests/unit/test_map_fields_detail.py",
+      "src/mcp_server/tools/map_fields.py"
+    ],
+    "size": 40
+  },
+  "51": {
+    "top_labels": [
+      "Any",
+      "asyncio",
+      "Test review mappings produces interrupt data.",
+      "Test review mappings with no pending changes still interrupts.",
+      "Test review mappings processes user feedback on resume.",
+      "Test dependency review produces interrupt data.",
+      "Test HITL nodes produce correct interrupt data.",
+      "Test dependency review processes feedback on resume.",
+      "Test final approval produces interrupt data.",
+      "Test final approval with user approval."
+    ],
+    "top_files": [
+      "",
+      "tests/integration/test_human_in_the_loop.py"
+    ],
+    "size": 40
+  },
+  "52": {
+    "top_labels": [
+      "Any",
+      "Tests for the extract_data node.",
+      "Test successful data extraction.",
+      "Test extraction when no tables match the entity.",
+      "remediation #1 (2026-07-30): a wildcard-INFERRED entity with no source table…",
+      "A mix: 'company' was explicitly requested and has no table (a real gap, must…",
+      "A failure mid-table records the error and stops the run.",
+      "Test handling of generic errors during extraction.",
+      "The core M.4 contract: half a table must never look like all of it. Keeping the…",
+      "Advancing past rows never read would lose them on the next run."
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_extract_data_node.py"
+    ],
+    "size": 40
+  },
+  "53": {
+    "top_labels": [
+      "Any",
+      "asyncio",
+      "fixture",
+      "A field with no destination equivalent is left unmapped, never given a new…",
+      "Test mapping with empty unified schema.",
+      "Test mapping when all fields have exact matches.",
+      "Test mapping with fields at different confidence levels.",
+      "Tests for map_fields_impl.",
+      "Bug B follow-up: when a cluster merges records from two origins whose schemas…",
+      "A batch with only `entityName` (no literal `name` field at all, e.g. an…"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_mcp_map_fields.py"
+    ],
+    "size": 40
+  },
+  "54": {
+    "top_labels": [
+      "profile_delete()",
+      "profile_get()",
+      "profile_save()",
+      "profiles_list()",
+      "profiles.py",
+      "delete_profile()",
+      "_index_path()",
+      "list_profiles()",
+      "_load_index()",
+      "load_profile()"
+    ],
+    "top_files": [
+      "",
+      "src/api/main.py",
+      "tests/unit/test_run_profiles.py",
+      "src/orchestrator/profiles.py"
+    ],
+    "size": 39
+  },
+  "55": {
+    "top_labels": [
+      "discover_schema.py",
+      "discover_schema_handler()",
+      "Any",
+      "discover_schema tool implementation. Connects to an origin database and returns…",
+      "MCP tool handler entry point. Parameters ---------- arguments : dict Either…",
+      "test_mcp_discover_schema.py",
+      "Any",
+      "asyncio",
+      "fixture",
+      "Unit tests for discover_schema MCP tool."
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_mcp_discover_schema.py",
+      "src/mcp_server/tools/discover_schema.py"
+    ],
+    "size": 39
+  },
+  "56": {
+    "top_labels": [
+      "F",
+      "Exception",
+      "Decorator that retries a function on transient errors. Parameters ----------…",
+      "retry_on_transient()",
+      "decorator()",
+      "wrapper()",
+      "_async_func()",
+      "asyncio",
+      "The wiring bug: a decorator that hid the parameters it forwards.",
+      "TestDecoratorPreservesSignature"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_retry.py",
+      "src/orchestrator/utils/retry.py",
+      "tests/unit/test_keyset_non_unique.py"
+    ],
+    "size": 38
+  },
+  "57": {
+    "top_labels": [
+      "Config",
+      "_deep_merge()",
+      "ExtractionConfig",
+      "MatchingConfig",
+      "BaseModel",
+      "Scope-planning defaults (Phase 4.2's join-graph BFS).",
+      "Entity-resolution blocking/matching tuning knobs (fix-v3 B.1.3).",
+      "Top-level application configuration.",
+      "Recursively merge *override* into *base*; override values win.",
+      "RetryConfig"
+    ],
+    "top_files": [
+      "",
+      "src/utils/config_loader.py",
+      "tests/integration/test_config_resolution.py",
+      "tests/unit/test_config_loader.py"
+    ],
+    "size": 38
+  },
+  "58": {
+    "top_labels": [
+      "ClickHouseConnector",
+      ".capabilities()",
+      ".close()",
+      ".create_id_scratch_table()",
+      ".discover_indexes()",
+      ".discover_schema()",
+      ".discover_statistics()",
+      ".drop_scratch_table()",
+      "._ensure_client()",
+      ".estimate_query_cost()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_connector_capabilities.py",
+      "src/mcp_server/connectors/clickhouse.py"
+    ],
+    "size": 38
+  },
+  "59": {
+    "top_labels": [
+      "parse_request()",
+      "Group discovered tables into entities and extract merge scope. Parameters…",
+      "Any",
+      "asyncio",
+      "The LLM omitting a group from group_names must not drop it -- the deterministic…",
+      "A rename entry for a group key that was never in the deterministic catalog must…",
+      "Tests for the parse_request node.",
+      "A subject with scope_type 'none' must not activate scoping. Guards against a…",
+      "The rendered prompt must contain the deterministic groups' member tables and…",
+      "Grouping never depended on the LLM (Phase 3.1) -- a naming failure must not…"
+    ],
+    "top_files": [
+      "",
+      "src/orchestrator/nodes/parse_request.py",
+      "tests/unit/test_parse_request_node.py"
+    ],
+    "size": 38
+  },
+  "60": {
+    "top_labels": [
+      "abortWorkflow()",
+      "GATE_LABELS",
+      "getStatus()",
+      "ProfileSummary",
+      "REVIEW_GATES",
+      "RunConfig",
+      "sendFeedback()",
+      "startWorkflow()",
+      "WorkflowStatus",
+      "AdvancedPanel.tsx"
+    ],
+    "top_files": [
+      "src/ui/frontend/src/components/AdvancedPanel.tsx",
+      "src/ui/frontend/src/components/EventLog.tsx",
+      "src/ui/frontend/src/components/Stepper.tsx",
+      "src/ui/frontend/src/components/PipelineScreen.tsx",
+      "src/ui/frontend/src/api.ts"
+    ],
+    "size": 37
+  },
+  "61": {
+    "top_labels": [
+      "TestClient",
+      "test_api.py",
+      "client()",
+      "isolated_profiles()",
+      "mock_manager()",
+      "fixture",
+      "Unit tests for the FastAPI backend (src/api/main.py). The API is a thin wrapper…",
+      "Point the profile store at a temp dir so tests never touch config/.",
+      "A typo in the profile name must not silently run an ad-hoc merge.",
+      "Phase 5 (O.3): an ad-hoc conflict_policy in the start request must reach…"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_api.py"
+    ],
+    "size": 36
+  },
+  "62": {
+    "top_labels": [
+      "create_api()",
+      "active_workflows()",
+      "add_recent()",
+      "_build_env_details()",
+      "get_config()",
+      "_provenance()",
+      "_mask_env_val()",
+      "_no_frontend()",
+      "recent_connections()",
+      "_decorate()"
+    ],
+    "top_files": [
+      "src/api/main.py"
+    ],
+    "size": 36
+  },
+  "63": {
+    "top_labels": [
+      "MetadataStore",
+      "Owns the connection and schema for the V3 discovery metadata store.",
+      "_cursor()",
+      "The whole point of ADR-shaped 'additive' overrides: this must never touch the…",
+      "P-8's metadata_graph_view.py builds a networkx graph from these -- one query…",
+      "TestBulkReaders",
+      ".test_list_columns_queries_md_column()",
+      ".test_list_field_mappings_with_run_id_filters_by_it()",
+      ".test_list_relationships_with_run_id_filters_by_it()",
+      ".test_list_relationships_without_run_id_has_no_where_clause()"
+    ],
+    "top_files": [
+      "src/mcp_server/tools/metadata_graph.py",
+      "tests/unit/test_metadata_graph.py"
+    ],
+    "size": 36
+  },
+  "64": {
+    "top_labels": [
+      "splink_model.py",
+      "activate_version()",
+      "_active_pointer()",
+      "archive_version()",
+      "compare_versions()",
+      "_flatten()",
+      "duplicate_version()",
+      "list_versions()",
+      "load_active()",
+      "load_version()"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/splink_model.py"
+    ],
+    "size": 36
+  },
+  "65": {
+    "top_labels": [
+      "apply_profile()",
+      "build_profile()",
+      "capture_from_state()",
+      "find_profile_by_fingerprint()",
+      "overall_fingerprint()",
+      "Capture a finished (or configured) run as a re-runnable profile. ``state`` is…",
+      "Seed graph state with a profile's pinned decisions. Only fills keys the profile…",
+      "Update a profile with the decisions a completed run actually made. This is what…",
+      "The identity a profile is looked up by: this (origins, destination) coordinate…",
+      "The saved profile matching this exact (origins, destination) shape, or None on…"
+    ],
+    "top_files": [
+      "tests/unit/test_run_profiles.py",
+      "src/orchestrator/profiles.py"
+    ],
+    "size": 36
+  },
+  "66": {
+    "top_labels": [
+      "create_llm_client()",
+      "Factory function to create an LLM client. Parameters ---------- config : dict…",
+      "preflight.py",
+      "_Check",
+      ".as_dict()",
+      "_check_disk_space()",
+      ".__init__()",
+      "_connection_of()",
+      "preflight()",
+      "_probe_clickhouse()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_llm_client.py",
+      "src/llm/client.py",
+      "src/orchestrator/nodes/preflight.py"
+    ],
+    "size": 34
+  },
+  "67": {
+    "top_labels": [
+      "has_low_confidence_clusters()",
+      "_load_entity_map()",
+      "_matching_connector_and_config()",
+      "_matching_rules_for()",
+      "Any",
+      "Per-entity rules, falling back to a ``_default`` entry (Part 1.6.A).…",
+      "The destination connector + ``matching.*`` config for B.1.3's pg_trgm trigram…",
+      "Previously assigned cluster ids, per entity type, from the destination. Best-…",
+      "Conditional edge: does anything need a human's judgement on matching? Two…",
+      "Part 1.6.A: the Advanced panel submits matching_rules before target_entities is…"
+    ],
+    "top_files": [
+      "",
+      "src/orchestrator/nodes/resolve_entities.py",
+      "tests/unit/test_phase_l_matching.py",
+      "tests/unit/test_resolve_entities_node.py",
+      "tests/unit/test_matching_rules_and_policy.py"
+    ],
+    "size": 34
+  },
+  "68": {
+    "top_labels": [
+      "schema_matching.py",
+      "_best_candidate()",
+      "_decide_ambiguous_with_llm()",
+      "heuristic_candidates_for_column()",
+      "match_columns_to_canonical_schema()",
+      "Any",
+      "V3 schema matching & canonical schema (Part B, P-7; PreSplink §25, §27). Three…",
+      "The deterministic exact/heuristic pass, reusing map_fields.py's own…",
+      "Merge one source column's two candidate lists into a single best pick:…",
+      "Tiers 1+2 for every source column against the current canonical schema's own…"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/schema_matching.py",
+      "tests/unit/test_schema_matching.py"
+    ],
+    "size": 33
+  },
+  "69": {
+    "top_labels": [
+      "_bulk_insert()",
+      "Any",
+      "Drop and recreate an entity's table. Called before an entity is re-extracted so…",
+      "Add rows to an entity's table. Returns how many were written.",
+      "Drop everything written past `keep` rows. Returns how many went. This is the…",
+      "Entity types with a table in this spool.",
+      "Every row for an entity, in extraction order. The whole point of the spool is…",
+      "Stream an entity's rows without materialising them all at once.",
+      "How many rows each origin contributed, counted in SQL. The reconciliation…",
+      "Fetch specific records by their cross-node key. This is what makes cluster-at-…"
+    ],
+    "top_files": [
+      "",
+      "src/orchestrator/spool.py"
+    ],
+    "size": 33
+  },
+  "70": {
+    "top_labels": [
+      "_df()",
+      "DataFrame",
+      "skipif",
+      "TestComparisonRecommendation",
+      ".test_email_type_maps_to_email_comparison()",
+      ".test_forename_surname_needs_two_columns()",
+      ".test_id_is_compared_exactly()",
+      ".test_settings_hit_builds_real_comparators()",
+      ".test_settings_hit_refuses_mismatched_columns()",
+      ".test_unknown_numeric_type_is_a_fallback_to_exact_match()"
+    ],
+    "top_files": [
+      "tests/unit/test_splink_workbench_helpers.py",
+      ""
+    ],
+    "size": 33
+  },
+  "71": {
+    "top_labels": [
+      "Pool",
+      "setup_test_databases.py",
+      "_address()",
+      "_create_schema()",
+      "_drop_tables()",
+      "_ensure_user_exists()",
+      "_gen_companies()",
+      "_gen_contacts()",
+      "_gen_orders()",
+      "_gen_products()"
+    ],
+    "top_files": [
+      "",
+      "tests/fixtures/setup_test_databases.py"
+    ],
+    "size": 32
+  },
+  "72": {
+    "top_labels": [
+      "fingerprint.py",
+      "destination_fingerprint()",
+      "_hash()",
+      "_origin_coords()",
+      "origin_fingerprint()",
+      "origins_fingerprint()",
+      "Any",
+      "Deterministic fingerprints for run-profile stage caching (Phase A4). A saved…",
+      "One origin's coordinates + discovered table/column shape. ``schema`` is this…",
+      "Combined fingerprint across every origin, order-independent. This is the…"
+    ],
+    "top_files": [
+      "",
+      "src/orchestrator/fingerprint.py",
+      "tests/unit/test_fingerprint.py"
+    ],
+    "size": 32
+  },
+  "73": {
+    "top_labels": [
+      "api.ts",
+      "deleteProfile()",
+      "EnvDetail",
+      "get()",
+      "getActive()",
+      "getGoldenDiff()",
+      "getLineage()",
+      "getMatches()",
+      "getTimeline()",
+      "GoldenDiff"
+    ],
+    "top_files": [
+      "src/ui/frontend/src/components/InvestigateScreen.tsx",
+      "src/ui/frontend/src/api.ts"
+    ],
+    "size": 32
+  },
+  "74": {
+    "top_labels": [
+      "make_async_cm()",
+      "make_query_result()",
+      "Live-caught (BP-B2, 2026-08-19): an unfiltered LIMIT with no ordering returns…",
+      "Return a MagicMock configured as an async context manager wrapping mock_obj.…",
+      "Create a mock SQLAlchemy query result. The source code uses: dr = await…",
+      "Tests for extract method.",
+      "extract should return paginated rows with metadata.",
+      "extract should filter by _imported flag.",
+      "extract should support custom filter parameters.",
+      "extract should support OFFSET/LIMIT pagination via cursor."
+    ],
+    "top_files": [
+      "tests/unit/test_postgres_connector.py"
+    ],
+    "size": 32
+  },
+  "75": {
+    "top_labels": [
+      "server.py",
+      "_call_tool_decorator()",
+      "decorator()",
+      "_handler()",
+      "_extend_schema_handler()",
+      "_get_config()",
+      "initialize_server()",
+      "_list_tools_decorator()",
+      "decorator()",
+      "_handler()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_mcp_server.py",
+      "src/mcp_server/server.py"
+    ],
+    "size": 31
+  },
+  "76": {
+    "top_labels": [
+      "explore_sample()",
+      "investigate_lineage()",
+      "db_discovery.py",
+      "_discover_clickhouse()",
+      "_discover_mongodb()",
+      "_discover_postgres()",
+      "Any",
+      "query_merge_lineage()",
+      "Database schema discovery utilities for the Gradio UI. Provides functions to…",
+      "Discover MongoDB databases, collections, and sample documents."
+    ],
+    "top_files": [
+      "",
+      "src/api/main.py",
+      "tests/unit/test_merge_lineage_lookup.py",
+      "src/ui/__init__.py",
+      "src/ui/components/db_discovery.py"
+    ],
+    "size": 31
+  },
+  "77": {
+    "top_labels": [
+      "PostgreSQLDestinationConnector",
+      ".close()",
+      ".__exit__()",
+      "Close the database connection.",
+      "PostgreSQL connector for destination writes. Handles upserts, schema…",
+      "PostgreSQL destination connector should return zero for empty batch.",
+      "PostgreSQL destination add_column should be idempotent.",
+      ".test_postgres_dest_add_column_exists()",
+      ".test_postgres_dest_empty_batch()",
+      "Tests for load_batch_bulk method."
+    ],
+    "top_files": [
+      "src/mcp_server/connectors/postgresql_destination.py",
+      "tests/integration/test_edge_cases.py",
+      "tests/unit/test_postgresql_destination.py"
+    ],
+    "size": 31
+  },
+  "78": {
+    "top_labels": [
+      "Write one child row per parent record into each cross-mapped sibling table.…",
+      "_write_child_rows()",
+      "test_load_data_cross_table.py",
+      "_connector_with_fk()",
+      "asyncio",
+      "Unit tests for Phase 6.3: writing child rows for cross-table mappings. Before…",
+      "Regression: child_rec[\"id\"] used to be generate_uuid() -- random every call --…",
+      "Live-caught (BP-A2, a real ClickHouse origin + PostgreSQL destination run):…",
+      "The narrower case of the same bug: every field cross-mapped onto the child…",
+      "Live regression: a company_company_relationship-shaped table has TWO required…"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/load_data.py",
+      "tests/unit/test_load_data_cross_table.py"
+    ],
+    "size": 31
+  },
+  "79": {
+    "top_labels": [
+      "Unify a cluster of matching records into one record. Parameters ----------…",
+      "unify_entity_group_impl()",
+      "_conflict_for()",
+      "asyncio",
+      "Phase 5 fix: `revenue` used to fall to DEFAULT_POLICY, whose second rule is…",
+      "A hex id or other non-numeric value must not crash numeric_max — it has nothing…",
+      "Phase A6: when no one has set an explicit per-origin priority (both default to…",
+      "A manually-set priority is still authoritative when configured --…",
+      "No field_reliability supplied at all (e.g. a caller that hasn't been updated,…",
+      "Multiple conflicting fields must not crash on the (formerly shadowed) origins…"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_matching_rules_and_policy.py",
+      "src/mcp_server/tools/unify_entity_group.py",
+      "tests/unit/test_conflict_tiebreaks.py"
+    ],
+    "size": 31
+  },
+  "80": {
+    "top_labels": [
+      "entity_aliases.py",
+      "concept_matches()",
+      "_group_of()",
+      "_norm()",
+      "Concept ↔ table-name matching helpers shared by pipeline nodes. The LLM parses…",
+      "Normalize a table/concept name: lowercase, strip schema prefix, strip a…",
+      "True when a table name plausibly holds records of the concept. Also matches…",
+      "Pick the destination table for a concept from available tables.",
+      "resolve_dest_table()",
+      "entity_grouping.py"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_entity_aliases.py",
+      "src/orchestrator/utils/entity_aliases.py",
+      "src/orchestrator/utils/entity_grouping.py"
+    ],
+    "size": 31
+  },
+  "81": {
+    "top_labels": [
+      "_NullObservation",
+      ".update()",
+      "Any",
+      "Yielded in place of a real span when tracing is off or failed. Callers do…",
+      "Adapts a LangChain child-run manager to span()'s ``.update(output=...)``…",
+      "Open a named span nested under the current LangGraph node, if any. Yields the…",
+      "_RunManagerObservation",
+      ".__init__()",
+      ".update()",
+      "span()"
+    ],
+    "top_files": [
+      "",
+      "src/utils/tracing.py",
+      "tests/unit/test_utils_tracing.py"
+    ],
+    "size": 31
+  },
+  "82": {
+    "top_labels": [
+      "Any",
+      "asyncio",
+      "Test that abort_workflow marks the workflow as aborted.",
+      "Test that list_active_workflows returns active workflows.",
+      "Test that resuming a non-existent workflow logs an error.",
+      "Test that resume_workflow calls update_state on the graph.",
+      "Phase 2.4: a custom link added in the \"Add Custom Dependency Link\" form must…",
+      "Test WorkflowManager start/status/resume/abort lifecycle.",
+      "Test that start_workflow accepts origins and destination params.",
+      "Build a mock graph that simulates a successful workflow."
+    ],
+    "top_files": [
+      "",
+      "tests/integration/test_workflow_manager.py"
+    ],
+    "size": 31
+  },
+  "83": {
+    "top_labels": [
+      "Namespace",
+      "generate_requirements.py",
+      "main()",
+      "Regenerate requirements.txt and requirements-dev.txt from pyproject.toml. Phase…",
+      "no_blanket_json_ignore.py",
+      "main()",
+      "pre-commit hook: reject a bare `*.json` line in .gitignore. A blanket `*.json`…",
+      "main.py",
+      "main()",
+      "parse_args()"
+    ],
+    "top_files": [
+      "",
+      "scripts/generate_requirements.py",
+      "src/utils/config_loader.py",
+      "tests/unit/test_splink_default_invariant.py",
+      "scripts/hooks/no_blanket_json_ignore.py"
+    ],
+    "size": 30
+  },
+  "84": {
+    "top_labels": [
+      "._map_sql_type()",
+      "Map PostgreSQL data_type to a cross-database type string.",
+      "Tests for the static _map_sql_type helper.",
+      "_map_sql_type should map 'character varying' to VARCHAR.",
+      "_map_sql_type should include length for VARCHAR.",
+      "_map_sql_type should map 'text' to TEXT.",
+      "_map_sql_type should map 'integer' to INTEGER.",
+      "_map_sql_type should map 'bigint' to BIGINT.",
+      "_map_sql_type should map 'numeric' to DECIMAL.",
+      "_map_sql_type should map 'boolean' to BOOLEAN."
+    ],
+    "top_files": [
+      "tests/unit/test_postgres_connector.py",
+      "src/mcp_server/connectors/postgres.py"
+    ],
+    "size": 30
+  },
+  "85": {
+    "top_labels": [
+      "select_entity_tables.py",
+      "build_table_catalog()",
+      "heuristic_candidates()",
+      "_known_tables()",
+      "Any",
+      "select_entity_tables tool implementation. Decides which source tables hold…",
+      "``{origin_id: {alias: canonical_full_name}}`` for name resolution. Every alias…",
+      "Map an LLM-named (origin, table) to its canonical form, or None.",
+      "Choose the source tables holding each target entity. Returns ``{entity_type:…",
+      "MCP tool handler entry point."
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/select_entity_tables.py",
+      "tests/unit/test_select_entity_tables.py"
+    ],
+    "size": 30
+  },
+  "86": {
+    "top_labels": [
+      "Any",
+      "origin_2's real 7-table schema from the 4th live run, minimal columns -- enough…",
+      "overlaps maps (table, column) -> the values sample_distinct_values should…",
+      "The exact issue-6 chain: Company -> Experience -> Person -> PersonContact, each…",
+      "A column that samples to no values at all yields no evidence either way -- must…",
+      "B4's identity_profile.py flattened EVERY column of the parent table into one…",
+      "The exact live bug found 2026-08-10: a large parent table's arbitrary LIMIT-N…",
+      "The old behaviour silently lost the join whenever a connector wasn't available…",
+      "End-to-end regression for the real Boeing bug: a PK-less, schema-qualified…",
+      "_schemas_for_issue_6()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_join_graph.py"
+    ],
+    "size": 30
+  },
+  "87": {
+    "top_labels": [
+      "profiling.py",
+      "_classify_pattern()",
+      "profile_and_store()",
+      "profile_column_full()",
+      "Any",
+      "V3 profiling engine (Part B, P-3). Two kinds of metric, deliberately computed…",
+      "The complete P-3 profile for one column: P-2's database-native aggregates plus…",
+      "Compute a full profile and persist it via ``MetadataStore.insert_profile``. The…",
+      "Length distribution, top values, and pattern distribution over a bounded,…",
+      "_shape_metrics()"
+    ],
+    "top_files": [
+      "src/mcp_server/tools/profiling.py",
+      "",
+      "tests/unit/test_profiling.py"
+    ],
+    "size": 29
+  },
+  "88": {
+    "top_labels": [
+      "Any",
+      "asyncio",
+      "fixture",
+      "Test unification with empty record list raises error.",
+      "Test unification with no conflicts.",
+      "Test that fields starting with _ are skipped.",
+      "Test unification with all null values for a field.",
+      "Test that source count reflects number of unique origins.",
+      "Tests for unify_entity_group_handler.",
+      "Test handler delegates to impl."
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_mcp_unify_entity_group.py"
+    ],
+    "size": 29
+  },
+  "89": {
+    "top_labels": [
+      "canonical_matching_dataset.py",
+      "build_dataset_rows()",
+      "materialize()",
+      "Any",
+      "V3 canonical matching dataset (Part B, P-10; PreSplink §38, §66, §67). The…",
+      "One row per extracted source record, every lineage field filled in from what an…",
+      "Write ``rows`` into the run's own DuckDB spool file, as the…",
+      "A ``PathHop`` chain (P-9's ``NodeProvenance.path``) into plain, JSON-…",
+      "serialize_graph_path()",
+      "test_canonical_matching_dataset.py"
+    ],
+    "top_files": [
+      "src/mcp_server/tools/canonical_matching_dataset.py",
+      "",
+      "tests/unit/test_canonical_matching_dataset.py"
+    ],
+    "size": 28
+  },
+  "90": {
+    "top_labels": [
+      "Tests for the _map_type_generic helper.",
+      "String-like types should map to TEXT.",
+      "Integer types should map correctly.",
+      "Decimal types should map to DOUBLE PRECISION.",
+      "Float types should map correctly.",
+      "Boolean types should map to BOOLEAN.",
+      "Timestamp types should map to TIMESTAMP.",
+      "Date and time types should map correctly.",
+      "JSON types should map to TEXT.",
+      "Special types should map correctly."
+    ],
+    "top_files": [
+      "tests/unit/test_map_fields_detail.py"
+    ],
+    "size": 28
+  },
+  "91": {
+    "top_labels": [
+      "Any",
+      "asyncio",
+      "fixture",
+      "Test load_data with empty records list.",
+      "Test data loading with field mapping.",
+      "Test data loading with conflict data in records.",
+      "Test load_data when destination connector creation fails.",
+      "Test load_data when load_batch fails.",
+      "Test load_data with explicit destination config.",
+      "Tests for load_data_impl."
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_mcp_load_data.py"
+    ],
+    "size": 28
+  },
+  "92": {
+    "top_labels": [
+      "call_tool()",
+      "list_tools()",
+      "Dispatch a tool call to the appropriate implementation. Parameters ----------…",
+      "Return the list of tools exposed by this MCP server.",
+      "asyncio",
+      "Test map_fields tool input schema.",
+      "Tests for call_tool dispatch.",
+      "Test that calling an unknown tool raises ValueError.",
+      "Test calling discover_schema tool.",
+      "Tests for list_tools."
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_mcp_server.py",
+      "src/mcp_server/server.py"
+    ],
+    "size": 27
+  },
+  "93": {
+    "top_labels": [
+      "build_family_map()",
+      "Any",
+      "entity table -> {tables with an FK to it} u {tables it has an FK to}. One-hop…",
+      "test_dest_family.py",
+      "_connector()",
+      "Any",
+      "Unit tests for src/mcp_server/tools/dest_family.py (Phase 6.1). Before this,…",
+      "Live regression (Boeing, this session): a plain FK relationship to \"entity\" or…",
+      "A fake PostgreSQLDestinationConnector-shaped object. ``fks`` maps table_name ->…",
+      "company gains every table with an FK to it, deduplicated by set semantics even…"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/dest_family.py",
+      "tests/unit/test_dest_family.py"
+    ],
+    "size": 27
+  },
+  "94": {
+    "top_labels": [
+      "get_initial_state()",
+      "Create the initial state dict for a new workflow. Parameters can be provided…",
+      "Phase 5.3: a caller-supplied conflict_policy (from WorkflowStart) must reach…",
+      "Part 1.6.A: matching_rules threads into state the same way conflict_policy…",
+      "Part 1.6.A: run_config.auto_approve_gates lands in state as auto_approve_gates,…",
+      "TestAutoApproveGatesThreading",
+      ".test_no_run_config_defaults_to_empty()",
+      ".test_run_config_gates_reach_state()",
+      "TestConflictPolicyOverridePath",
+      ".test_an_explicit_override_beats_a_saved_profiles_pinned_policy()"
+    ],
+    "top_files": [
+      "src/orchestrator/graph.py",
+      "tests/unit/test_matching_rules_and_policy.py",
+      "tests/unit/test_subject_mode.py"
+    ],
+    "size": 27
+  },
+  "95": {
+    "top_labels": [
+      "extract_data.py",
+      "_candidates_from_selection()",
+      "extract_data()",
+      "_find_entity_tables()",
+      "_handle_count()",
+      "Any",
+      "extract_data node: Extracts data for all entities in dependency order. Parses…",
+      "Extract data for all entities in dependency order. Parameters ---------- state…",
+      "Find the scope-plan entry for a specific (origin, table), or None. Matches on…",
+      "Turn a `match`-mode scope-plan entry into an extraction filter. `link_path`…"
+    ],
+    "top_files": [
+      "src/orchestrator/nodes/extract_data.py",
+      "",
+      "tests/unit/test_extract_data_node.py"
+    ],
+    "size": 27
+  },
+  "96": {
+    "top_labels": [
+      "Any",
+      "asyncio",
+      "fixture",
+      "Tests for the analyze_dependencies node.",
+      "Test successful dependency analysis.",
+      "Test with no target entities.",
+      "Test that LLM failure returns fallback dependency structure.",
+      "Test with missing prompt template uses hardcoded fallback.",
+      "Existing errors survive a call to this node - via MergeState's real…",
+      "Test with empty LLM response returns fallback."
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_analyze_dependencies_node.py"
+    ],
+    "size": 27
+  },
+  "97": {
+    "top_labels": [
+      "__init__.py",
+      "MCP tool implementations for merge-engine. All tool implementations serve dual…",
+      "map_fields.py",
+      "map_fields_handler()",
+      "map_fields tool implementation. Maps unified fields to destination columns with…",
+      "MCP tool handler entry point.",
+      "Split a field name into lowercase words, camelCase included. ``foundingDate``…",
+      "Strip one inflectional ending so ``founded``/``founding`` agree. Deliberately…",
+      "Two word-tokens naming the same thing, allowing inflection.",
+      "Jaccard overlap of two field names' word tokens (0.0-1.0)."
+    ],
+    "top_files": [
+      "tests/unit/test_map_fields_valentine.py",
+      "src/mcp_server/tools/__init__.py",
+      "tests/unit/test_mcp_map_fields.py",
+      "src/mcp_server/tools/map_fields.py"
+    ],
+    "size": 26
+  },
+  "98": {
+    "top_labels": [
+      "Rewrite FK columns from source ids to the referenced rows' cluster ids. Must…",
+      "_translate_foreign_keys()",
+      "_apply_schema_changes()",
+      "_load_all_entities()",
+      "_persist_entity_map()",
+      "Any",
+      "Raw source-record id -> the destination id that record's cluster got. A record…",
+      "Load every entity through the shared connector/transaction. Records are pulled…",
+      "Save each source record's cluster assignment for future runs. This is what…",
+      "Refuse pending schema changes — the destination schema is a contract. This is…"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_mcp_load_data.py",
+      "tests/unit/test_load_data_node.py",
+      "src/orchestrator/nodes/load_data.py",
+      "src/mcp_server/tools/load_data.py"
+    ],
+    "size": 26
+  },
+  "99": {
+    "top_labels": [
+      ".create_run()",
+      "._ensure_connection()",
+      ".ensure_schema()",
+      ".__enter__()",
+      ".get_latest_semantic_type()",
+      ".insert_profile()",
+      ".list_field_mappings()",
+      ".list_relationships()",
+      ".record_override()",
+      ".update_run_status()"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/metadata_graph.py",
+      "src/utils/id_utils.py"
+    ],
+    "size": 26
+  },
+  "100": {
+    "top_labels": [
+      "infer_semantic_type_heuristic()",
+      "Evidence-carrying heuristic inference. Never calls the LLM. Returns…",
+      "test_semantic_type_inference.py",
+      "parametrize",
+      "Unit tests for V3 semantic type inference (Part B, P-4). The heuristic (no LLM)…",
+      "Even though 'alpha' can't confirm PERSON_NAME over ORGANIZATION_NAME, a near-…",
+      "A human reviewing a NEEDS_REVIEW row must be able to see the reasoning without…",
+      "The whole point of using measured evidence: a misleading column name must not…",
+      "Live-caught (BP-B, a real ClickHouse Company table): a bare 'name' column…",
+      "TestHeuristicNameOnly"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/semantic_type_inference.py",
+      "tests/unit/test_semantic_type_inference.py"
+    ],
+    "size": 26
+  },
+  "101": {
+    "top_labels": [
+      "build_graph()",
+      "Build and compile the LangGraph state graph. Parameters ---------- checkpointer…",
+      "Graph should include discover_schemas as a node.",
+      "Graph should include extract_data as a node.",
+      "Graph should include resolve_entities as a node.",
+      "Graph should include resolve_entities as a node.",
+      "Graph should include map_fields as a node.",
+      "Graph should include map_fields as a node.",
+      "Graph should include load_data as a node.",
+      "build_graph should compile to a CompiledGraph."
+    ],
+    "top_files": [
+      "src/orchestrator/graph.py",
+      "tests/integration/test_graph_workflow.py"
+    ],
+    "size": 26
+  },
+  "102": {
+    "top_labels": [
+      "ColumnDependency",
+      "InterruptData",
+      "MappingRow",
+      "Gates.tsx",
+      "ACTIONS",
+      "CandidateCard()",
+      "computeTiers()",
+      "tierOf()",
+      "DependencyBody()",
+      "addDependency()"
+    ],
+    "top_files": [
+      "src/ui/frontend/src/components/Gates.tsx",
+      "src/ui/frontend/src/api.ts",
+      "src/ui/frontend/src/components/Tooltip.tsx"
+    ],
+    "size": 26
+  },
+  "103": {
+    "top_labels": [
+      "test_boeing_full_pipeline.py",
+      "check_langfuse_traces()",
+      "check_service()",
+      "generate_report()",
+      "main()",
+      "next_step()",
+      "Full Boeing pipeline test - runs through all HITL checkpoints. This script…",
+      "Check if a service is responding.",
+      "Load config from config.yaml.",
+      "Test graph construction. Returns two graphs: 1. A graph WITH checkpointer (for…"
+    ],
+    "top_files": [
+      "tests/integration/test_boeing_full_pipeline.py"
+    ],
+    "size": 26
+  },
+  "104": {
+    "top_labels": [
+      "test_hybrid_llm_paths.py",
+      "_borderline_records()",
+      "_mock_llm()",
+      "Any",
+      "asyncio",
+      "fixture",
+      "Unit tests for the hybrid-LLM paths in resolve_entities and map_fields. Covers:…",
+      "LLM decisions for fields the heuristic can't place.",
+      "The destination schema is a fixed contract: a `new_column` reply is rejected…",
+      "Two records the heuristic scores in the borderline band. Shared first name-…"
+    ],
+    "top_files": [
+      "tests/unit/test_hybrid_llm_paths.py",
+      ""
+    ],
+    "size": 26
+  },
+  "105": {
+    "top_labels": [
+      "Tests for the _compute_heuristic_confidence helper. Note: This function no…",
+      "Should return 0 when no common fields.",
+      "Should return 1.0 for exact field match.",
+      "Records with null values should skip that field.",
+      "Both null should skip that field.",
+      "Should return 1.0 when all fields match.",
+      "Should return partial score for partial matches.",
+      "Case differences should be normalized away.",
+      "Completely different values should return 0.",
+      "Missing key should be treated as null."
+    ],
+    "top_files": [
+      "tests/unit/test_resolve_entities_detail.py"
+    ],
+    "size": 26
+  },
+  "106": {
+    "top_labels": [
+      "data_quality.py",
+      "_check_sane_date_bounds()",
+      "_date_shaped_columns()",
+      "_dateutil_parseable_columns()",
+      "_detect_name_column()",
+      "_gx_expectation_entry()",
+      "Any",
+      "Data quality tool: native row/field validation (salvaged from B3-quality-…",
+      "The ``*_date``-shaped subset of ``_date_shaped_columns`` — GX's…",
+      "Run one GX expectation, shaped exactly like this file's other ``entity_checks``…"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/data_quality.py",
+      "tests/unit/test_data_quality_gx.py"
+    ],
+    "size": 25
+  },
+  "107": {
+    "top_labels": [
+      "react-dom",
+      "DestinationConfig",
+      "OriginConfig",
+      "App.tsx",
+      "App()",
+      "setDestination()",
+      "setOrigins()",
+      "setTab()",
+      "Tab",
+      "Theme"
+    ],
+    "top_files": [
+      "src/ui/frontend/src/store.ts",
+      "src/ui/frontend/src/main.tsx",
+      "src/ui/frontend/package.json",
+      "src/ui/frontend/src/App.tsx",
+      "src/ui/frontend/src/components/SetupScreen.tsx"
+    ],
+    "size": 25
+  },
+  "108": {
+    "top_labels": [
+      "@types/react",
+      "@types/react-dom",
+      "typescript",
+      "vite",
+      "@vitejs/plugin-react",
+      "package.json",
+      "dependencies",
+      "react",
+      "react-dom",
+      "devDependencies"
+    ],
+    "top_files": [
+      "src/ui/frontend/vite.config.ts",
+      "src/ui/frontend/package.json"
+    ],
+    "size": 25
+  },
+  "109": {
+    "top_labels": [
+      "build_relationship_index()",
+      "RELATER-style relational-matching signal, adopted natively rather than from…",
+      "The pair's shared asserted-relationship neighbors — guarded against the audit's…",
+      "Bounded additive confidence boost from shared asserted relationships (RELATER-…",
+      "_relational_agreement()",
+      "_shared_neighbors_beyond_common_parent()",
+      "test_relational_agreement.py",
+      "Unit tests for _relational_agreement and its common-parent guard (audit §13 #3,…",
+      "TestRelationalAgreementIsBoundedAndAdditive",
+      ".test_boost_alone_can_never_cross_auto_match()"
+    ],
+    "top_files": [
+      "tests/unit/test_relational_agreement.py",
+      "src/mcp_server/tools/resolve_entities.py",
+      "tests/unit/test_relationship_index.py"
+    ],
+    "size": 25
+  },
+  "110": {
+    "top_labels": [
+      "splink_recommender.py",
+      "auto_recommend()",
+      "build_comparator()",
+      "comparison_to_settings_hit()",
+      "field_stats()",
+      "observed_similarity_distribution()",
+      "Any",
+      "S-A / S-B / S-C / S-D: field roles, comparison config, levels, term frequency…",
+      "S-B: the comparator to configure for a field of a given semantic type.…",
+      "The one ``comparator name -> Splink comparison object`` builder in the…"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/splink_recommender.py"
+    ],
+    "size": 25
+  },
+  "111": {
+    "top_labels": [
+      "Any",
+      "asyncio",
+      "fixture",
+      "No pointless overhead below the yield threshold.",
+      "Tests for resolve_entities_impl.",
+      "Sample records from multiple origins.",
+      "Test resolving with empty records.",
+      "Tests for the chunked, bounded-concurrency LLM judgment path.",
+      "Test resolving with a single record.",
+      "Test resolving with multiple records."
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_mcp_resolve_entities.py"
+    ],
+    "size": 25
+  },
+  "112": {
+    "top_labels": [
+      "Item",
+      "conftest.py",
+      "clean_env()",
+      "Any",
+      "fixture",
+      "pytest_collection_modifyitems()",
+      "Pytest configuration and shared fixtures for merge-engine tests.",
+      "Sample person records from multiple origins.",
+      "Sample company records from multiple origins.",
+      "Sample schema discovery results."
+    ],
+    "top_files": [
+      "",
+      "tests/conftest.py"
+    ],
+    "size": 24
+  },
+  "113": {
+    "top_labels": [
+      "normalise_prompt()",
+      "Best-effort (input, output) token counts from a LangChain response. Providers…",
+      "Collapse formatting noise so equivalent prompts share a key.",
+      "token_usage()",
+      "test_llm_cost.py",
+      "key()",
+      "LLM cost controls — Phase O.5. The cache's whole value depends on it never…",
+      "The same pair asked twice must hit, not miss on formatting.",
+      "Same prompt, different output shape — serving one for the other would hand the…",
+      "TestKeyNormalisation"
+    ],
+    "top_files": [
+      "src/llm/cost.py",
+      "tests/unit/test_llm_cost.py"
+    ],
+    "size": 24
+  },
+  "114": {
+    "top_labels": [
+      "Check if a table name matches a target entity or a recognised business concept.…",
+      "_table_may_be_related()",
+      "Tests for the _table_may_be_related helper.",
+      "Test exact name match.",
+      "Test entity type found within table name.",
+      "Test table name found within entity type.",
+      "Test plural form matching.",
+      "Test possessive form matching.",
+      "Test unrelated table is filtered out.",
+      "Test irregular plural (person -> people) matches."
+    ],
+    "top_files": [
+      "src/orchestrator/nodes/analyze_dependencies.py",
+      "tests/unit/test_analyze_dependencies_node.py"
+    ],
+    "size": 24
+  },
+  "115": {
+    "top_labels": [
+      "has_unmapped_fields()",
+      "Conditional edge: True if any entity has unmapped or low-confidence fields.",
+      "test_map_fields_node.py",
+      "Unit tests for map_fields node.",
+      "Tests for the has_unmapped_fields conditional edge.",
+      "Test returns True when there are pending schema changes.",
+      "Test returns True when there are pending schema changes.",
+      "Test returns False when all mappings are high confidence.",
+      "Test returns False with empty state.",
+      "Test returns False with empty mappings and no schema changes."
+    ],
+    "top_files": [
+      "tests/unit/test_map_fields_node.py",
+      "src/orchestrator/nodes/map_fields_node.py"
+    ],
+    "size": 24
+  },
+  "116": {
+    "top_labels": [
+      "cluster_edits.py",
+      "apply_cluster_decisions()",
+      "Any",
+      "Apply a reviewer's decisions from the entity-matches gate. The matches gate…",
+      "Rebuild ``entity_clusters`` from the reviewer's decisions. Each decision is…",
+      "deterministic_uuid()",
+      "Any",
+      "Derive a stable 32-char hex id from the given parts. Same parts in, same id out…",
+      "test_phase_k_gates.py",
+      "Phase K: HITL gates must actually gate. Before Phase K, Reject was a no-op at…"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_phase_k_gates.py",
+      "src/utils/id_utils.py",
+      "src/orchestrator/utils/cluster_edits.py"
+    ],
+    "size": 24
+  },
+  "117": {
+    "top_labels": [
+      "Any",
+      "asyncio",
+      "Test load_data node integrated with orchestrator state.",
+      "Test load data with empty unified entities.",
+      "Test load data handles connector errors gracefully.",
+      "Test load data node with valid unified data.",
+      "Test load_data MCP tool.",
+      "Test load_data tool with mocked connector.",
+      "Test load_data tool with empty records list.",
+      "Test load_data tool handles no mapping by passing through fields."
+    ],
+    "top_files": [
+      "",
+      "tests/integration/test_load_data.py"
+    ],
+    "size": 24
+  },
+  "118": {
+    "top_labels": [
+      "react",
+      "addRecent()",
+      "DiscoverResult",
+      "getRecent()",
+      "RecentItem",
+      "testConnection()",
+      "ConnectionForm.tsx",
+      "ConnectionForm()",
+      "loadRecent()",
+      "onTypeChange()"
+    ],
+    "top_files": [
+      "src/ui/frontend/src/components/SetupScreen.tsx",
+      "src/ui/frontend/src/api.ts",
+      "src/ui/frontend/src/components/ConnectionForm.tsx",
+      "src/ui/frontend/package.json"
+    ],
+    "size": 23
+  },
+  "119": {
+    "top_labels": [
+      "test_splink_compat_common.py",
+      "skipif",
+      "B.4 unit tests: the version gate and shared plumbing (S0 + common). Covers the…",
+      "TestLabelsAndUid",
+      ".test_labels_dataframe_uses_the_40_schema()",
+      ".test_labels_default_column_is_the_workbench_uid()",
+      ".test_unique_id_column_of_falls_back_to_default()",
+      ".test_unique_id_column_of_reads_the_linker_setting()",
+      "TestRecordsToDataFrame",
+      ".test_adds_unique_id_and_drops_internal_keys()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_splink_compat_common.py"
+    ],
+    "size": 23
+  },
+  "120": {
+    "top_labels": [
+      ".close()",
+      ".__exit__()",
+      ".get_latest_profile()",
+      ".get_overrides()",
+      ".__init__()",
+      ".insert_candidate_key()",
+      ".insert_edge()",
+      "._insert_evidence_row()",
+      ".insert_field_mapping()",
+      ".insert_relationship()"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/metadata_graph.py"
+    ],
+    "size": 23
+  },
+  "121": {
+    "top_labels": [
+      "imported_version()",
+      "The ``splink.__version__`` string, or ``\"unknown\"`` when not installed.",
+      "splink_training.py",
+      "_chart_series()",
+      "estimate_prior()",
+      "estimate_u()",
+      "_extract_parameter_history()",
+      "_level_label()",
+      "Any",
+      "S-G / S-H / S-I: u-estimation, EM/m-estimation, training sessions & diagnostics…"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/splink_compat.py",
+      "src/mcp_server/tools/splink_training.py"
+    ],
+    "size": 23
+  },
+  "122": {
+    "top_labels": [
+      "coerce_value()",
+      "Adapt one value to a target SQL type. Returns ``(coerced_value, ok, reason)``.…",
+      "TestCoerceValue",
+      ".test_already_correct_type_is_untouched()",
+      ".test_approximation_into_integer()",
+      ".test_bool_from_text()",
+      ".test_clean_iso_date_is_a_noop()",
+      ".test_diffbot_partial_date_unknown_month_and_day()",
+      ".test_diffbot_tagged_date_into_date_column()",
+      ".test_empty_string_into_bigint_is_null()"
+    ],
+    "top_files": [
+      "src/utils/value_coercion.py",
+      "tests/unit/test_value_coercion.py"
+    ],
+    "size": 23
+  },
+  "123": {
+    "top_labels": [
+      ".clear_extraction_state()",
+      ".column_exists()",
+      "._ensure_client()",
+      ".ensure_extraction_state()",
+      ".ensure_merge_audit()",
+      ".__enter__()",
+      ".get_extraction_state()",
+      ".list_tables()",
+      ".save_merge_audit()",
+      ".table_exists()"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/connectors/clickhouse_destination.py"
+    ],
+    "size": 22
+  },
+  "124": {
+    "top_labels": [
+      "PostgresConnector",
+      ".capabilities()",
+      ".close()",
+      "PostgreSQL database connector.",
+      "Live-caught: a real freshly-loaded 2-row table reported reltuples=-1…",
+      ".test_postgres_declares_full_relational_support()",
+      "TestPostgresDiscoverStatistics",
+      ".test_falls_back_to_n_live_tup_when_never_analyzed()",
+      ".test_uses_reltuples_directly_once_analyzed()",
+      "TestPostgresProfileColumn"
+    ],
+    "top_files": [
+      "tests/unit/test_connectors.py",
+      "tests/unit/test_postgres_connector.py",
+      "tests/unit/test_connector_capabilities.py",
+      "src/mcp_server/connectors/postgres.py"
+    ],
+    "size": 22
+  },
+  "125": {
+    "top_labels": [
+      "._normalize_type()",
+      "Normalize PostgreSQL data types to canonical form.",
+      "PostgreSQL destination should uppercase unknown types.",
+      "PostgreSQL destination should handle lowercase type names.",
+      ".test_postgres_dest_normalize_type_lowercase()",
+      ".test_postgres_dest_normalize_type_unknown()",
+      "Tests for the static _normalize_type helper.",
+      "TestNormalizeType",
+      ".test_normalizes_bigint()",
+      ".test_normalizes_boolean()"
+    ],
+    "top_files": [
+      "src/mcp_server/connectors/postgresql_destination.py",
+      "tests/integration/test_edge_cases.py",
+      "tests/unit/test_postgresql_destination.py"
+    ],
+    "size": 22
+  },
+  "126": {
+    "top_labels": [
+      "_persist_merge_audit()",
+      "Persist durable per-pair merge evidence (Phase 7.1's ``match_evidence``). One…",
+      "test_load_data_merge_audit.py",
+      "Any",
+      "Unit tests for Phase 7.2: persisting per-pair merge evidence. Phase 7.1…",
+      "cluster_edits.apply_cluster_decisions' \"keep\" path sets reviewed_by_human on…",
+      "Phase 7.2's other half: a human split's evidence (captured by…",
+      "A split pair for an entity this load run never touched must not be written --…",
+      "Unlike _persist_entity_map, a merge-audit failure must never roll the load back…",
+      "_state_with_clusters()"
+    ],
+    "top_files": [
+      "tests/unit/test_load_data_merge_audit.py",
+      "",
+      "src/orchestrator/nodes/load_data.py"
+    ],
+    "size": 22
+  },
+  "127": {
+    "top_labels": [
+      "Tests for pipeline state transitions through workflow.",
+      "New state dict should have 'created' status.",
+      "After parse_request, state should update parsed_request and status.",
+      "After analyze_dependencies, state should have dependency tree.",
+      "After discover_schemas, state should have schema info.",
+      "State should hold extracted data per table.",
+      "State should hold resolved entity groups.",
+      "State should hold field mappings.",
+      "State should hold load results.",
+      "State should accumulate workflow logs."
+    ],
+    "top_files": [
+      "tests/integration/test_graph_workflow.py"
+    ],
+    "size": 22
+  },
+  "128": {
+    "top_labels": [
+      "test_mapping_gate.py",
+      "manager()",
+      "_mock_dest_connector()",
+      "fixture",
+      "Unit tests for the editable mapping review gate (Phase 4). Covers…",
+      "A reviewer has no more power to add a column than a node does. The UI dropdown…",
+      "Phase 6.2/6.3: a row the gate already tagged with a sibling dest_table…",
+      "TestApplyMappingFeedback",
+      "._run()",
+      ".test_cross_table_dest_column_not_on_that_table_is_rejected()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_mapping_gate.py"
+    ],
+    "size": 22
+  },
+  "129": {
+    "top_labels": [
+      "AsyncEngine",
+      ".discover_indexes()",
+      ".discover_schema()",
+      ".discover_statistics()",
+      "._ensure_engine()",
+      ".estimate_query_cost()",
+      ".__init__()",
+      ".profile_column()",
+      "._resolve_schema_qualified()",
+      ".sample_distinct_values()"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/connectors/postgres.py"
+    ],
+    "size": 21
+  },
+  "130": {
+    "top_labels": [
+      "import_sample_databases.py",
+      "create_origin1_schemas()",
+      "create_origin2_schemas()",
+      "extract_tuples()",
+      "fix_quotes()",
+      "get_client()",
+      "get_file_resume_offset()",
+      "is_file_completed()",
+      "load_progress()",
+      "log()"
+    ],
+    "top_files": [
+      "scripts/import_sample_databases.py"
+    ],
+    "size": 21
+  },
+  "131": {
+    "top_labels": [
+      "LLMClient",
+      "Unified LLM client wrapping LangChain chat models.",
+      "Fix (Phase 7): a quota/billing error on the active model is never going to…",
+      "Tests for LLMClient initialization.",
+      "LLMClient should use defaults when config is minimal.",
+      "LLMClient should accept all config options.",
+      "Azure provider should be accepted when explicitly specified.",
+      "Empty API key should be accepted (may be set via env var).",
+      "TestLLMClientInit",
+      ".test_azure_provider()"
+    ],
+    "top_files": [
+      "tests/unit/test_llm_client.py",
+      "src/llm/client.py"
+    ],
+    "size": 21
+  },
+  "132": {
+    "top_labels": [
+      "_coerce_to_column_type()",
+      ".ensure_entity_chain()",
+      "._fk_targets_for_column()",
+      ".get_entity_supertype_chain()",
+      ".get_table_schema()",
+      ".__init__()",
+      ".load_batch()",
+      ".read_entity_rows()",
+      ".sample_distinct_values()",
+      ".write_knowledge_fact()"
+    ],
+    "top_files": [
+      "src/mcp_server/connectors/postgresql_destination.py",
+      ""
+    ],
+    "size": 21
+  },
+  "133": {
+    "top_labels": [
+      "map_fields_impl()",
+      "Map unified fields to destination columns. Parameters ---------- entity_type :…",
+      "test_map_fields_cross_table.py",
+      "dest_schema()",
+      "family_schemas()",
+      "_mock_llm()",
+      "Any",
+      "asyncio",
+      "fixture",
+      "Unit tests for Phase 6.2: map_fields_impl's widened, family-aware search.…"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_map_fields_cross_table.py",
+      "src/mcp_server/tools/map_fields.py"
+    ],
+    "size": 21
+  },
+  "134": {
+    "top_labels": [
+      "survivorship.py",
+      "measure_field_reliability()",
+      "Any",
+      "Measured per-origin field reliability — Phase A6. ``unify_entity_group.py``…",
+      "``{origin_id: {field: completeness_ratio}}`` across every record an origin…",
+      "unify_entities.py",
+      "unify_entities node: Merges matched record clusters into unified records. Calls…",
+      "test_survivorship.py",
+      "Unit tests for measured per-origin field reliability (Phase A6).…",
+      "An origin can be reliable for one field and unreliable for another -- the score…"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_survivorship.py",
+      "src/mcp_server/tools/survivorship.py",
+      "src/orchestrator/nodes/unify_entities.py"
+    ],
+    "size": 21
+  },
+  "135": {
+    "top_labels": [
+      "_default_policy_for_field()",
+      "The smart built-in chain for a field nothing more specific covers.",
+      "The rule chain to apply to one field. A policy maps a field name to an ordered…",
+      "resolve_policy()",
+      "Phase 5 (merge-engine-remediation-1-to-6): before this, EVERY field fell to…",
+      "An explicit `_default` in the caller's policy is a deliberate blanket override…",
+      "TestConflictPolicy",
+      ".test_a_named_field_overrides_the_default()",
+      ".test_a_single_rule_may_be_given_as_a_string()",
+      ".test_an_unknown_rule_is_dropped_not_silently_obeyed()"
+    ],
+    "top_files": [
+      "tests/unit/test_matching_rules_and_policy.py",
+      "src/mcp_server/tools/unify_entity_group.py"
+    ],
+    "size": 21
+  },
+  "136": {
+    "top_labels": [
+      "getMetadataGraph()",
+      "GraphEdge",
+      "GraphNode",
+      "GraphNodeType",
+      "MetadataGraphScreen.tsx",
+      "EDGE_COLOR",
+      "LayoutNode",
+      "layoutNodes()",
+      "MetadataGraphScreen()",
+      "clearFocus()"
+    ],
+    "top_files": [
+      "src/ui/frontend/src/components/MetadataGraphScreen.tsx",
+      "src/ui/frontend/src/api.ts"
+    ],
+    "size": 21
+  },
+  "137": {
+    "top_labels": [
+      "test_parse_request_node.py",
+      "fixture",
+      "Unit tests for parse_request node (Phase 3.2 contract). Entity grouping is…",
+      "Base workflow state with two discoverable tables.",
+      "Mock LLMClient for testing.",
+      "Phase A4: a profile-pinned entity_tables decision must actually be consulted…",
+      "The actual point of the feature: zero LLM calls on a repeat run against the…",
+      "explicit_target_entities/merge_scope depend on request text, not just schema --…",
+      "Phase 3.3: get_initial_state sets an active merge_scope directly from the UI's…",
+      "An explicitly inactive merge_scope in state (the normal free-text/Advanced-mode…"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_parse_request_node.py"
+    ],
+    "size": 21
+  },
+  "138": {
+    "top_labels": [
+      "_estimate_tokens()",
+      "_is_quota_error()",
+      "._advance_model()",
+      ".call()",
+      ".call_batch()",
+      ".call_json()",
+      "._get_model()",
+      ".__init__()",
+      "._parse_json_content()",
+      "Any"
+    ],
+    "top_files": [
+      "",
+      "src/llm/cost.py",
+      "src/llm/client.py"
+    ],
+    "size": 20
+  },
+  "139": {
+    "top_labels": [
+      "_map_type_generic()",
+      "Map a generic source type to a portable SQL type. Output feeds the destination…",
+      "Tests for _map_type_generic helper.",
+      "Test STRING, VARCHAR, TEXT map to TEXT.",
+      "Python type().__name__ values map correctly.",
+      "Test integer types map correctly.",
+      "Test floating point types map correctly.",
+      "Test date/time types.",
+      "Test JSON and UUID types.",
+      "Test unknown types default to TEXT."
+    ],
+    "top_files": [
+      "tests/unit/test_mcp_map_fields.py",
+      "src/mcp_server/tools/map_fields.py"
+    ],
+    "size": 20
+  },
+  "140": {
+    "top_labels": [
+      "Does a table name match an entity concept? Uses the shared alias groups so…",
+      "_table_matches_entity()",
+      "Tests for the _table_matches_entity helper.",
+      "Test exact entity-to-table name match.",
+      "Test entity type found within table name.",
+      "Irregular plurals/synonyms match via the shared alias groups.",
+      "A table that IS a known concept never token-matches another entity.",
+      "Test plural 's' form matching.",
+      "Test plural 'es' form matching.",
+      "Test case insensitive matching."
+    ],
+    "top_files": [
+      "src/orchestrator/nodes/extract_data.py",
+      "tests/unit/test_extract_data_node.py"
+    ],
+    "size": 20
+  },
+  "141": {
+    "top_labels": [
+      "Configure structured logging for the application. Parameters ---------- level :…",
+      "setup_logging()",
+      "Tests for setup_logging().",
+      "Default logging level should be INFO.",
+      "Custom logging level should be applied.",
+      "ERROR level should be applied.",
+      "Console handler should be added.",
+      "Custom app name should be used as logger name prefix.",
+      "File handler should be added when log_file is specified.",
+      "Log directory should be created if it doesn't exist."
+    ],
+    "top_files": [
+      "src/utils/logging_config.py",
+      "tests/unit/test_logging_config.py"
+    ],
+    "size": 20
+  },
+  "142": {
+    "top_labels": [
+      "value_coercion.py",
+      "is_compatible()",
+      "normalize_date_like()",
+      "Any",
+      "Source-value <-> destination-column-type reconciliation. Different origins…",
+      "Would mapping onto a column of ``target_sql_type`` survive these samples? Used…",
+      "Strip Diffbot's \"d\" date tag and fill unknown \"XX\" components with \"01\" so the…",
+      "test_value_coercion.py",
+      "Phase 4.1/4.7 (merge-engine-remediation-1-to-6): value <-> SQL-type…",
+      "TestIsCompatible"
+    ],
+    "top_files": [
+      "",
+      "src/utils/value_coercion.py",
+      "tests/unit/test_value_coercion.py"
+    ],
+    "size": 20
+  },
+  "143": {
+    "top_labels": [
+      "Any",
+      "asyncio",
+      "Test map_fields_node integrated with orchestrator state.",
+      "Test map_fields MCP tool integration.",
+      "Test map_fields tool returns field mappings via heuristic matching.",
+      "Test map_fields tool returns mapping even when no matching columns.",
+      "Test field mapping node produces mappings for target entities.",
+      "Test that exact name matches produce high confidence.",
+      "Test field mapping with no target entities.",
+      "Test that errors are caught and logged."
+    ],
+    "top_files": [
+      "",
+      "tests/integration/test_field_mapping.py"
+    ],
+    "size": 20
+  },
+  "144": {
+    "top_labels": [
+      "Tests for _compute_heuristic_confidence helper.",
+      "Test identical values return perfect score.",
+      "Test different values return low score.",
+      "Test that None values are ignored in comparison.",
+      "Test records with no common fields return 0.",
+      "Partial field matches average, but exact-name evidence dominates.",
+      "Without name agreement, the common-field average is the score.",
+      "Same name under different field names scores just above auto-match.",
+      "Fuzzy cross-field name similarity stays below the auto-match band.",
+      "Test string similarity matching."
+    ],
+    "top_files": [
+      "tests/unit/test_mcp_resolve_entities.py"
+    ],
+    "size": 20
+  },
+  "145": {
+    "top_labels": [
+      "Either the whole merge lands, or the destination is untouched.",
+      "The entity that succeeded first must not survive on its own.",
+      "A per-entity rollback would undo the earlier entities silently.",
+      "The headline M.5 contract, at the node level. Two entities, the second fails.…",
+      "Phase 0 Bug A, at the real-connector level. Before Bug A's fix,…",
+      "Pretending to roll back would be worse than saying we can't.",
+      "TestAtomicLoad",
+      "._connector()",
+      ".test_a_failure_rolls_the_whole_block_back()",
+      ".test_clickhouse_refuses_to_fake_a_dry_run()"
+    ],
+    "top_files": [
+      "tests/unit/test_phase_m_resilience.py"
+    ],
+    "size": 20
+  },
+  "146": {
+    "top_labels": [
+      "AST",
+      "Module",
+      "lint_arch.py",
+      "check_layering()",
+      "check_no_module_scope_compile()",
+      "check_no_new_module_mutable_state()",
+      "check_node_enter_exit_logging()",
+      "_imported_modules()",
+      "_layer_of()",
+      "load_baseline()"
+    ],
+    "top_files": [
+      "",
+      "scripts/update_arch_lint_baseline.py",
+      "scripts/lint_arch.py"
+    ],
+    "size": 19
+  },
+  "147": {
+    "top_labels": [
+      "cache_key()",
+      "A stable digest of everything that can change the model's answer. Response…",
+      ".clear()",
+      "asyncio",
+      "Phase 0 Sec 0.8: a malformed response must never be cached. The old call()…",
+      "The direct call() path (no validate_before_cache) is unaffected - a plain-text…",
+      "Phase A5: the SQLite-backed second cache layer that survives a process restart.…",
+      "So the NEXT call in the same process hits L1 without another disk round trip.",
+      "Same guarantee as the in-memory layer's validate_before_cache check: a response…",
+      "TestLLMClientCallJsonCaching"
+    ],
+    "top_files": [
+      "",
+      "src/llm/cost.py",
+      "tests/unit/test_llm_client.py"
+    ],
+    "size": 19
+  },
+  "148": {
+    "top_labels": [
+      "Run native validation checks across a per-entity row sample. Parameters…",
+      "run_data_quality_checks()",
+      "test_data_quality.py",
+      "Unit tests for src/mcp_server/tools/data_quality.py (salvaged from B3-quality-…",
+      "The rows[0] bug this replaces: if the first sampled row happens not to carry a…",
+      "An internal error (never Great Expectations -- that dependency was dropped…",
+      "The check that matters most for issue 6: an entity's real row count (from the…",
+      "test_bad_year_warns()",
+      "test_clean_data_passes()",
+      "test_columns_are_unioned_across_the_whole_sample_not_just_row_zero()"
+    ],
+    "top_files": [
+      "src/mcp_server/tools/data_quality.py",
+      "tests/unit/test_data_quality.py"
+    ],
+    "size": 19
+  },
+  "149": {
+    "top_labels": [
+      "_build_builder()",
+      "_failure_route()",
+      "route()",
+      "_has_open_failure()",
+      "_load_llm_config()",
+      "_load_scope_config()",
+      "_map_fields_router()",
+      "Any",
+      "Load LLM configuration from config file. Parameters ---------- config_path :…",
+      "Load scope-planning defaults (join-graph BFS max_hops etc.) from config file.…"
+    ],
+    "top_files": [
+      "",
+      "src/orchestrator/graph.py",
+      "tests/unit/test_phase_m_resilience.py"
+    ],
+    "size": 19
+  },
+  "150": {
+    "top_labels": [
+      "test_clickhouse_scratch_table.py",
+      "_connector_with_mock_client()",
+      "Unit tests for ClickHouseConnector's scratch-table extraction path (Part 1.5…",
+      "Phase 4.1: bounded DISTINCT sample used by join_graph.py's inclusion-dependency…",
+      "Phase 4.1 sampling fix (2026-08-10): given filter_values, this must query for…",
+      "TestCreateIdScratchTable",
+      ".test_creates_table_then_inserts_all_values()",
+      ".test_generates_a_uniquely_named_table_matching_the_validator()",
+      ".test_infers_column_type_from_first_non_null_value()",
+      ".test_infers_int_type()"
+    ],
+    "top_files": [
+      "tests/unit/test_clickhouse_scratch_table.py"
+    ],
+    "size": 19
+  },
+  "151": {
+    "top_labels": [
+      "unify_entity_group.py",
+      "_apply_rule()",
+      "_completeness()",
+      "_numeric_value()",
+      "Any",
+      "unify_entity_group tool implementation. Merges attributes within a cluster:…",
+      "A field value as a plain number, or None if it isn't one. Reuses the Phase 4…",
+      "Narrow the candidates by one rule. Never returns an empty list.",
+      "Pick the winning (record, origin) by this field's configured rules. Returns the…",
+      "Longer / non-empty beats shorter / empty."
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_mcp_unify_entity_group.py",
+      "src/mcp_server/tools/unify_entity_group.py"
+    ],
+    "size": 18
+  },
+  "152": {
+    "top_labels": [
+      "sql_lineage.py",
+      "column_lineage()",
+      "mapping_to_sql()",
+      "Any",
+      "Column-level SQL lineage (ADR 0009, fix-v3 B.1.5). Thin wrapper over…",
+      "Trace ``target_column`` back through ``mapping_sql`` to its base…",
+      "Render a ``map_fields`` ``field_mapping`` dict as parseable SQL so…",
+      "test_sql_lineage.py",
+      "Unit tests for sqlglot column-level lineage (ADR 0009, fix-v3 B.1.5).",
+      "TestColumnLineage"
+    ],
+    "top_files": [
+      "src/mcp_server/tools/sql_lineage.py",
+      "",
+      "tests/unit/test_sql_lineage.py"
+    ],
+    "size": 18
+  },
+  "153": {
+    "top_labels": [
+      "ClickHouseDestinationConnector",
+      ".atomic()",
+      "ClickHouse connector for destination writes. Handles bulk inserts, schema…",
+      "Not a real transaction — ClickHouse has no cross-table rollback. Deliberately…",
+      "test_clickhouse_destination_merge_audit.py",
+      "connector()",
+      "dest_config()",
+      "fixture",
+      "Unit tests for ClickHouseDestinationConnector's merge-lineage audit table…",
+      "The other half of Phase 7.2: a human-split pair's evidence must reach…"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_clickhouse_destination_merge_audit.py",
+      "src/mcp_server/connectors/clickhouse_destination.py"
+    ],
+    "size": 18
+  },
+  "154": {
+    "top_labels": [
+      ".close()",
+      ".create_table()",
+      "._create_table_sql()",
+      ".__exit__()",
+      ".get_table_schema()",
+      ".__init__()",
+      ".load_batch()",
+      ".load_batch_bulk()",
+      ".read_entity_rows()",
+      "Any"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/connectors/clickhouse_destination.py"
+    ],
+    "size": 18
+  },
+  "155": {
+    "top_labels": [
+      "analyze_dependencies()",
+      "_parse_llm_tree()",
+      "_build_schema_summary()",
+      "_extract_declared_column_dependencies()",
+      "_format_confirmed_lines()",
+      "_format_coverage_matrix()",
+      "_join_graph_to_dependency_tree()",
+      "_matrix_to_dependency_tree()",
+      "Any",
+      "Analyze schemas to determine entity dependencies. Parameters ---------- state :…"
+    ],
+    "top_files": [
+      "",
+      "src/orchestrator/nodes/analyze_dependencies.py",
+      "tests/unit/test_analyze_dependencies_node.py"
+    ],
+    "size": 18
+  },
+  "156": {
+    "top_labels": [
+      "Any",
+      "Up to `_SAMPLE_SIZE` rows for an entity, from a spool handle or an inline list…",
+      "Validate extracted data quality before entity resolution. Reads from…",
+      "_sample_rows()",
+      "validate_data_node()",
+      "asyncio",
+      "The never-auto-abort posture, proven directly: no matter how bad the quality…",
+      "The pre-spool shape (a plain list, still used by most unit tests and any caller…",
+      "The critical fix vs the B3 branch this was salvaged from: B3's…",
+      "origin_2.Person / origin_2.PersonContact from the 4th live run: a scoped join…"
+    ],
+    "top_files": [
+      "",
+      "src/orchestrator/nodes/validate_data.py",
+      "tests/unit/test_validate_data_node.py"
+    ],
+    "size": 18
+  },
+  "157": {
+    "top_labels": [
+      "_build_wait_strategy()",
+      "Build a tenacity wait strategy from configuration.",
+      "test_retry.py",
+      "Tests for src/orchestrator/utils/retry.py - Retry logic wrapper using tenacity.",
+      "Tests for PermanentError exception.",
+      "PermanentError should inherit from Exception.",
+      "PermanentError should store the error message.",
+      "Tests for _build_wait_strategy().",
+      "Exponential backoff should build a wait chain.",
+      "Linear backoff should build a fixed wait."
+    ],
+    "top_files": [
+      "tests/unit/test_retry.py",
+      "src/orchestrator/utils/retry.py"
+    ],
+    "size": 18
+  },
+  "158": {
+    "top_labels": [
+      "tsconfig.json",
+      "compilerOptions",
+      "allowImportingTsExtensions",
+      "isolatedModules",
+      "jsx",
+      "lib",
+      "module",
+      "moduleDetection",
+      "moduleResolution",
+      "noEmit"
+    ],
+    "top_files": [
+      "src/ui/frontend/tsconfig.json"
+    ],
+    "size": 18
+  },
+  "159": {
+    "top_labels": [
+      "Check whether a string is a valid 32-character hex UUID. Parameters ----------…",
+      "validate_uuid()",
+      "UUID with spaces should return False.",
+      "Tests for validate_uuid().",
+      "Valid 32-char hex UUID should return True.",
+      "UUID shorter than 32 chars should return False.",
+      "UUID longer than 32 chars should return False.",
+      "UUID with non-hex characters should return False.",
+      "Empty string should return False.",
+      "None input should return False."
+    ],
+    "top_files": [
+      "tests/unit/test_id_utils.py",
+      "src/utils/id_utils.py"
+    ],
+    "size": 18
+  },
+  "160": {
+    "top_labels": [
+      "Edge cases for ID utilities.",
+      "validate_uuid_with_dash should accept standard UUID format.",
+      "validate_uuid_with_dash should reject UUID without dashes.",
+      "validate_uuid_with_dash should reject short UUID.",
+      "validate_uuid_with_dash should reject UUID with invalid chars.",
+      "validate_uuid should return False for None (TypeError is caught internally).",
+      "validate_uuid should return False for empty string.",
+      "validate_uuid should return False for invalid UUID.",
+      "dash_to_hex should raise ValueError for hex UUID without dashes.",
+      "TestIDUtilsEdgeCases"
+    ],
+    "top_files": [
+      "tests/integration/test_edge_cases.py"
+    ],
+    "size": 18
+  },
+  "161": {
+    "top_labels": [
+      "test_llm_client.py",
+      "_isolated_persistent_cache()",
+      "fixture",
+      "Tests for src/llm/client.py - LLM client setup using LangChain.",
+      "Tests for call() method.",
+      "Basic call should invoke LLM with correct messages.",
+      "Call with response_format should use structured output.",
+      "Phase A5: LLMClient.call() now also writes to the process-wide PERSISTENT_CACHE…",
+      "Unsupported provider should raise ValueError.",
+      "Tests for call_batch() method."
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_llm_client.py"
+    ],
+    "size": 18
+  },
+  "162": {
+    "top_labels": [
+      "test_map_fields_detail.py",
+      "Unit tests for map_fields helper functions. Tests _heuristic_match and…",
+      "Edge case tests for _heuristic_match.",
+      "Single character field names should handle edge cases.",
+      "Field names that are numeric strings.",
+      "Pascal case should match snake case.",
+      "Very long field names should still process.",
+      "Non-alphanumeric separators tokenize the same as underscores, so this is a…",
+      "Whitespace in field names should be normalized.",
+      "Multiple consecutive underscores should be handled."
+    ],
+    "top_files": [
+      "tests/unit/test_map_fields_detail.py"
+    ],
+    "size": 18
+  },
+  "163": {
+    "top_labels": [
+      "Tests for _transform_records.",
+      "Test transforming records with field mapping.",
+      "Two source fields mapping to one dest column must coalesce: the absent origin's…",
+      "A mapping like person_id -> id must not leave id NULL for records whose origin…",
+      "Test that records without mapping pass through non-internal fields.",
+      "Fields requiring schema changes are kept — their columns are added before load,…",
+      "Test that UUID is generated if neither id nor _cluster_id exists.",
+      "Test that source_ids are properly serialized.",
+      "Test handling of invalid source_ids JSON.",
+      "TestTransformRecords"
+    ],
+    "top_files": [
+      "tests/unit/test_mcp_load_data.py"
+    ],
+    "size": 18
+  },
+  "164": {
+    "top_labels": [
+      "Any",
+      "asyncio",
+      "fixture",
+      "Fail in seconds with a specific message, not five minutes in.",
+      "The whole point: don't extract for five minutes then fail on write.",
+      "An exhausted quota used to surface as an empty, \"successful\" run.",
+      "One run should reveal every broken connection, not just the first.",
+      "TestPreflight",
+      ".state()",
+      ".test_all_clear_records_no_failure()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_phase_m_resilience.py"
+    ],
+    "size": 18
+  },
+  "165": {
+    "top_labels": [
+      "asyncio",
+      "Tests for _ensure_engine lifecycle method.",
+      "_ensure_engine should create an AsyncEngine on first call.",
+      "_ensure_engine should reuse engine if already created.",
+      "_ensure_engine should default port to 5432 when not specified.",
+      "_ensure_engine should create engine with echo=False.",
+      "Live regression: a bare table name used to default straight to \"public\"…",
+      "TestEnsureEngine",
+      ".test_creates_engine_on_first_call()",
+      ".test_defaults_port_to_5432()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_postgres_connector.py"
+    ],
+    "size": 18
+  },
+  "166": {
+    "top_labels": [
+      "LogRecord",
+      "_JSONFormatter",
+      ".format()",
+      ".__init__()",
+      "Minimal JSON formatter for stdlib logging records.",
+      "_JSONFormatter should accept custom app name.",
+      "JSON output should contain standard fields.",
+      "JSON output should include extra_data if present.",
+      "JSON output should properly escape special characters.",
+      "Tests for _JSONFormatter class."
+    ],
+    "top_files": [
+      "",
+      "src/utils/logging_config.py",
+      "tests/unit/test_logging_config.py"
+    ],
+    "size": 17
+  },
+  "167": {
+    "top_labels": [
+      "build_ground_truth.py",
+      "add_fact_code()",
+      "add_fact_date()",
+      "add_fact_money()",
+      "add_fact_numeric()",
+      "add_fact_text()",
+      "add_name()",
+      "add_person_company()",
+      "add_relationship()",
+      "link_evidence()"
+    ],
+    "top_files": [
+      "scripts/ground_truth/build_ground_truth.py"
+    ],
+    "size": 17
+  },
+  "168": {
+    "top_labels": [
+      "build_ground_truth_gt_sweep.py",
+      "add_fact_code()",
+      "add_fact_date()",
+      "add_fact_money()",
+      "add_fact_numeric()",
+      "add_fact_text()",
+      "add_name()",
+      "add_person_company()",
+      "add_relationship()",
+      "link_evidence()"
+    ],
+    "top_files": [
+      "scripts/ground_truth/build_ground_truth_gt_sweep.py"
+    ],
+    "size": 17
+  },
+  "169": {
+    "top_labels": [
+      "filters.py",
+      "normalize_filter()",
+      "Any",
+      "Shared normalisation for extraction filters. The ``filter`` argument to a…",
+      "Return ``[{\"column\", \"op\", \"value\"}, ...]`` for any accepted filter shape. A…",
+      "test_connector_filters.py",
+      "Unit tests for the extraction filter normaliser (P.4 foundation).",
+      "test_bare_scalar_is_equals()",
+      "test_empty_in_is_dropped()",
+      "test_explicit_eq()"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/connectors/filters.py",
+      "tests/unit/test_connector_filters.py"
+    ],
+    "size": 17
+  },
+  "170": {
+    "top_labels": [
+      "create_connector()",
+      "Any",
+      "Factory function to create the appropriate connector. Parameters ----------…",
+      "Tests for the create_connector factory function.",
+      "Should create a PostgresConnector for postgres type.",
+      "Should create a MongoDBConnector for mongodb type.",
+      "Should create a DatabricksConnector for databricks type.",
+      "Should raise ValueError for unknown connector type.",
+      "Should raise for nonsense type string.",
+      "Should accept empty config dict for known types."
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_connectors.py",
+      "src/mcp_server/connectors/__init__.py"
+    ],
+    "size": 17
+  },
+  "171": {
+    "top_labels": [
+      "_apply_heuristic_tier()",
+      "_apply_llm_decision()",
+      "_build_valentine_frames()",
+      "_decide_fields_with_llm()",
+      "_incompatible_with_column()",
+      "Any",
+      "Phase 0 (B.3.1): each source field's single best Valentine candidate, as…",
+      "Build Valentine's source/target DataFrames for Phase 0. ``source_df``: one…",
+      "Would mapping ``field`` onto this destination column crash the load? Checked…",
+      "Refuse a mapping whose sample values would crash the load. Previously the value…"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/map_fields.py"
+    ],
+    "size": 17
+  },
+  "172": {
+    "top_labels": [
+      "MergeState",
+      "The cached artefact for ``stage``, or None if there isn't one or it was…",
+      "Record ``stage``'s output and the fingerprint it was computed from, in place,…",
+      "stage_cache_get()",
+      "stage_cache_set()",
+      "Per-stage fingerprint caching: reuse a stage's prior output only when it was…",
+      "The core guarantee: a schema drift (different fingerprint) must never return…",
+      "capture_from_state's own logic is correct in isolation (proven above), but that…",
+      "TestStageCache",
+      ".test_different_stages_do_not_collide()"
+    ],
+    "top_files": [
+      "",
+      "src/orchestrator/graph.py",
+      "tests/unit/test_run_profiles.py",
+      "src/orchestrator/profiles.py"
+    ],
+    "size": 17
+  },
+  "173": {
+    "top_labels": [
+      "Every multi-member cluster's Phase 7.1 match_evidence, per entity. Singletons…",
+      "._clusters_by_entity()",
+      "test_final_gate_lineage.py",
+      "manager()",
+      "fixture",
+      "Unit tests for Phase 7.3: merge lineage surfaced at the final approval gate.…",
+      "The payload must not leak whatever internal bookkeeping a cluster happens to…",
+      "A cluster the heuristic/auto path merged before Phase 7.1 evidence capture…",
+      "TestClustersByEntity",
+      ".test_cluster_without_match_evidence_still_included()"
+    ],
+    "top_files": [
+      "tests/unit/test_final_gate_lineage.py",
+      "",
+      "src/orchestrator/workflow_manager.py"
+    ],
+    "size": 17
+  },
+  "174": {
+    "top_labels": [
+      "The specific bug: origin_1's CompanyExperience/CompanyIndustry never joined…",
+      "Both are \"contact info\" tables and the destination schema treats contact as one…",
+      "The other half of correctness: a fallback compound name must never be swept…",
+      "entity_aliases.ALIAS_GROUPS' industry group literally contains the alias…",
+      "\"Technographics\" (firmographic/segmentation data) is not the same concept as…",
+      "Both origin from \"Company\" + investment-adjacent nouns, but an investor (a…",
+      "TestCrossOriginMerging",
+      ".test_bare_company_tables_merge_across_origins()",
+      ".test_bare_location_and_person_merge_across_origins()",
+      ".test_company_contact_and_person_contact_merge()"
+    ],
+    "top_files": [
+      "tests/unit/test_entity_grouping.py"
+    ],
+    "size": 17
+  },
+  "175": {
+    "top_labels": [
+      "reset_destination.py",
+      "Reset a destination schema to a true blank slate: truncate all data tables +…",
+      "restore_pristine.py",
+      "Restore a destination schema to pristine schema-only state after an app run.…",
+      "verify_langfuse_trace.py",
+      "_load_run_report()",
+      "main()",
+      "check()",
+      "_observation_seconds()",
+      "Any"
+    ],
+    "top_files": [
+      "scripts/diagnostics/reset_destination.py",
+      "",
+      "scripts/goldens/setup_golden_db.py",
+      "scripts/diagnostics/verify_langfuse_trace.py",
+      "scripts/diagnostics/restore_pristine.py"
+    ],
+    "size": 16
+  },
+  "176": {
+    "top_labels": [
+      "resolve_cache.py",
+      "apply_known_cluster_ids()",
+      "_connect()",
+      "content_hash()",
+      "get()",
+      "put()",
+      "Any",
+      "Cross-run cache for resolve_entities' matching decision (Part 1.5 D.7). A…",
+      "The cached result for this hash, or ``None`` on a miss or any failure.…",
+      "Store a matching result. Best-effort: a write failure is logged, not raised."
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/resolve_cache.py",
+      "src/mcp_server/tools/resolve_entities.py"
+    ],
+    "size": 16
+  },
+  "177": {
+    "top_labels": [
+      "check.py",
+      "check_arch()",
+      "check_docs()",
+      "check_eval()",
+      "check_format()",
+      "check_frontend()",
+      "check_lint()",
+      "check_portability()",
+      "check_prompts()",
+      "check_test()"
+    ],
+    "top_files": [
+      "",
+      "scripts/check.py"
+    ],
+    "size": 16
+  },
+  "178": {
+    "top_labels": [
+      "A named stage's fingerprint over whatever inputs it declares. Keeping this as…",
+      "stage_fingerprint()",
+      "parse_request.py",
+      "_discovered_table_pairs()",
+      "_finish()",
+      "Any",
+      "parse_request node: Groups discovered tables into entities and extracts merge…",
+      "Every (origin_id, table_name) discover_schemas actually found — the ground…",
+      "TestStageFingerprint",
+      ".test_different_input_value_differs()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_fingerprint.py",
+      "src/orchestrator/fingerprint.py",
+      "src/orchestrator/nodes/parse_request.py",
+      "tests/unit/test_select_entity_tables.py"
+    ],
+    "size": 16
+  },
+  "179": {
+    "top_labels": [
+      "splink_blocking.py",
+      "cost_rule()",
+      "cumulative_costs()",
+      "largest_blocks()",
+      "Any",
+      "LinkType",
+      "S-E / S-F: prediction blocking and training blocking (Branch_Plan.md B.4;…",
+      "S-E: the ``n_largest`` blocks a rule would produce (installed 4.0.16's…",
+      "S-E: the cumulative pair count across an *ordered* list of rules (installed…",
+      "S-E end-to-end: cost every candidate prediction-blocking rule against the pair…"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/splink_blocking.py"
+    ],
+    "size": 16
+  },
+  "180": {
+    "top_labels": [
+      "_error_gate_destinations()",
+      "_error_gate_router()",
+      "Route out of the error gate on the user's decision. ``retry`` re-runs the node…",
+      "Every node the error gate can hand control back to.",
+      "Where the run goes after a human looks at the failure.",
+      "Phase 8.1 regression: NODE_SUCCESSOR must cover plan_scope. Before this entry…",
+      "The run is already known to be incomplete. Defaulting to \"carry on\" is the…",
+      "A router returning an unmapped name would crash the graph.",
+      "TestErrorGateRouting",
+      ".test_abort_ends_the_run()"
+    ],
+    "top_files": [
+      "src/orchestrator/graph.py",
+      "tests/unit/test_phase_m_resilience.py"
+    ],
+    "size": 16
+  },
+  "181": {
+    "top_labels": [
+      "Try a ClickHouse scratch-table filter for a large id list (Part 1.5 D.6).…",
+      "Walk an N-hop join path, returning the final entity-side key set. The fixpoint…",
+      "_resolve_link_path()",
+      "_scratch_filter()",
+      "_cleanup()",
+      "test_extract_data_node.py",
+      "Unit tests for extract_data node.",
+      "Unit tests for _scratch_filter (Part 1.5 D.6): a large ClickHouse linked-id…",
+      "Numeric watermarks from the TEXT tracking column must be re-typed.",
+      "TestScratchFilter"
+    ],
+    "top_files": [
+      "src/orchestrator/nodes/extract_data.py",
+      "tests/unit/test_extract_data_node.py"
+    ],
+    "size": 16
+  },
+  "182": {
+    "top_labels": [
+      "find_execution_groups()",
+      "Group entities that can be extracted in parallel. Entities at the same…",
+      "Tests for find_execution_groups().",
+      "Entities at same level should be in same group.",
+      "All entities with no deps should be in one group.",
+      "Linear dependency should produce one entity per group.",
+      "Complex dependency should produce correct groupings.",
+      "Entities within groups should be sorted.",
+      "Empty tree should return list with one empty group.",
+      "TestFindExecutionGroups"
+    ],
+    "top_files": [
+      "tests/unit/test_dependency_sort.py",
+      "src/orchestrator/utils/dependency_sort.py"
+    ],
+    "size": 16
+  },
+  "183": {
+    "top_labels": [
+      "Verify that *extraction_order* is a valid topological ordering of…",
+      "validate_extraction_order()",
+      "Tests for validate_extraction_order().",
+      "Valid topological order should return True.",
+      "Invalid order (dep after dependents) should return False.",
+      "Entity not in order should return False.",
+      "Empty order with non-empty tree should return False.",
+      "Empty tree and empty order should return True.",
+      "Complex valid order should pass.",
+      "TestValidateExtractionOrder"
+    ],
+    "top_files": [
+      "tests/unit/test_dependency_sort.py",
+      "src/orchestrator/utils/dependency_sort.py"
+    ],
+    "size": 16
+  },
+  "184": {
+    "top_labels": [
+      "group_tables_into_entities()",
+      "Any",
+      "Assign EVERY discovered table across all origins to exactly one entity group,…",
+      "test_entity_grouping.py",
+      "Unit tests for the deterministic entity-grouping module (Phase 3.1). Uses the…",
+      "The invariant this module exists to guarantee: no discovered table is ever…",
+      "Regression test for the bug that made parse_request crash on any PostgreSQL…",
+      "_schemas_from()",
+      "_mk()",
+      "._groups()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_entity_grouping.py",
+      "src/orchestrator/utils/entity_grouping.py"
+    ],
+    "size": 16
+  },
+  "185": {
+    "top_labels": [
+      "EffectiveConfig",
+      "getConfig()",
+      "put()",
+      "resetEnvOverrides()",
+      "updateEnvOverrides()",
+      "updatePlatformConfig()",
+      "SettingsScreen.tsx",
+      "FormState",
+      "Provenance()",
+      "SettingsScreen()"
+    ],
+    "top_files": [
+      "src/ui/frontend/src/components/SettingsScreen.tsx",
+      "src/ui/frontend/src/api.ts"
+    ],
+    "size": 16
+  },
+  "186": {
+    "top_labels": [
+      "Replace ${VAR_NAME} placeholders with environment variable values.",
+      "_resolve_env_vars()",
+      "_replacer()",
+      "_fn()",
+      "Tests for _resolve_env_vars() function.",
+      "Simple ${VAR} should be resolved.",
+      "Missing env var should leave placeholder unchanged.",
+      "Env vars in dict values should be resolved.",
+      "Env vars in list items should be resolved.",
+      "Non-string values should be returned unchanged."
+    ],
+    "top_files": [
+      "src/utils/config_loader.py",
+      "tests/unit/test_config_loader.py"
+    ],
+    "size": 16
+  },
+  "187": {
+    "top_labels": [
+      "id_utils.py",
+      "generate_uuid_with_dash()",
+      "UUID generation and validation utilities for merge-engine. Provides…",
+      "Generate a new random UUID v4 string with standard dashes. Returns ------- str…",
+      "__init__.py",
+      "Utility modules for merge-engine.",
+      "generate_uuid_with_dash should return a valid UUID string.",
+      ".test_generate_thread_id_returns_string()",
+      "Tests for generate_uuid_with_dash().",
+      "generate_uuid_with_dash should return a string."
+    ],
+    "top_files": [
+      "tests/unit/test_id_utils.py",
+      "src/utils/__init__.py",
+      "src/utils/id_utils.py",
+      "tests/integration/test_edge_cases.py"
+    ],
+    "size": 16
+  },
+  "188": {
+    "top_labels": [
+      "hex_to_dash()",
+      "Convert a 32-character hex UUID string to standard dashed format. Parameters…",
+      "hex_to_dash should add dashes to 32-char hex UUID.",
+      "hex_to_dash should raise ValueError for UUID with dashes.",
+      ".test_convert_uuid_to_dash()",
+      ".test_convert_uuid_to_dash_with_existing_dashes()",
+      "Tests for hex_to_dash().",
+      "Valid hex UUID should convert to dashed format.",
+      "Invalid hex UUID should raise ValueError.",
+      "Too short hex should raise ValueError."
+    ],
+    "top_files": [
+      "tests/unit/test_id_utils.py",
+      "tests/integration/test_edge_cases.py",
+      "src/utils/id_utils.py"
+    ],
+    "size": 16
+  },
+  "189": {
+    "top_labels": [
+      "Check whether a string is a valid standard-format UUID. Parameters ----------…",
+      "validate_uuid_with_dash()",
+      "Tests for validate_uuid_with_dash().",
+      "Valid dashed UUID should return True.",
+      "UUID without dashes should return False.",
+      "UUID with wrong number of parts should return False.",
+      "UUID with invalid characters should return False.",
+      "Empty string should return False.",
+      "None input should return False.",
+      "TestValidateUUIDWithDash"
+    ],
+    "top_files": [
+      "tests/unit/test_id_utils.py",
+      "src/utils/id_utils.py"
+    ],
+    "size": 16
+  },
+  "190": {
+    "top_labels": [
+      "Tests for _heuristic_match helper.",
+      "Test exact field name match returns 1.0.",
+      "Test substring match returns 0.8.",
+      "Test match after underscore normalization.",
+      "Test common alias matching.",
+      "Test completely unrelated field names return 0.0.",
+      "Test matching is case insensitive.",
+      "Test hyphen normalization.",
+      "TestHeuristicMatch",
+      ".test_case_insensitive()"
+    ],
+    "top_files": [
+      "tests/unit/test_mcp_map_fields.py"
+    ],
+    "size": 16
+  },
+  "191": {
+    "top_labels": [
+      "make_single_result()",
+      "Tests for discover_schema method.",
+      "discover_schema should return list of user tables.",
+      "discover_schema should return column info for each table.",
+      "discover_schema should return foreign key info.",
+      "discover_schema should include a sample row when available.",
+      "discover_schema should skip tables that fail to discover.",
+      "discover_schema should exclude pg_catalog and information_schema.",
+      "Create a mock result that supports both mappings().fetchall() and…",
+      "TestDiscoverSchema"
+    ],
+    "top_files": [
+      "tests/unit/test_postgres_connector.py"
+    ],
+    "size": 16
+  },
+  "192": {
+    "top_labels": [
+      "Tests for load_batch method.",
+      "load_batch should return zero counts for empty records.",
+      "load_batch should execute INSERT ... ON CONFLICT DO UPDATE.",
+      "load_batch should use custom upsert_key for conflict column.",
+      "load_batch should serialize dict/list values as JSON strings.",
+      "load_batch should rollback on error.",
+      "load_batch should close the cursor after completion.",
+      "load_batch should use configured schema in INSERT statement.",
+      "TestLoadBatch",
+      ".test_closes_cursor()"
+    ],
+    "top_files": [
+      "tests/unit/test_postgresql_destination.py"
+    ],
+    "size": 16
+  },
+  "193": {
+    "top_labels": [
+      "candidate_keys.py",
+      "propose_composite_candidate_pairs()",
+      "V3 candidate & composite key discovery (Part B, P-5). Three tiers, checked in…",
+      "The PRUNED search: only identifier-LIKE, low-null columns are even considered,…",
+      "column_naming.py",
+      "normalize_column_name()",
+      "Column-name normalization shared across V3 discovery tools (Part B). Originally…",
+      "camelCase / PascalCase / already-snake_case -> lowercase snake_case, so…",
+      "Live-caught (BP-B, real ClickHouse origin2.Company): the identifier-shape regex…",
+      "TestProposeCompositeCandidatePairs"
+    ],
+    "top_files": [
+      "tests/unit/test_candidate_keys.py",
+      "src/mcp_server/tools/candidate_keys.py",
+      "src/utils/column_naming.py"
+    ],
+    "size": 15
+  },
+  "194": {
+    "top_labels": [
+      "compare_to_golden.py",
+      "compare_table()",
+      "fetch_all()",
+      "golden_record_diff()",
+      "find()",
+      "main()",
+      "natural_key()",
+      "norm()",
+      "Row-level diff of an app run's output (`global_warehouse`.public) against a…",
+      "One DB side (either the app's public schema or the golden's subject schema)."
+    ],
+    "top_files": [
+      "scripts/diagnostics/compare_to_golden.py"
+    ],
+    "size": 15
+  },
+  "195": {
+    "top_labels": [
+      "classify_declared_indexes()",
+      "Any",
+      "Persist every proposal via ``MetadataStore.insert_candidate_key``. Declared…",
+      "Turn P-2's raw ``discover_indexes()`` rows into candidate-key proposals. Purely…",
+      "store_candidate_keys()",
+      "test_candidate_keys.py",
+      "Unit tests for V3 candidate & composite key discovery (Part B, P-5). Three…",
+      "TestClassifyDeclaredIndexes",
+      ".test_a_composite_primary_key_keeps_its_column_order()",
+      ".test_a_plain_non_unique_index_is_ignored()"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/candidate_keys.py",
+      "tests/unit/test_candidate_keys.py"
+    ],
+    "size": 15
+  },
+  "196": {
+    "top_labels": [
+      "discover_candidate_keys()",
+      "The real check a proposed composite pair must clear: distinct combined-value…",
+      "The full P-5 pipeline for one table: declared first (via P-2's…",
+      "verify_composite_uniqueness()",
+      "asyncio",
+      "TestDiscoverCandidateKeysPipeline",
+      ".test_a_composite_pair_below_the_uniqueness_bar_is_dropped_not_reported()",
+      ".test_declared_keys_short_circuit_before_any_inference()",
+      ".test_no_declared_keys_falls_through_to_single_column_inference()",
+      ".test_no_declared_or_single_column_falls_through_to_verified_composite()"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/candidate_keys.py",
+      "tests/unit/test_candidate_keys.py"
+    ],
+    "size": 15
+  },
+  "197": {
+    "top_labels": [
+      "pg_trgm GIN-indexed candidate-pair blocking (audit §13 #13, B.1.3). Stages…",
+      "trigram_candidate_pairs()",
+      "test_trigram_blocking.py",
+      "_FakeConnector",
+      ".execute_sql()",
+      ".__init__()",
+      "Any",
+      "Unit tests for pg_trgm GIN trigram candidate blocking (audit §13 #13, B.1.3).…",
+      "Records every SQL statement it is asked to run; returns a canned result for the…",
+      "_records()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_trigram_blocking.py",
+      "src/mcp_server/tools/resolve_entities.py"
+    ],
+    "size": 15
+  },
+  "198": {
+    "top_labels": [
+      "_fallible_router()",
+      "Route a node onward, to the error gate, or straight to the end. A node that…",
+      "A node that recorded a failure must not be allowed to continue.",
+      "A dead database has no honest \"skip\" — don't offer one. Escalating an…",
+      "Defaulting to a human is safer than defaulting to ending the run.",
+      "A failed resolve must escalate, not walk into the matches gate.",
+      "Wiring check: preflight must emit `fail`, not `escalate`. If it ever emits…",
+      "TestFallibleRouting",
+      ".test_another_node_s_failure_is_not_this_node_s_problem()",
+      ".test_clean_state_continues()"
+    ],
+    "top_files": [
+      "src/orchestrator/graph.py",
+      "tests/unit/test_phase_m_resilience.py"
+    ],
+    "size": 15
+  },
+  "199": {
+    "top_labels": [
+      "Any",
+      "MonkeyPatch",
+      "2,484 records generate ~28k pairs; the old 10k budget dropped 2/3.",
+      "A dropped pair must be counted, never silently discarded.",
+      "Identical input must produce identical output, budget or no budget.",
+      "Equal-sized blocks used to fall back on dict insertion order. That made a…",
+      "_rec()",
+      "TestComparisonBudget",
+      ".test_a_realistic_merge_compares_every_candidate_pair()",
+      ".test_budget_is_high_enough_for_ordinary_merges()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_matching_performance.py"
+    ],
+    "size": 15
+  },
+  "200": {
+    "top_labels": [
+      "test_postgres_connector.py",
+      "_build_connector()",
+      "mock_cursor()",
+      "postgres_config()",
+      "fixture",
+      "Unit tests for src/mcp_server/connectors/postgres.py Tests PostgresConnector's…",
+      "Mock synchronous cursor for Databricks connector.",
+      "Tests for the close() method.",
+      "close() should call dispose on the engine.",
+      "close() should do nothing when engine is None."
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_postgres_connector.py"
+    ],
+    "size": 15
+  },
+  "201": {
+    "top_labels": [
+      "skip",
+      "Tests for _ensure_connection method.",
+      "_ensure_connection should create a psycopg2 connection.",
+      "_ensure_connection should reuse connection if open.",
+      "_ensure_connection should create new connection if previous is closed.",
+      "Tests for __enter__ and __exit__ methods.",
+      "__enter__ should ensure connection is created.",
+      "__exit__ should close the connection.",
+      "TestContextManager",
+      ".test_enter_ensures_connection()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_postgresql_destination.py"
+    ],
+    "size": 15
+  },
+  "202": {
+    "top_labels": [
+      "asyncio",
+      "Tests for retry_on_transient decorator with async functions.",
+      "Async function that succeeds should return immediately.",
+      "Async function should retry on TransientError.",
+      "Async function should raise after max_attempts.",
+      "Async PermanentError should not be retried.",
+      "TestRetryOnTransientAsync",
+      ".test_async_exhausts_max_attempts()",
+      "async_always_fails()",
+      ".test_async_no_retry_on_permanent_error()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_retry.py"
+    ],
+    "size": 15
+  },
+  "203": {
+    "top_labels": [
+      "Any",
+      "Unchanged behaviour (not touched by C.2), but previously untested.",
+      "Part 1.5 C.6: unlike the no-key case (still a permanent latch, see…",
+      "get_trace_handler_for_trace must share get_trace_handler's enablement gate…",
+      "TestGetTraceHandler",
+      ".test_disabled_when_no_public_key()",
+      ".test_one_shot_latch_does_not_recheck()",
+      "TestGetTraceHandlerForTrace",
+      ".test_disabled_returns_none()",
+      ".test_enabled_binds_the_given_trace_id()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_tracing.py"
+    ],
+    "size": 15
+  },
+  "204": {
+    "top_labels": [
+      "profile_resolve.py",
+      "_cluster_signature()",
+      "_fetch_records()",
+      "main()",
+      "_profile_run()",
+      "_target()",
+      "Any",
+      "Profile + byte-identical-output harness for resolve_entities (Part 1.5 A.0).…",
+      "Order-independent fingerprint of the cluster structure. Two runs are 'byte-…",
+      "Deterministically fetch + tag records; snapshot to disk for reuse."
+    ],
+    "top_files": [
+      "",
+      "scripts/diagnostics/profile_resolve.py"
+    ],
+    "size": 14
+  },
+  "205": {
+    "top_labels": [
+      "CostLedger",
+      ".__init__()",
+      ".record()",
+      ".reset()",
+      "Token and call counts per run, so cost is reportable rather than felt. Prices…",
+      "test_cost_endpoint_reports_recorded_tokens()",
+      "The fallback chain switches models mid-run; the report should say so.",
+      "TestCostLedger",
+      ".test_a_cache_hit_costs_nothing_but_records_the_saving()",
+      ".test_an_unknown_run_reports_zeroes_not_an_error()"
+    ],
+    "top_files": [
+      "src/llm/cost.py",
+      "tests/unit/test_llm_cost.py",
+      "tests/unit/test_api.py"
+    ],
+    "size": 14
+  },
+  "206": {
+    "top_labels": [
+      "Bounded, thread-safe LRU over normalised prompts. Thread-safe because the…",
+      "SemanticCache",
+      ".__init__()",
+      ".size()",
+      "The graph runs on a background thread while the API reads status.",
+      "TestSemanticCache",
+      ".test_a_cached_none_is_distinguishable_from_a_miss()",
+      ".test_clear_resets_counters_too()",
+      ".test_eviction_is_least_recently_used()",
+      ".test_it_is_bounded()"
+    ],
+    "top_files": [
+      "src/llm/cost.py",
+      "tests/unit/test_llm_cost.py"
+    ],
+    "size": 14
+  },
+  "207": {
+    "top_labels": [
+      "semantic_type_inference.py",
+      "_format_evidence_block()",
+      "infer_semantic_type()",
+      "_infer_with_llm()",
+      "Any",
+      "V3 semantic type inference (Part B, P-4). Evidence-carrying inference over a…",
+      "One LLM call proposing a label for a column the heuristic could not confidently…",
+      "The full P-4 inference: heuristic first, LLM fallback only when the heuristic…",
+      "asyncio",
+      "TestInferSemanticTypeOrchestration"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/semantic_type_inference.py",
+      "tests/unit/test_semantic_type_inference.py"
+    ],
+    "size": 14
+  },
+  "208": {
+    "top_labels": [
+      "splink_inference.py",
+      "explain_candidate()",
+      "prioritise_review()",
+      "Any",
+      "S-J / S-O / S-P: prediction + explainability, clustering, review prioritisation…",
+      "S-J: score every blocked pair with the (trained) model. Returns the full…",
+      "S-J/§33: the per-field, per-level Bayes-factor decomposition of one pair's…",
+      "S-O: cluster the predictions at a probability threshold and report the shape of…",
+      "S-P: split the scored pairs into auto-match / auto-keep-apart / review and…",
+      "A SplinkDataFrame to a plain list of row-dicts (JSON-safe)."
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/splink_inference.py"
+    ],
+    "size": 14
+  },
+  "209": {
+    "top_labels": [
+      "Show the scope gate only for a scoped merge with a plan to confirm. An unscoped…",
+      "_scope_router()",
+      "A real entry covers only origin_1; plan_scope.py's own coverage guarantee…",
+      "Phase 5.1/5.2: the checkbox gate round-trips whatever it's shown back on…",
+      "TestScopeGate",
+      ".test_enabled_defaults_true_when_entry_omits_it()",
+      ".test_forwards_every_field_including_link_path_hops()",
+      ".test_gate_applies_edited_plan_on_resume()",
+      ".test_gate_interrupts_without_feedback()",
+      ".test_interrupt_payload_shape()"
+    ],
+    "top_files": [
+      "src/orchestrator/graph.py",
+      "tests/unit/test_plan_scope.py"
+    ],
+    "size": 14
+  },
+  "210": {
+    "top_labels": [
+      "connection_key()",
+      "Any",
+      "Coordinates that identify a server, ignoring credentials and order. Used to re-…",
+      "Re-attach live passwords to password-free saved origins. Matching is by…",
+      "Recursively blank out password-ish values. Returns a copy — the caller's live…",
+      "restore_credentials()",
+      "strip_secrets()",
+      "Reordering the live origins must not repoint a saved origin.",
+      "TestCredentialRestore",
+      ".test_an_unmatched_origin_is_reported_not_guessed()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_run_profiles.py",
+      "src/orchestrator/profiles.py"
+    ],
+    "size": 14
+  },
+  "211": {
+    "top_labels": [
+      "dash_to_hex()",
+      "Convert a standard UUID string to 32-character hex format. Parameters…",
+      "dash_to_hex should remove dashes from UUID.",
+      ".test_convert_uuid_to_hex()",
+      "test_id_utils.py",
+      "Tests for src/utils/id_utils.py - UUID generation and validation utilities.",
+      "Tests for dash_to_hex().",
+      "Valid dashed UUID should convert to hex format.",
+      "Invalid dashed UUID should raise ValueError.",
+      "hex -> dash -> hex should return original."
+    ],
+    "top_files": [
+      "tests/unit/test_id_utils.py",
+      "tests/integration/test_edge_cases.py",
+      "src/utils/id_utils.py"
+    ],
+    "size": 14
+  },
+  "212": {
+    "top_labels": [
+      "Test value normalization for comparison.",
+      "Test record ID extraction from different record formats.",
+      "Test that exact matching fields produce high confidence.",
+      "Test partial matching produces intermediate confidence.",
+      "Test completely different fields produce zero confidence.",
+      "Test that null values are skipped in confidence calculation.",
+      "Test helper functions used in heuristic scoring.",
+      "TestHeuristicScoringHelpers",
+      ".test_compute_heuristic_confidence_exact_match()",
+      ".test_compute_heuristic_confidence_no_common_fields()"
+    ],
+    "top_files": [
+      "tests/integration/test_resolve_entities.py"
+    ],
+    "size": 14
+  },
+  "213": {
+    "top_labels": [
+      "No session_id, no tags, nothing to add on top of the ambient metadata:…",
+      "No session_id at all (no thread id to key a trace on): fall back to the plain…",
+      "LANGFUSE_PUBLIC_KEY unset (or auth failed): still a no-op, exactly as before…",
+      "A graph run with NO callbacks bound at all (e.g. rehydrate_workflow before its…",
+      "The core Part 1.5 C.2 fix: inherit ambient tracing, don't replace it.",
+      "The defining regression test: LLMClient.call()'s trace_config() must not carry…",
+      "Ambient langfuse_tags (e.g. from an earlier trace_config call in the same node)…",
+      "TestTraceConfigInheritance",
+      ".test_ambient_manager_with_no_handlers_falls_back_to_standalone_path()",
+      ".test_inside_active_graph_run_does_not_attach_own_handler()"
+    ],
+    "top_files": [
+      "tests/unit/test_tracing.py"
+    ],
+    "size": 14
+  },
+  "214": {
+    "top_labels": [
+      "NodeFn",
+      "Wrap a node so its wall-clock seconds land in MergeState.timings. Centralised…",
+      "_timed()",
+      "wrapper()",
+      "_timed() merges elapsed wall time into state['timings'] without disturbing…",
+      "TestTimedWrapper",
+      ".test_node_returning_falsy_dict_still_gets_a_timing_entry()",
+      "fake_node()",
+      ".test_two_different_nodes_produce_independent_keys()",
+      "node_a()"
+    ],
+    "top_files": [
+      "",
+      "src/orchestrator/graph.py",
+      "tests/unit/test_graph_timing.py"
+    ],
+    "size": 13
+  },
+  "215": {
+    "top_labels": [
+      "mock_config_data()",
+      "fixture",
+      "Generate valid config for testing.",
+      "Create a mock workflow graph.",
+      "Mock end-to-end workflow tests.",
+      "Create a workflow manager with mocked graph.",
+      "Test full workflow lifecycle: start → poll → abort.",
+      "Test workflow with multiple origin databases.",
+      "TestEndToEndMockWorkflow",
+      ".mock_workflow_manager()"
+    ],
+    "top_files": [
+      "",
+      "tests/integration/test_graph_workflow.py"
+    ],
+    "size": 13
+  },
+  "216": {
+    "top_labels": [
+      "bootstrap.py",
+      "build_frontend()",
+      "check_python_version()",
+      "copy_env_example()",
+      "create_venv()",
+      "_fail()",
+      "install_python_deps()",
+      "main()",
+      "Path",
+      "One command from a fresh clone to a running app (Part 1.6.C). Cross-platform…"
+    ],
+    "top_files": [
+      "scripts/bootstrap.py",
+      ""
+    ],
+    "size": 12
+  },
+  "217": {
+    "top_labels": [
+      "._infer_type()",
+      "Infer a cross-database type from a Python value.",
+      "Tests for the static _infer_type helper.",
+      "TestInferType",
+      ".test_infer_bool()",
+      ".test_infer_dict()",
+      ".test_infer_float()",
+      ".test_infer_int()",
+      ".test_infer_list()",
+      ".test_infer_none()"
+    ],
+    "top_files": [
+      "tests/unit/test_mongodb_connector.py",
+      "src/mcp_server/connectors/mongodb.py"
+    ],
+    "size": 12
+  },
+  "218": {
+    "top_labels": [
+      "_validate_origin()",
+      "_validate_review_status()",
+      "test_metadata_graph.py",
+      "fixture",
+      "Unit tests for the V3 discovery-engine metadata store (Part B, P-1). All tests…",
+      "store()",
+      "store_config()",
+      "TestValidators",
+      ".test_an_unknown_origin_is_rejected()",
+      ".test_an_unknown_review_status_is_rejected()"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/metadata_graph.py",
+      "tests/unit/test_metadata_graph.py"
+    ],
+    "size": 12
+  },
+  "219": {
+    "top_labels": [
+      "None if the run is safe to load; a ``failure`` dict if it is not. Only ever…",
+      "_scoped_merge_guardrail_failure()",
+      "test_conflict_tiebreaks.py",
+      "Unit tests for conflict tiebreaks and the reconciliation report (Phase 6).",
+      "Phase 6.2: catch the exact Airbus-20->20 / Lockheed-9->9 signature (a scoped…",
+      "TestScopedMergeGuardrail",
+      "._clusters()",
+      ".test_does_not_fire_below_the_cluster_threshold()",
+      ".test_does_not_fire_for_an_unscoped_run()",
+      ".test_does_not_fire_when_some_clusters_auto_merged()"
+    ],
+    "top_files": [
+      "tests/unit/test_conflict_tiebreaks.py",
+      "src/orchestrator/nodes/load_data.py"
+    ],
+    "size": 12
+  },
+  "220": {
+    "top_labels": [
+      "build_origin_config()",
+      "Build an origin config dict from runtime values (e.g., from the UI). Origin…",
+      "Test that build_origin_config creates valid config dict.",
+      ".test_build_origin_config()",
+      "Tests for build_origin_config() function.",
+      "Should create postgres origin config dict.",
+      "Should create mongodb origin config dict.",
+      "Should accept custom priority.",
+      "TestBuildOriginConfig",
+      ".test_build_mongodb_origin()"
+    ],
+    "top_files": [
+      "tests/integration/test_config_resolution.py",
+      "src/utils/config_loader.py",
+      "tests/unit/test_config_loader.py"
+    ],
+    "size": 12
+  },
+  "221": {
+    "top_labels": [
+      "test_analyze_dependencies_join_graph.py",
+      "_fully_covered_state()",
+      "_partially_covered_state()",
+      "Any",
+      "asyncio",
+      "Unit tests for analyze_dependencies' join-graph-first cascade (audit §14.3,…",
+      "A declared FK (confidence=\"declared\" unconditionally, per build_join_graph's…",
+      "Same declared FK as above, plus a third entity (\"person\") whose only join…",
+      "TestJoinGraphFirstCascade",
+      ".test_fully_covered_graph_skips_the_llm_entirely()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_analyze_dependencies_join_graph.py"
+    ],
+    "size": 12
+  },
+  "222": {
+    "top_labels": [
+      "clusters()",
+      "_loadable_state()",
+      "Any",
+      "asyncio",
+      "fixture",
+      "parametrize",
+      "The same records resolved twice yield the same cluster ids.",
+      "Anything other than a literal True writes nothing.",
+      "test_gate_router_decisions()",
+      "test_load_refuses_without_explicit_approval()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_phase_k_gates.py"
+    ],
+    "size": 12
+  },
+  "223": {
+    "top_labels": [
+      "_isolated_cache()",
+      "fixture",
+      "MonkeyPatch",
+      "Path",
+      "Every test gets its own cache file and the global test-suite bypass (set in…",
+      "TestGetPut",
+      ".test_disable_env_var_forces_miss_even_when_cached()",
+      ".test_get_failure_degrades_to_none()",
+      ".test_miss_on_empty_cache()",
+      ".test_put_failure_is_swallowed()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_resolve_cache.py"
+    ],
+    "size": 12
+  },
+  "224": {
+    "top_labels": [
+      "Any",
+      "_rec()",
+      "TestContentHash",
+      ".test_deterministic_for_identical_input()",
+      ".test_order_independent()",
+      ".test_sensitive_to_blocking_keys()",
+      ".test_sensitive_to_entity_type()",
+      ".test_sensitive_to_llm_requested()",
+      ".test_sensitive_to_matching_rules()",
+      ".test_sensitive_to_record_content()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_resolve_cache.py"
+    ],
+    "size": 12
+  },
+  "225": {
+    "top_labels": [
+      "splink_compat.py",
+      "check_splink()",
+      "installed_minor_version()",
+      "RuntimeError",
+      "Runtime Splink version gate for every B.4 phase (Branch_Plan.md B.4). The…"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/splink_compat.py"
+    ],
+    "size": 11
+  },
+  "226": {
+    "top_labels": [
+      "parse_magnitude()",
+      "Parse a human-written magnitude to a float, or None if it isn't one. ``\"$6.7…",
+      "TestParseMagnitude",
+      ".test_bare_number()",
+      ".test_dollar_billion()",
+      ".test_dollar_million()",
+      ".test_empty_and_none()",
+      ".test_hex_id_is_not_a_magnitude()",
+      ".test_non_numeric_text()",
+      ".test_over_with_comma()"
+    ],
+    "top_files": [
+      "src/utils/value_coercion.py",
+      "tests/unit/test_value_coercion.py"
+    ],
+    "size": 11
+  },
+  "227": {
+    "top_labels": [
+      "_FakeConnector",
+      ".__init__()",
+      ".sample_distinct_values()",
+      "Any",
+      "asyncio",
+      "Duck-typed like PostgresConnector/PostgreSQLDestinationConnector's own…",
+      "TestValentinePhase0",
+      ".test_empty_destination_column_degrades_without_crash()",
+      ".test_incompatible_valentine_top_pick_falls_through_not_bypassed()",
+      ".test_zero_name_overlap_field_mapped_via_value_overlap_with_connector()"
+    ],
+    "top_files": [
+      "tests/unit/test_map_fields_valentine.py",
+      ""
+    ],
+    "size": 11
+  },
+  "228": {
+    "top_labels": [
+      "Tests for retry configuration parameters.",
+      "Custom max_attempts should be respected.",
+      "Linear backoff should work with custom parameters.",
+      "Exponential backoff should work with custom parameters.",
+      "TestRetryConfiguration",
+      ".test_custom_max_attempts()",
+      "func()",
+      ".test_exponential_backoff_config()",
+      "func()",
+      ".test_linear_backoff_config()"
+    ],
+    "top_files": [
+      "tests/unit/test_retry.py"
+    ],
+    "size": 11
+  },
+  "229": {
+    "top_labels": [
+      "tracing.py",
+      "get_trace_handler()",
+      "get_trace_handler_for_trace()",
+      "Any",
+      "Langfuse tracing setup (self-hosted, fully local). One shared LangChain…"
+    ],
+    "top_files": [
+      "",
+      "src/llm/tracing.py"
+    ],
+    "size": 10
+  },
+  "230": {
+    "top_labels": [
+      "_chunked_filters()",
+      "Split a single-condition ``{column: {\"op\": \"in\", \"value\": [...]}}`` filter into…",
+      "Unit tests for _chunked_filters in isolation (Phase 7 fix: a scoped merge's…",
+      "TestChunkedFilters",
+      ".test_a_large_in_filter_is_split_into_equal_chunks()"
+    ],
+    "top_files": [
+      "src/orchestrator/nodes/extract_data.py",
+      "tests/unit/test_extract_data_node.py"
+    ],
+    "size": 10
+  },
+  "231": {
+    "top_labels": [
+      "connections.py",
+      "add_to_recent()",
+      "conn_label()",
+      "load_persistent_history()",
+      "Recent-connection persistence for the merge-engine UI. Framework-agnostic:…"
+    ],
+    "top_files": [
+      "src/ui/connections.py"
+    ],
+    "size": 10
+  },
+  "232": {
+    "top_labels": [
+      "Test that sample row fields are included (up to 3).",
+      "Tests for the _build_schema_summary helper.",
+      "Test with empty schemas dict.",
+      "Test with one origin and one table.",
+      "Test that foreign keys are included in summary."
+    ],
+    "top_files": [
+      "tests/unit/test_analyze_dependencies_node.py"
+    ],
+    "size": 10
+  },
+  "233": {
+    "top_labels": [
+      "Tests for generate_uuid().",
+      "generate_uuid should return a string.",
+      "generate_uuid should return a 32-character string.",
+      "generate_uuid should return a valid hex string.",
+      "Multiple calls to generate_uuid should produce different values."
+    ],
+    "top_files": [
+      "tests/unit/test_id_utils.py"
+    ],
+    "size": 10
+  },
+  "234": {
+    "top_labels": [
+      "Tests for call_json() method.",
+      "call_json should parse JSON response.",
+      "Should extract JSON from markdown code blocks.",
+      "Should extract JSON without json tag.",
+      "Invalid JSON response should raise JSONDecodeError."
+    ],
+    "top_files": [
+      "tests/unit/test_llm_client.py"
+    ],
+    "size": 10
+  },
+  "235": {
+    "top_labels": [
+      "Tests for get_table_schema method.",
+      "get_table_schema should return empty for non-existent table.",
+      "get_table_schema should return column info for existing table.",
+      "get_table_schema should return primary key column name.",
+      "get_table_schema should close the cursor after use."
+    ],
+    "top_files": [
+      "tests/unit/test_postgresql_destination.py"
+    ],
+    "size": 10
+  },
+  "236": {
+    "top_labels": [
+      "Tests for add_column method.",
+      "add_column should execute ALTER TABLE ADD COLUMN.",
+      "add_column should return True when column already exists (idempotent).",
+      "add_column should return False on non-already-exists errors.",
+      "add_column should close the cursor after completion."
+    ],
+    "top_files": [
+      "tests/unit/test_postgresql_destination.py"
+    ],
+    "size": 10
+  },
+  "237": {
+    "top_labels": [
+      "Tests for PostgreSQLDestinationConnector initialization.",
+      "__init__ should store the config dict.",
+      "__init__ should set _connection to None before first use.",
+      "__init__ should store schema from config.",
+      "__init__ should default schema to 'public' when not in config."
+    ],
+    "top_files": [
+      "tests/unit/test_postgresql_destination.py"
+    ],
+    "size": 10
+  },
+  "238": {
+    "top_labels": [
+      "Tests for TransientError exception.",
+      "TransientError should inherit from Exception.",
+      "TransientError should store the error message.",
+      "TransientError should store retry_after value.",
+      "TransientError should default retry_after to None."
+    ],
+    "top_files": [
+      "tests/unit/test_retry.py"
+    ],
+    "size": 10
+  },
+  "239": {
+    "top_labels": [
+      "relationship_scoring.py",
+      "_normalize_type()",
+      "V3 relationship discovery & scoring (Part B, P-6). Extends ``join_graph.py``…",
+      "Coarse type family, so ClickHouse's `String` and PostgreSQL's `character…",
+      "score_datatype()"
+    ],
+    "top_files": [
+      "src/mcp_server/tools/relationship_scoring.py",
+      "tests/unit/test_relationship_scoring.py"
+    ],
+    "size": 9
+  },
+  "240": {
+    "top_labels": [
+      "drive_app.py",
+      "assert_budgets()",
+      "drive()",
+      "log()",
+      "main()"
+    ],
+    "top_files": [
+      "scripts/diagnostics/drive_app.py"
+    ],
+    "size": 9
+  },
+  "241": {
+    "top_labels": [
+      "lint_docs.py",
+      "check_citations()",
+      "check_links()",
+      "main()",
+      "Path"
+    ],
+    "top_files": [
+      "",
+      "scripts/lint_docs.py"
+    ],
+    "size": 9
+  },
+  "242": {
+    "top_labels": [
+      "workflow_cost()",
+      "workflow_timeline()",
+      "_load_run_report()",
+      "Any",
+      ".for_run()"
+    ],
+    "top_files": [
+      "",
+      "src/api/main.py",
+      "src/llm/cost.py"
+    ],
+    "size": 9
+  },
+  "243": {
+    "top_labels": [
+      "_has_active_callbacks()",
+      "True when ``callbacks`` (a ``RunnableConfig[\"callbacks\"]`` value) already…",
+      "_has_active_callbacks must not be fooled by LangGraph's empty…",
+      "TestHasActiveCallbacks",
+      ".test_empty_list_is_inactive()"
+    ],
+    "top_files": [
+      "tests/unit/test_tracing.py",
+      "src/llm/tracing.py"
+    ],
+    "size": 9
+  },
+  "244": {
+    "top_labels": [
+      "Deterministic Langfuse trace id for a given session (workflow thread id). A…",
+      "trace_id_for_session()",
+      "No graph run in progress (e.g. tests/prompts/harness.py): attach a handler and…",
+      "Part 1.5 C.3: the deterministic trace id every top-level run for a thread must…",
+      ".test_standalone_no_ambient_callbacks_attaches_own_handler()"
+    ],
+    "top_files": [
+      "tests/unit/test_tracing.py",
+      "src/llm/tracing.py"
+    ],
+    "size": 9
+  },
+  "245": {
+    "top_labels": [
+      "_classify_relationship_type()",
+      "Any",
+      "Combine the ten already-computed signals into an overall confidence and a…",
+      "score_relationship()",
+      "TestScoreRelationship"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/relationship_scoring.py",
+      "tests/unit/test_relationship_scoring.py"
+    ],
+    "size": 9
+  },
+  "246": {
+    "top_labels": [
+      "Persist one scored relationship via ``MetadataStore.insert_relationship``…",
+      "store_relationship()",
+      "Any",
+      "PreSplink §21: 'each stored as evidence with the coverage formula' -- live-…",
+      "TestStoreRelationship"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/relationship_scoring.py",
+      "tests/unit/test_relationship_scoring.py"
+    ],
+    "size": 9
+  },
+  "247": {
+    "top_labels": [
+      "_average_linkage()",
+      "_partition_component()",
+      "Split one connected component into defensible clusters. Returns (partitions,…",
+      "Mean similarity over all member pairs, missing edges counting as 0. A chain…",
+      "Drop the weakest edges and re-derive components, recursing as needed."
+    ],
+    "top_files": [
+      "tests/unit/test_phase_l_matching.py",
+      "src/mcp_server/tools/resolve_entities.py"
+    ],
+    "size": 9
+  },
+  "248": {
+    "top_labels": [
+      "_build_coverage_matrix()",
+      "find_entity_for_table()",
+      "Scan database schemas for foreign key column patterns and map to entity…",
+      "The real column on ``table_info`` the heuristic ID-column match (above) should…",
+      "_resolve_parent_key_column()"
+    ],
+    "top_files": [
+      "src/orchestrator/nodes/analyze_dependencies.py",
+      "tests/unit/test_analyze_dependencies_node.py"
+    ],
+    "size": 9
+  },
+  "249": {
+    "top_labels": [
+      "_create_checkpointer()",
+      "adelete_thread()",
+      "aget_tuple()",
+      "alist()",
+      "aput()"
+    ],
+    "top_files": [
+      "src/orchestrator/workflow_manager.py"
+    ],
+    "size": 9
+  },
+  "250": {
+    "top_labels": [
+      "update_platform_config()",
+      "load_platform_overrides()",
+      "Any",
+      "Return the platform overlay dict, or {} if none exists.",
+      "Persist the platform overlay. Secrets are refused, never written."
+    ],
+    "top_files": [
+      "",
+      "src/api/main.py",
+      "src/utils/config_loader.py"
+    ],
+    "size": 8
+  },
+  "251": {
+    "top_labels": [
+      "infer_single_column_candidates()",
+      "From P-3 profiles alone -- ``{column_name: profile_dict}``. A column already…",
+      "TestInferSingleColumnCandidates",
+      ".test_high_null_ratio_is_rejected_even_if_unique_among_non_nulls()",
+      ".test_high_unique_low_null_column_is_proposed()"
+    ],
+    "top_files": [
+      "src/mcp_server/tools/candidate_keys.py",
+      "tests/unit/test_candidate_keys.py"
+    ],
+    "size": 8
+  },
+  "252": {
+    "top_labels": [
+      "Reuses P-4's classification when available; falls back to the same generic id-…",
+      "score_identifier_likelihood()",
+      "Live-caught (BP-B, real ClickHouse origin2.Company.companyID): the name-shape…",
+      "TestScoreIdentifierLikelihood",
+      ".test_camelcase_id_columns_get_the_name_shape_signal_too()"
+    ],
+    "top_files": [
+      "src/mcp_server/tools/relationship_scoring.py",
+      "tests/unit/test_relationship_scoring.py"
+    ],
+    "size": 8
+  },
+  "253": {
+    "top_labels": [
+      "DataFrame",
+      "Run all three ADR-0005 matchers and merge their results. Returns…",
+      "run_valentine_candidates()",
+      "TestRunValentineCandidates",
+      ".test_a_column_with_no_counterpart_gets_no_candidates_or_only_weak_ones()"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/schema_matching.py",
+      "tests/unit/test_schema_matching.py"
+    ],
+    "size": 8
+  },
+  "254": {
+    "top_labels": [
+      "_apply_run_config_overrides()",
+      "Part 1.6.A: apply this run's UI-set overrides in place. ``run_config`` only…",
+      "Part 1.6.A: run_config overrides llm_config/extraction_config in place, but…",
+      "TestRunConfigOverrides",
+      ".test_batch_size_maps_onto_default_batch_size()"
+    ],
+    "top_files": [
+      "src/orchestrator/graph.py",
+      "tests/unit/test_matching_rules_and_policy.py"
+    ],
+    "size": 8
+  },
+  "255": {
+    "top_labels": [
+      "Edge cases for entity resolution.",
+      "Entity resolution should return single entity when no matches.",
+      "Entity resolution should handle empty data gracefully.",
+      "Entity resolution should detect identical records as potential duplicates.",
+      "TestEntityResolutionEdgeCases"
+    ],
+    "top_files": [
+      "tests/integration/test_edge_cases.py"
+    ],
+    "size": 8
+  },
+  "256": {
+    "top_labels": [
+      "Edge cases for field mapping.",
+      "Field mapping should handle case with no unmapped fields.",
+      "Field mapping should handle case where all fields are unmapped.",
+      "Field mapping should handle empty table mappings.",
+      "TestFieldMappingEdgeCases"
+    ],
+    "top_files": [
+      "tests/integration/test_edge_cases.py"
+    ],
+    "size": 8
+  },
+  "257": {
+    "top_labels": [
+      "Edge cases for pipeline state management.",
+      "State dict should have correct default values.",
+      "State dict should reset to initial state.",
+      "State should support interruption data.",
+      "TestStateManagementEdgeCases"
+    ],
+    "top_files": [
+      "tests/integration/test_edge_cases.py"
+    ],
+    "size": 8
+  },
+  "258": {
+    "top_labels": [
+      "Edge cases for retry logic.",
+      "TransientError should be caught by retry decorator.",
+      "PermanentError should NOT be caught by retry decorator.",
+      "TransientError and PermanentError should inherit from RuntimeError.",
+      "TestRetryEdgeCases"
+    ],
+    "top_files": [
+      "tests/integration/test_edge_cases.py"
+    ],
+    "size": 8
+  },
+  "259": {
+    "top_labels": [
+      "Tests asserting the exact pipeline topology in NODE_SUCCESSOR.",
+      "Schema discovery must run before entity parsing (Phase 9).",
+      "map_fields runs before extract_data, not after unify_entities. This move…",
+      "Phase 8.1: plan_scope must have a NODE_SUCCESSOR entry. plan_scope_impl…",
+      "TestNodeOrder"
+    ],
+    "top_files": [
+      "tests/integration/test_graph_workflow.py"
+    ],
+    "size": 8
+  },
+  "260": {
+    "top_labels": [
+      "Tests for the close() method.",
+      "close() should close the psycopg2 connection.",
+      "close() should do nothing when connection is already closed.",
+      "close() should do nothing when _connection is None.",
+      "TestClose"
+    ],
+    "top_files": [
+      "tests/unit/test_postgresql_destination.py"
+    ],
+    "size": 8
+  },
+  "261": {
+    "top_labels": [
+      "Tests for list_tables method.",
+      "list_tables should return table names in the target schema.",
+      "list_tables should return empty list when no tables exist.",
+      "list_tables should close the cursor after use.",
+      "TestListTables"
+    ],
+    "top_files": [
+      "tests/unit/test_postgresql_destination.py"
+    ],
+    "size": 8
+  },
+  "262": {
+    "top_labels": [
+      "Tests for column_exists method.",
+      "column_exists should return True when column exists.",
+      "column_exists should return False when column doesn't exist.",
+      "column_exists should close the cursor after use.",
+      "TestColumnExists"
+    ],
+    "top_files": [
+      "tests/unit/test_postgresql_destination.py"
+    ],
+    "size": 8
+  },
+  "263": {
+    "top_labels": [
+      "correct_ground_truth_airbus.py",
+      "link_evidence()",
+      "make_evidence()",
+      "new_item()",
+      "Set valid_to=TODAY on the current live description fact (audit trail preserved,…"
+    ],
+    "top_files": [
+      "scripts/ground_truth/correct_ground_truth_airbus.py"
+    ],
+    "size": 7
+  },
+  "264": {
+    "top_labels": [
+      "lint_portability.py",
+      "check_hardcoded_paths()",
+      "check_required_files()",
+      "main()",
+      "Path"
+    ],
+    "top_files": [
+      "",
+      "scripts/lint_portability.py"
+    ],
+    "size": 7
+  },
+  "265": {
+    "top_labels": [
+      "_group_mapping_by_dest_table()",
+      "Split one entity's field mapping by which destination table it targets. A plain…",
+      "TestGroupMappingByDestTable",
+      ".test_cross_table_entries_split_into_their_own_group()",
+      ".test_dest_table_equal_to_primary_stays_in_primary_group()"
+    ],
+    "top_files": [
+      "src/mcp_server/tools/load_data.py",
+      "tests/unit/test_load_data_cross_table.py"
+    ],
+    "size": 7
+  },
+  "266": {
+    "top_labels": [
+      "The exact, database-verified coverage(child->parent) = |distinct (child)…",
+      "score_inclusion_coverage()",
+      "asyncio",
+      "TestScoreInclusionCoverage",
+      ".test_a_sampling_failure_is_caught_not_propagated()"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/relationship_scoring.py",
+      "tests/unit/test_relationship_scoring.py"
+    ],
+    "size": 7
+  },
+  "267": {
+    "top_labels": [
+      "A heavily-null FK-candidate column is weaker evidence of a real, consistently-…",
+      "score_null_behaviour()",
+      "test_relationship_scoring.py",
+      "Unit tests for V3 relationship discovery & scoring (Part B, P-6). Each of the…",
+      "TestScoreNullBehaviour"
+    ],
+    "top_files": [
+      "src/mcp_server/tools/relationship_scoring.py",
+      "tests/unit/test_relationship_scoring.py"
+    ],
+    "size": 7
+  },
+  "268": {
+    "top_labels": [
+      "The child table's name plausibly refers to the parent table…",
+      "Local copy of join_graph.py's own singulariser -- not imported, to keep this…",
+      "score_table_semantics()",
+      "_singularise()",
+      "TestScoreTableSemantics"
+    ],
+    "top_files": [
+      "src/mcp_server/tools/relationship_scoring.py",
+      "tests/unit/test_relationship_scoring.py"
+    ],
+    "size": 7
+  },
+  "269": {
+    "top_labels": [
+      "Tier 3: the LLM sees only what tiers 1+2 left ambiguous. Returns updated…",
+      "resolve_ambiguous_columns()",
+      "asyncio",
+      "TestResolveAmbiguousColumns",
+      ".test_llm_accept_decision_updates_the_best_candidate()"
+    ],
+    "top_files": [
+      "",
+      "src/mcp_server/tools/schema_matching.py",
+      "tests/unit/test_schema_matching.py"
+    ],
+    "size": 7
+  },
+  "270": {
+    "top_labels": [
+      "_gate_router()",
+      "route()",
+      "Build the conditional-edge router for one HITL gate. The four decisions a gate…",
+      "Retry at final approval must not loop; load_data's guard decides.",
+      "A user cannot loop a gate forever."
+    ],
+    "top_files": [
+      "src/orchestrator/graph.py",
+      "tests/unit/test_phase_k_gates.py"
+    ],
+    "size": 7
+  },
+  "271": {
+    "top_labels": [
+      "TestReviewPrioritisation",
+      "._preds()",
+      ".test_bands_are_disjoint_and_complete()",
+      ".test_inverted_thresholds_are_rejected()",
+      ".test_limit_truncates_the_queue_but_not_the_count()"
+    ],
+    "top_files": [
+      "tests/unit/test_splink_workbench_helpers.py"
+    ],
+    "size": 7
+  },
+  "272": {
+    "top_labels": [
+      "TestRehydrateWorkflow",
+      ".test_completed_workflow()",
+      ".test_died_mid_node_reports_failed()",
+      ".test_get_state_error_returns_not_found()",
+      ".test_in_memory_entry_wins()"
+    ],
+    "top_files": [
+      "tests/unit/test_workflow_persistence.py"
+    ],
+    "size": 7
+  },
+  "273": {
+    "top_labels": [
+      "test_tracing.py",
+      "fixture",
+      "Unit tests for src/llm/tracing.py (Part 1.5 C.2). No coverage existed for this…",
+      "_handler/_initialized/_last_attempt_monotonic/_no_key_at_startup are module-…",
+      "_reset_tracing_singleton()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_tracing.py"
+    ],
+    "size": 6
+  },
+  "274": {
+    "top_labels": [
+      "no_new_bare_except_pass.py",
+      "_block_count()",
+      "_head_content()",
+      "main()",
+      "Path"
+    ],
+    "top_files": [
+      "",
+      "scripts/hooks/no_new_bare_except_pass.py"
+    ],
+    "size": 6
+  },
+  "275": {
+    "top_labels": [
+      ".add_column()",
+      "._clickhouse_type_from_string()",
+      ".extend_schema_batch()",
+      "Normalize a cross-database type string to ClickHouse-compatible type.",
+      "Add a column to an existing table. Parameters ---------- table_name : str…"
+    ],
+    "top_files": [
+      "src/mcp_server/connectors/clickhouse_destination.py"
+    ],
+    "size": 6
+  },
+  "276": {
+    "top_labels": [
+      "A child FK-shaped column pointing at a parent that P-4 also classified as…",
+      "score_semantic_type()",
+      "TestScoreSemanticType",
+      ".test_child_pointing_at_a_parent_identifier_is_strong_evidence()",
+      ".test_unclassified_columns_are_neutral_not_penalized()"
+    ],
+    "top_files": [
+      "src/mcp_server/tools/relationship_scoring.py",
+      "tests/unit/test_relationship_scoring.py"
+    ],
+    "size": 6
+  },
+  "277": {
+    "top_labels": [
+      "Two checks, either of which is enough to count as a strong match: the columns…",
+      "score_name_similarity()",
+      "TestScoreNameSimilarity",
+      ".test_convention_match_on_singularised_parent_table_scores_perfectly()",
+      ".test_exact_column_name_match_scores_perfectly()"
+    ],
+    "top_files": [
+      "src/mcp_server/tools/relationship_scoring.py",
+      "tests/unit/test_relationship_scoring.py"
+    ],
+    "size": 6
+  },
+  "278": {
+    "top_labels": [
+      "Cheap, approximate overlap over two ALREADY-fetched samples -- no query of its…",
+      "score_value_overlap()",
+      "TestScoreValueOverlap",
+      ".test_empty_child_sample_scores_zero_not_a_division_error()",
+      ".test_full_overlap_scores_1_0()"
+    ],
+    "top_files": [
+      "src/mcp_server/tools/relationship_scoring.py",
+      "tests/unit/test_relationship_scoring.py"
+    ],
+    "size": 6
+  },
+  "279": {
+    "top_labels": [
+      "A parent column backed by a declared or inferred candidate key (P-5) is a…",
+      "score_target_uniqueness()",
+      "TestScoreTargetUniqueness",
+      ".test_a_declared_key_scores_1_0()",
+      ".test_an_inferred_only_key_scores_lower()"
+    ],
+    "top_files": [
+      "src/mcp_server/tools/relationship_scoring.py",
+      "tests/unit/test_relationship_scoring.py"
+    ],
+    "size": 6
+  },
+  "280": {
+    "top_labels": [
+      "The classic FK shape: parent side near-unique (it's the one side), child side…",
+      "score_cardinality()",
+      "TestScoreCardinality",
+      ".test_both_sides_unique_infers_one_to_one()",
+      ".test_neither_side_unique_is_unclear_and_scores_low()"
+    ],
+    "top_files": [
+      "src/mcp_server/tools/relationship_scoring.py",
+      "tests/unit/test_relationship_scoring.py"
+    ],
+    "size": 6
+  },
+  "281": {
+    "top_labels": [
+      "Tests for graph edge/connectivity configuration.",
+      "Graph should have a START edge to preflight.",
+      "Graph should have conditional edges for human-in-the-loop flow.",
+      "TestGraphEdges",
+      ".test_graph_has_conditional_edges()"
+    ],
+    "top_files": [
+      "tests/integration/test_graph_workflow.py"
+    ],
+    "size": 6
+  },
+  "282": {
+    "top_labels": [
+      "fixture",
+      "Give every test its own spool directory. Extraction now writes rows to…",
+      "Mock extract_data_impl.",
+      "_spool_isolation()",
+      ".base_state()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_extract_data_node.py"
+    ],
+    "size": 6
+  },
+  "283": {
+    "top_labels": [
+      "Create a mock that returns fresh row dicts on each call to avoid mutation…",
+      "Test that extracted rows get origin metadata tags.",
+      "._make_fresh_mock()",
+      "fresh_rows()",
+      ".test_extract_data_tags_origin_metadata()"
+    ],
+    "top_files": [
+      "tests/unit/test_extract_data_node.py"
+    ],
+    "size": 6
+  },
+  "284": {
+    "top_labels": [
+      "Tests for _get_model() method.",
+      "Should create ChatOpenAI model on first call.",
+      "Should return cached model on subsequent calls.",
+      "TestLLMClientGetModel",
+      ".test_cached_model()"
+    ],
+    "top_files": [
+      "tests/unit/test_llm_client.py"
+    ],
+    "size": 6
+  },
+  "285": {
+    "top_labels": [
+      "Any",
+      "Phase 0 Sec 0.8: the legacy `config=` branch of get_initial_state (used when no…",
+      "TestGetInitialStateLegacyConfigPath",
+      "._config_with_origins()",
+      ".test_conflict_policy_override_reaches_state_via_the_legacy_path()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_matching_rules_and_policy.py"
+    ],
+    "size": 6
+  },
+  "286": {
+    "top_labels": [
+      "langgraph.json",
+      "dependencies",
+      "env",
+      "graphs",
+      "merge_engine"
+    ],
+    "top_files": [
+      "langgraph.json"
+    ],
+    "size": 5
+  },
+  "287": {
+    "top_labels": [
+      "The 43M-row run lost 24,200,000 rows to this. Cleanup used to delete every…",
+      "TestCleanupNeverDeletesLiveSpools",
+      ".test_a_genuinely_old_spool_is_swept()",
+      ".test_a_spool_being_written_right_now_survives()",
+      ".test_an_old_spool_still_in_the_keep_set_survives()"
+    ],
+    "top_files": [
+      "tests/unit/test_spool.py"
+    ],
+    "size": 5
+  },
+  "288": {
+    "top_labels": [
+      "__init__.py",
+      "LLM integration modules for merge-engine. Provides prompt templates and an…",
+      "Read a prompt template file and return its contents.",
+      "_read_prompt()"
+    ],
+    "top_files": [
+      "src/llm/__init__.py"
+    ],
+    "size": 4
+  },
+  "289": {
+    "top_labels": [
+      "Regression test for the bug that crashed parse_request on any PostgreSQL…",
+      "._prompts()",
+      "TestPostgresqlOriginIdentity",
+      ".test_postgresql_origin_with_full_name_does_not_orphan()"
+    ],
+    "top_files": [
+      "tests/unit/test_parse_request_node.py"
+    ],
+    "size": 4
+  },
+  "290": {
+    "top_labels": [
+      "_LoadAborted",
+      "RuntimeError",
+      "Raised to roll the load transaction back after a failed entity."
+    ],
+    "top_files": [
+      "",
+      "src/orchestrator/nodes/load_data.py"
+    ],
+    "size": 3
+  },
+  "291": {
+    "top_labels": [
+      ".context()",
+      "Any",
+      "The where-and-how-much, for the error gate to render."
+    ],
+    "top_files": [
+      "",
+      "src/orchestrator/utils/retry.py"
+    ],
+    "size": 3
+  },
+  "292": {
+    "top_labels": [
+      "asyncio",
+      "The point of the whole feature: an incoming subject that matches an existing…",
+      "test_cluster_adopts_the_destination_id()"
+    ],
+    "top_files": [
+      "",
+      "tests/unit/test_dest_dedup.py"
+    ],
+    "size": 3
+  },
+  "293": {
+    "top_labels": [
+      "Silent loss becomes a loud failure.",
+      ".test_a_spool_replaced_mid_run_raises()",
+      "sabotage()"
+    ],
+    "top_files": [
+      "tests/unit/test_spool.py"
+    ],
+    "size": 3
+  },
+  "294": {
+    "top_labels": [
+      "TestValidateDataGraphPosition",
+      ".test_node_is_registered_in_the_graph()",
+      ".test_sits_between_extract_data_and_resolve_entities()"
+    ],
+    "top_files": [
+      "tests/unit/test_validate_data_node.py"
+    ],
+    "size": 3
+  },
+  "295": {
+    "top_labels": [
+      "__init__.py",
+      "FastAPI backend for the merge-engine UI (replaces the Gradio app)."
+    ],
+    "top_files": [
+      "src/api/__init__.py"
+    ],
+    "size": 2
+  },
+  "296": {
+    "top_labels": [
+      "__init__.py",
+      "Entity-resolution evaluation harness. Phase L rule: no matching threshold moves…"
+    ],
+    "top_files": [
+      "tests/eval/__init__.py"
+    ],
+    "size": 2
+  },
+  "297": {
+    "top_labels": [
+      "__init__.py",
+      "Integration tests for merge-engine."
+    ],
+    "top_files": [
+      "tests/integration/__init__.py"
+    ],
+    "size": 2
+  },
+  "298": {
+    "top_labels": [
+      "agents_md"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/AGENTS.md"
+    ],
+    "size": 1
+  },
+  "299": {
+    "top_labels": [
+      "architecture"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/TECHNICAL_README.md"
+    ],
+    "size": 1
+  },
+  "300": {
+    "top_labels": [
+      "backlog"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/TODO.md"
+    ],
+    "size": 1
+  },
+  "301": {
+    "top_labels": [
+      "branch_plan"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/Branch_Plan.md"
+    ],
+    "size": 1
+  },
+  "302": {
+    "top_labels": [
+      "bug_fixes"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/TODO.md"
+    ],
+    "size": 1
+  },
+  "303": {
+    "top_labels": [
+      "ci"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/AGENTS.md"
+    ],
+    "size": 1
+  },
+  "304": {
+    "top_labels": [
+      "claude_code"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/AGENTS.md"
+    ],
+    "size": 1
+  },
+  "305": {
+    "top_labels": [
+      "claude_code"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/CLAUDE.md"
+    ],
+    "size": 1
+  },
+  "306": {
+    "top_labels": [
+      "claude_md"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/CLAUDE.md"
+    ],
+    "size": 1
+  },
+  "307": {
+    "top_labels": [
+      "cli_tool"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/TECHNICAL_README.md"
+    ],
+    "size": 1
+  },
+  "308": {
+    "top_labels": [
+      "code_review"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/AGENTS.md"
+    ],
+    "size": 1
+  },
+  "309": {
+    "top_labels": [
+      "coding_agent"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/AGENTS.md"
+    ],
+    "size": 1
+  },
+  "310": {
+    "top_labels": [
+      "coding_standards"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/CLAUDE.md"
+    ],
+    "size": 1
+  },
+  "311": {
+    "top_labels": [
+      "coverage"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/.gitea/workflows/ci.yml"
+    ],
+    "size": 1
+  },
+  "312": {
+    "top_labels": [
+      "dependency_injection"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/TECHNICAL_README.md"
+    ],
+    "size": 1
+  },
+  "313": {
+    "top_labels": [
+      "feature_branch"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/Branch_Plan.md"
+    ],
+    "size": 1
+  },
+  "314": {
+    "top_labels": [
+      "feature_requests"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/TODO.md"
+    ],
+    "size": 1
+  },
+  "315": {
+    "top_labels": [
+      "git"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/AGENTS.md"
+    ],
+    "size": 1
+  },
+  "316": {
+    "top_labels": [
+      "git_flow"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/Branch_Plan.md"
+    ],
+    "size": 1
+  },
+  "317": {
+    "top_labels": [],
+    "top_files": [],
+    "size": 1
+  },
+  "318": {
+    "top_labels": [],
+    "top_files": [],
+    "size": 1
+  },
+  "319": {
+    "top_labels": [],
+    "top_files": [],
+    "size": 1
+  },
+  "320": {
+    "top_labels": [],
+    "top_files": [],
+    "size": 1
+  },
+  "321": {
+    "top_labels": [
+      "main_branch"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/Branch_Plan.md"
+    ],
+    "size": 1
+  },
+  "322": {
+    "top_labels": [
+      "merge_engine"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/.gitea/workflows/ci.yml"
+    ],
+    "size": 1
+  },
+  "323": {
+    "top_labels": [
+      "merge_engine"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/AGENTS.md"
+    ],
+    "size": 1
+  },
+  "324": {
+    "top_labels": [
+      "merge_engine"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/CLAUDE.md"
+    ],
+    "size": 1
+  },
+  "325": {
+    "top_labels": [
+      "merge_engine"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/README.md"
+    ],
+    "size": 1
+  },
+  "326": {
+    "top_labels": [
+      "merge_engine"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/TECHNICAL_README.md"
+    ],
+    "size": 1
+  },
+  "327": {
+    "top_labels": [
+      "merge_engine"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/TODO.md"
+    ],
+    "size": 1
+  },
+  "328": {
+    "top_labels": [
+      "merge_strategy"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/Branch_Plan.md"
+    ],
+    "size": 1
+  },
+  "329": {
+    "top_labels": [
+      "mypy"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/.pre-commit-config.yaml"
+    ],
+    "size": 1
+  },
+  "330": {
+    "top_labels": [
+      "openwiki"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/.github/workflows/openwiki-update.yml"
+    ],
+    "size": 1
+  },
+  "331": {
+    "top_labels": [
+      "merge-engine"
+    ],
+    "top_files": [
+      "pyproject.toml"
+    ],
+    "size": 1
+  },
+  "332": {
+    "top_labels": [
+      "plugin_system"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/TECHNICAL_README.md"
+    ],
+    "size": 1
+  },
+  "333": {
+    "top_labels": [
+      "pre_commit"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/.pre-commit-config.yaml"
+    ],
+    "size": 1
+  },
+  "334": {
+    "top_labels": [
+      "precommit_config"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/.pre-commit-config.yaml"
+    ],
+    "size": 1
+  },
+  "335": {
+    "top_labels": [
+      "project_rules"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/CLAUDE.md"
+    ],
+    "size": 1
+  },
+  "336": {
+    "top_labels": [
+      "pytest"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/.gitea/workflows/ci.yml"
+    ],
+    "size": 1
+  },
+  "337": {
+    "top_labels": [
+      "python"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/.gitea/workflows/ci.yml"
+    ],
+    "size": 1
+  },
+  "338": {
+    "top_labels": [
+      "python"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/TECHNICAL_README.md"
+    ],
+    "size": 1
+  },
+  "339": {
+    "top_labels": [
+      "python_package"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/README.md"
+    ],
+    "size": 1
+  },
+  "340": {
+    "top_labels": [
+      "readme"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/README.md"
+    ],
+    "size": 1
+  },
+  "341": {
+    "top_labels": [
+      "ruff"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/.pre-commit-config.yaml"
+    ],
+    "size": 1
+  },
+  "342": {
+    "top_labels": [
+      "ruff_format"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/.pre-commit-config.yaml"
+    ],
+    "size": 1
+  },
+  "343": {
+    "top_labels": [
+      "__init__.py"
+    ],
+    "top_files": [
+      "scripts/hooks/__init__.py"
+    ],
+    "size": 1
+  },
+  "344": {
+    "top_labels": [
+      "__init__.py"
+    ],
+    "top_files": [
+      "scripts/__init__.py"
+    ],
+    "size": 1
+  },
+  "345": {
+    "top_labels": [
+      "__init__.py"
+    ],
+    "top_files": [
+      "src/__init__.py"
+    ],
+    "size": 1
+  },
+  "346": {
+    "top_labels": [
+      "__init__.py"
+    ],
+    "top_files": [
+      "src/mcp_server/__init__.py"
+    ],
+    "size": 1
+  },
+  "347": {
+    "top_labels": [
+      "__init__.py"
+    ],
+    "top_files": [
+      "src/orchestrator/__init__.py"
+    ],
+    "size": 1
+  },
+  "348": {
+    "top_labels": [
+      "__init__.py"
+    ],
+    "top_files": [
+      "src/ui/components/__init__.py"
+    ],
+    "size": 1
+  },
+  "349": {
+    "top_labels": [
+      "strategy_pattern"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/TECHNICAL_README.md"
+    ],
+    "size": 1
+  },
+  "350": {
+    "top_labels": [
+      "task_delegation"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/AGENTS.md"
+    ],
+    "size": 1
+  },
+  "351": {
+    "top_labels": [
+      "technical_readme"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/TECHNICAL_README.md"
+    ],
+    "size": 1
+  },
+  "352": {
+    "top_labels": [
+      "__init__.py"
+    ],
+    "top_files": [
+      "tests/prompts/__init__.py"
+    ],
+    "size": 1
+  },
+  "353": {
+    "top_labels": [
+      "todo_md"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/TODO.md"
+    ],
+    "size": 1
+  },
+  "354": {
+    "top_labels": [
+      "tox"
+    ],
+    "top_files": [
+      "/home/bayern/Projects/merge-engine/.gitea/workflows/ci.yml"
+    ],
+    "size": 1
+  }
+}

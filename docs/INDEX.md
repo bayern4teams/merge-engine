@@ -21,6 +21,24 @@ Split from the old root `TECHNICAL_README.md`, by subsystem, in reading order:
 ## decisions/ — ADRs, one per locked decision
 
 - [0003-server-ci-unreachable.md](decisions/0003-server-ci-unreachable.md) — why server-side CI is undone (`git.n4t.com` unreachable) and the revisit trigger
+- [0004-adopt-splink-matcher.md](decisions/0004-adopt-splink-matcher.md) — Splink 4.0.16 as a second matching engine, gated behind BP-B4's measured A/B comparison
+- [0005-adopt-valentine-schema-matching.md](decisions/0005-adopt-valentine-schema-matching.md) — Valentine as the first-pass schema matcher ahead of the LLM
+- [0006-adopt-desbordante-optional-agpl-isolated.md](decisions/0006-adopt-desbordante-optional-agpl-isolated.md) — Desbordante for deep profiling, optional extra, AGPL isolated to one module
+- [0007-adopt-datasketch-containment-queries.md](decisions/0007-adopt-datasketch-containment-queries.md) — `MinHashLSHEnsemble` as a candidate-pruning accelerator ahead of the exact SQL check
+- [0008-adopt-great-expectations-optional-format-checks.md](decisions/0008-adopt-great-expectations-optional-format-checks.md) — Great Expectations for format-level checks `data_quality.py` didn't have
+- [0009-adopt-networkx-sqlglot-jailer-model.md](decisions/0009-adopt-networkx-sqlglot-jailer-model.md) — networkx + sqlglot + the Jailer subject/association model for graph traversal, lineage, extraction
+- [0010-reject-openmetadata.md](decisions/0010-reject-openmetadata.md) — rejected: four new services for a catalog UI this project would still have to wrap
+- [0011-reject-datahub-adopt-its-model.md](decisions/0011-reject-datahub-adopt-its-model.md) — rejected as infrastructure, its source/dataset/column metadata model adopted into PostgreSQL
+- [0012-reject-neo4j.md](decisions/0012-reject-neo4j.md) — rejected: PostgreSQL + networkx covers every traversal at this graph's actual size
+- [0013-informatica-benchmark-only.md](decisions/0013-informatica-benchmark-only.md) — capability benchmark only, never a dependency
+- [0014-replace-budget-truncation-with-blocking-analysis.md](decisions/0014-replace-budget-truncation-with-blocking-analysis.md) — costed blocking before pair generation, replacing after-the-fact truncation
+- [0015-v3-discovery-engine-flag.md](decisions/0015-v3-discovery-engine-flag.md) — P-9's engine wired into `plan_scope_impl` as a `scope_config.engine` flag, scoped to planning only (not extraction execution)
+- [0016-splink-model-versioning-file-store.md](decisions/0016-splink-model-versioning-file-store.md) — B.4 S-N: trained Splink models as immutable file-store versions, activation as a pointer, round-trip-verify gating activation
+- [0017-reject-hiergat.md](decisions/0017-reject-hiergat.md) — rejected: unmaintained PyTorch 1.4/Python 3.7 research code; its relational-signal finding corroborates B.5, adopted natively instead
+- [0018-reject-relater-code-adopt-idea.md](decisions/0018-reject-relater-code-adopt-idea.md) — rejected: Python 2, 2-commit snapshot; its relational-matching idea lands natively as B.5's `_relational_agreement`
+- [0019-utopia-reference-only.md](decisions/0019-utopia-reference-only.md) — reference only: this project's own `kg` schema is already the bitemporal, evidence-carrying decision ledger Utopia demonstrates
+- [0020-ontop-study-not-aws-accelerator.md](decisions/0020-ontop-study-not-aws-accelerator.md) — AWS accelerator rejected (Neptune/Bedrock cloud coupling); Ontop itself a portable OBDA reference if a concrete SPARQL/OWL need appears
+- [0021-semantica-immature-native-rule-engine.md](decisions/0021-semantica-immature-native-rule-engine.md) — `semantica` rejected (pre-1.0, drags in an unrelated audio/CV/ML-inference dependency tree, failed to install); B.4's rules-as-data contract implemented natively instead
 
 ## plans/ — the plans this repo is executing against
 

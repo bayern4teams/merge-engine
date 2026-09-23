@@ -118,3 +118,68 @@ class TestBuildFamilyMap:
         assert family["company"] == {"finance"}
         assert family["finance"] == {"company"}
         assert family["broken"] == set()
+
+
+class TestEntityGraphExclusions:
+    """Live regression (Boeing, this session): a plain FK relationship to
+    "entity" or a *_relationship table is real, but neither is a valid
+    field-mapping target — see build_family_map's own comment for why.
+    """
+
+    def test_a_tables_own_entity_supertype_ancestors_are_excluded(self) -> None:
+        conn = _connector(
+            ["entity", "organization", "company", "finance"],
+            {
+                "organization": {"organization_id": "entity"},
+                "company": {"company_id": "organization"},
+                "finance": {"company_id": "company"},
+            },
+        )
+        conn.get_entity_supertype_chain.side_effect = lambda t: {
+            "company": ["entity", "organization"],
+            "organization": ["entity"],
+        }.get(t)
+
+        family = build_family_map(conn)
+
+        # "finance" (a genuine sibling) stays; "entity"/"organization" (its
+        # own ancestors, populated by ensure_entity_chain, not by mapping)
+        # do not.
+        assert family["company"] == {"finance"}
+        assert "company" not in family["entity"]
+        assert "company" not in family["organization"]
+
+    def test_a_relationship_item_table_is_excluded_entirely(self) -> None:
+        conn = _connector(
+            ["company", "finance", "company_company_relationship"],
+            {
+                "finance": {"company_id": "company"},
+                "company_company_relationship": {
+                    "company_a_id": "company",
+                    "company_b_id": "company",
+                },
+            },
+        )
+        conn.get_entity_supertype_chain.return_value = None
+        conn.get_table_schema.side_effect = lambda t: {
+            "company_company_relationship": {"primary_key": "item_id"},
+        }.get(t, {"primary_key": None})
+
+        def get_fks(t: str) -> dict[str, str]:
+            base = {
+                "finance": {"company_id": "company"},
+                "company_company_relationship": {
+                    "company_a_id": "company",
+                    "company_b_id": "company",
+                    "item_id": "knowledge_item",
+                },
+            }
+            return base.get(t, {})
+
+        conn.get_foreign_keys.side_effect = get_fks
+
+        family = build_family_map(conn)
+
+        assert family["company"] == {"finance"}
+        assert "company_company_relationship" not in family
+        assert "company_company_relationship" not in family.get("company", set())

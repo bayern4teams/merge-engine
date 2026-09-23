@@ -22,7 +22,11 @@ repos:
       - id: detect-private-key
       - id: check-merge-conflict
       - id: end-of-file-fixer
-        exclude: ^tests/fixtures/.*\.json$
+        # graphify-out/ is generated knowledge-graph output that is tracked on
+        # purpose. It is not hand-edited source, and rewriting its trailing
+        # newlines churned 281 files on a single `pre-commit run --all-files`
+        # -- noise that buries the real diff and rewrites graphify's own cache.
+        exclude: ^(tests/fixtures/.*\.json|graphify-out/.*)$
 
   - repo: local
     hooks:
@@ -53,9 +57,9 @@ repos:
         language: system
         pass_filenames: false
 
-      - id: no-blanket-json-ignore
-        name: .gitignore must not blanket-ignore *.json
-        entry: python -m scripts.hooks.no_blanket_json_ignore
+      - id: no-blanket-data-ignore
+        name: .gitignore must not blanket-ignore *.json / *.csv / *.tsv
+        entry: python -m scripts.hooks.no_blanket_data_ignore
         language: system
         files: ^\.gitignore$
 

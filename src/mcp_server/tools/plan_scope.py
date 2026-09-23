@@ -270,6 +270,92 @@ def _heuristic_plan(
     return plan
 
 
+def _v3_discovery_plan(
+    subject_entity: str,
+    target_entities: list[str],
+    schemas: dict[str, Any],
+    graph: JoinGraph,
+    *,
+    max_hops: int = _DEFAULT_MAX_HOPS,
+    min_edge_confidence: str = "heuristic",
+) -> dict[str, list[dict[str, Any]]]:
+    """P-9's engine (``scope_config.engine == "v3_discovery"``): policy-
+    capped subgraph traversal (``entity_extraction_v3.traverse_subgraph``)
+    over the same real ``JoinGraph`` the heuristic floor uses, instead of a
+    separate ``find_paths`` call per (subject-table, dependent-table) pair.
+    Adapted into the exact same wire shape ``_heuristic_plan`` produces
+    (via ``_entry_from_hops``, which already accepts a ``list[PathHop]``)
+    so ``extract_data.py`` needs no changes to consume either engine's
+    output -- P-9 extends the underlying Jailer model (ADR 0009), it does
+    not need its own execution path.
+
+    Pure graph traversal, no connector calls -- safe to call unconditionally
+    once ``graph`` exists. Never raises; the caller
+    (``plan_scope_impl``) is expected to fall back to the heuristic floor on
+    any exception, matching the engine-flag precedent in
+    ``resolve_entities.py``.
+    """
+    from src.mcp_server.tools.entity_extraction_v3 import TraversalPolicy, traverse_subgraph
+
+    plan: dict[str, list[dict[str, Any]]] = {e: [] for e in target_entities}
+    policy = TraversalPolicy(max_depth=max_hops, min_edge_confidence=min_edge_confidence)
+
+    subject_nodes: dict[str, list[Node]] = {}
+    for origin_id, table, full in _iter_tables(schemas):
+        name = table.get("name", "")
+        if not (concept_matches(subject_entity, name) or concept_matches(subject_entity, full)):
+            continue
+        subject_nodes.setdefault(origin_id, []).append((origin_id, name))
+        if subject_entity in plan:
+            cols = _columns_of(table)
+            match_cols = [c for c in cols if _is_name_column(c)] or (
+                [cols[1]] if len(cols) > 1 else cols[:1]
+            )
+            if match_cols:
+                plan[subject_entity].append(
+                    {
+                        "origin_id": origin_id,
+                        "table": full,
+                        "mode": "match",
+                        "columns": match_cols[:2],
+                        "enabled": True,
+                        "reason": "subject entity's own record (v3_discovery)",
+                    }
+                )
+
+    anchor_nodes = [n for nodes in subject_nodes.values() for n in nodes]
+    traversal = traverse_subgraph(graph, anchor_nodes, policy)
+
+    for entity in target_entities:
+        if entity == subject_entity:
+            continue
+        for origin_id, table, full in _iter_tables(schemas):
+            name = table.get("name", "")
+            if not (concept_matches(entity, name) or concept_matches(entity, full)):
+                continue
+            node = (origin_id, name)
+            provenance = traversal.provenance.get(node)
+            if not provenance or not provenance.path:
+                continue  # unreached, or it's a subject table itself
+            traversal_status = (
+                f"truncated: {traversal.truncation_reason}" if traversal.truncated else "complete"
+            )
+            plan[entity].append(
+                _entry_from_hops(
+                    origin_id,
+                    full,
+                    provenance.path,
+                    subject_entity,
+                    reason=(
+                        f"v3_discovery traversal, context_score={provenance.context_score} "
+                        f"({traversal_status})"
+                    ),
+                )
+            )
+
+    return plan
+
+
 def _concept_link_fallback(
     origin_id: str,
     table: dict[str, Any],
@@ -586,6 +672,42 @@ async def plan_scope_impl(
     if graph is None:
         graph = await build_join_graph(schemas, origins or [], sample_size=sample_size)
     floor = _heuristic_plan(subject_entity, target_entities, schemas, graph, max_hops=max_hops)
+
+    # P-9 (Part B): the new general discovery engine, behind a flag --
+    # same in-function-branch, fall-through-on-failure precedent
+    # resolve_entities.py already established for its own engine flag
+    # (Splink vs. builtin matching). ``scope_config.engine`` defaults to
+    # "v2" (unchanged behavior) everywhere this isn't explicitly opted
+    # into; any exception here is swallowed and the V2 heuristic floor
+    # computed above stands exactly as if this engine were never
+    # configured.
+    if scope_config.get("engine") == "v3_discovery":
+        try:
+            v3_floor = _v3_discovery_plan(
+                subject_entity,
+                target_entities,
+                schemas,
+                graph,
+                max_hops=max_hops,
+                min_edge_confidence=str(scope_config.get("v3_min_edge_confidence", "heuristic")),
+            )
+            if any(v3_floor.values()):
+                floor = v3_floor
+                logger.info(
+                    "v3_discovery engine produced scope plan for %r: %s",
+                    subject,
+                    {e: len(v) for e, v in floor.items()},
+                )
+            else:
+                logger.warning(
+                    "v3_discovery engine produced an empty plan for %r; "
+                    "using the V2 heuristic floor instead.",
+                    subject,
+                )
+        except Exception as exc:
+            logger.warning(
+                "v3_discovery engine failed (%s); using the V2 heuristic floor instead.", exc
+            )
 
     def _wrap(entities: dict[str, list[dict[str, Any]]], notes: str, llm_used: bool):
         return {

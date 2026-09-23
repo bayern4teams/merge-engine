@@ -29,19 +29,6 @@ class TestCreateConnector:
             connector = create_connector("mongodb", {"uri": "mongodb://localhost:27017/db"})
             assert connector is not None
 
-    def test_create_databricks_connector(self) -> None:
-        """Should create a DatabricksConnector for databricks type."""
-        with patch("src.mcp_server.connectors._CONNECTOR_REGISTRY", {"databricks": MagicMock()}):
-            connector = create_connector(
-                "databricks",
-                {
-                    "host": "test.databricks.com",
-                    "http_path": "/sql/1.0/warehouses/abc",
-                    "token": "test",
-                },
-            )
-            assert connector is not None
-
     def test_invalid_type_raises(self) -> None:
         """Should raise ValueError for unknown connector type."""
         with pytest.raises(ValueError, match="Unknown connector type"):
@@ -121,20 +108,6 @@ class TestConnectorConnectionConfig:
         conn = MongoDBConnector(config)
         assert conn.config == config
 
-    def test_databricks_config_keys(self) -> None:
-        """Databricks config should have expected keys."""
-        config = {
-            "host": "test.cloud.databricks.com",
-            "http_path": "/sql/1.0/warehouses/abc123",
-            "token": "dapiXXXXX",
-            "catalog": "main",
-            "schema": "unified",
-        }
-        # Just test that the config dict has expected keys
-        assert config["host"] == "test.cloud.databricks.com"
-        assert config["catalog"] == "main"
-        assert config["schema"] == "unified"
-
 
 class TestConnectorModuleExports:
     """Tests for module-level exports."""
@@ -156,7 +129,6 @@ class TestConnectorModuleExports:
         from src.mcp_server.connectors import (
             BaseConnector,
             ClickHouseConnector,
-            DatabricksConnector,
             MongoDBConnector,
             PostgresConnector,
         )
@@ -165,7 +137,6 @@ class TestConnectorModuleExports:
         assert ClickHouseConnector is not None
         assert PostgresConnector is not None
         assert MongoDBConnector is not None
-        assert DatabricksConnector is not None
 
     def test_connector_registry_has_all_types(self) -> None:
         """Connector registry should have all expected types."""
@@ -173,14 +144,13 @@ class TestConnectorModuleExports:
 
         assert "postgres" in _CONNECTOR_REGISTRY
         assert "mongodb" in _CONNECTOR_REGISTRY
-        assert "databricks" in _CONNECTOR_REGISTRY
         assert "clickhouse" in _CONNECTOR_REGISTRY
 
     def test_connector_registry_no_duplicates(self) -> None:
         """Connector registry should have no duplicate entries."""
         from src.mcp_server.connectors import _CONNECTOR_REGISTRY
 
-        # 4 connector types plus the "postgresql" alias for "postgres"
-        assert len(_CONNECTOR_REGISTRY) == 5
+        # 3 connector types plus the "postgresql" alias for "postgres"
+        assert len(_CONNECTOR_REGISTRY) == 4
         assert "clickhouse" in _CONNECTOR_REGISTRY
         assert _CONNECTOR_REGISTRY["postgresql"] is _CONNECTOR_REGISTRY["postgres"]

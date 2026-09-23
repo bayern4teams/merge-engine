@@ -1,0 +1,14 @@
+# .graphifyignore — merges with .gitignore; excludes MORE, never re-includes.
+# .gitignore already handles: .venv/, __pycache__/, .mypy_cache/, .ruff_cache/,
+# .pytest_cache/, node_modules/, data/, logs/, dist/, build/, *.egg-info/,
+# sample_databases/, .env*, config/, *.tsbuildinfo, .worktrees/, *.whl.
+
+# Agent/assistant metadata — not project code
+.claude/
+.hermes/
+
+# Generated build/analysis output
+gt_build_out/
+
+# Backup / stale code copies
+backup/

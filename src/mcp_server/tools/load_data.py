@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC
+import re
+from datetime import UTC, date, datetime
 from typing import Any
 
 from src.mcp_server.connectors.clickhouse_destination import ClickHouseDestinationConnector
@@ -21,6 +22,165 @@ from src.orchestrator.utils.retry import PermanentError
 from src.utils.id_utils import deterministic_uuid, generate_uuid
 
 logger = logging.getLogger("merge-engine.tools.load_data")
+
+
+def _resolve_upsert_key(connector: Any, dest_table: str) -> str:
+    """The destination table's real primary-key column, or "id" as a
+    fallback when introspection is unavailable or the table has none.
+
+    ``load_batch``'s ``upsert_key`` must name a column that actually exists
+    on the destination table. A literal ``"id"`` broke every load into a
+    schema whose primary keys are named ``<entity>_id`` (this project's
+    real ``kg`` schema: ``kg.company.company_id`` etc.) — the transformed
+    record legitimately carried that column (Phase 6's universal-identity
+    field, see ``_transform_records``), but ``load_batch`` rejected the
+    whole batch before ever reaching Postgres because "id" itself wasn't
+    among the table's columns. Asking the table its own primary key,
+    instead of assuming a name, is the fix.
+    """
+    if hasattr(connector, "get_table_schema"):
+        try:
+            pk = connector.get_table_schema(dest_table).get("primary_key")
+            if isinstance(pk, str) and pk:
+                return pk
+        except Exception:
+            logger.debug(
+                "Could not introspect primary key for '%s'; falling back to 'id'",
+                dest_table,
+                exc_info=True,
+            )
+    return "id"
+
+
+def _align_identity_column(records: list[dict[str, Any]], upsert_key: str) -> None:
+    """Copy each record's canonical identity (``"id"``) onto ``upsert_key``.
+
+    ``_transform_records``/the child-row builder always guarantee a stable
+    ``"id"`` value (cluster-derived, so idempotent across re-runs) — that is
+    the identity ``load_batch`` must upsert on, regardless of what column
+    name the destination table's own primary key happens to have. Mutates
+    in place; a no-op when ``upsert_key`` already is ``"id"``.
+    """
+    if upsert_key == "id":
+        return
+    for rec in records:
+        rec[upsert_key] = rec.get("id")
+
+
+_CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+
+
+def _normalize_field_name(name: str) -> str:
+    """``companyName``/``company_name``/``CompanyName`` all normalize to the
+    same ``company_name`` — so they resolve to the same fact_predicate
+    instead of three near-duplicate ones."""
+    spaced = _CAMEL_BOUNDARY_RE.sub("_", name)
+    return re.sub(r"[^a-z0-9]+", "_", spaced.lower()).strip("_")
+
+
+def _looks_like_name_field(field: str) -> bool:
+    lowered = field.lower()
+    return "name" in lowered and "username" not in lowered
+
+
+def _infer_fact_value(value: Any) -> tuple[str, Any] | None:
+    """(value_kind, coerced_value) for a raw field value, or None to skip it
+    (null/empty). Only TEXT/NUMERIC/DATE/BOOLEAN are inferred — anything
+    that would need ENTITY/CODE/MONEY's extra reference data (see
+    ``write_knowledge_fact``) is coerced to TEXT instead of dropped."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return "BOOLEAN", value
+    if isinstance(value, (int, float)):
+        return "NUMERIC", value
+    if isinstance(value, (date, datetime)):
+        return "DATE", value
+    if isinstance(value, (dict, list)):
+        return "TEXT", json.dumps(value, default=str)
+    return "TEXT", str(value)
+
+
+def _write_entity_attributes_as_facts(
+    connector: Any,
+    dest_table: str,
+    raw_records: list[dict[str, Any]],
+    transformed_records: list[dict[str, Any]],
+    upsert_key: str,
+) -> int:
+    """Write every non-null attribute of an entity-graph record as a
+    ``knowledge_fact`` row (plus one ``entity_name`` row for whichever field
+    looks like the record's name).
+
+    This project's real destination shape has nowhere else for these values
+    to go: ``kg.company`` etc. carry only their own id, every attribute is a
+    fact keyed by a ``fact_predicate`` (see the forensic audit, §7/§11) —
+    this is the load path that actually reaches it, rather than everything
+    landing in ``unmapped_fields``. Best-effort per field: one field's
+    failure is logged and skipped, never fails the whole load.
+    """
+    if not raw_records:
+        return 0
+    entity_type = dest_table.upper()
+    source_id = connector.get_or_create_source(
+        uri=f"merge-engine:{dest_table}",
+        title=f"merge-engine automated load ({dest_table})",
+    )
+    name_type_id = connector.get_or_create_taxonomy_term("name_type", "PREFERRED", "Preferred")
+    written = 0
+    for raw_rec, t_rec in zip(raw_records, transformed_records, strict=True):
+        entity_id = t_rec.get(upsert_key)
+        if not entity_id:
+            continue
+        name_written = False
+        for field, value in raw_rec.items():
+            # "id" is the universal identity field _transform_records always
+            # guarantees (see _align_identity_column) — already represented
+            # by the entity row itself, not a real attribute.
+            if field.startswith("_") or field in (upsert_key, "id"):
+                continue
+            inferred = _infer_fact_value(value)
+            if inferred is None:
+                continue
+            value_kind, coerced_value = inferred
+
+            if not name_written and value_kind == "TEXT" and _looks_like_name_field(field):
+                try:
+                    connector.write_entity_name(
+                        item_id=deterministic_uuid("kg_name", entity_id),
+                        entity_id=entity_id,
+                        name=coerced_value,
+                        name_type_term_id=name_type_id,
+                    )
+                    name_written = True
+                    continue
+                except Exception:
+                    logger.debug(
+                        "Could not write entity_name for %s (field %r)",
+                        entity_id,
+                        field,
+                        exc_info=True,
+                    )
+
+            predicate_code = f"{dest_table}_{_normalize_field_name(field)}"
+            try:
+                predicate_id = connector.get_or_create_fact_predicate(
+                    predicate_code, field, entity_type, value_kind
+                )
+                connector.write_knowledge_fact(
+                    item_id=deterministic_uuid("kg_fact", entity_id, predicate_code),
+                    entity_id=entity_id,
+                    predicate_id=predicate_id,
+                    value_kind=value_kind,
+                    value=coerced_value,
+                    source_id=source_id,
+                )
+                written += 1
+            except Exception:
+                logger.debug(
+                    "Could not write knowledge_fact for %s.%s", dest_table, field, exc_info=True
+                )
+    return written
 
 
 def _translate_foreign_keys(
@@ -188,18 +348,58 @@ async def load_data_impl(
     try:
         if hasattr(connector, "ensure_table"):
             connector.ensure_table(dest_table)
+        upsert_key = _resolve_upsert_key(connector, dest_table)
+        _align_identity_column(transformed_records, upsert_key)
+
+        # This project's real destination is an entity/knowledge-graph
+        # schema, not a flat table per entity: a "company" row can't exist
+        # until its supertype "entity" (and "organization") rows do, and
+        # every attribute beyond the bare id belongs in knowledge_fact, not
+        # a destination column (see the forensic audit, §7/§11). Detected
+        # generically via FK introspection — a no-op (entity_chain is None)
+        # against any other, flat destination schema, so this changes
+        # nothing for the existing test fixtures or a non-kg destination.
+        entity_chain = None
+        if hasattr(connector, "get_entity_supertype_chain"):
+            try:
+                entity_chain = connector.get_entity_supertype_chain(dest_table)
+            except Exception:
+                logger.debug(
+                    "Could not determine entity-supertype chain for '%s'",
+                    dest_table,
+                    exc_info=True,
+                )
+        if entity_chain is not None:
+            for rec in transformed_records:
+                rec_entity_id = rec.get(upsert_key)
+                if rec_entity_id:
+                    connector.ensure_entity_chain(rec_entity_id, dest_table, entity_chain)
+
         logger.debug(
-            "Calling connector.load_batch: table=%s, records=%d",
+            "Calling connector.load_batch: table=%s, records=%d, upsert_key=%s",
             dest_table,
             len(transformed_records),
+            upsert_key,
         )
         result = connector.load_batch(
             table_name=dest_table,
             records=transformed_records,
             mapping=parent_mapping,
-            upsert_key="id",
+            upsert_key=upsert_key,
         )
         logger.debug("load_batch completed: %s", result)
+
+        facts_written = 0
+        if entity_chain is not None:
+            facts_written = _write_entity_attributes_as_facts(
+                connector, dest_table, records, transformed_records, upsert_key
+            )
+            logger.info(
+                "Entity '%s': wrote %d knowledge_fact row(s) into the kg schema "
+                "(attributes have no destination column beyond the id).",
+                entity_type,
+                facts_written,
+            )
 
         child_results: dict[str, dict[str, Any]] = {}
         if mapping_by_table:
@@ -222,6 +422,7 @@ async def load_data_impl(
             "type_coercions_attempted": result.get("type_coercions_attempted", 0),
             "type_coercion_failures": result.get("type_coercion_failures", 0),
             "child_tables": child_results,
+            "knowledge_facts_written": facts_written,
         }
     except Exception as exc:
         logger.error("Load failed for entity '%s': %s", entity_type, exc)
@@ -383,6 +584,47 @@ def _write_child_rows(
                 continue
 
         dest_cols = {info.get("dest_column") for info in field_mapping.values() if info}
+
+        # A genuine relationship table (e.g. company_company_relationship's
+        # company_a_id + company_b_id, BOTH required, BOTH pointing back at
+        # THIS SAME primary_table) needs a second resolved parent entity per
+        # row -- something this one-parent-per-child model has no way to
+        # supply. fk_target_cols (computed above) already names every other
+        # FK column besides fk_column itself; if any of those is NOT NULL
+        # and never got a mapped value, inserting would violate that
+        # constraint and roll back the whole batch (live-reproduced: Boeing,
+        # a "description" field auto-mapped onto company_company_relationship
+        # rolled back an otherwise-successful load). Refuse up front instead.
+        if fk_target_cols:
+            schema_columns = {
+                c["name"]: c for c in connector.get_table_schema(child_table).get("columns", [])
+            }
+            unresolvable_fk_cols = sorted(
+                col
+                for col in fk_target_cols
+                if col not in dest_cols and not schema_columns.get(col, {}).get("nullable", True)
+            )
+            if unresolvable_fk_cols:
+                dropped = sorted(field_mapping)
+                logger.warning(
+                    "Cross-table mapping into '%s' would leave required "
+                    "foreign-key column(s) %s unset -- this table needs a "
+                    "second resolved parent entity per row (e.g. a "
+                    "company-to-company relationship), not a single-parent "
+                    "child attribute -- skipping %d field(s) rather than a "
+                    "doomed insert: %s",
+                    child_table,
+                    unresolvable_fk_cols,
+                    len(dropped),
+                    ", ".join(dropped),
+                )
+                results[child_table] = {
+                    "inserted": 0,
+                    "updated": 0,
+                    "dropped_fields": dropped,
+                }
+                continue
+
         child_records: list[dict[str, Any]] = []
         for src_rec, parent_rec in zip(source_records, transformed_parent_records, strict=True):
             parent_id = parent_rec.get("id")
@@ -418,11 +660,13 @@ def _write_child_rows(
 
         if hasattr(connector, "ensure_table"):
             connector.ensure_table(child_table)
+        child_upsert_key = _resolve_upsert_key(connector, child_table)
+        _align_identity_column(child_records, child_upsert_key)
         result = connector.load_batch(
             table_name=child_table,
             records=child_records,
             mapping=field_mapping,
-            upsert_key="id",
+            upsert_key=child_upsert_key,
         )
         results[child_table] = {
             "inserted": result.get("inserted", 0),

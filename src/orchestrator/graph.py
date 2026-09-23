@@ -41,6 +41,7 @@ from src.orchestrator.nodes import (
     unify_entity_groups,
     update_extraction_state_node,
     validate_data_node,
+    validate_graph_consistency,
 )
 from src.orchestrator.nodes.preflight import preflight
 from src.orchestrator.utils.retry import TransientError, classify_exception
@@ -110,7 +111,7 @@ NODE_SUCCESSOR = {
     "validate_data": "resolve_entities",
     "resolve_entities": "unify_entities",
     "unify_entities": "human_final_approval",
-    "load_data": "update_extraction_state",
+    "load_data": "validate_graph_consistency",
 }
 
 # Which node produced the data a gate reviews. "retry" at a gate re-runs that
@@ -390,6 +391,15 @@ def _build_builder() -> StateGraph:
     )
     builder.add_node("human_final_approval", _timed("human_final_approval", human_final_approval))
     builder.add_node("load_data", _timed("load_data", load_data_node), retry_policy=NETWORK_RETRY)
+    # B.4.2: post-merge consistency rules over just-written destination
+    # facts. Never sets state["failure"] itself (same discipline as
+    # validate_data) -- a rule violation is a red flag for a human to see
+    # at the run report, never an auto-abort -- so it needs no
+    # _fallible_router error routing, just a plain edge onward.
+    builder.add_node(
+        "validate_graph_consistency",
+        _timed("validate_graph_consistency", validate_graph_consistency),
+    )
     builder.add_node(
         "update_extraction_state",
         _timed("update_extraction_state", update_extraction_state_node),
@@ -427,6 +437,11 @@ def _build_builder() -> StateGraph:
     # a plain edge is the honest representation of "this step cannot fail
     # the run by itself".
     builder.add_edge("validate_data", "resolve_entities")
+
+    # validate_graph_consistency: same "cannot fail the run by itself"
+    # discipline as validate_data above -- a plain edge, no error-gate
+    # routing of its own.
+    builder.add_edge("validate_graph_consistency", "update_extraction_state")
 
     # Conditional: low-confidence entity matches -> human review
     builder.add_conditional_edges(
@@ -1066,9 +1081,10 @@ def _load_scope_config(config_path: str | None) -> dict[str, Any]:
         return {
             "max_hops": cfg.scope.max_hops,
             "join_graph_sample_size": cfg.scope.join_graph_sample_size,
+            "engine": cfg.scope.engine,
         }
     except Exception:
-        return {"max_hops": 6, "join_graph_sample_size": 500}
+        return {"max_hops": 6, "join_graph_sample_size": 500, "engine": "v3_discovery"}
 
 
 # ── Server Mode Export ──────────────────────────────────────────────

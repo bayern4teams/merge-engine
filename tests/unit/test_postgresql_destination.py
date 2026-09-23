@@ -55,9 +55,6 @@ def mock_cursor():
 # =============================================================================
 
 
-@pytest.mark.skip(
-    reason="Skipped per user request - postgresql_destination tests excluded from test suite"
-)
 class TestPostgreSQLDestinationInit:
     """Tests for PostgreSQLDestinationConnector initialization."""
 
@@ -96,9 +93,6 @@ class TestPostgreSQLDestinationInit:
 # =============================================================================
 
 
-@pytest.mark.skip(
-    reason="Skipped per user request - postgresql_destination tests excluded from test suite"
-)
 class TestEnsureConnection:
     """Tests for _ensure_connection method."""
 
@@ -134,7 +128,10 @@ class TestEnsureConnection:
         conn = connector._ensure_connection()
 
         assert conn is mock_conn
-        assert mock_psycopg2.call_count == 1  # Only initial call
+        # __init__ is lazy (sets _connection = None), so reuse means psycopg2.connect
+        # is never called at all -- not 'called once' as this asserted when the
+        # connector still connected eagerly in its constructor.
+        assert mock_psycopg2.call_count == 0
 
     def test_creates_new_when_closed(self, dest_config, mock_psycopg2_connect):
         """_ensure_connection should create new connection if previous is closed."""
@@ -148,7 +145,9 @@ class TestEnsureConnection:
 
         connector._ensure_connection()
 
-        assert mock_psycopg2.call_count == 2
+        # One connect: the constructor makes none, and the closed connection
+        # forces exactly one reconnect here.
+        assert mock_psycopg2.call_count == 1
 
 
 # =============================================================================
@@ -156,9 +155,6 @@ class TestEnsureConnection:
 # =============================================================================
 
 
-@pytest.mark.skip(
-    reason="Skipped per user request - postgresql_destination tests excluded from test suite"
-)
 class TestClose:
     """Tests for the close() method."""
 
@@ -202,9 +198,6 @@ class TestClose:
 # =============================================================================
 
 
-@pytest.mark.skip(
-    reason="Skipped per user request - postgresql_destination tests excluded from test suite"
-)
 class TestContextManager:
     """Tests for __enter__ and __exit__ methods."""
 
@@ -237,9 +230,6 @@ class TestContextManager:
 # =============================================================================
 
 
-@pytest.mark.skip(
-    reason="Skipped per user request - postgresql_destination tests excluded from test suite"
-)
 class TestGetTableSchema:
     """Tests for get_table_schema method."""
 
@@ -324,9 +314,6 @@ class TestGetTableSchema:
 # =============================================================================
 
 
-@pytest.mark.skip(
-    reason="Skipped per user request - postgresql_destination tests excluded from test suite"
-)
 class TestListTables:
     """Tests for list_tables method."""
 
@@ -378,9 +365,6 @@ class TestListTables:
 # =============================================================================
 
 
-@pytest.mark.skip(
-    reason="Skipped per user request - postgresql_destination tests excluded from test suite"
-)
 class TestColumnExists:
     """Tests for column_exists method."""
 
@@ -432,9 +416,6 @@ class TestColumnExists:
 # =============================================================================
 
 
-@pytest.mark.skip(
-    reason="Skipped per user request - postgresql_destination tests excluded from test suite"
-)
 class TestLoadBatch:
     """Tests for load_batch method."""
 
@@ -466,8 +447,12 @@ class TestLoadBatch:
         connector = PostgreSQLDestinationConnector(dest_config)
         result = connector.load_batch("users", records)
 
-        # Should have executed once per record
-        assert mock_cursor.execute.call_count == 2
+        # One INSERT per record. Count only those: load_batch first runs three
+        # schema-introspection SELECTs (table exists, columns, primary key), so
+        # a bare execute.call_count is 5 and breaks whenever introspection
+        # changes -- which is exactly how this assertion went stale.
+        inserts = [c for c in mock_cursor.execute.call_args_list if "INSERT INTO" in str(c.args[0])]
+        assert len(inserts) == 2, mock_cursor.execute.call_args_list
         mock_conn.commit.assert_called_once()
 
     def test_upserts_with_custom_key(self, dest_config, mock_psycopg2_connect, mock_cursor):
@@ -511,7 +496,17 @@ class TestLoadBatch:
         """load_batch should rollback on error."""
         mock_psycopg2, mock_conn = mock_psycopg2_connect
         mock_conn.cursor.return_value = mock_cursor
-        mock_cursor.execute.side_effect = Exception("database error")
+
+        # Fail the write, not the schema read. get_table_schema() runs before
+        # load_batch's try/except, so a blanket side_effect raised there instead
+        # and the rollback path was never exercised -- the test asserted on a
+        # failure mode it was not actually producing.
+        def _fail_on_insert(sql, *args, **kwargs):
+            if "INSERT INTO" in str(sql):
+                raise Exception("database error")
+            return None
+
+        mock_cursor.execute.side_effect = _fail_on_insert
 
         from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
 
@@ -531,7 +526,12 @@ class TestLoadBatch:
         connector = PostgreSQLDestinationConnector(dest_config)
         connector.load_batch("users", [{"id": "1", "name": "A"}])
 
-        mock_cursor.close.assert_called_once()
+        # Every cursor opened is closed. load_batch opens two (one for schema
+        # introspection, one for the write), so asserting "closed exactly once"
+        # only held before introspection was added; the leak-free invariant is
+        # what this test is really for.
+        assert mock_cursor.close.call_count == mock_conn.cursor.call_count
+        assert mock_cursor.close.call_count >= 1
 
     def test_uses_target_schema(self, dest_config, mock_psycopg2_connect, mock_cursor):
         """load_batch should use configured schema in INSERT statement."""
@@ -553,9 +553,6 @@ class TestLoadBatch:
 # =============================================================================
 
 
-@pytest.mark.skip(
-    reason="Skipped per user request - postgresql_destination tests excluded from test suite"
-)
 class TestLoadBatchBulk:
     """Tests for load_batch_bulk method."""
 
@@ -582,7 +579,12 @@ class TestLoadBatchBulk:
         from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
 
         connector = PostgreSQLDestinationConnector(dest_config)
-        result = connector.load_batch_bulk("users", records)
+        # psycopg2's real execute_values reads cur.connection.encoding and looks
+        # it up in psycopg2's encodings table, which a MagicMock cursor cannot
+        # satisfy (KeyError). Patch it: what this test is about is the row count
+        # the connector reports, not psycopg2's own SQL assembly.
+        with patch("psycopg2.extras.execute_values"):
+            result = connector.load_batch_bulk("users", records)
 
         assert result["inserted"] == 100
         assert result["updated"] == 0
@@ -599,10 +601,15 @@ class TestLoadBatchBulk:
         from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
 
         connector = PostgreSQLDestinationConnector(dest_config)
-        connector.load_batch_bulk("users", records)
+        with patch("psycopg2.extras.execute_values") as mock_execute_values:
+            connector.load_batch_bulk("users", records)
 
-        # Should call execute_values 3 times
-        assert mock_cursor.execute.call_count == 3
+        # Three micro-batches: 1000 + 1000 + 500. Assert on execute_values, not
+        # on cursor.execute -- execute_values pages internally at page_size=100,
+        # so the cursor sees ~25 executes, which is why the old count never held.
+        assert mock_execute_values.call_count == 3
+        sizes = [len(c.args[2]) for c in mock_execute_values.call_args_list]
+        assert sizes == [1000, 1000, 500], sizes
 
 
 # =============================================================================
@@ -610,9 +617,6 @@ class TestLoadBatchBulk:
 # =============================================================================
 
 
-@pytest.mark.skip(
-    reason="Skipped per user request - postgresql_destination tests excluded from test suite"
-)
 class TestAddColumn:
     """Tests for add_column method."""
 
@@ -688,9 +692,6 @@ class TestAddColumn:
 # =============================================================================
 
 
-@pytest.mark.skip(
-    reason="Skipped per user request - postgresql_destination tests excluded from test suite"
-)
 class TestExtendSchemaBatch:
     """Tests for extend_schema_batch method."""
 
@@ -812,9 +813,6 @@ class TestExtendSchemaBatch:
 # =============================================================================
 
 
-@pytest.mark.skip(
-    reason="Skipped per user request - postgresql_destination tests excluded from test suite"
-)
 class TestNormalizeType:
     """Tests for the static _normalize_type helper."""
 

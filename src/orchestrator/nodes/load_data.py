@@ -1,5 +1,5 @@
 """
-load_data node: Upserts unified records into Databricks destination.
+load_data node: Upserts unified records into the configured destination.
 
 Applies field mappings, transforms records, and calls load_data_impl
 for each entity type in dependency order.
@@ -302,7 +302,7 @@ def _write_run_report(report: dict[str, Any]) -> str | None:
 
 
 async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
-    """Load unified data into the Databricks destination.
+    """Load unified data into the configured destination.
 
     Parameters
     ----------

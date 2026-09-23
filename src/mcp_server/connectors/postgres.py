@@ -76,6 +76,10 @@ class PostgresConnector(BaseConnector):
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
         self._engine: AsyncEngine | None = None
+        # Cache for _resolve_schema_qualified -- resolved once per bare table
+        # name, not once per call (extract/count/sample_distinct_values/
+        # explain_cost each ask this identically, often many times per run).
+        self._table_schema_cache: dict[str, str] = {}
 
     # ── Lifecycle ─────────────────────────────────────────────────────
 
@@ -121,6 +125,67 @@ class PostgresConnector(BaseConnector):
             await self._engine.dispose()
             self._engine = None
             logger.debug("PostgreSQL engine disposed")
+
+    async def _resolve_schema_qualified(self, table_name: str) -> str:
+        """A bare table name resolved to its REAL schema, not a hardcoded
+        "public" guess.
+
+        ``discover_schema`` scans every non-system schema and exposes each
+        table by its bare name (``"name"``) plus a separately-carried
+        ``"full_name"`` -- but every other query-building method here
+        (``extract``, ``sample_distinct_values``, ``profile_column``,
+        ``estimate_query_cost``) previously received only the bare name and
+        defaulted straight to ``public.<table>`` whenever the caller didn't
+        already pass a dotted name. Live-reproduced: testdiffbot's entire
+        ``diffbot`` schema (13 tables, zero of them in ``public``) made
+        every one of these queries fail with "relation public.<table> does
+        not exist" -- which silently zeroed out scope-planning's join-graph
+        edges (caught there) and then hard-failed live extraction outright
+        (not caught -- this is what a real Boeing run hit once the join
+        graph correctly found a path to ``companyexperience``).
+
+        Cached per connector instance (each table asked identically many
+        times across one run) via ``self._table_schema_cache``; a table
+        found in more than one schema prefers a non-``public`` one, since a
+        bulk-loaded origin's real tables are the common case this is fixing
+        and ``public`` empty-by-convention is the far more common shape for
+        those. Falls back to ``public`` only when the table genuinely isn't
+        found anywhere else -- unchanged behavior for a real public-schema
+        origin.
+        """
+        if "." in table_name:
+            return table_name
+        cached = self._table_schema_cache.get(table_name)
+        if cached:
+            return f"{cached}.{table_name}"
+        schema = "public"
+        try:
+            engine = await self._ensure_engine()
+            async with engine.connect() as conn:
+                result = await conn.execute(
+                    text(
+                        """
+                        SELECT table_schema FROM information_schema.tables
+                        WHERE table_name = :table
+                          AND table_schema NOT IN ('pg_catalog', 'information_schema')
+                        ORDER BY (table_schema = 'public') ASC
+                        LIMIT 1
+                        """
+                    ),
+                    {"table": table_name},
+                )
+                row = result.fetchone()
+                await conn.commit()
+            if row:
+                schema = row[0]
+        except Exception as exc:
+            logger.debug(
+                "Could not resolve real schema for bare table name %r; defaulting to 'public': %s",
+                table_name,
+                exc,
+            )
+        self._table_schema_cache[table_name] = schema
+        return f"{schema}.{table_name}"
 
     # ── Schema Discovery ──────────────────────────────────────────────
 
@@ -317,9 +382,7 @@ class PostgresConnector(BaseConnector):
         )
         engine = await self._ensure_engine()
 
-        # Resolve schema-qualified table name (default to public)
-        if "." not in table_name:
-            table_name = f"public.{table_name}"
+        table_name = await self._resolve_schema_qualified(table_name)
         logger.debug("Resolved table name: %s", table_name)
 
         col_list = "* " if columns == ["*"] else ", ".join(f'"{c}"' for c in columns)
@@ -517,15 +580,27 @@ class PostgresConnector(BaseConnector):
             bool(filter_values),
         )
         engine = await self._ensure_engine()
-        resolved = table_name if "." in table_name else f"public.{table_name}"
+        resolved = await self._resolve_schema_qualified(table_name)
         if filter_values:
             sql = text(
                 f'SELECT DISTINCT "{column}" FROM {resolved} WHERE "{column}" IN :values LIMIT :limit'
             ).bindparams(bindparam("values", expanding=True))
             params: dict[str, Any] = {"values": filter_values, "limit": limit}
         else:
+            # ORDER BY random() is required here, not cosmetic -- see
+            # clickhouse.py's identical fix (BP-B2, live-caught 2026-08-19):
+            # a plain LIMIT with no ordering is the planner's arbitrary scan
+            # order, not a random sample, and silently biases inclusion-
+            # coverage estimates. PostgreSQL rejects `SELECT DISTINCT col
+            # ... ORDER BY random()` directly ("ORDER BY expressions must
+            # appear in select list" -- live-caught against the real
+            # global_warehouse destination DB), so the DISTINCT has to be
+            # computed in a subquery before randomizing its order.
             sql = text(
-                f'SELECT DISTINCT "{column}" FROM {resolved} WHERE "{column}" IS NOT NULL LIMIT :limit'
+                f'SELECT "{column}" FROM ('
+                f'SELECT DISTINCT "{column}" FROM {resolved} WHERE "{column}" IS NOT NULL'
+                f") AS distinct_vals "
+                "ORDER BY random() LIMIT :limit"
             )
             params = {"limit": limit}
         async with engine.connect() as conn:
@@ -534,6 +609,186 @@ class PostgresConnector(BaseConnector):
             await conn.commit()
         logger.debug("EXIT sample_distinct_values: %d value(s)", len(values))
         return values
+
+    # ── Capability matrix (Part B / P-2) ────────────────────────────────
+
+    def capabilities(self) -> dict[str, bool]:
+        return {
+            "supports_declared_pk": True,
+            "supports_declared_fk": True,
+            "supports_declared_unique_constraints": True,
+            "supports_statistics": True,
+            "supports_sampling": True,
+            "supports_explain": True,
+            "supports_cte": True,
+            "supports_temp_tables": True,
+            "supports_window_functions": True,
+            "supports_pushdown": True,
+            "supports_parallel_queries": True,
+            "supports_column_comments": True,
+            "supports_table_comments": True,
+        }
+
+    async def discover_indexes(self, table_name: str) -> list[dict[str, Any]]:
+        """Real PostgreSQL indexes from ``pg_index``/``pg_class`` — never
+        parsed out of ``pg_indexes``' pre-formatted DDL text, so multi-
+        column indexes come back with their columns in the actual index
+        key order, not guessed from a string."""
+        engine = await self._ensure_engine()
+        schema, table = self._split_table_name(table_name)
+        sql = text("""
+            SELECT
+                ix.relname AS index_name,
+                i.indisunique AS is_unique,
+                i.indisprimary AS is_primary,
+                array_agg(a.attname ORDER BY k.ord) AS columns
+            FROM pg_index i
+            JOIN pg_class t ON t.oid = i.indrelid
+            JOIN pg_class ix ON ix.oid = i.indexrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            JOIN unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
+            JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
+            WHERE n.nspname = :schema AND t.relname = :table
+            GROUP BY ix.relname, i.indisunique, i.indisprimary
+        """)
+        async with engine.connect() as conn:
+            result = await conn.execute(sql, {"schema": schema, "table": table})
+            rows = result.mappings().fetchall()
+            await conn.commit()
+        return [
+            {
+                "name": row["index_name"],
+                "columns": list(row["columns"]),
+                "is_unique": bool(row["is_unique"]),
+                "is_primary": bool(row["is_primary"]),
+                "kind": "btree",
+            }
+            for row in rows
+        ]
+
+    async def discover_statistics(self, table_name: str) -> dict[str, Any]:
+        """Row-count estimate and size straight from PostgreSQL's own
+        catalog (``pg_class``/``pg_stat_user_tables``) — the planner's own
+        numbers, current as of the last ``ANALYZE``, never a live
+        ``COUNT(*)`` scan.
+
+        ``pg_class.reltuples`` is ``-1`` for a table that has never been
+        analyzed (live-caught against a freshly-loaded table with this
+        exact method: a real 2-row table reported -1, not 0 or 2). Falls
+        back to ``pg_stat_user_tables.n_live_tup`` in that case, which
+        autovacuum's stats collector tracks independently of ``ANALYZE`` --
+        still an estimate, but a live one, rather than the "nobody has
+        looked yet" sentinel.
+        """
+        engine = await self._ensure_engine()
+        schema, table = self._split_table_name(table_name)
+        sql = text("""
+            SELECT
+                c.reltuples::BIGINT AS row_count_estimate,
+                s.n_live_tup,
+                pg_total_relation_size(c.oid) AS total_bytes,
+                s.last_analyze,
+                s.last_autoanalyze
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            LEFT JOIN pg_stat_user_tables s
+                ON s.schemaname = n.nspname AND s.relname = c.relname
+            WHERE n.nspname = :schema AND c.relname = :table
+        """)
+        async with engine.connect() as conn:
+            result = await conn.execute(sql, {"schema": schema, "table": table})
+            row = result.mappings().fetchone()
+            await conn.commit()
+        if row is None:
+            return {"row_count_estimate": 0, "total_bytes": 0}
+        last_analyzed = row["last_analyze"] or row["last_autoanalyze"]
+        row_count_estimate = row["row_count_estimate"]
+        if row_count_estimate < 0:
+            row_count_estimate = row["n_live_tup"] or 0
+        return {
+            "row_count_estimate": row_count_estimate,
+            "total_bytes": row["total_bytes"],
+            "last_analyzed": last_analyzed.isoformat() if last_analyzed else None,
+        }
+
+    async def profile_column(
+        self, table_name: str, column: str, mode: str = "SAMPLED", sample_size: int = 10_000
+    ) -> dict[str, Any]:
+        """Null/distinct/min/max, computed database-side.
+
+        SAMPLED wraps the source in a ``TABLESAMPLE SYSTEM`` (or a plain
+        LIMIT for a small table) so a 40M-row table is never fully scanned
+        by default; FULL removes that bound explicitly.
+        """
+        engine = await self._ensure_engine()
+        resolved = await self._resolve_schema_qualified(table_name)
+        source = (
+            f"(SELECT * FROM {resolved} LIMIT :sample_size) sub" if mode == "SAMPLED" else resolved
+        )
+        sql = text(f"""
+            SELECT
+                COUNT(*) AS total_count,
+                COUNT(*) - COUNT("{column}") AS null_count,
+                COUNT(DISTINCT "{column}") AS distinct_count,
+                MIN("{column}"::TEXT) AS min_value,
+                MAX("{column}"::TEXT) AS max_value
+            FROM {source}
+        """)
+        params = {"sample_size": sample_size} if mode == "SAMPLED" else {}
+        async with engine.connect() as conn:
+            result = await conn.execute(sql, params)
+            row = result.mappings().fetchone()
+            await conn.commit()
+        total = row["total_count"] if row else 0
+        null_count = row["null_count"] if row else 0
+        return {
+            "mode": mode,
+            "total_count": total,
+            "null_count": null_count,
+            "null_ratio": (null_count / total) if total else 0.0,
+            "distinct_count": row["distinct_count"] if row else 0,
+            "min_value": row["min_value"] if row else None,
+            "max_value": row["max_value"] if row else None,
+        }
+
+    async def estimate_query_cost(
+        self, table_name: str, filter: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """The planner's own cost estimate (``EXPLAIN (FORMAT JSON)``) for
+        reading ``table_name`` under ``filter`` — a real number from the
+        query planner, not a row-count guess."""
+        engine = await self._ensure_engine()
+        resolved = await self._resolve_schema_qualified(table_name)
+        where_sql = ""
+        params: dict[str, Any] = {}
+        if filter:
+            clauses = []
+            for i, (col, val) in enumerate(filter.items()):
+                key = f"p{i}"
+                clauses.append(f'"{col}" = :{key}')
+                params[key] = val
+            where_sql = " WHERE " + " AND ".join(clauses)
+        sql = text(f"EXPLAIN (FORMAT JSON) SELECT * FROM {resolved}{where_sql}")
+        async with engine.connect() as conn:
+            result = await conn.execute(sql, params)
+            plan = result.scalar()
+            await conn.commit()
+        root = plan[0]["Plan"] if plan else {}
+        return {
+            "estimated_rows": root.get("Plan Rows", 0),
+            "estimated_cost": root.get("Total Cost", 0.0),
+            "node_type": root.get("Node Type", ""),
+        }
+
+    @staticmethod
+    def _split_table_name(table_name: str) -> tuple[str, str]:
+        """Split a possibly-schema-qualified table name; bare names
+        default to the ``public`` schema, matching this connector's other
+        table-name resolution (extract/sample_distinct_values)."""
+        if "." in table_name:
+            schema, table = table_name.split(".", 1)
+            return schema, table
+        return "public", table_name
 
     # ── Helpers ───────────────────────────────────────────────────────
 

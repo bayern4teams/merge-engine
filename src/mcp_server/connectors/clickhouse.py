@@ -507,13 +507,162 @@ class ClickHouseConnector(BaseConnector):
                 sql, parameters={"values": [str(v) for v in filter_values], "limit": limit}
             )
         else:
+            # ORDER BY rand() is required here, not cosmetic: a plain
+            # `LIMIT` with no ordering returns ClickHouse's first N distinct
+            # values in whatever order the MergeTree parts happen to yield
+            # them (close to insertion order in practice) -- NOT a random
+            # sample. Live-caught 2026-08-19 (BP-B2, real ClickHouse
+            # origin2.CompanyIndustry, 2.66M distinct companyID values):
+            # the unordered sample put inclusion coverage at 0.646 against
+            # origin2.Company, while the true full-table ratio (verified by
+            # a direct SQL aggregate) is 0.254 -- a false "probable" edge
+            # (>_PROBABLE_THRESHOLD) that a genuinely random sample does not
+            # produce.
             sql = (
                 f"SELECT DISTINCT `{column}` FROM `{self._database}`.`{table_name}` "
-                f"WHERE `{column}` IS NOT NULL LIMIT {{limit:UInt64}}"
+                f"WHERE `{column}` IS NOT NULL ORDER BY rand() LIMIT {{limit:UInt64}}"
             )
             result = client.query(sql, parameters={"limit": limit})
         values = [row[0] for row in result.result_rows]
         logger.debug("EXIT sample_distinct_values: %d value(s)", len(values))
         return values
+
+    # ── Capability matrix (Part B / P-2) ────────────────────────────────
+
+    def capabilities(self) -> dict[str, bool]:
+        return {
+            # A MergeTree table can declare an ORDER BY / PRIMARY KEY
+            # expression, but ClickHouse never enforces it as a uniqueness
+            # constraint (a duplicate key is not rejected) -- declarable,
+            # not a real constraint, hence pk True but unique False.
+            "supports_declared_pk": True,
+            "supports_declared_fk": False,
+            "supports_declared_unique_constraints": False,
+            "supports_statistics": True,
+            "supports_sampling": True,
+            "supports_explain": True,
+            "supports_cte": True,
+            "supports_temp_tables": True,
+            "supports_window_functions": True,
+            "supports_pushdown": True,
+            "supports_parallel_queries": True,
+            "supports_column_comments": True,
+            "supports_table_comments": True,
+        }
+
+    async def discover_indexes(self, table_name: str) -> list[dict[str, Any]]:
+        """ClickHouse has no secondary-index concept in the traditional
+        sense; the table's own sorting key plays that role for range scans
+        and is reported here as the one "index" every MergeTree table has.
+        Data-skipping indexes (``system.data_skipping_indices``), if any,
+        are reported alongside it as their own kind."""
+        client = await self._ensure_client()
+        result = client.query(
+            "SELECT sorting_key, primary_key FROM system.tables "
+            "WHERE database = {db:String} AND name = {table:String}",
+            parameters={"db": self._database, "table": table_name},
+        )
+        indexes: list[dict[str, Any]] = []
+        if result.result_rows:
+            sorting_key, primary_key = result.result_rows[0]
+            if sorting_key:
+                indexes.append(
+                    {
+                        "name": f"{table_name}_order_by",
+                        "columns": [c.strip() for c in sorting_key.split(",") if c.strip()],
+                        "is_unique": False,
+                        "is_primary": bool(primary_key),
+                        "kind": "order_by",
+                    }
+                )
+        skip_result = client.query(
+            "SELECT name, expr, type FROM system.data_skipping_indices "
+            "WHERE database = {db:String} AND table = {table:String}",
+            parameters={"db": self._database, "table": table_name},
+        )
+        for name, expr, index_type in skip_result.result_rows:
+            indexes.append(
+                {
+                    "name": name,
+                    "columns": [expr],
+                    "is_unique": False,
+                    "is_primary": False,
+                    "kind": f"data_skipping_{index_type}",
+                }
+            )
+        return indexes
+
+    async def discover_statistics(self, table_name: str) -> dict[str, Any]:
+        """Row count and size straight from ``system.tables`` -- ClickHouse
+        already tracks these per part, so this is a metadata read, never a
+        ``count(*)`` scan."""
+        client = await self._ensure_client()
+        result = client.query(
+            "SELECT total_rows, total_bytes, metadata_modification_time FROM system.tables "
+            "WHERE database = {db:String} AND name = {table:String}",
+            parameters={"db": self._database, "table": table_name},
+        )
+        if not result.result_rows:
+            return {"row_count_estimate": 0, "total_bytes": 0}
+        total_rows, total_bytes, modified_at = result.result_rows[0]
+        return {
+            "row_count_estimate": total_rows or 0,
+            "total_bytes": total_bytes or 0,
+            "last_analyzed": modified_at.isoformat() if modified_at else None,
+        }
+
+    async def profile_column(
+        self, table_name: str, column: str, mode: str = "SAMPLED", sample_size: int = 10_000
+    ) -> dict[str, Any]:
+        """Null/distinct/min/max, computed database-side. APPROXIMATE uses
+        ClickHouse's ``uniq`` (HyperLogLog) instead of the exact
+        ``uniqExact`` -- for a table with hundreds of millions of rows the
+        approximate count is often the only one that returns in reasonable
+        time, and the caller is told which one it got via ``mode``."""
+        client = await self._ensure_client()
+        source = f"`{self._database}`.`{table_name}`"
+        if mode == "SAMPLED":
+            source = f"(SELECT * FROM {source} LIMIT {{sample_size:UInt64}}) AS sub"
+        distinct_fn = "uniq" if mode == "APPROXIMATE" else "uniqExact"
+        sql = (
+            f"SELECT count() AS total_count, "
+            f"countIf(`{column}` IS NULL) AS null_count, "
+            f"{distinct_fn}(`{column}`) AS distinct_count, "
+            f"toString(min(`{column}`)) AS min_value, "
+            f"toString(max(`{column}`)) AS max_value "
+            f"FROM {source}"
+        )
+        params = {"sample_size": sample_size} if mode == "SAMPLED" else {}
+        result = client.query(sql, parameters=params)
+        if not result.result_rows:
+            return {"mode": mode, "total_count": 0, "null_count": 0, "null_ratio": 0.0}
+        total, null_count, distinct_count, min_value, max_value = result.result_rows[0]
+        return {
+            "mode": mode,
+            "total_count": total,
+            "null_count": null_count,
+            "null_ratio": (null_count / total) if total else 0.0,
+            "distinct_count": distinct_count,
+            "min_value": min_value,
+            "max_value": max_value,
+        }
+
+    async def estimate_query_cost(
+        self, table_name: str, filter: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """ClickHouse's own ``EXPLAIN ESTIMATE`` -- the parts/rows/marks it
+        would actually read for this query, not a guess."""
+        client = await self._ensure_client()
+        where_sql = ""
+        if filter:
+            clauses = [f"`{col}` = '{val}'" for col, val in filter.items()]
+            where_sql = " WHERE " + " AND ".join(clauses)
+        sql = f"EXPLAIN ESTIMATE SELECT * FROM `{self._database}`.`{table_name}`{where_sql}"
+        result = client.query(sql)
+        if not result.result_rows:
+            return {"estimated_rows": 0, "estimated_parts": 0, "estimated_marks": 0}
+        # Columns: database, table, parts, rows, marks
+        _, _, parts, rows, marks = result.result_rows[0]
+        return {"estimated_rows": rows, "estimated_parts": parts, "estimated_marks": marks}
 
     # ── Helpers ───────────────────────────────────────────────────────

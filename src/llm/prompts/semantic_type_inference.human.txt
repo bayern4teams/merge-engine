@@ -1,0 +1,10 @@
+Column: {column_name}
+Declared data type: {data_type}
+
+## Measured evidence
+{evidence_block}
+
+## Heuristic pass result (why it could not decide)
+{heuristic_summary}
+
+Output:
