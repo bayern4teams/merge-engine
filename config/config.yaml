@@ -91,8 +91,8 @@ splink:
   # <model_store>/<model_name>/v<N>/{model.json,metadata.json}
   model_store: logs/splink_models
   # A prediction-blocking rule that would generate more candidate pairs than
-  # this is flagged "⚠ Too broad" by splink_blocking.recommend_prediction_
-  # blocking (S-E). 600,000 ≈ a quarter of the 2.4M figure that silently
+  # this is flagged "⚠ Too broad" by splink_workbench.recommend
+  # (S-E). 600,000 ≈ a quarter of the 2.4M figure that silently
   # truncated a real run before costed blocking existed (ADR 0014).
   pair_budget: 600000
   # S-P review-band defaults (a *view* over the predictions, not the model's
