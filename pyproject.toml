@@ -35,7 +35,6 @@ dependencies = [
     "python-dotenv>=1.0.0",
     # Utilities
     "tenacity>=8.2.0",
-    "uuid-utils>=0.8.0",
     # UI (FastAPI serves the built React frontend)
     "fastapi>=0.115.0",
     "uvicorn>=0.30.0",

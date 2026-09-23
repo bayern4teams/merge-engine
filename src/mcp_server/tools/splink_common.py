@@ -1,8 +1,8 @@
 """Shared plumbing for the B.4 Splink workbench (Branch_Plan.md B.4).
 
-Every phase module (``splink_recommender``, ``splink_blocking``,
-``splink_training``, ``splink_inference``, ``splink_evaluation``,
-``splink_versioning``) needs the same handful of low-level operations:
+Every phase module (``splink_recommender``, ``splink_training``,
+``splink_inference``, ``splink_evaluation``) needs the same handful of
+low-level operations:
 turn raw records into a DataFrame with a unique-id column, assemble a
 ``SettingsCreator`` from comparisons + blocking rules, build a ``Linker``
 over in-process DuckDB, and shape a labels table the way the *installed*

@@ -1,8 +1,8 @@
 """Request-scoped orchestration for the B.4 Splink workbench (Branch_Plan.md B.4).
 
-The per-phase modules (``splink_recommender`` / ``splink_blocking`` /
-``splink_training`` / ``splink_inference`` / ``splink_evaluation`` /
-``splink_model``) are pure functions over a DataFrame or a ``Linker``. The API
+The per-phase modules (``splink_recommender`` / ``splink_training`` /
+``splink_inference`` / ``splink_evaluation`` / ``splink_model``) are pure
+functions over a DataFrame or a ``Linker``. The API
 layer must stay a thin delegator (``src/api/main.py`` holds no business
 logic — the project's own invariant), so *this* module is where the
 multi-step flows the UI drives are sequenced and where the ephemeral

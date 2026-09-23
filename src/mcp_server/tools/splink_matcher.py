@@ -81,8 +81,8 @@ _DETERMINISTIC_RULE_RECALL = 0.7
 # domain, but does share a real word — this rule catches that case. Plain
 # DuckDB SQL (Splink's own backend here), sqlglot-free per the plan: split
 # each side's lowercased name on spaces and require a nonempty intersection.
-# Costed against the existing rules via splink_blocking.py's recommender
-# before being unioned in — see the B.6.2 commit message for the numbers.
+# Costed against the existing rules before being unioned in — see the B.6.2
+# commit message for the numbers.
 _NAME_TOKEN_OVERLAP_RULE = (
     "len(list_intersect(string_split(lower(l.\"name\"), ' '), "
     "string_split(lower(r.\"name\"), ' '))) > 0"
