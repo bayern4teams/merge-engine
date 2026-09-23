@@ -10,7 +10,7 @@ import sys
 import time
 
 sys.path.insert(0, "/home/bayern/Projects/merge-engine/scripts/ground_truth")
-from helpers import psql
+from gtcore import psql
 
 DEST = "ground_truth"
 OUT = "/home/bayern/Projects/merge-engine/scripts/ground_truth/cache_diffbot"
@@ -40,7 +40,7 @@ for tbl, cols in tables.items():
         continue
     t0 = time.time()
     q = f"SELECT {cols} FROM gt_origin1.{tbl}"
-    out = psql(DEST, q)
+    out = psql(q)
     with open(path, "w") as f:
         f.write(q + "\n")  # header line 0 = query
         f.write(out)

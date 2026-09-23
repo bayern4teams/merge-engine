@@ -124,32 +124,52 @@ def parse_revenue(raw):
 
 
 def normalize_name(n):
+    """§6.1 normalizer: lower, strip legal suffixes + punctuation, collapse ws.
+
+    Suffixes are matched on word boundaries. The previous version used a bare
+    ``str.replace``, which ate the letters wherever they appeared inside a
+    real word -- "The Boeing Company" normalised to "boeing mpany" (the "co"
+    of "Company" was stripped first), "Capella Space Corp" to "capella space
+    rp". Keep this identical to gtcore.norm_name: both build baselines the
+    engine is scored against, so they must agree.
+    """
     if not n:
         return ""
     n = n.lower().strip()
-    for stop in [
-        "the ",
+    for suf in (
+        "corporation",
+        "proprietary",
+        "limited",
+        "company",
+        "international",
         "inc.",
         "inc",
         "ltd.",
         "ltd",
         "llc",
-        "co.",
-        "co",
         "corp.",
         "corp",
-        "corporation",
-        "limited",
-        "company",
-        "proprietary",
-        "sa",
+        "gmbh",
+        "pty",
+        "plc",
+        "spa",
+        "s.p.a.",
         "sas",
         "se",
-        "gmbh",
+        "co.",
+        "co",
+        "sa",
+        "ag",
+        "nv",
+        "bv",
+        "the",
         ",",
         ".",
-    ]:
-        n = n.replace(stop, "")
+    ):
+        n = re.sub(r"(?<!\w)" + re.escape(suf) + r"(?!\w)", " ", n)
+    n = re.sub(r"(?<!\w)defence(?!\w)", "defense", n)
+    n = re.sub(r"(?<!\w)and(?!\w)", " ", n)
+    n = re.sub(r"(?<!\w)&(?!\w)", " ", n)
     return " ".join(n.split())
 
 

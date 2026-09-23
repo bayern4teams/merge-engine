@@ -22,7 +22,7 @@ import time
 from collections import defaultdict, deque
 
 sys.path.insert(0, "/home/bayern/Projects/merge-engine/scripts/ground_truth")
-from helpers import domain_root, normalize_domain, normalize_name, psql
+from gtcore import dom_root, norm_dom, norm_name, psql
 
 DEST = "ground_truth"
 CD = "/home/bayern/Projects/merge-engine/scripts/ground_truth/cache_diffbot"
@@ -44,17 +44,17 @@ def sq(v):
 # ---------------- read families ----------------
 families = {}
 for line in psql(
-    DEST, "SELECT family, name_pattern, official_domain FROM gt_build.families"
+    "SELECT family, name_pattern, official_domain FROM gt_build.families"
 ).splitlines():
     if not line.strip():
         continue
     fam, np_, od = line.split("|")
-    families[fam] = {"pattern": np_, "official_domain": normalize_domain(od)}
+    families[fam] = {"pattern": np_, "official_domain": norm_dom(od)}
 print("families:", {k: v["pattern"] for k, v in families.items()})
 
 # ---------------- read seed roots ----------------
 seed_roots = []  # (family, origin, record_id)
-for line in psql(DEST, "SELECT family, origin, record_id FROM gt_build.seed_roots").splitlines():
+for line in psql("SELECT family, origin, record_id FROM gt_build.seed_roots").splitlines():
     if not line.strip():
         continue
     fam, org, rid = line.split("|")
@@ -79,10 +79,10 @@ for line in read_lines(os.path.join(CD, "company.tsv")):
     }
     db_rows[cid] = row
     for nm in (row["entityname"], row["fullname"]):
-        nn = normalize_name(nm)
+        nn = norm_name(nm)
         if nn:
             db_normname[nn].append(cid)
-    dom = normalize_domain(row["website"])
+    dom = norm_dom(row["website"])
     db_domain[cid] = dom
 print("diffbot company rows:", len(db_rows))
 
@@ -104,13 +104,13 @@ for line in read_lines(CH_CACHE):
     name = cells[1] if len(cells) > 1 else ""
     dom = cells[2] if len(cells) > 2 else ""
     zi_rows[cid] = {"id": cid, "name": name, "domain": dom}
-    nn = normalize_name(name)
+    nn = norm_name(name)
     if nn:
         zi_normname[nn].append(cid)
-    nd = normalize_domain(dom)
+    nd = norm_dom(dom)
     if nd:
         zi_domain[cid] = nd
-        zi_domroot[domain_root(nd)].append(cid)
+        zi_domroot[dom_root(nd)].append(cid)
 zi_normname = {k: sorted(set(v)) for k, v in zi_normname.items()}
 print("zoominfo company rows:", len(zi_rows))
 
@@ -237,7 +237,7 @@ print("BFS done:", time.time() - t_stage, "closure:", len(closure))
 
 # cross-origin join: after diffbot closure, match zoominfo by name/domain
 def cross_origin(fam, info):
-    official_root = domain_root(info["official_domain"])
+    official_root = dom_root(info["official_domain"])
     # for each diffbot closure member, look up zi matches by EXACT normalized
     # name or EXACT normalized domain (or family-domain-root)
     for (f, org, cid), hop in list(closure.items()):
@@ -248,7 +248,7 @@ def cross_origin(fam, info):
             continue
         candidates = set()
         for nm in (row["entityname"], row["fullname"]):
-            nn = normalize_name(nm)
+            nn = norm_name(nm)
             if nn:
                 candidates.update(zi_normname.get(nn, ()))
         dom = db_domain.get(cid)
@@ -256,7 +256,7 @@ def cross_origin(fam, info):
             # exact domain equality
             candidates.update(zi_domain.get(dom, ()))
             # family official domain root (e.g. boeing.com -> zi boeing.com)
-            if domain_root(dom) == official_root:
+            if dom_root(dom) == official_root:
                 candidates.update(zi_domroot.get(official_root, ()))
         for zc in candidates:
             k = (fam, "zoominfo", zc)
@@ -285,5 +285,5 @@ for i in range(0, len(rows), CHUNK):
         + vals
         + " ON CONFLICT (family, origin, company_id) DO UPDATE SET hop = LEAST(gt_build.company_closure.hop, EXCLUDED.hop)"
     )
-    psql(DEST, sql)
+    psql(sql)
 print("wrote closure rows:", len(rows))
