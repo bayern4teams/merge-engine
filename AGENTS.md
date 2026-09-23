@@ -5,6 +5,16 @@ harness stays tool-agnostic (this repo's map should not disappear if the
 agent changes). Do not fork the content between the two files; edit
 `CLAUDE.md` and keep this one a pointer.
 
+## Code lookup order (the one rule worth repeating here)
+
+Before reading source, go down this ladder and **stop at the first tier that
+answers**: `graphify` -> `graft` -> `codebase-memory-mcp` -> raw source.
+Never the LLM/`--deep` paths of any of them.
+
+Full commands and the reasoning are under "Code lookup order" in
+[CLAUDE.md](CLAUDE.md) -- this is the only thing restated here, because an
+agent that skips it reads the whole repo the slow way.
+
 <!-- OPENWIKI:START -->
 
 ## OpenWiki

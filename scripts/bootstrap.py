@@ -15,7 +15,11 @@ Steps:
        skipped (with a clear message) if it isn't, matching check.py
        frontend's own graceful-skip behaviour.
     5. Copy .env.example -> .env if .env doesn't exist yet.
-    6. Print the exact command to run the app.
+    6. Install the git hooks (pre-commit + post-commit). A fresh clone has an
+       empty .git/hooks/, so without this step none of the repo's hooks run.
+    7. Build the three code graphs agents read before source (graphify, graft,
+       codebase-memory-mcp). They are gitignored, so a clone has none.
+    8. Print the exact command to run the app.
 
 Usage:
     python scripts/bootstrap.py
@@ -106,12 +110,63 @@ def copy_env_example() -> None:
     print(f"Created {env_path} from .env.example — fill in LLM_API_KEY before running.")
 
 
+def install_git_hooks() -> None:
+    """Install pre-commit AND post-commit hooks.
+
+    .git/ is not cloned, so a fresh clone starts with an empty .git/hooks/ --
+    which is exactly what this repo was found in: all 13 configured hooks,
+    including the four CLAUDE.md calls "mechanically enforced", had never run
+    once. Bootstrapping them here is what makes them real for the next clone.
+    """
+    py = _venv_python()
+    if not py.exists():
+        print("(venv python missing - skipping git hook install)")
+        return
+    result = subprocess.run(
+        [
+            str(py),
+            "-m",
+            "pre_commit",
+            "install",
+            "--hook-type",
+            "pre-commit",
+            "--hook-type",
+            "post-commit",
+        ],
+        cwd=ROOT,
+    )
+    if result.returncode != 0:
+        # Not fatal: the app still runs without hooks, and CI enforces the
+        # same rules via `check.py guards`. Say so rather than failing here.
+        print("(pre-commit install failed - hooks not active; CI still enforces the guards)")
+        return
+    print("Git hooks installed (pre-commit + post-commit graph refresh).")
+
+
+def build_code_graphs() -> None:
+    """Build the three graphs agents consult before reading source.
+
+    They are gitignored local caches -- graphify-out/ alone was 750k lines of
+    tracked JSON before being untracked -- so a fresh clone has none until
+    something builds them. That something is this. ~8s, no LLM, no API key.
+    """
+    py = _venv_python()
+    script = ROOT / "scripts" / "refresh_graphs.py"
+    if not py.exists() or not script.exists():
+        return
+    print("Building code graphs (graphify, graft, codebase-memory-mcp) ...")
+    subprocess.run([str(py), str(script), "--if-missing"], cwd=ROOT)
+    print("Code graphs ready (see .tmp/refresh_graphs.log).")
+
+
 def main() -> int:
     check_python_version()
     create_venv()
     install_python_deps()
     build_frontend()
     copy_env_example()
+    install_git_hooks()
+    build_code_graphs()
 
     py = _venv_python()
     print("\nDone. Run the app with:\n")

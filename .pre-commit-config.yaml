@@ -22,11 +22,7 @@ repos:
       - id: detect-private-key
       - id: check-merge-conflict
       - id: end-of-file-fixer
-        # graphify-out/ is generated knowledge-graph output that is tracked on
-        # purpose. It is not hand-edited source, and rewriting its trailing
-        # newlines churned 281 files on a single `pre-commit run --all-files`
-        # -- noise that buries the real diff and rewrites graphify's own cache.
-        exclude: ^(tests/fixtures/.*\.json|graphify-out/.*)$
+        exclude: ^tests/fixtures/.*\.json$
 
   - repo: local
     hooks:
@@ -87,3 +83,22 @@ repos:
         entry: python -m scripts.hooks.no_new_bare_except_pass
         language: system
         types: [python]
+
+      # Keeps the three code graphs agents read (graphify, graft,
+      # codebase-memory-mcp) in step with the commit that just landed.
+      #
+      # post-commit, not pre-commit: the commit is already written by the time
+      # this fires, so a graph rebuild can never be the thing that blocks or
+      # breaks committing. --detach returns immediately and rebuilds in the
+      # background (~8s), because an 8s pause after every commit is a tax
+      # people work around. Results go to .tmp/refresh_graphs.log.
+      #
+      # Every command it runs is the tool's own no-LLM path -- no API key, no
+      # cost, no --deep. See scripts/refresh_graphs.py.
+      - id: refresh-graphs
+        name: refresh code graphs (graphify, graft, codebase-memory-mcp)
+        entry: python scripts/refresh_graphs.py --detach
+        language: system
+        stages: [post-commit]
+        always_run: true
+        pass_filenames: false

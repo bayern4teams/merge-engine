@@ -4,6 +4,41 @@ Every line below is traceable to a real past failure or a hard constraint.
 Depth lives in `docs/` — start at [docs/INDEX.md](docs/INDEX.md). This file
 just tells you where to look and what not to redo.
 
+## Code lookup order — stop at the first tier that answers
+
+Four tiers. **If a tier answers the question, stop.** Do not re-derive from a
+lower tier a fact a higher one already gave you; reading source to confirm
+what the graph just told you is the slow path these tools exist to replace.
+
+1. **graphify** — `graphify query "<question>"` (BFS over the graph),
+   `graphify path "A" "B"` (shortest path between two nodes),
+   `graphify explain "X"`, `graphify affected "X"` (reverse traversal: what
+   breaks if X changes), `graphify god-nodes` (architectural hubs).
+   Graph lives at `graphify-out/graph.json`.
+2. **graft** — `graft ask "<query>"` returns ranked nodes with exact
+   `file:line`; `graft skeleton <file>` is the cheapest view of one file's API
+   surface. Per-file cards in `graft/` (greppable — see `.ignore`).
+3. **codebase-memory-mcp** — `search_graph`, `trace_path`, `get_code_snippet`,
+   `query_graph`, `get_architecture`. Call `check_index_coverage` on any file
+   you rely on; clean coverage is not proof of completeness.
+4. **Raw source** — grep and read. Last resort, and the only tier that is
+   always current, so use it to confirm anything from 1-3 that looks wrong.
+
+Tiers 1-3 are caches. They can be stale or plain mistaken, and a confident
+wrong answer from a graph is worse than no answer: when a claim from any tier
+contradicts what the code does, the code wins and the graph needs rebuilding.
+
+**Never the LLM paths** — `graphify extract --mode deep`, `graphify label`,
+`graphify cluster-only` without `--no-label`, `graft build --deep`. They spend
+model calls for what tiers 1-3 already answer for free.
+
+The three graphs are gitignored local caches, never committed:
+`scripts/bootstrap.py` builds them on a fresh clone, and the `refresh-graphs`
+post-commit hook rebuilds them in the background after every commit
+(`scripts/refresh_graphs.py`, ~8s, no API key, log in `.tmp/`). Missing or
+stale? Run `python scripts/refresh_graphs.py` — do not quietly drop to tier 4
+and leave it stale for whoever comes next.
+
 ## Hard constraints
 
 - Work only inside this repo root. Never touch parent folders.

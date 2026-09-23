@@ -99,10 +99,12 @@ temp/
 .tokensave/
 .claude/settings.local.json
 
-# keep graph outputs, skip heavy/local-only files
-graphify-out/cache/            # optional: commit for shared extraction speed, skip to keep repo small
-graphify-out/manifest.json     # mtime-based, invalid after git clone — always gitignore this
-graphify-out/cost.json         # local token tracking, not useful to share
+# Generated knowledge-graph output. Regenerable in ~5s by `graphify update`,
+# and it churns hard: one update rewrites graph.json (263k lines), recreates
+# cache/ast/ and drops a ~10MB dated backup dir. Tracking it put 750k lines --
+# three quarters of the whole tree -- into git. Built locally instead, by
+# scripts/bootstrap.py on a fresh clone and by the post-commit hook after.
+graphify-out/
 # Per-run scratch: DuckDB spools and scale-test measurements are local only
 logs/spool/
 logs/scale/
@@ -135,3 +137,6 @@ Bugs/
 scripts/ground_truth/cache_zi_company.tsv
 scripts/ground_truth/cache_diffbot/
 backup/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
