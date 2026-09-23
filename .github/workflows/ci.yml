@@ -10,6 +10,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+  schedule:
+    # Weekly, so an idle repo still notices an upstream dependency breaking
+    # it. CI only fired on push/PR before, which means a repo nobody touched
+    # could rot silently and only reveal it on the next unrelated commit.
+    - cron: "0 6 * * 1"
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}

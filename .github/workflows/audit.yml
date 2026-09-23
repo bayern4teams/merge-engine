@@ -1,0 +1,56 @@
+name: Dependency audit
+
+# Scans the runtime dependency set for known advisories. This tool handles
+# live database credentials, so a known-vulnerable transitive dep matters.
+#
+# Not on every push, on purpose. Two reasons:
+#   1. New advisories land against unchanged code, so push is the wrong
+#      trigger -- a weekly check matches how the risk actually arrives.
+#   2. A job that goes red for something nobody can fix is the OpenWiki
+#      failure repeating: that workflow failed every night for months and
+#      trained everyone to ignore a red badge. scripts/audit_deps.py
+#      therefore fails ONLY on advisories with a released fix. Unfixable
+#      ones are printed in full but do not turn the run red.
+on:
+  schedule:
+    # Mondays 06:00 UTC -- start of the week, while there is time to act.
+    - cron: "0 6 * * 1"
+  push:
+    paths:
+      - "requirements.txt"
+      - "pyproject.toml"
+      - ".github/workflows/audit.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Install pip-audit
+        run: pip install pip-audit==2.10.1
+
+      # pip-audit exits non-zero on ANY advisory; `|| true` hands the verdict
+      # to audit_deps.py, which is the thing that decides red vs not.
+      - name: Audit requirements.txt
+        run: |
+          pip-audit --requirement requirements.txt --format json \
+            --progress-spinner off > audit.json || true
+
+      - name: Fail only on advisories that have a fix
+        run: python scripts/audit_deps.py audit.json | tee "$GITHUB_STEP_SUMMARY"
