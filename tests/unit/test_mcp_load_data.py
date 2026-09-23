@@ -30,7 +30,7 @@ class TestLoadDataImpl:
     def mock_config(self) -> MagicMock:
         """Mock config with destination."""
         config = MagicMock()
-        config.destination.type = "databricks"
+        config.destination.type = "postgresql"
         config.destination.host = "localhost"
         config.destination.port = 443
         config.destination.user = "testuser"
@@ -244,7 +244,7 @@ class TestLoadDataImpl:
     ) -> None:
         """Test load_data with explicit destination config."""
         dest_config = {
-            "host": "custom-host.databricks.com",
+            "host": "custom-host.example.com",
             "port": 443,
             "user": "custom_user",
             "password": "custom_pass",
@@ -504,7 +504,7 @@ class TestGetDestinationConnector:
     def test_get_destination_connector_with_defaults(self) -> None:
         """Test getting destination connector with defaults from global config."""
         mock_config = MagicMock()
-        mock_config.destination.type = "databricks"
+        mock_config.destination.type = "postgresql"
         mock_config.destination.host = "global-host"
         mock_config.destination.port = 443
         mock_config.destination.user = "global_user"

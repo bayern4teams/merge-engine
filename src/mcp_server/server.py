@@ -224,7 +224,7 @@ async def list_tools() -> list[Tool]:
         Tool(  # type: ignore[call-arg]
             name="load_data",
             description=(
-                "Upsert unified records into destination Databricks table "
+                "Upsert unified records into the destination table "
                 "(Delta) using MERGE. Handles conflict column and provenance tracking."
             ),
             inputSchema={
@@ -251,7 +251,7 @@ async def list_tools() -> list[Tool]:
         Tool(  # type: ignore[call-arg]
             name="extend_schema",
             description=(
-                "Add new columns to one or more Databricks destination tables. "
+                "Add new columns to one or more destination tables. "
                 "Useful when unmapped fields require schema extension."
             ),
             inputSchema={

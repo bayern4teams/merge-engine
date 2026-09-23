@@ -52,12 +52,12 @@ class TestLoadDataNodeIntegration:
             "schema": "public",
         }
 
-        mock_databricks = MagicMock()
-        mock_databricks.load_batch = AsyncMock(return_value={"inserted": 2, "updated": 0})
-        mock_databricks.close = AsyncMock()
+        mock_destination = MagicMock()
+        mock_destination.load_batch = AsyncMock(return_value={"inserted": 2, "updated": 0})
+        mock_destination.close = AsyncMock()
 
         with patch("src.mcp_server.tools.load_data._get_destination_connector") as mock_create:
-            mock_create.return_value = mock_databricks
+            mock_create.return_value = mock_destination
             result = await load_data_node(dependency_state)
 
         assert "errors" in result
@@ -143,12 +143,12 @@ class TestLoadDataNodeIntegration:
             "schema": "public",
         }
 
-        mock_databricks = MagicMock()
-        mock_databricks.load_batch = AsyncMock(return_value={"inserted": 0, "updated": 0})
-        mock_databricks.close = AsyncMock()
+        mock_destination = MagicMock()
+        mock_destination.load_batch = AsyncMock(return_value={"inserted": 0, "updated": 0})
+        mock_destination.close = AsyncMock()
 
         with patch("src.mcp_server.tools.load_data._get_destination_connector") as mock_create:
-            mock_create.return_value = mock_databricks
+            mock_create.return_value = mock_destination
             result = await load_data_node(dependency_state)
 
         assert "errors" in result

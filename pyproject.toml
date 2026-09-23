@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "merge-engine"
 version = "0.1.0"
-description = "Multi-source data migration, deduplication, and unification into Databricks with human oversight"
+description = "Multi-source data migration, deduplication, and unification into a relational destination with human oversight"
 requires-python = ">=3.11"
 dependencies = [
     # LangGraph orchestration
@@ -23,7 +23,6 @@ dependencies = [
     "psycopg2-binary>=2.9.0",
     "asyncpg>=0.29.0",
     "pymongo>=4.6.0",
-    "databricks-sql-connector>=3.0.0",
     "clickhouse-connect>=0.7.0",
     # Configuration & validation
     "pydantic>=2.0.0",

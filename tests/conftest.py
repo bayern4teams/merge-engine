@@ -304,7 +304,7 @@ def clean_env(monkeypatch: Any) -> None:
     """Clean environment for each test."""
     # Clear any test-related env vars
     for key in list(os.environ.keys()):
-        if key.startswith("DB_") or key.startswith("DATABRICKS_") or key.startswith("OPENAI_"):
+        if key.startswith("DB_") or key.startswith("OPENAI_"):
             monkeypatch.delenv(key, raising=False)
 
 

@@ -108,7 +108,7 @@ def _build_connector(postgres_config, *conn_list):
 
 @pytest.fixture
 def mock_cursor():
-    """Mock synchronous cursor for Databricks connector."""
+    """Mock synchronous cursor for the destination connector."""
     cursor = MagicMock()
     cursor.fetchall.return_value = []
     cursor.rowcount = 0

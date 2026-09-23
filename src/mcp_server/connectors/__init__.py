@@ -1,7 +1,7 @@
 """Database connectors for merge-engine.
 
 Provides a unified interface for schema discovery, data extraction,
-and import flagging across PostgreSQL, MongoDB, and Databricks.
+and import flagging across PostgreSQL, MongoDB and ClickHouse.
 """
 
 from __future__ import annotations
@@ -10,7 +10,6 @@ from typing import Any
 
 from src.mcp_server.connectors.base import BaseConnector
 from src.mcp_server.connectors.clickhouse import ClickHouseConnector
-from src.mcp_server.connectors.databricks import DatabricksConnector
 from src.mcp_server.connectors.mongodb import MongoDBConnector
 from src.mcp_server.connectors.postgres import PostgresConnector
 
@@ -19,7 +18,6 @@ _CONNECTOR_REGISTRY: dict[str, type[BaseConnector]] = {
     "postgres": PostgresConnector,
     "postgresql": PostgresConnector,
     "mongodb": MongoDBConnector,
-    "databricks": DatabricksConnector,
     "clickhouse": ClickHouseConnector,
 }
 
@@ -30,7 +28,7 @@ def create_connector(origin_type: str, config: dict[str, Any]) -> BaseConnector:
     Parameters
     ----------
     origin_type : str
-        One of "postgres", "mongodb", "databricks", "clickhouse".
+        One of "postgres", "mongodb", "clickhouse".
     config : dict
         Connection configuration for the target origin/destination.
 
@@ -56,7 +54,6 @@ __all__ = [
     "_CONNECTOR_REGISTRY",
     "BaseConnector",
     "ClickHouseConnector",
-    "DatabricksConnector",
     "MongoDBConnector",
     "PostgresConnector",
     "create_connector",

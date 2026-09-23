@@ -652,23 +652,6 @@ class TestFieldMappingEdgeCases:
 class TestDataLoadEdgeCases:
     """Edge cases for data loading."""
 
-    @pytest.mark.asyncio
-    async def test_databricks_empty_batch(self):
-        """Databricks connector load_batch should return zero counts for empty batch."""
-        # Test via the base class or the expected behavior
-        from src.mcp_server.connectors.databricks import DatabricksConnector
-
-        # Verify the connector has the expected method
-        assert hasattr(DatabricksConnector, "load_batch")
-
-    @pytest.mark.asyncio
-    async def test_databricks_add_column_error(self):
-        """Databricks connector add_column should handle column add error gracefully."""
-        from src.mcp_server.connectors.databricks import DatabricksConnector
-
-        # Verify the connector has the expected method
-        assert hasattr(DatabricksConnector, "add_column")
-
     def test_postgres_dest_empty_batch(self):
         """PostgreSQL destination connector should return zero for empty batch."""
         from src.mcp_server.connectors.postgresql_destination import PostgreSQLDestinationConnector
