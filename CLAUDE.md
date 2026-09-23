@@ -4,6 +4,32 @@ Every line below is traceable to a real past failure or a hard constraint.
 Depth lives in `docs/` — start at [docs/INDEX.md](docs/INDEX.md). This file
 just tells you where to look and what not to redo.
 
+## Do this first, before anything else
+
+```bash
+python scripts/bootstrap.py          # venv, deps, frontend, git hooks, graphs
+```
+
+`git clone` gives you **none** of the tooling below. `.git/hooks/` is never
+cloned — git excludes hooks so that cloning a repo cannot execute its code —
+and there is no post-clone hook to hang anything on. This repo was found in
+exactly that state: `.git/hooks/` empty, so all 13 configured hooks, including
+the four called "mechanically enforced" further down, had never run once.
+
+`bootstrap.py` is the one command that fixes that. It installs the pre-commit
+**and** post-commit hooks and builds all three graphs (~8s, no LLM, no key).
+
+**Every session, before reading any code, check the graphs exist:**
+
+```bash
+ls graphify-out/graph.json graft/ >/dev/null 2>&1 || python scripts/refresh_graphs.py
+```
+
+If they are missing, build them — do not shrug and start grepping. A missing
+graph is an 8-second fix; skipping it means reading the whole repo the slow way
+and leaving the next agent to do the same. The graphs are gitignored local
+caches, so "not there" is the normal state of a fresh clone, not a bug.
+
 ## Code lookup order — stop at the first tier that answers
 
 **graphify, graft and codebase-memory-mcp are this repo's primary tools for

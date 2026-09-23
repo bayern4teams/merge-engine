@@ -134,6 +134,20 @@ live against real databases — see the phase-by-phase evidence in
   bound only to `127.0.0.1`, which a container's port-forwarding can't
   reach). See [TODO.md](TODO.md)'s "Part 1.6" section.
 
+- **CI, cleanup and tooling (2026-09, on `main`):** GitHub Actions CI went
+  green for the first time in the repo's history, after four independent
+  root causes were fixed — 47 unlinted ruff errors in `scripts/ground_truth/`,
+  an eval stage that hung forever (a blanket `*.csv` had untracked the eval
+  fixture, degrading it to a 2-row stub whose 3 distinct names never returned
+  from Splink blocking), CI installing 5 of 8 extras against a baseline built
+  with all 8, and a test stage that hung 30 minutes in CI while passing in 64s
+  locally (a tracked `config.yaml` pointing at a LAN vLLM box, no LLM timeout,
+  and a fixture falling through to the production config — meaning the
+  "mocked" integration tests had been making live model calls). The unreachable,
+  untested Databricks connector was deleted, 56 skipped PostgreSQL destination
+  tests were unskipped, and `graphify-out/` was untracked. See
+  [TODO.md](TODO.md) and the git log.
+
 Read [TODO.md](TODO.md) for the evidence behind every one of those claims —
 it is the append-only working log this project was built from, phase by
 phase, with real numbers rather than descriptions.
@@ -141,9 +155,20 @@ phase, with real numbers rather than descriptions.
 ## Quick start
 
 ```bash
-python scripts/bootstrap.py    # creates .venv, installs deps, builds the frontend, copies .env.example
-# fill in LLM_API_KEY in the new .env, then:
-.venv\Scripts\python -m src.main --mode gradio --port 7860
+python scripts/bootstrap.py
+```
+
+That one command creates `.venv`, installs deps, builds the frontend, copies
+`.env.example` → `.env`, installs the git hooks, and builds the code graphs.
+**Run it before anything else.** `.git/hooks/` is never cloned — git excludes
+hooks so cloning a repo cannot execute its code — so until you run this, no
+hook in this repo does anything at all.
+
+Fill in `LLM_API_KEY` in the new `.env`, then:
+
+```bash
+.venv/bin/python -m src.main --mode gradio --port 7860      # Linux / macOS
+.venv\Scripts\python -m src.main --mode gradio --port 7860  # Windows
 ```
 
 (`--mode gradio` is the legacy flag name — it serves FastAPI + the React
@@ -185,6 +210,39 @@ docker/
   langfuse-compose.yml   self-hosted observability stack
 ```
 
+## Working on this repo
+
+Three code-graph tools are the primary way to understand this codebase;
+reading source is the fallback, not the default. Go down the ladder and stop
+at the first tier that answers:
+
+| Tier | Tool | Typical use |
+|---|---|---|
+| 1 | **graphify** | `graphify query "<question>"`, `graphify affected "X"` (what breaks if X changes), `graphify god-nodes` |
+| 2 | **graft** | `graft ask "<query>"` → ranked nodes with exact `file:line`; `graft skeleton <file>` for an API surface |
+| 3 | **codebase-memory-mcp** | `search_graph`, `trace_path`, `get_code_snippet` over MCP |
+| 4 | raw source | grep and read — always correct, so use it to confirm anything surprising from 1–3 |
+
+All three are **gitignored local caches**, never committed — `graphify-out/`
+alone was 750k lines of tracked JSON, three quarters of the whole tree.
+`scripts/bootstrap.py` builds them on a fresh clone, and a `post-commit` hook
+refreshes all three in the background after each commit (~8s, no LLM, no API
+key — `scripts/refresh_graphs.py`). If they are missing, build them:
+
+```bash
+python scripts/refresh_graphs.py
+```
+
+Never use the LLM paths (`graphify extract --mode deep`, `graphify label`,
+`graft build --deep`); the free tiers already answer what this repo needs.
+
+[Ponytail](https://github.com/dietrichgebert/ponytail) is installed and sets
+the standing brief for *how much* to build. `/ponytail-audit` pairs well with
+the graph tiers — but "no callers in the graph" is not proof of no callers,
+so confirm with grep before deleting anything.
+
+`CLAUDE.md` and `AGENTS.md` carry the full rules for agents working here.
+
 ## Observability
 
 Tracing is a self-hosted [Langfuse](https://langfuse.com) stack
@@ -206,17 +264,48 @@ show up as their own child spans. Verify a run's trace automatically with:
 python -m scripts.diagnostics.verify_langfuse_trace <thread_id>
 ```
 
-## Testing
+## Testing and CI
 
 ```bash
-pytest
+pytest                          # 2081 passed, 2 skipped, 63s
+python scripts/check.py all     # the full 11-stage gate, ~90s
 ```
 
-1,325 tests passing as of the last full run (0 failed, 83 skipped — the
-skips are tests that require a live database container). Run `tests/eval/`
-separately for matcher precision/recall against labelled data, or
-`python scripts/check.py all` for the full gate (lint, types, arch/doc
-lint, tests, frontend build, matcher eval) in one command.
+`check.py all` is *the* verification command, and it is exactly what CI runs.
+Eleven stages, in order: `lint`, `format`, `arch`, `docs`, `portability`,
+`guards`, `types`, `frontend`, `test`, `eval`, `prompts`. If it passes
+locally and fails in CI, that is a bug in `check.py`, not something to work
+around.
+
+`guards` runs the custom pre-commit hooks (blanket-gitignore guard,
+`sample_databases/` guard, `.format()`-on-prompts guard, bare-`except`-`pass`
+ratchet, and a requirements/pyproject drift check). They used to live only in
+`.pre-commit-config.yaml`, which meant `--no-verify` skipped them and CI never
+ran them at all.
+
+**The two remaining skips are environmental, not disabled tests:**
+
+- `tests/eval/test_matcher_recall.py:158` — needs the 1500-row
+  `tests/eval/pagila_staff.csv`. A blanket `*.csv` line in `.gitignore` meant
+  that file was **never committed to any branch**, so it is not recoverable
+  from git history (recorded BLOCKED in `dc4d65b`). The `.gitignore` rule is
+  fixed and guarded, but the data itself still has to be regenerated.
+- `tests/eval/test_matcher_recall.py:237` — needs a live PostgreSQL on
+  `localhost:55201` for the parity leg.
+
+### Continuous integration
+
+Two GitHub Actions workflows, both green:
+
+- **CI** (`.github/workflows/ci.yml`) — runs `python scripts/check.py all` on
+  every push and PR. ~3.5 min.
+- **Docker** (`.github/workflows/docker.yml`) — builds the image, runs
+  `pip check`, and asserts every runtime import resolves. Path-filtered to
+  the files that can change the image. This exists because `requirements.txt`
+  had silently drifted from `pyproject.toml` and omitted `networkx`, so the
+  built image raised `ModuleNotFoundError` the moment anyone opened the
+  metadata graph view — and because that import is *lazy*, the app booted
+  fine and a boot-and-curl smoke test would never have caught it.
 
 ## Known, documented limitations
 

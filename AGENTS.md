@@ -5,6 +5,25 @@ harness stays tool-agnostic (this repo's map should not disappear if the
 agent changes). Do not fork the content between the two files; edit
 `CLAUDE.md` and keep this one a pointer.
 
+## Do this first, in a fresh clone
+
+```bash
+python scripts/bootstrap.py    # venv, deps, frontend, git hooks, graphs
+```
+
+`git clone` gives you none of it: `.git/hooks/` is never cloned, and there is
+no post-clone hook. This repo was found with an empty `.git/hooks/`, so every
+configured hook had never run. Bootstrap installs them and builds the graphs.
+
+Then, every session, before reading code:
+
+```bash
+ls graphify-out/graph.json graft/ >/dev/null 2>&1 || python scripts/refresh_graphs.py
+```
+
+Missing graphs are the normal state of a fresh clone, not a bug — build them
+(~8s, no LLM) instead of falling back to grepping the whole repo.
+
 ## The two rules worth repeating here
 
 **1. graphify, graft and codebase-memory-mcp are the primary tools for

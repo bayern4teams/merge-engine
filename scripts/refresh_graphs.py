@@ -37,13 +37,12 @@ ROOT = Path(__file__).resolve().parent.parent
 LOG = ROOT / ".tmp" / "refresh_graphs.log"
 STAMP = ROOT / ".tmp" / "refresh_graphs.stamp"
 
-# graft 0.18.0 finishes its work, prints this line, and THEN aborts with
-# SIGABRT (exit 134) on the way out -- reproducible on every run, with graft/
-# fully written and correct each time. Judging it by exit code alone would
-# report a failed refresh after every single commit, which is how a red signal
-# becomes one people ignore. So for graft the success marker is the proof, not
-# the exit status. If graft ever fails for real it prints no marker and is
-# still caught. (graft 0.19.0 exists and may fix this; not upgraded here.)
+# graft 0.18.0 finished its work, printed this line, and THEN aborted with
+# SIGABRT (exit 134) every single run -- output fully written and correct each
+# time. 0.19.0 fixed it and exits 0, so this is now a safety net rather than a
+# live workaround: it keeps a teammate still on 0.18.x from getting a red
+# refresh after every commit, which is how a red signal becomes one people
+# ignore. A genuine graft failure prints no marker and is still caught.
 _GRAFT_OK_MARKER = "✓ wiring:"
 
 # (tool, argv, output path proving it ran, stdout marker that overrides exit)
