@@ -22,13 +22,17 @@ just tells you where to look and what not to redo.
 
 `python scripts/check.py all` — ruff, ruff-format (report-only, see the
 script's own docstring), the mypy ratchet, `lint_arch.py`, `lint_docs.py`,
-unit tests, frontend typecheck+build. If it passes locally and fails in CI,
+unit tests, frontend typecheck+build, and the
+custom pre-commit guard hooks (`guards`). If it passes locally and fails in CI,
 that is a bug in `check.py`, not a discrepancy to work around. Server-side CI
 is not yet wired up — `git.n4t.com` is unreachable
 (`docs/decisions/0003-server-ci-unreachable.md`); `pre-commit` is the only
 enforcement that actually runs today.
 
 ## Rules that are mechanically enforced, not just written down
+
+These run on every commit *and* in CI: `check.py guards` invokes them, so
+`--no-verify` no longer slips past them.
 
 A prompt instruction is a suggestion; only code and a lint rule are a rule
 (this is why BUG A happened — a prompt telling the LLM "prefer a new column"

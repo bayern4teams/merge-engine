@@ -201,6 +201,39 @@ def check_eval() -> bool:
     return _run([PYTHON, "-m", "tests.eval.score"], label="tests.eval.score")
 
 
+# The four rules CLAUDE.md calls "mechanically enforced" lived only in
+# .pre-commit-config.yaml, so they fired on `git commit` and nowhere else --
+# `--no-verify` or a commit made by any tool that skips hooks slipped straight
+# past them, and CI never ran them at all. Each one exists because of a real
+# incident (a blanket *.csv line silently untracking the eval fixture; 6 GB of
+# sample dumps nearly committed; .format() on a prompt full of JSON braces;
+# except Exception: pass swallowing every failure), so "enforced" has to mean
+# enforced on every commit, not just the ones made through a hooked checkout.
+#
+# These are all `language: system` hooks, so pre-commit runs them with no repo
+# clone and no env install. Delegating to pre-commit rather than re-deriving
+# each hook's file filter here keeps one filter, not two that drift apart.
+_GUARD_HOOKS = (
+    "no-blanket-data-ignore",
+    "no-sample-databases-commit",
+    "no-str-format-on-prompts",
+    "no-new-bare-except-pass",
+)
+
+
+def check_guards() -> bool:
+    ok = True
+    for hook in _GUARD_HOOKS:
+        ok = (
+            _run(
+                [PYTHON, "-m", "pre_commit", "run", "--all-files", hook],
+                label=f"pre-commit {hook}",
+            )
+            and ok
+        )
+    return ok
+
+
 def check_prompts() -> bool:
     return _run([PYTHON, "-m", "tests.prompts.harness"], label="tests.prompts.harness")
 
@@ -217,6 +250,7 @@ _SUBCOMMANDS = {
     "frontend": check_frontend,
     "eval": check_eval,
     "prompts": check_prompts,
+    "guards": check_guards,
 }
 
 # Order for `all`: cheap/fast checks first, so a broken lint rule fails in
@@ -231,6 +265,7 @@ _ALL_ORDER = [
     "arch",
     "docs",
     "portability",
+    "guards",
     "types",
     "frontend",
     "test",
