@@ -214,6 +214,7 @@ def check_eval() -> bool:
 # clone and no env install. Delegating to pre-commit rather than re-deriving
 # each hook's file filter here keeps one filter, not two that drift apart.
 _GUARD_HOOKS = (
+    "requirements-in-sync",
     "no-blanket-data-ignore",
     "no-sample-databases-commit",
     "no-str-format-on-prompts",

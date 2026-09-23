@@ -57,6 +57,13 @@ repos:
         language: system
         pass_filenames: false
 
+      - id: requirements-in-sync
+        name: requirements*.txt must match pyproject.toml (generated files)
+        entry: python scripts/generate_requirements.py --check
+        language: system
+        pass_filenames: false
+        files: ^(pyproject\.toml|requirements(-dev)?\.txt)$
+
       - id: no-blanket-data-ignore
         name: .gitignore must not blanket-ignore *.json / *.csv / *.tsv
         entry: python -m scripts.hooks.no_blanket_data_ignore
