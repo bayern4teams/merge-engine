@@ -6,6 +6,9 @@ just tells you where to look and what not to redo.
 
 ## Code lookup order — stop at the first tier that answers
 
+**graphify, graft and codebase-memory-mcp are this repo's primary tools for
+understanding code. Reading source is the fallback, not the default.**
+
 Four tiers. **If a tier answers the question, stop.** Do not re-derive from a
 lower tier a fact a higher one already gave you; reading source to confirm
 what the graph just told you is the slow path these tools exist to replace.
@@ -55,23 +58,31 @@ and leave it stale for whoever comes next.
 
 ## The one verification command
 
-`python scripts/check.py all` — ruff, ruff-format (report-only, see the
-script's own docstring), the mypy ratchet, `lint_arch.py`, `lint_docs.py`,
-unit tests, frontend typecheck+build, and the
-custom pre-commit guard hooks (`guards`). If it passes locally and fails in CI,
-that is a bug in `check.py`, not a discrepancy to work around. Server-side CI
-is not yet wired up — `git.n4t.com` is unreachable
-(`docs/decisions/0003-server-ci-unreachable.md`); `pre-commit` is the only
-enforcement that actually runs today.
+`python scripts/check.py all` — 11 stages, in this order: `lint`, `format`
+(ruff + ruff-format, report-only — see the script's own docstring), `arch`
+(`lint_arch.py`), `docs` (`lint_docs.py`), `portability`, `guards` (the custom
+pre-commit hooks below), `types` (the mypy ratchet), `frontend`
+(typecheck+build), `test` (unit **and** integration), `eval`, `prompts`. If it
+passes locally and fails in CI, that is a bug in `check.py`, not a discrepancy
+to work around.
+
+CI runs exactly this command on GitHub Actions
+(`.github/workflows/ci.yml`), green since 2026-09-22. ADR
+`docs/decisions/0003-server-ci-unreachable.md` records why the original
+`git.n4t.com` server-side CI was abandoned; GitHub is the replacement, not a
+gap. Do not assume `pre-commit` is enforcing anything on its own: `.git/hooks/`
+is never cloned, so until someone runs `python scripts/bootstrap.py` it is
+empty and *no* hook runs. This repo sat in exactly that state — which is why
+`check.py guards` exists, so CI enforces the same rules regardless.
 
 ## Rules that are mechanically enforced, not just written down
-
-These run on every commit *and* in CI: `check.py guards` invokes them, so
-`--no-verify` no longer slips past them.
 
 A prompt instruction is a suggestion; only code and a lint rule are a rule
 (this is why BUG A happened — a prompt telling the LLM "prefer a new column"
 was obeyed, and the destination schema grew from 14 columns to 43).
+
+The rules below run on every commit *and* in CI — `check.py guards` invokes
+them, so `--no-verify` does not slip past them.
 
 - **Prompt substitution is literal `str.replace()`, never `.format()`**
   (`src/llm/__init__.py`). Prompts contain literal JSON braces; `.format()`
@@ -121,9 +132,10 @@ app said everything was fine.
 only the router does. See `docs/architecture/orchestration_and_ui.md` before
 touching gate logic.
 
-## Branch discipline (once `feat/*`/`chore/*` branches exist)
+## Branch discipline
 
-Five branches (B1-B5) exist because a strict file-ownership map keeps six
+`fix-v3` was merged into `main` on 2026-09-23; the five `feat/*`/`chore/*`
+branches (B1-B5) are still open. They exist because a strict file-ownership map keeps six
 parallel workstreams from producing six-way merge conflicts in `graph.py`,
 `resolve_entities.py`, and `pyproject.toml`. That only holds if every agent
 obeys it mechanically, not by memory:
@@ -146,6 +158,32 @@ obeys it mechanically, not by memory:
   branches, cross-branch rules R1-R11, integration order) — read it for
   context on how your branch fits the whole, but your branch's own
   `Branch_Plan.md` is what you implement against.
+
+## Ponytail — use it, and use all of it
+
+Ponytail (<https://github.com/dietrichgebert/ponytail>) is installed as a
+plugin and is active by default. It is the standing brief for *how much* to
+build: stop at the first rung that works, delete before adding, and never
+scaffold for a "later" that can scaffold for itself. This repo is the
+cautionary tale — 750k lines of generated JSON were tracked in git, a
+connector nobody could reach shipped with 549 lines of tests, and four rules
+were declared "mechanically enforced" while running nowhere.
+
+All six commands are available; they are not interchangeable:
+
+| Command | Use it when |
+|---|---|
+| `/ponytail` | Set or restate the intensity (`lite`/`full`/`ultra`). Default is `full`. |
+| `/ponytail-review` | Reviewing a diff or PR for over-building before it lands. |
+| `/ponytail-audit` | Hunting dead code, unused deps, duplicated helpers across the tree. |
+| `/ponytail-debt` | Cataloguing what was deliberately deferred, and what triggers paying it. |
+| `/ponytail-gain` | Measuring what a simplification actually bought — lines, deps, runtime. |
+| `/ponytail-help` | When unsure which of the above applies. |
+
+Pair `/ponytail-audit` with the graph tiers above: the graph finds what is
+unreferenced, the audit decides whether it should exist at all. Neither
+conclusion is safe alone — `affected "X"` returning nothing means the *graph*
+sees no caller, not that there is none. Confirm with grep before deleting.
 
 ## Where to look next
 

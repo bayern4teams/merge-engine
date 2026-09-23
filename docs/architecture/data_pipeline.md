@@ -76,8 +76,8 @@ reprieve for files that are already old enough to be eligible.
 ## 6. Connectors and keyset pagination
 
 `src/mcp_server/connectors/`: `postgres.py`, `clickhouse.py`, `mongodb.py`,
-`databricks.py`, `base.py` (the abstract interface), plus two shared helper
-modules: `keyset.py` and `watermark.py`.
+`base.py` (the abstract interface), plus two shared helper modules:
+`keyset.py` and `watermark.py`.
 
 **Why keyset (seek) pagination instead of `OFFSET`/`LIMIT`.** `OFFSET`
 pagination makes the database re-scan and discard every already-returned row
@@ -431,4 +431,3 @@ unknown month/day — `"d1997-XX-XX"`) is normalized to a plain ISO date via
 failing the whole batch on the first partial date.
 
 ---
-

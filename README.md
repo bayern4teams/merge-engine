@@ -168,7 +168,7 @@ src/
     profiles.py    saved run profiles (pin non-deterministic LLM decisions)
     workflow_manager.py   thread/run lifecycle, resume, profile capture
   mcp_server/
-    connectors/    postgres, clickhouse, mongodb, databricks, + keyset/watermark helpers
+    connectors/    postgres, clickhouse, mongodb, + keyset/watermark helpers
     tools/         the actual logic each node calls (discover_schema, extract_data,
                    resolve_entities, fellegi_sunter, unify_entity_group, map_fields,
                    load_data, select_entity_tables)
@@ -224,5 +224,3 @@ lint, tests, frontend build, matcher eval) in one command.
   gets full stage-then-swap atomic loads) — the app says so rather than
   pretending otherwise.
 - MongoDB is origin-only; there is no MongoDB destination connector.
-- Databricks has a connector but has not been exercised in this project's own
-  live verification runs the way PostgreSQL/ClickHouse/MongoDB have.

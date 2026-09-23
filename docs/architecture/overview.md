@@ -139,7 +139,7 @@ all — e.g. `resolve_entities_impl()` is called directly by hundreds of tests.
 | Per-cluster merge + conflict survivorship | `src/mcp_server/tools/unify_entity_group.py` |
 | Field mapping | `src/mcp_server/tools/map_fields.py` |
 | Destination write | `src/mcp_server/tools/load_data.py` |
-| Database drivers | `src/mcp_server/connectors/{postgres,clickhouse,mongodb,databricks}.py` |
+| Database drivers | `src/mcp_server/connectors/{postgres,clickhouse,mongodb}.py` |
 | Keyset pagination helpers | `src/mcp_server/connectors/keyset.py` |
 | Incremental-run watermarks | `src/mcp_server/connectors/watermark.py` |
 | DuckDB row spool | `src/orchestrator/spool.py` |
@@ -224,4 +224,3 @@ these gates to the next" or "what happens around the graph to make it usable
 and observable."
 
 ---
-

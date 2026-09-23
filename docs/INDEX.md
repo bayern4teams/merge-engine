@@ -20,7 +20,7 @@ Split from the old root `TECHNICAL_README.md`, by subsystem, in reading order:
 
 ## decisions/ — ADRs, one per locked decision
 
-- [0003-server-ci-unreachable.md](decisions/0003-server-ci-unreachable.md) — why server-side CI is undone (`git.n4t.com` unreachable) and the revisit trigger
+- [0003-server-ci-unreachable.md](decisions/0003-server-ci-unreachable.md) — why `git.n4t.com` server-side CI was abandoned; superseded 2026-09-22 by GitHub Actions (`.github/workflows/ci.yml`), which runs `check.py all` green
 - [0004-adopt-splink-matcher.md](decisions/0004-adopt-splink-matcher.md) — Splink 4.0.16 as a second matching engine, gated behind BP-B4's measured A/B comparison
 - [0005-adopt-valentine-schema-matching.md](decisions/0005-adopt-valentine-schema-matching.md) — Valentine as the first-pass schema matcher ahead of the LLM
 - [0006-adopt-desbordante-optional-agpl-isolated.md](decisions/0006-adopt-desbordante-optional-agpl-isolated.md) — Desbordante for deep profiling, optional extra, AGPL isolated to one module

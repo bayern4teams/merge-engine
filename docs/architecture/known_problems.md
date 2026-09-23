@@ -79,14 +79,6 @@ that fails midway leaves a partially written destination. Documented
 everywhere rather than papered over, but it is a real gap in the "all or
 nothing" guarantee (§10).
 
-### 18.6 🟡 Databricks is implemented but never verified
-
-`src/mcp_server/connectors/databricks.py` is registered in the connector
-factory and will be selected if someone picks that type. Unlike
-PostgreSQL/ClickHouse/MongoDB, it has **never been exercised against a live
-instance** in this project's verification runs. Treat it as untested code, not
-a supported path.
-
 ### 18.7 🟡 Local state is growing without any retention policy
 
 `logs/spool/` is at **3.4 GB** and `logs/debug.log` at **201 MB** right now.
@@ -281,7 +273,9 @@ started; this is the honest "what would I do with another month" list.
     stages everything and reports the exact diff without committing. Partly
     present in the staging path; not exposed as a user-facing mode.
 15. **Destination connectors: MongoDB, Databricks, S3/Parquet** [M each] —
-    Mongo is origin-only today; Databricks is unverified (§18.6).
+    Mongo is origin-only today. The Databricks connector was deleted
+    2026-09-23: unreachable, untested, and no live instance to verify it
+    against. Rebuilding it is a new piece of work, not a fix.
 16. **ClickHouse atomic loads** [M] — insert into a temp table then
     `EXCHANGE TABLES` / partition move, closing §18.5.
 17. **Run comparison view** [S] — two runs of the same profile, diffed:
