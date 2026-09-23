@@ -1,0 +1,69 @@
+name: Docker
+
+# The image is built from requirements.txt, which is generated from
+# pyproject.toml. That file had silently drifted: networkx was missing
+# entirely, so the published image raised ModuleNotFoundError the moment
+# anyone opened the metadata graph view. It booted fine -- the import in
+# src/ui/components/db_discovery.py is lazy -- so a boot-only smoke test
+# would not have caught it, and nothing else did either.
+#
+# `check.py guards` now fails on that drift at commit time. This job is the
+# backstop for what a static check cannot see: a dependency that resolves in
+# pyproject but fails to install, a missing apt package, a bad COPY path.
+#
+# Path-filtered on purpose. A full image build is minutes, and nothing
+# outside these files can change what lands in it -- src/ is copied, not
+# installed. The main CI job stays ~3.5 min and runs on everything.
+on:
+  push:
+    paths: &docker_paths
+      - "Dockerfile"
+      - ".dockerignore"
+      - "requirements.txt"
+      - "requirements-dev.txt"
+      - "pyproject.toml"
+      - "src/ui/frontend/package.json"
+      - "src/ui/frontend/package-lock.json"
+      - ".github/workflows/docker.yml"
+  pull_request:
+    paths: *docker_paths
+  workflow_dispatch:
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build the image
+        run: docker build -t merge-engine:ci .
+
+      - name: Dependency set is internally consistent
+        run: docker run --rm --entrypoint pip merge-engine:ci check
+
+      - name: Every runtime import resolves
+        # Explicit, because the imports that broke are lazy: they live inside
+        # functions, so importing src.api.main alone proves nothing about
+        # them. Add a line here whenever a module gains an unguarded
+        # third-party import that is NOT behind an optional extra.
+        run: |
+          docker run --rm --entrypoint python merge-engine:ci -c "
+          import importlib
+          for m in [
+              'src.api.main',
+              'src.main',
+              'src.mcp_server.tools.metadata_graph_view',
+              'src.ui.components.db_discovery',
+          ]:
+              importlib.import_module(m)
+              print('ok', m)
+          "
