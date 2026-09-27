@@ -137,6 +137,10 @@ Bugs/
 scripts/ground_truth/cache_zi_company.tsv
 scripts/ground_truth/cache_diffbot/
 backup/
+docs/verification/
+reports/
+research_notes/
+docs/*.pdf
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/

@@ -1,9 +1,10 @@
 # AGENTS.md
 
-See [CLAUDE.md](CLAUDE.md) — same content, kept as a separate file so the
-harness stays tool-agnostic (this repo's map should not disappear if the
-agent changes). Do not fork the content between the two files; edit
-`CLAUDE.md` and keep this one a pointer.
+[CLAUDE.md](CLAUDE.md) is the authoritative map. This file is a **pointer plus
+the few rules worth restating**, kept separate so the repo's map does not
+disappear if the agent changes. It is deliberately shorter, not a copy — do
+not fork shared content: anything that belongs in both goes in `CLAUDE.md`,
+and this file only ever summarises and links to it.
 
 ## Do this first, in a fresh clone
 
@@ -47,11 +48,9 @@ repo the slow way and then over-builds what it finds.
 
 ## OpenWiki
 
-This repository has **no** committed `openwiki/` tree -- do not go looking for one. The scheduled workflow regenerates it only when `OPENROUTER_API_KEY` is configured; with no such secret it skips cleanly (it used to fail every night instead). Source code and tests are the authority regardless.
-
-- Treat source code and tests as authoritative. A brief's unknowns and review items are verification gaps, not automatic requirements.
-- Prefer the narrowest quiet validation that proves the changed behavior. Preserve complete failure output.
-
-The scheduled OpenWiki GitHub Actions workflow refreshes the repository wiki. Do not hand-edit generated OpenWiki pages unless explicitly asked; prefer updating source code/docs and letting OpenWiki regenerate.
+There is **no** committed `openwiki/` tree — do not look for one. A scheduled
+workflow regenerates the wiki only when `OPENROUTER_API_KEY` is set, and skips
+cleanly otherwise. Source code and tests are authoritative either way; never
+hand-edit generated pages.
 
 <!-- OPENWIKI:END -->

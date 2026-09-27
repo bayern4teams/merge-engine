@@ -152,6 +152,14 @@ regenerated report — never the app's own success message. The matcher once
 reported `uncompared_pairs = 0` while having silently dropped 465 pairs; the
 app said everything was fine.
 
+**A terminal status of `completed` is not evidence of anything.** Measured
+2026-09-24 on the enrichment corpus: one run finished `completed` having
+discarded 9,556,382 candidate pairs unexamined, left 78 of 99 `company.name`
+values NULL, and produced zero field mappings for 8 of 16 entities. No stage
+can fail a run on its *results* — only on an exception — so the only way to
+know a run was good is to score it against something independent. Write the
+scorer before the run; a scorer written afterwards gets fitted to the result.
+
 ## HITL resume trap
 
 `interrupt_before=[...]` means a HITL node's own body never runs on resume —
