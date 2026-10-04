@@ -7,7 +7,7 @@ Overwrite this file at every commit. A fresh session reads it first, then
 
 (Lock/heartbeat protocol: plan §7. A session sets `Lock: <ISO time>`, pushes it, and refreshes it at every commit; a lock older than 75 min is stale. `Autonomy: unattended-through-phase-5` is set by the user's first launch and authorises the supervisor to chain phases.)
 
-**Branch:** `feat/part1-fixes` · **Current phase:** 0 done (see [PHASE0_REPORT.md](PHASE0_REPORT.md)); cloud re-check done (see [CLOUD_RECHECK.md](CLOUD_RECHECK.md)) · **Last usage reading:** 5-hour window `allowed`, resets 12:00Z, at 2026-10-04 09:06Z via cloud `get_session` (no percentage available in the cloud)
+**Branch:** `feat/part1-fixes` · **Current phase:** 0 done (see [PHASE0_REPORT.md](PHASE0_REPORT.md)); cloud re-checks #1 and #2 done (see [CLOUD_RECHECK.md](CLOUD_RECHECK.md), [CLOUD_RECHECK2.md](CLOUD_RECHECK2.md)) · **Last usage reading:** 5-hour window `allowed_warning`, resets 12:00Z, at 2026-10-04 10:28Z via cloud `get_session` (no percentage available in the cloud)
 
 | item | phase | state | commit | lead verdict |
 |---|---|---|---|---|
@@ -103,10 +103,12 @@ lists files an item must **edit**. Paths are under `src/` unless stated. Abbrevi
 | 4 | P10 (after P16, P17, P18) | P16 (quality module + `N/load_data.py` report) |
 
 ## Next action
-Cloud preparation committed (Ponytail settings, `.mcp.json`, `scripts/cloud_setup.sh`, supervisor
-protocol). Next: the user pastes the setup script into the cloud environment, then a short
-**cloud re-check #2** (graphs built, Ponytail present, a routine-started session works). Then
-Phase 1, step 1 (derive acceptance for P2, P1, P18, P13), run by the hourly supervisor.
+Cloud re-check #2 done: **not yet viable unattended** ([CLOUD_RECHECK2.md](CLOUD_RECHECK2.md)). A routine
+created by the in-session tool starts a session with no repo, so the setup script fails (exit 127) and
+Claude never runs. Waiting for the user: create the hourly routine in the claude.ai Routines UI with
+repo + branch `feat/part1-fixes` (or choose the persistent-session option), harden the setup-script
+line, decide `allowed_warning`; then repeat the item-4 dry run. Until it passes, Phase 1 runs in an
+attended session. Phase 1, step 1 (derive acceptance for P2, P1, P18, P13) is next either way.
 
 ## Open escalations (worker/verifier results that passed only written tests or one case)
 none
