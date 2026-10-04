@@ -12,6 +12,7 @@ import logging
 from typing import Any
 
 from src.mcp_server.tools.discover_schema import discover_schema_impl
+from src.mcp_server.tools.metadata_classification import OVERRIDE_KEY
 
 logger = logging.getLogger("merge-engine.orchestrator.discover_schemas")
 
@@ -22,7 +23,8 @@ async def discover_schemas(state: dict[str, Any]) -> dict[str, Any]:
     Parameters
     ----------
     state : dict
-        MergeState with ``origins`` populated.
+        MergeState with ``origins`` populated; optional ``metadata_overrides`` is the
+        per-run P12 override layer (per-origin ones live on each origin config).
 
     Returns
     -------
@@ -49,6 +51,9 @@ async def discover_schemas(state: dict[str, Any]) -> dict[str, Any]:
     # `failed_origins` is sorted below rather than relying on completion
     # order (which parallel execution no longer guarantees matches origin
     # order for any incidental reason).
+    # Passed only when set, so a stub of the one-argument form keeps working.
+    run_kwargs = {"run_overrides": state[OVERRIDE_KEY]} if state.get(OVERRIDE_KEY) else {}
+
     async def _discover_one(origin: Any) -> tuple[str, Any, Exception | None]:
         origin_id = (
             origin.get("id", "unknown")
@@ -58,7 +63,7 @@ async def discover_schemas(state: dict[str, Any]) -> dict[str, Any]:
         origin_type = origin.get("type", "unknown") if isinstance(origin, dict) else "unknown"
         logger.debug("Discovering schema for origin '%s' (type=%s)", origin_id, origin_type)
         try:
-            schema = await discover_schema_impl(origin)
+            schema = await discover_schema_impl(origin, **run_kwargs)
             return origin_id, schema, None
         except Exception as exc:
             return origin_id, None, exc
@@ -81,6 +86,16 @@ async def discover_schemas(state: dict[str, Any]) -> dict[str, Any]:
             "Schema discovered for origin '%s': %d tables",
             origin_id,
             table_count,
+        )
+        # P12: say what was excluded, so the exclusion is never silent.
+        cls = schema.get("classification") or {}
+        logger.info(
+            "Origin '%s' classification: %d catalog table(s) excluded, %d ETL metadata "
+            "column(s) held out of matching/mapping (see schemas[%r]['classification']).",
+            origin_id,
+            sum(1 for t in cls.get("tables", []) if t.get("effective") == "catalog"),
+            sum(1 for c in cls.get("columns", []) if c.get("effective") == "etl_metadata"),
+            origin_id,
         )
 
     failed_origins.sort()

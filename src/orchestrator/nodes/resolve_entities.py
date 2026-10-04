@@ -13,6 +13,7 @@ import os
 from concurrent.futures import ProcessPoolExecutor
 from typing import Any
 
+from src.mcp_server.tools.metadata_classification import metadata_columns_by_table
 from src.mcp_server.tools.resolve_entities import (
     _PROCESS_POOL_MIN_RECORDS,
     CandidatePairBudgetExceeded,
@@ -106,6 +107,23 @@ def _relationship_index_for_companies(
         return {}
 
 
+def _without_metadata(
+    records: list[dict[str, Any]], metadata: dict[tuple[str, str], frozenset[str]]
+) -> list[dict[str, Any]]:
+    """P12: the records matching sees. ETL metadata columns (per origin and table, from discovery)
+    are left out of shallow COPIES; the corpus rows themselves are untouched, so the columns stay
+    in the run output as provenance. Rows with nothing to drop are passed through as-is."""
+    if not metadata:
+        return records
+    out: list[dict[str, Any]] = []
+    for rec in records:
+        cols = metadata.get((str(rec.get("_origin_id")), str(rec.get("_origin_table", "")).lower()))
+        if cols and any(k.lower() in cols for k in rec):
+            rec = {k: v for k, v in rec.items() if k.lower() not in cols}
+        out.append(rec)
+    return out
+
+
 def _matching_rules_for(
     matching_rules: dict[str, Any] | None, entity_type: str
 ) -> dict[str, Any] | None:
@@ -176,6 +194,7 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
     # every entity's records are resolved here, strictly in order, before
     # any resolve_entities_impl call is dispatched.
     prepared: list[tuple[str, list[dict[str, Any]]]] = []
+    metadata = metadata_columns_by_table(state.get("schemas") or {})
     for entity_type in target_entities:
         records = entity_rows(state, entity_type)
         if not records:
@@ -204,7 +223,7 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
             logger.info("No records to resolve for entity '%s', skipping.", entity_type)
             entity_clusters[entity_type] = []
             continue
-        prepared.append((entity_type, records))
+        prepared.append((entity_type, _without_metadata(records, metadata)))
 
     # ── Phase 2: concurrent dispatch ────────────────────────────────────
     # Part 1.5 B.3: resolve_entities_impl's CPU-bound core (blocking, model

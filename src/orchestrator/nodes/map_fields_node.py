@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Iterator
 from typing import Any
 
 from src.mcp_server.tools.dest_family import build_family_map
@@ -30,11 +31,10 @@ _MAX_SAMPLE_RECORDS = 500
 _MAX_SAMPLE_VALUES = 10
 
 
-def _build_source_schema_from_discovered(state: dict[str, Any], entity_type: str) -> dict[str, Any]:
-    """Collect source fields across origins for entity_type when run before extraction."""
+def _entity_tables(state: dict[str, Any], entity_type: str) -> Iterator[tuple[str, dict[str, Any]]]:
+    """(origin_id, table) for every discovered table that belongs to ``entity_type``."""
     schemas = state.get("schemas", {})
     entity_tables = (state.get("entity_tables") or {}).get(entity_type, [])
-    source_schema: dict[str, Any] = {}
 
     target_tables_by_origin: dict[str, set[str]] = {}
     if entity_tables:
@@ -64,24 +64,51 @@ def _build_source_schema_from_discovered(state: dict[str, Any], entity_type: str
                     or concept_matches(entity_type, full_name)
                 ):
                     continue
+            yield origin_id, table
 
-            sample_row = table.get("sample_row", {})
-            for col in table.get("columns", []):
-                cname = str(col.get("name", "")).strip()
-                if not cname or cname.startswith("_"):
-                    continue
-                col_type = str(col.get("type", "STRING"))
-                sample_val = sample_row.get(cname)
 
-                info = {
-                    "type": col_type,
-                    "sample_value": sample_val,
-                    "sample_values": [sample_val] if sample_val is not None else [],
-                    "origin_id": origin_id,
-                    "table": full_name or table_name,
-                    "source_field": cname,
-                }
-                source_schema[cname] = info
+def _metadata_only_fields(state: dict[str, Any], entity_type: str) -> set[str]:
+    """P12: lower-cased field names that are ETL metadata in every discovered table of the entity
+    that carries them. A field any origin treats as business stays mappable; a unified record has
+    no single origin, so that is the only consistent reading."""
+    meta: set[str] = set()
+    business: set[str] = set()
+    for _origin_id, table in _entity_tables(state, entity_type):
+        flagged = {str(c).lower() for c in table.get("metadata_columns") or []}
+        for col in table.get("columns", []):
+            cname = str(col.get("name", "")).strip().lower()
+            (meta if cname in flagged else business).add(cname)
+    return meta - business
+
+
+def _build_source_schema_from_discovered(state: dict[str, Any], entity_type: str) -> dict[str, Any]:
+    """Collect source fields across origins for entity_type when run before extraction.
+
+    ETL metadata columns (P12) are skipped: an unmapped column is never projected, and the
+    column itself stays in the corpus.
+    """
+    source_schema: dict[str, Any] = {}
+    for origin_id, table in _entity_tables(state, entity_type):
+        table_name = str(table.get("name", "")).strip()
+        full_name = str(table.get("full_name") or table_name).strip()
+        metadata = {str(c).lower() for c in table.get("metadata_columns") or []}
+        sample_row = table.get("sample_row", {})
+        for col in table.get("columns", []):
+            cname = str(col.get("name", "")).strip()
+            if not cname or cname.startswith("_") or cname.lower() in metadata:
+                continue
+            col_type = str(col.get("type", "STRING"))
+            sample_val = sample_row.get(cname)
+
+            info = {
+                "type": col_type,
+                "sample_value": sample_val,
+                "sample_values": [sample_val] if sample_val is not None else [],
+                "origin_id": origin_id,
+                "table": full_name or table_name,
+                "source_field": cname,
+            }
+            source_schema[cname] = info
 
     return source_schema
 
@@ -208,9 +235,10 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
 
         unified_schema: dict[str, Any] = {}
         if records:
+            metadata_only = _metadata_only_fields(state, entity_type)
             for rec in records[:_MAX_SAMPLE_RECORDS]:
                 for key, value in rec.items():
-                    if key.startswith("_"):
+                    if key.startswith("_") or key.lower() in metadata_only:
                         continue
                     info = unified_schema.setdefault(
                         key,
@@ -368,6 +396,14 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
         logger.debug("Schema changes: %d", len(schema_changes))
 
         unmapped = result.get("unmapped_fields", [])
+        # P1: ambiguous splits were left unsplit on purpose; the operator must see them (a field
+        # the mapper already reported unmapped just gains its candidates).
+        for amb in result.get("ambiguous_splits", []):
+            known = next((u for u in unmapped if u.get("field") == amb["field"]), None)
+            if known is None:
+                unmapped.append(amb)
+            else:
+                known["candidates"] = amb["candidates"]
         unmapped_fields[entity_type] = unmapped
         logger.debug("Unmapped fields: %d", len(unmapped))
 

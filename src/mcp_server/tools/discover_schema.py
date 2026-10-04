@@ -1,10 +1,9 @@
 """
 discover_schema tool implementation.
 
-Connects to an origin database and returns all tables/collections
-with column names, types, one sample value, and foreign keys.
-For PostgreSQL: uses information_schema.
-For MongoDB: samples N documents to infer schema.
+Connects to an origin database and returns its tables/collections (column names, types, one
+sample value, foreign keys), minus catalog tables (P12).
+PostgreSQL: uses information_schema. MongoDB: samples N documents to infer the schema.
 
 This function is called both by the MCP server dispatch and directly
 by the orchestrator node (no protocol overhead).
@@ -16,12 +15,15 @@ import logging
 from typing import Any
 
 from src.mcp_server.connectors import create_connector
+from src.mcp_server.tools.metadata_classification import OVERRIDE_KEY, classify_schema
 from src.orchestrator.utils.retry import PermanentError
 
 logger = logging.getLogger("merge-engine.tools.discover_schema")
 
 
-async def discover_schema_impl(origin_config: dict[str, Any]) -> dict[str, Any]:
+async def discover_schema_impl(
+    origin_config: dict[str, Any], run_overrides: Any = None
+) -> dict[str, Any]:
     """Discover schema for a given origin.
 
     Parameters
@@ -32,6 +34,10 @@ async def discover_schema_impl(origin_config: dict[str, Any]) -> dict[str, Any]:
         - type (str): "postgres" or "mongodb"
         - connection (dict): host, port, user, password, database
         - priority (int, optional): priority for conflict resolution
+        - metadata_overrides (dict, optional): per-origin P12 override layer
+    run_overrides : dict, optional
+        Per-run P12 override layer (beats the per-origin one); see
+        ``metadata_classification``.
 
     Returns
     -------
@@ -40,15 +46,20 @@ async def discover_schema_impl(origin_config: dict[str, Any]) -> dict[str, Any]:
         {
             "origin_id": str,
             "origin_type": str,
+            "classification": {"tables": [...], "columns": [...]},  # P12, see below
             "tables": [
                 {
                     "name": str,
                     "columns": [{"name": ..., "type": ..., "nullable": ...}],
                     "foreign_keys": [{"column": ..., "ref_table": ..., "ref_column": ...}],
-                    "sample_row": {...}
+                    "sample_row": {...},
+                    "metadata_columns": [str]  # P12: ETL metadata, kept but never mapped/matched
                 }
             ]
         }
+
+        Catalog/system tables are removed; every exclusion and override is recorded in
+        ``classification`` (P12).
 
     Raises
     ------
@@ -83,11 +94,12 @@ async def discover_schema_impl(origin_config: dict[str, Any]) -> dict[str, Any]:
         logger.debug("Connector created, calling discover_schema()")
         schema = await connector.discover_schema()
         logger.debug("Schema discovery completed: %d tables", len(schema.get("tables", [])))
-        return {
-            "origin_id": origin_id,
-            "origin_type": origin_type,
-            **schema,
-        }
+        return classify_schema(
+            {"origin_id": origin_id, "origin_type": origin_type, **schema},
+            origin_config.get(OVERRIDE_KEY),
+            run_overrides,
+            origin_id=str(origin_id),
+        )
     except Exception as exc:
         logger.error("Schema discovery failed for origin %s: %s", origin_id, exc)
         raise PermanentError(f"Schema discovery failed for origin '{origin_id}': {exc}") from exc
