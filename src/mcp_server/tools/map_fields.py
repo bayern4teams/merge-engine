@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from functools import lru_cache
 from typing import Any
 
 logger = logging.getLogger("merge-engine.tools.map_fields")
@@ -844,6 +845,15 @@ def _vocab_splits(token: str, vocabulary: Any) -> list[tuple[str, ...]]:
     ambiguity (``presspoint`` is not ``press|point`` in every schema), so ties
     are returned for the caller to REPORT, never to pick from.
     """
+    if not isinstance(vocabulary, frozenset):
+        vocabulary = frozenset(vocabulary)
+    return list(_cached_vocab_splits(token, vocabulary))
+
+
+# Called for every (source field, destination column) pair, so the split of
+# one token against one run's vocabulary is computed once. Pure function.
+@lru_cache(maxsize=4096)
+def _cached_vocab_splits(token: str, vocabulary: frozenset[str]) -> list[tuple[str, ...]]:
     stems = {_stem(w) for w in vocabulary}
     memo: dict[int, list[tuple[str, ...]]] = {}
 
