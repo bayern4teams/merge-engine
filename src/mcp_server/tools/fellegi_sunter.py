@@ -79,8 +79,10 @@ _PRIOR_MATCH_RATE = 0.10
 
 # Random record pairs drawn for the sampled ``u`` (report P13: "a few thousand").
 # Not a corpus fit: the standard error of a proportion estimated from k pairs is
-# at most 0.5/sqrt(k), so k=3000 bounds the error on any field's u by ~0.009
-# whatever the data.
+# at most 0.5/sqrt(k), so k=3000 bounds the ABSOLUTE error on any field's u by
+# ~0.009 whatever the data. That is only an absolute bound: the RELATIVE error is
+# large for a rare level (u~0.002 -> ~40%, u~0.0005 -> ~80%), which is the
+# ceiling named below.
 SAMPLE_PAIRS = 3000
 
 
@@ -227,6 +229,12 @@ def sample_random_pairs(n: int, k: int, seed: int) -> list[tuple[int, int]]:
 # estimate floors (prior pseudo-count, never 0). Deferred: calibrating the score
 # (Platt/isotonic, Belin & Rubin 1997); trigger: the review band's volume
 # justifies it (report P13, section 2.17).
+# Prior consistency (lead decision, deviates from the report's literal wording):
+# sampled ``u`` is the random-pair population's, so ``match_prior`` must be that
+# population's too -- the share of RANDOM pairs that match, EM match mass over
+# the candidates / population_pairs. Pairing sampled ``u`` with the blocked-
+# candidate prior counts the blocking agreement twice and over-scores
+# non-matches, so ``sampled_vectors`` without ``population_pairs`` is refused.
 def _sampled_u(
     sampled_vectors: list[dict[str, tuple[str, str | None]]],
 ) -> dict[str, dict[str, float]]:
@@ -253,6 +261,7 @@ def estimate_model(
     unique_id_fields: set[str] | None = None,
     iterations: int = 8,
     sampled_vectors: list[dict[str, tuple[str, str | None]]] | None = None,
+    population_pairs: int | None = None,
 ) -> MatchModel:
     """Estimate m/u per field from unlabelled candidate pairs, via EM.
 
@@ -264,8 +273,16 @@ def estimate_model(
     ``sampled_vectors`` (optional): comparison vectors of randomly sampled
     record pairs (see ``sample_random_pairs``). When given, each field's ``u``
     is taken from them instead of from the blocked candidates; ``m`` is the
-    unchanged EM result. Omitted or ``None``: output is exactly as before.
+    unchanged EM result, and ``match_prior`` becomes the random-pair match rate
+    (EM match mass / ``population_pairs``, the size C(n, 2) of the unblocked
+    cross product), so ``u`` and the prior describe the same population.
+    ``sampled_vectors`` without ``population_pairs`` raises ``ValueError``.
+    Both omitted: output is exactly as before.
     """
+    if sampled_vectors and not population_pairs:
+        raise ValueError(
+            "sampled_vectors needs population_pairs: u and match_prior must share a population"
+        )
     unique_id_fields = unique_id_fields or set()
     names = {n for vec in comparison_vectors for n in vec}
     if sampled_vectors:
@@ -281,7 +298,7 @@ def estimate_model(
     model = MatchModel(fields, _PRIOR_MATCH_RATE)
 
     if not comparison_vectors:
-        return _pin_sampled_u(model, sampled_vectors)
+        return _pin_sampled_u(model, comparison_vectors, sampled_vectors, population_pairs)
 
     for _ in range(iterations):
         # E-step: responsibility of the "match" class for each pair.
@@ -337,14 +354,25 @@ def estimate_model(
         model.match_prior,
         sorted(fields),
     )
-    return _pin_sampled_u(model, sampled_vectors)
+    return _pin_sampled_u(model, comparison_vectors, sampled_vectors, population_pairs)
 
 
 def _pin_sampled_u(
-    model: MatchModel, sampled_vectors: list[dict[str, tuple[str, str | None]]] | None
+    model: MatchModel,
+    comparison_vectors: list[dict[str, tuple[str, str | None]]],
+    sampled_vectors: list[dict[str, tuple[str, str | None]]] | None,
+    population_pairs: int | None,
 ) -> MatchModel:
-    """Replace each sampled field's EM ``u`` with its random-pair ``u``."""
-    if sampled_vectors:
-        for name, u in _sampled_u(sampled_vectors).items():
-            model.fields[name].u = u
+    """Swap in the random-pair ``u`` and the random-pair match prior together."""
+    if not (sampled_vectors and population_pairs):
+        return model
+    # Mass is read BEFORE u is replaced, so it is the EM's own match count.
+    mass = sum(model.probability(vec) for vec in comparison_vectors)
+    for name, u in _sampled_u(sampled_vectors).items():
+        model.fields[name].u = u
+    # At least one match in the population keeps the prior above 0; matches lie
+    # inside the candidates, so a random pair cannot match more often than a
+    # candidate does. Set directly: the constructor's clamp is for candidate-
+    # scale rates and would inflate a prior of order 1/C(n, 2).
+    model.match_prior = min(max(mass, 1.0) / population_pairs, model.match_prior)
     return model
