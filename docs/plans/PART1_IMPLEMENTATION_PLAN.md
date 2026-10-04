@@ -496,9 +496,11 @@ beyond what Part 1 itself specifies (e.g. P9's file is Part 3's backfill source)
 
 Phase 0 ran in a **local** desktop session ([part1/PHASE0_REPORT.md](part1/PHASE0_REPORT.md)). CI had been red since 2026-09-27 from dependency drift (splink 5, SQLAlchemy 2.1); fixed on this branch by `splink<5`, `sqlalchemy[asyncio]<2.2`, regenerated requirements, and `bootstrap.py` installing CI's extras. A **cloud re-check** (S1, S3, S4, S5, `check.py all`) precedes Phase 1, because S3/S4/S5 did not transfer from the local run. If the cloud cannot read usage or resume itself, Phases 1–5 run in a local session instead, and §7 stays "user launches each phase".
 
+**Cloud re-check outcome** ([part1/CLOUD_RECHECK.md](part1/CLOUD_RECHECK.md)): `check.py all` is green in the cloud (156 s) and matches CI; scheduled wake-ups work there; but the cloud shows no usage percentage, has no graph tools and no Ponytail. **Decision: Phases 1–5 run in a local desktop session** (usage via `get_usage`, graphs, Ponytail all work). The cloud stays the upgrade path once its setup script installs the graph tools, the project enables Ponytail, and a limit-stopped session is shown to be woken by a scheduled trigger. Local rules: check `get_usage` at every item boundary and stop at 90 % of the 5-hour window (commit, write `HANDOFF.md`, notify). Auto-resume needs the user to allow scheduled tasks for this project; otherwise the user relaunches from `HANDOFF.md`.
+
 ## 12. Known limits of this plan (stated, not hidden)
 
-- Orchestration choices in §7 are provisional until Phase 0's smoke tests report.
+- Orchestration choices in §7 are settled by §11: local session, fresh session per phase, user-launched unless scheduled tasks are allowed.
 - Cloud-verifiable evidence is mechanism-level (synthetic fixtures). The report's live
   numbers can only be confirmed locally — which is why `LOCAL_VERIFY.md` exists.
 - Parallelism is modest: roughly half of Part 1 is a serial chain through one file. The
