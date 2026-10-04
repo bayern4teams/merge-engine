@@ -94,3 +94,10 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Independent check: SQL over the two origins for revenue/employee_count values that differ for the same resolved company; compare the count with `numeric_disagreements.<field>.clusters`.
 - Expected evidence: numeric disagreements now listed with spread (before: discarded silently); `first_seen` winners identical across two runs with shuffled extraction order; `winning_rule` reads `longest` where it read `completeness`.
 - Result (filled in locally):
+
+### P13 — u from a random sample of the unblocked cross product
+- Why cloud could not verify: no restored corpus / ground truth.
+- Command: full merge run with and without this commit (parent: the commit before "P13:"); score both with the restored ground truth.
+- Independent check: ground-truth pair precision/recall per entity, stratified cross- vs within-source (counts, not rates), plus the review-band volume.
+- Expected evidence: `log2(m/u)` for the blocking field no longer ~0 (synthetic: 0.29 bits -> ~4.5 bits); precision at the auto-match bar not lower than before; watch for true matches with few agreeing fields dropping below auto_exclude (see HANDOFF escalation on P6 case a).
+- Result (filled in locally):

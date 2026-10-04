@@ -55,10 +55,22 @@ def sample_arg() -> str:
     return new[0]
 
 
+# Lead adaptation (round 2): sampled u requires the size of the population it was
+# drawn from, so the match prior is rescaled to that population (a model mixing a
+# random-pair u with a blocked-pair prior over-scored non-matches; see P13.verdict.md).
+# These checks are about m/u, so any population larger than the candidates works.
+POPULATION_PAIRS = 1000 * 999 // 2
+
+
+def _population_kw():
+    params = inspect.signature(fs.estimate_model).parameters
+    return {"population_pairs": POPULATION_PAIRS} if "population_pairs" in params else {}
+
+
 def fit(blocked, sampled=None, **kw):
     if sampled is None:
         return fs.estimate_model(blocked, {}, **kw)
-    return fs.estimate_model(blocked, {}, **{sample_arg(): sampled}, **kw)
+    return fs.estimate_model(blocked, {}, **{sample_arg(): sampled}, **_population_kw(), **kw)
 
 
 def snapshot(model):
@@ -215,7 +227,9 @@ def test_4b_exact_weight_for_a_term_uses_df_over_n_not_the_sampled_u():
     recs = [{"zip": "z1"}] * 30 + [{"zip": f"z{i}"} for i in range(2, 72)]  # df/N = 30/100
     tf = fs.build_term_frequencies(recs, lambda v: str(v).lower())
     assert tf["zip"]["z1"] == pytest.approx(0.30)
-    model = fs.estimate_model(fx.blocked_vectors(), tf, **{sample_arg(): fx.sampled_vectors()})
+    model = fs.estimate_model(
+        fx.blocked_vectors(), tf, **{sample_arg(): fx.sampled_vectors()}, **_population_kw()
+    )
     fm = model.fields["zip"]
     assert fm.u["exact"] < 0.15  # sampled u really is far from df/N here
     assert fm.weight("exact", "z1") == pytest.approx(math.log2(fm.m["exact"] / 0.30))

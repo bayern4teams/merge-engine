@@ -1414,18 +1414,32 @@ def _fit_match_model(
 
     try:
         from src.mcp_server.tools.fellegi_sunter import (
+            SAMPLE_PAIRS,
             build_term_frequencies,
             estimate_model,
+            sample_random_pairs,
         )
 
         vectors = [
             _build_comparison_vector(rec1, rec2, normalise, record_cache)
             for _id1, _id2, rec1, rec2 in candidate_pairs
         ]
+        # P13: u from random pairs of the UNBLOCKED cross product (the blocked
+        # candidates are look-alikes, so EM's u there is far too high). Sorted
+        # by record id so the sample does not depend on extraction order; the
+        # seed is fixed so two runs over the same records draw the same pairs.
+        population = sorted(records, key=_record_id)
+        n = len(population)
+        sampled = [
+            _build_comparison_vector(population[i], population[j], normalise, record_cache)
+            for i, j in sample_random_pairs(n, SAMPLE_PAIRS, seed=0)
+        ]
         model = estimate_model(
             vectors,
             build_term_frequencies(records, normalise),
             unique_id_fields=_unique_id_fields(records) | (extra_unique_ids or set()),
+            sampled_vectors=sampled or None,
+            population_pairs=n * (n - 1) // 2 if sampled else None,
         )
         logger.debug(
             "Match model fitted over %d candidate pairs (match_prior=%.3f)",
