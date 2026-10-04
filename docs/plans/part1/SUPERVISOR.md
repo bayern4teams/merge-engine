@@ -1,7 +1,13 @@
 # Supervisor prompt — the hourly routine runs exactly this
 
+Use a **dedicated cloud environment** whose setup line first checks out the work branch (a routine clones the repo's default branch, `main`, which has none of the cloud kit, and skills load only at session start):
+
+```
+git fetch origin feat/part1-fixes && git checkout -f -B feat/part1-fixes origin/feat/part1-fixes && bash scripts/cloud_setup.sh || echo "cloud_setup failed: $?" >&2
+```
+
 Create the routine **in the claude.ai Routines UI** (a routine made from inside a session cannot
-carry a repo — cloud re-check #2): repo `bayern4teams/merge-engine`, branch `feat/part1-fixes`, the
+carry a repo — cloud re-check #2): repo `bayern4teams/merge-engine`, that dedicated environment, the
 GitHub connector, cron `0 * * * *`, Opus 5.5, high effort, and the fenced block below as its
 prompt. The routine is the user's standing authorisation to schedule and to chain phases; nothing
 else is. Set `Autonomy: dryrun` in HANDOFF.md first (step 1b), confirm one tick, then switch to
@@ -16,8 +22,10 @@ never check out, merge, rebase or delete another branch.
 1b. If HANDOFF.md says "Autonomy: dryrun": write ONE line to .handoff/supervisor_dryrun.txt with the
    time, HEAD sha, how you evaluated the step 2 conditions, and whether each of these works in this
    session: git push; gh run list; the six ponytail skills (ponytail, -review, -audit, -debt, -gain,
-   -help) loadable; codebase-memory-mcp MCP tools (search_graph) present; graphify, graft and
-   codebase-memory-mcp on PATH. Commit, push, stop. Do nothing else (no lock, no code).
+   -help) loadable; the output of `git branch --show-current` at session start; codebase-memory-mcp
+   MCP tools (search_graph) present, and if absent whether `codebase-memory-mcp cli search_graph`
+   works (the CLI is an accepted tier-3 substitute); graphify, graft and codebase-memory-mcp on
+   PATH. Commit, push, stop. Do nothing else (no lock, no code).
 2. EXIT IMMEDIATELY, doing nothing else and writing nothing, if any of these hold:
    - your session's rate limit is a hard stop (any status other than "allowed" or
      "allowed_warning"; the warning band is NOT a reason to stop: work, commit per step, and let
