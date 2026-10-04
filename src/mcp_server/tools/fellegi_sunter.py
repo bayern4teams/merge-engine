@@ -20,9 +20,12 @@ fields gives a total match weight, which converts back to a probability.
 value IS that value's frequency, so a value held by 1 record in 1500 has a
 far smaller ``u`` — and therefore far more weight — than one held by 40.
 
-Both m and u are estimated **unsupervised** from the candidate pairs
-themselves (a simplified EM pass), with priors that keep a cold start sane.
-No labelled training data is required.
+``m`` is estimated **unsupervised** from the candidate pairs themselves (a
+simplified EM pass), with priors that keep a cold start sane; no labelled
+training data is required. ``u`` is, when the caller supplies comparison
+vectors of randomly sampled record pairs, taken from those instead (P13): the
+candidate set is blocked down to look-alikes, so a ``u`` estimated there is far
+too high. See the comment above ``_sampled_u`` before touching either path.
 
 Reference: Fellegi & Sunter (1969); the term-frequency treatment follows the
 approach used by Splink.
@@ -32,6 +35,7 @@ from __future__ import annotations
 
 import logging
 import math
+import random
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
@@ -72,6 +76,12 @@ _PRIOR_WEIGHT = 20.0
 
 # Assumed share of candidate pairs that are true matches before estimation.
 _PRIOR_MATCH_RATE = 0.10
+
+# Random record pairs drawn for the sampled ``u`` (report P13: "a few thousand").
+# Not a corpus fit: the standard error of a proportion estimated from k pairs is
+# at most 0.5/sqrt(k), so k=3000 bounds the error on any field's u by ~0.009
+# whatever the data.
+SAMPLE_PAIRS = 3000
 
 
 @dataclass
@@ -179,11 +189,70 @@ def build_term_frequencies(records: list[dict[str, Any]], normalise) -> dict[str
     return frequencies
 
 
+def sample_random_pairs(n: int, k: int, seed: int) -> list[tuple[int, int]]:
+    """Up to ``k`` distinct record-index pairs ``(i, j)``, ``i < j``, drawn
+    uniformly from the full cross product of ``n`` records — NOT from blocks.
+
+    Seeded and deterministic: the same ``(n, k, seed)`` gives the same pairs.
+    Returns every pair when ``k`` covers the whole cross product.
+    """
+    total = n * (n - 1) // 2
+    if total <= 0 or k <= 0:
+        return []
+    rng = random.Random(seed)
+    if k * 2 >= total:  # dense: enumerating is cheaper than rejection
+        pairs = [(i, j) for i in range(n) for j in range(i + 1, n)]
+        return pairs if k >= total else rng.sample(pairs, k)
+    seen: set[tuple[int, int]] = set()
+    drawn: list[tuple[int, int]] = []
+    while len(drawn) < k:  # k < total/2, so rejections are rare
+        i, j = sorted(rng.sample(range(n), 2))
+        if (i, j) not in seen:
+            seen.add((i, j))
+            drawn.append((i, j))
+    return drawn
+
+
+# P13: there are two ``u`` estimation paths and they coexist ON PURPOSE. Do not
+# unify them -- unifying is what reintroduces the bug. (1) Field-level
+# agreement: ``u`` comes from the comparison vectors of RANDOMLY SAMPLED record
+# pairs (the unblocked cross product), because EM over the blocked candidates
+# sees only look-alikes and returns a ``u`` far too high. (2) Token/value-level
+# exact agreement: ``FieldModel.weight`` uses ``df/N`` from
+# ``build_term_frequencies`` directly -- measured, no EM and no sampling. ``m``
+# stays EM on the blocked candidates and is fitted BEFORE ``u`` is replaced:
+# pinning ``u`` inside the EM would make blocked non-matches that agree on the
+# blocking field look like matches and dilute ``m``.
+# ponytail: ceiling -- a rare value rarely agrees in a random sample, so the
+# estimate floors (prior pseudo-count, never 0). Deferred: calibrating the score
+# (Platt/isotonic, Belin & Rubin 1997); trigger: the review band's volume
+# justifies it (report P13, section 2.17).
+def _sampled_u(
+    sampled_vectors: list[dict[str, tuple[str, str | None]]],
+) -> dict[str, dict[str, float]]:
+    """Per-field level probabilities among sampled random pairs.
+
+    Prior pseudo-counts (as in the EM M-step) floor an unseen level above zero.
+    A field with no non-null sampled comparison is absent: it has no evidence.
+    """
+    counts: dict[str, dict[str, float]] = {}
+    for vec in sampled_vectors:
+        for name, (level, _value) in vec.items():
+            if level == LEVEL_NULL:
+                continue
+            row = counts.setdefault(name, {lvl: _PRIOR_U[lvl] * _PRIOR_WEIGHT for lvl in _LEVELS})
+            row[level] += 1.0
+    return {
+        name: {lvl: c / sum(row.values()) for lvl, c in row.items()} for name, row in counts.items()
+    }
+
+
 def estimate_model(
     comparison_vectors: list[dict[str, tuple[str, str | None]]],
     term_frequencies: dict[str, dict[str, float]],
     unique_id_fields: set[str] | None = None,
     iterations: int = 8,
+    sampled_vectors: list[dict[str, tuple[str, str | None]]] | None = None,
 ) -> MatchModel:
     """Estimate m/u per field from unlabelled candidate pairs, via EM.
 
@@ -191,9 +260,16 @@ def estimate_model(
     model and (M) re-estimates each level's m/u weighted by those scores.
     Priors are mixed in throughout so a handful of pairs can't produce
     absurd probabilities.
+
+    ``sampled_vectors`` (optional): comparison vectors of randomly sampled
+    record pairs (see ``sample_random_pairs``). When given, each field's ``u``
+    is taken from them instead of from the blocked candidates; ``m`` is the
+    unchanged EM result. Omitted or ``None``: output is exactly as before.
     """
     unique_id_fields = unique_id_fields or set()
     names = {n for vec in comparison_vectors for n in vec}
+    if sampled_vectors:
+        names |= {n for vec in sampled_vectors for n in vec}
     fields = {
         name: FieldModel(
             name=name,
@@ -205,7 +281,7 @@ def estimate_model(
     model = MatchModel(fields, _PRIOR_MATCH_RATE)
 
     if not comparison_vectors:
-        return model
+        return _pin_sampled_u(model, sampled_vectors)
 
     for _ in range(iterations):
         # E-step: responsibility of the "match" class for each pair.
@@ -261,4 +337,14 @@ def estimate_model(
         model.match_prior,
         sorted(fields),
     )
+    return _pin_sampled_u(model, sampled_vectors)
+
+
+def _pin_sampled_u(
+    model: MatchModel, sampled_vectors: list[dict[str, tuple[str, str | None]]] | None
+) -> MatchModel:
+    """Replace each sampled field's EM ``u`` with its random-pair ``u``."""
+    if sampled_vectors:
+        for name, u in _sampled_u(sampled_vectors).items():
+            model.fields[name].u = u
     return model
