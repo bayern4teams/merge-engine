@@ -159,8 +159,11 @@ def build_code_graphs() -> None:
     if not py.exists() or not script.exists():
         return
     print("Building code graphs (graphify, graft, codebase-memory-mcp) ...")
-    subprocess.run([str(py), str(script), "--if-missing"], cwd=ROOT)
-    print("Code graphs ready (see .tmp/refresh_graphs.log).")
+    done = subprocess.run([str(py), str(script), "--if-missing"], cwd=ROOT)
+    if done.returncode == 0:
+        print("Code graphs ready (see .tmp/refresh_graphs.log).")
+    else:
+        print("WARNING: code graphs NOT fully built (see .tmp/refresh_graphs.log).")
 
 
 def main() -> int:

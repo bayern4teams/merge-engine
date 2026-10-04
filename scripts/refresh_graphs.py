@@ -82,6 +82,7 @@ def _head() -> str:
 def refresh(*, if_missing: bool = False) -> int:
     LOG.parent.mkdir(parents=True, exist_ok=True)
     failed: list[str] = []
+    missing: list[str] = []
 
     with LOG.open("a", encoding="utf-8") as log:
         log.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} HEAD={_head()[:8]} ===\n")
@@ -89,9 +90,11 @@ def refresh(*, if_missing: bool = False) -> int:
         for tool, args, proof, marker in _GRAPHS:
             exe = shutil.which(tool)
             if exe is None:
-                # Not an error: a clone without the tooling still works, it
-                # just falls further down the lookup ladder in CLAUDE.md.
+                # A clone without the tooling still works (it falls down the
+                # lookup ladder in CLAUDE.md), but it must NOT be reported as
+                # refreshed: bootstrap once said "graphs ready" having built none.
                 log.write(f"skip {tool}: not on PATH\n")
+                missing.append(tool)
                 continue
             if if_missing and proof != Path() and proof.exists():
                 log.write(f"skip {tool}: {proof.name} already present\n")
@@ -136,11 +139,15 @@ def refresh(*, if_missing: bool = False) -> int:
 
         if failed:
             log.write(f"failed: {', '.join(failed)}\n")
-        else:
+        if missing:
+            log.write(f"NOT BUILT, not on PATH: {', '.join(missing)}\n")
+        if not failed and not missing:
             STAMP.write_text(_head(), encoding="utf-8")
             log.write("all graphs refreshed\n")
 
-    return 1 if failed else 0
+    for tool in missing:
+        print(f"refresh_graphs: {tool} is not on PATH, its graph was NOT built", file=sys.stderr)
+    return 1 if failed or missing else 0
 
 
 def _detach() -> int:
