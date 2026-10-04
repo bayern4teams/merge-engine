@@ -3,7 +3,7 @@
 Overwrite this file at every commit. A fresh session reads it first, then
 [the plan](../PART1_IMPLEMENTATION_PLAN.md). Git is the memory; a session's context is not.
 
-**Branch:** `feat/part1-fixes` · **Current phase:** 0 done (see [PHASE0_REPORT.md](PHASE0_REPORT.md)) · **Last usage reading:** 5-hour window 9 % at 2026-10-04 04:37 EDT (Pro plan), via `get_usage`
+**Branch:** `feat/part1-fixes` · **Current phase:** 0 done (see [PHASE0_REPORT.md](PHASE0_REPORT.md)); cloud re-check done (see [CLOUD_RECHECK.md](CLOUD_RECHECK.md)) · **Last usage reading:** 5-hour window `allowed`, resets 12:00Z, at 2026-10-04 09:06Z via cloud `get_session` (no percentage available in the cloud)
 
 | item | phase | state | commit | lead verdict |
 |---|---|---|---|---|
@@ -99,10 +99,10 @@ lists files an item must **edit**. Paths are under `src/` unless stated. Abbrevi
 | 4 | P10 (after P16, P17, P18) | P16 (quality module + `N/load_data.py` report) |
 
 ## Next action
-**Cloud re-check** (S1, S3, S4, S5, `check.py all` in the cloud; no Part 1 code), then Phase 1. Phase 0 is finished; B1/B2 fixed on the branch. Before Phase 1 starts, the user resolves the
-two blockers in [PHASE0_REPORT.md](PHASE0_REPORT.md) §"Blockers" (CI red on dependency drift;
-`bootstrap.py` hard-coded to the 3.14 `.venv`) and confirms the §7 orchestration choices.
-After that: Phase 1, step 1 (derive acceptance for P2, P1, P18, P13).
+Cloud re-check done: **verdict, run Phases 1–5 in a local session** ([CLOUD_RECHECK.md](CLOUD_RECHECK.md);
+S3 decided it: the cloud shows no usage percentage). B1 is closed (CI run 37190719097 green, and
+`check.py all` is green in the cloud too). The user confirms the §7 orchestration choices, then
+launches Phase 1 locally: step 1 (derive acceptance for P2, P1, P18, P13).
 
 ## Open escalations (worker/verifier results that passed only written tests or one case)
 none
