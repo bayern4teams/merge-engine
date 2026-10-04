@@ -3,7 +3,7 @@
 Overwrite this file at every commit. A fresh session reads it first, then
 [the plan](../PART1_IMPLEMENTATION_PLAN.md). Git is the memory; a session's context is not.
 
-**Lock:** 2026-10-04T14:01:34Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-04T14:01:34Z
+**Lock:** 2026-10-04T14:04:30Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-04T14:04:30Z
 
 (Lock/heartbeat protocol: plan §7. A session sets `Lock: <ISO time>`, pushes it, and refreshes it at every commit; a lock older than 75 min is stale. `Autonomy` is `off`, `dryrun` (a tick only records what works and exits) or `unattended-through-phase-5` (authorises the supervisor to chain phases). Only the user changes it.)
 
