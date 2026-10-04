@@ -3,7 +3,7 @@
 Overwrite this file at every commit. A fresh session reads it first, then
 [the plan](../PART1_IMPLEMENTATION_PLAN.md). Git is the memory; a session's context is not.
 
-**Lock:** 2026-10-04T13:50:59Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-04T13:50:59Z
+**Lock:** 2026-10-04T13:56:42Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-04T13:56:42Z
 
 (Lock/heartbeat protocol: plan §7. A session sets `Lock: <ISO time>`, pushes it, and refreshes it at every commit; a lock older than 75 min is stale. `Autonomy` is `off`, `dryrun` (a tick only records what works and exits) or `unattended-through-phase-5` (authorises the supervisor to chain phases). Only the user changes it.)
 
@@ -110,6 +110,9 @@ attack P13 → lead does the P13 call site in `_fit_match_model` (seeded sample 
 `check.py all`, `pytest tests/part1`, CI green, `/ponytail-review` of the phase diff.
 Deviation (one line, §3.2): the lead edited `N/resolve_entities.py` (owned by lane B / P12) to
 re-raise `CandidatePairBudgetExceeded` and surface P2's pruned counts — lane B had not started.
+Deviation (P13): the report says "m from EM, u sampled" only; the attack showed that pairs random-pair u
+with a prior fitted on blocked pairs (precision@0.5 0.83-0.98 -> 0.61-0.82). Lead decision: the prior is
+rescaled to the random-pair population (EM match mass / C(n,2)) so m, u and prior describe one population.
 
 ## Open escalations (worker/verifier results that passed only written tests or one case)
 - `tests/part1/` is NOT run by `check.py test` (CI runs tests/unit + tests/integration only). The lead runs `pytest tests/part1` at every phase gate; folding it into CI is a Phase 5 decision.
