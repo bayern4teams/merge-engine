@@ -108,3 +108,10 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Independent check: list origin tables/columns with SQL (`information_schema.columns`) and compare with what was mapped and what matching saw (`resolution_stats`), and with the destination rows.
 - Expected evidence: catalog tables and `created_at` / `etl_batch_id` / `_row_version` absent from mapping and matching (before: profiled and mapped); metadata columns still present in the run output; a `RunConfig.metadata_overrides` business override restores a flagged column.
 - Result (filled in locally):
+
+### P11 — bounded per-entity field mapping
+- Why cloud could not verify: no LLM endpoint / databases.
+- Command: full merge run; time the `map_fields` node (logs / Langfuse span).
+- Independent check: endpoint request log shows at most `_LLM_CONCURRENCY` (4) concurrent map_fields calls; mapping output identical to a run with `_LLM_CONCURRENCY = 1`.
+- Expected evidence: `map_fields` share of wall clock below 44 % (before); no endpoint rate-limit errors; dest_connector sampling stays correct under concurrent callers.
+- Result (filled in locally):
