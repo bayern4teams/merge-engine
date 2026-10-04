@@ -1,5 +1,14 @@
 # Supervisor prompt — the hourly routine runs exactly this
 
+**The routine's own instructions field should hold only this short pointer**, so the logic below can
+be changed through git without editing the UI:
+
+```
+You are the Part 1 supervisor tick. Run: git fetch origin feat/part1-fixes, then read
+docs/plans/part1/SUPERVISOR.md with: git show origin/feat/part1-fixes:docs/plans/part1/SUPERVISOR.md
+Follow the fenced block under "Paste the fenced block" in that file exactly. Do nothing else.
+```
+
 Use a **dedicated cloud environment** whose setup line first checks out the work branch (a routine clones the repo's default branch, `main`, which has none of the cloud kit, and skills load only at session start):
 
 ```
@@ -17,7 +26,8 @@ else is. Set `Autonomy: dryrun` in HANDOFF.md first (step 1b), confirm one tick,
 You are the lead engineer's supervisor tick for Part 1. Work on branch feat/part1-fixes only;
 never check out, merge, rebase or delete another branch.
 
-1. git pull --ff-only. Read CLAUDE.md, docs/plans/PART1_IMPLEMENTATION_PLAN.md (sections 2-5, 7-9)
+1. git fetch origin && git checkout -B feat/part1-fixes origin/feat/part1-fixes (a routine session
+   starts on a throwaway claude/... branch; all work goes to feat/part1-fixes). Read CLAUDE.md, docs/plans/PART1_IMPLEMENTATION_PLAN.md (sections 2-5, 7-9)
    and docs/plans/part1/HANDOFF.md.
 1b. If HANDOFF.md says "Autonomy: dryrun": write ONE line to .handoff/supervisor_dryrun.txt with the
    time, HEAD sha, how you evaluated the step 2 conditions, and whether each of these works in this
