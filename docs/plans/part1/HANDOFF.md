@@ -103,12 +103,10 @@ lists files an item must **edit**. Paths are under `src/` unless stated. Abbrevi
 | 4 | P10 (after P16, P17, P18) | P16 (quality module + `N/load_data.py` report) |
 
 ## Next action
-Cloud re-check #2 found one blocker: a routine made from inside a session starts with **no repo**
-([CLOUD_RECHECK2.md](CLOUD_RECHECK2.md)). Repo-side fixes are committed (vendored Ponytail skills,
-Bootstrap workflow, supervisor `dryrun` mode and `allowed_warning` handling). The user now creates the
-hourly routine in the claude.ai Routines UI with `Autonomy: dryrun`, confirms one tick pushed
-`.handoff/supervisor_dryrun.txt`, then sets `Autonomy: unattended-through-phase-5`. Then Phase 1,
-step 1 (derive acceptance for P2, P1, P18, P13).
+Dry run passed (skills, MCP tools, push, gh, setup line; graft's npm download is flaky and a real
+tick recovers it with step 4). **Phase 1, step 1:** derive acceptance for P2, P1, P18, P13 with
+`part1-verifier` agents, then implement per the lane plan below. Runs only while `Autonomy` is
+`unattended-through-phase-5` (set by the user).
 
 ## Open escalations (worker/verifier results that passed only written tests or one case)
 none
