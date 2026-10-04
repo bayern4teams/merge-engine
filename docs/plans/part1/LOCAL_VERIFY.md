@@ -87,3 +87,10 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Independent check: count distinct blocking pairs independently (`_blocking_keys_for` over the restored `staff` rows) and compare against `candidate_pairs` + pruned counts; score the run against ground truth (pair completeness on the restored truth set).
 - Expected evidence: `uncompared_pairs` = 0 (before: 711 670 for `staff`); either the run completes with the pruned counts shown, or it FAILS with `CandidatePairBudgetExceeded` (guard 5M pairs) — never `completed` with silent discards. Watch memory (~300 B/pair) and the WNP loss: synthetic attack measured 4-19 % of pairs the uncapped old code found are pruned (accepted ceiling; P5 revisits blocking).
 - Result (filled in locally):
+
+### P18 — survivorship five sub-fixes
+- Why cloud could not verify: no restored corpus.
+- Command: full merge run; open the run report's `entities.<entity>.numeric_disagreements` and each unified record's `_conflicts`.
+- Independent check: SQL over the two origins for revenue/employee_count values that differ for the same resolved company; compare the count with `numeric_disagreements.<field>.clusters`.
+- Expected evidence: numeric disagreements now listed with spread (before: discarded silently); `first_seen` winners identical across two runs with shuffled extraction order; `winning_rule` reads `longest` where it read `completeness`.
+- Result (filled in locally):

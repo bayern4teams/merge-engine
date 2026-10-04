@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import math
 from typing import Any
 
 from src.mcp_server.tools.survivorship import measure_field_reliability
@@ -58,7 +59,9 @@ DEFAULT_POLICY = ("priority", "longest", "recency")
 # record; only Data Ladder has a plain "longest"). Renamed, and the old name
 # kept as a config alias so saved profiles still load with the same meaning on
 # text. Chose the rename over a record-level fewest-NULLs rule: it needs no new
-# record-level machinery and cannot change any stored config's winners.
+# record-level machinery. It does change winners on NON-text fields: the old
+# string-length pick there (999 vs 1000, 0.5 vs 0.25) was a digit-count
+# accident, and the report restricts the rule to text, so it now falls through.
 _RULE_ALIASES = {"completeness": "longest"}
 
 # ponytail: these five repair the rules, they do not make survivorship
@@ -420,16 +423,17 @@ async def unify_entity_group_impl(
                     nums = [
                         v
                         for v in (_numeric_value(r[field]) for r, _ in non_null_values)
-                        if v is not None
+                        if v is not None and math.isfinite(v)
                     ]
-                    spread = max(nums) - min(nums)
-                    peak = max(abs(v) for v in nums)
-                    conflict_record["numeric_disagreement"] = {
-                        "min": min(nums),
-                        "max": max(nums),
-                        "spread": spread,
-                        "relative_spread": spread / peak if peak else 0.0,
-                    }
+                    spread = max(nums) - min(nums) if nums else 0.0
+                    if spread > 0:  # one parseable value is not a disagreement
+                        peak = max(abs(v) for v in nums)
+                        conflict_record["numeric_disagreement"] = {
+                            "min": min(nums),
+                            "max": max(nums),
+                            "spread": spread,
+                            "relative_spread": spread / peak,
+                        }
                 if rule == "measured_reliability" and field_reliability:
                     # The actual evidence, not just the rule name -- what
                     # makes "name taken from origin_1" into "name taken

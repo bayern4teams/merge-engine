@@ -374,6 +374,10 @@ def test_3a_option_A_longest_with_alias() -> None:
         pytest.fail("; ".join(problems))
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="lead: option A (rename to longest) chosen for P18-3; B must stay unimplemented",
+)
 def test_3b_option_B_record_level_fewest_nulls() -> None:
     """[B] a record-level fewest-NULLs rule wins over the longer string (fails on old code)."""
     problems = _option_b_problems()

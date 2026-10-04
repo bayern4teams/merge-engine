@@ -3,7 +3,7 @@
 Overwrite this file at every commit. A fresh session reads it first, then
 [the plan](../PART1_IMPLEMENTATION_PLAN.md). Git is the memory; a session's context is not.
 
-**Lock:** 2026-10-04T13:49:18Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-04T13:49:18Z
+**Lock:** 2026-10-04T13:50:23Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-04T13:50:23Z
 
 (Lock/heartbeat protocol: plan §7. A session sets `Lock: <ISO time>`, pushes it, and refreshes it at every commit; a lock older than 75 min is stale. `Autonomy` is `off`, `dryrun` (a tick only records what works and exits) or `unattended-through-phase-5` (authorises the supervisor to chain phases). Only the user changes it.)
 
@@ -28,7 +28,7 @@ Overwrite this file at every commit. A fresh session reads it first, then
 | P15 | 3 | todo | | |
 | P16 | 4 | todo | | |
 | P17 | 3 | todo | | |
-| P18 | 1 | todo | | |
+| P18 | 1 | unverified-live | (this commit) | ACCEPT: 54/55 acceptance (3b = rejected option B, strict xfail); attack follow-ups applied (comment reworded: longest is text-only and changes non-text winners — sanctioned by report ③; disagreement needs spread>0 and finite values). ③ = rename + `completeness` alias |
 | P19 | 3 | todo | | |
 | P20 | 3 | todo | | |
 
@@ -109,4 +109,6 @@ tick recovers it with step 4). **Phase 1, step 1:** derive acceptance for P2, P1
 `unattended-through-phase-5` (set by the user).
 
 ## Open escalations (worker/verifier results that passed only written tests or one case)
-none
+- `tests/part1/` is NOT run by `check.py test` (CI runs tests/unit + tests/integration only). The lead runs `pytest tests/part1` at every phase gate; folding it into CI is a Phase 5 decision.
+- P1 `ambiguous_splits` is returned by `map_fields_impl` but dropped by `map_fields_node` — surface it in lane B (P11/P12).
+- P18 `field_priorities` has no API/UI surface yet (config-only).

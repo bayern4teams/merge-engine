@@ -120,6 +120,22 @@ class TestConflictTiebreaks:
         assert result["unified_record"]["revenue"] == "$6.7 Billion"
 
     @pytest.mark.asyncio
+    async def test_numeric_disagreement_needs_two_finite_numbers(self):
+        """P18-5 follow-up: one parseable value is not a disagreement, and an
+        infinite value must not put NaN into the run report."""
+        for values in ((10, "abc"), (10, float("inf"))):
+            result = await unify_entity_group_impl(
+                "c8",
+                [
+                    {"_origin_id": "a", "revenue": values[0]},
+                    {"_origin_id": "b", "revenue": values[1]},
+                ],
+                origins=[{"id": "a", "priority": 1}, {"id": "b", "priority": 1}],
+            )
+            conflict = _conflict_for(result, "revenue")
+            assert "numeric_disagreement" not in conflict, values
+
+    @pytest.mark.asyncio
     async def test_numeric_max_falls_through_when_nothing_is_numeric(self):
         """A hex id or other non-numeric value must not crash numeric_max —
         it has nothing to discriminate on, so the chain moves to the next
