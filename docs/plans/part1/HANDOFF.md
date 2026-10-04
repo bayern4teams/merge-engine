@@ -3,7 +3,7 @@
 Overwrite this file at every commit. A fresh session reads it first, then
 [the plan](../PART1_IMPLEMENTATION_PLAN.md). Git is the memory; a session's context is not.
 
-**Lock:** 2026-10-04T13:50:23Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-04T13:50:23Z
+**Lock:** 2026-10-04T13:50:49Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-04T13:50:49Z
 
 (Lock/heartbeat protocol: plan §7. A session sets `Lock: <ISO time>`, pushes it, and refreshes it at every commit; a lock older than 75 min is stale. `Autonomy` is `off`, `dryrun` (a tick only records what works and exits) or `unattended-through-phase-5` (authorises the supervisor to chain phases). Only the user changes it.)
 
@@ -103,10 +103,13 @@ lists files an item must **edit**. Paths are under `src/` unless stated. Abbrevi
 | 4 | P10 (after P16, P17, P18) | P16 (quality module + `N/load_data.py` report) |
 
 ## Next action
-Dry run passed (skills, MCP tools, push, gh, setup line; graft's npm download is flaky and a real
-tick recovers it with step 4). **Phase 1, step 1:** derive acceptance for P2, P1, P18, P13 with
-`part1-verifier` agents, then implement per the lane plan below. Runs only while `Autonomy` is
-`unattended-through-phase-5` (set by the user).
+**Phase 1 in progress.** Accepted: P1, P2, P18 (all `unverified-live`). In flight: P13 worker
+(`fellegi_sunter.py`, acceptance in tests/part1/test_p13_acceptance.py) and P12 derive. Then, in order:
+attack P13 → lead does the P13 call site in `_fit_match_model` (seeded sample of random record pairs
+→ `estimate_model`) → derive + implement P14 (lead) → P12 worker → P11 (derive, worker). Phase gate:
+`check.py all`, `pytest tests/part1`, CI green, `/ponytail-review` of the phase diff.
+Deviation (one line, §3.2): the lead edited `N/resolve_entities.py` (owned by lane B / P12) to
+re-raise `CandidatePairBudgetExceeded` and surface P2's pruned counts — lane B had not started.
 
 ## Open escalations (worker/verifier results that passed only written tests or one case)
 - `tests/part1/` is NOT run by `check.py test` (CI runs tests/unit + tests/integration only). The lead runs `pytest tests/part1` at every phase gate; folding it into CI is a Phase 5 decision.
