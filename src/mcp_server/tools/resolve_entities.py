@@ -40,6 +40,7 @@ from src.mcp_server.tools.fellegi_sunter import (
     LEVEL_NULL,
     LEVEL_STRONG,
     LEVEL_WEAK,
+    idf_cosine,
 )
 from src.utils.id_utils import deterministic_uuid
 from src.utils.tracing import span
@@ -1416,12 +1417,18 @@ def _fit_match_model(
         from src.mcp_server.tools.fellegi_sunter import (
             SAMPLE_PAIRS,
             build_term_frequencies,
+            build_token_document_frequencies,
             estimate_model,
             sample_random_pairs,
         )
 
+        # P14: token document frequencies over the canonical projection, the
+        # same field names the comparison vectors carry.
+        token_df = build_token_document_frequencies(
+            [_cached_projection(r, record_cache)[0] for r in records]
+        )
         vectors = [
-            _build_comparison_vector(rec1, rec2, normalise, record_cache)
+            _build_comparison_vector(rec1, rec2, normalise, record_cache, token_df)
             for _id1, _id2, rec1, rec2 in candidate_pairs
         ]
         # P13: u from random pairs of the UNBLOCKED cross product (the blocked
@@ -1431,7 +1438,9 @@ def _fit_match_model(
         population = sorted(records, key=_record_id)
         n = len(population)
         sampled = [
-            _build_comparison_vector(population[i], population[j], normalise, record_cache)
+            _build_comparison_vector(
+                population[i], population[j], normalise, record_cache, token_df
+            )
             for i, j in sample_random_pairs(n, SAMPLE_PAIRS, seed=0)
         ]
         model = estimate_model(
@@ -1441,6 +1450,7 @@ def _fit_match_model(
             sampled_vectors=sampled or None,
             population_pairs=n * (n - 1) // 2 if sampled else None,
         )
+        model.token_df = token_df
         logger.debug(
             "Match model fitted over %d candidate pairs (match_prior=%.3f)",
             len(vectors),
@@ -1513,7 +1523,9 @@ def _score_pair(
         vector = (
             precomputed_vector
             if precomputed_vector is not None
-            else _build_comparison_vector(rec1, rec2, normalise, record_cache)
+            else _build_comparison_vector(
+                rec1, rec2, normalise, record_cache, getattr(model, "token_df", None)
+            )
         )
         probability = model.probability(vector)
     except Exception:
@@ -1572,7 +1584,9 @@ def _has_discriminating_agreement(
         return field_model.term_frequency.get(value, 0.0)
 
     name_parts: list[float] = []
-    vector = _build_comparison_vector(rec1, rec2, normalise, record_cache)
+    vector = _build_comparison_vector(
+        rec1, rec2, normalise, record_cache, getattr(model, "token_df", None)
+    )
     for field, (level, value) in vector.items():
         if level not in (LEVEL_EXACT, LEVEL_STRONG):
             continue
@@ -1713,7 +1727,11 @@ _FUZZY_NAME_CAP = 0.93
 
 
 def _comparison_level(
-    v1: Any, v2: Any, normalise: Any = _normalize, field_name: str = ""
+    v1: Any,
+    v2: Any,
+    normalise: Any = _normalize,
+    field_name: str = "",
+    token_df: tuple[dict[str, int], int] | None = None,
 ) -> tuple[str, str | None]:
     """Classify how two field values agree, for the probabilistic model.
 
@@ -1725,6 +1743,15 @@ def _comparison_level(
     Type-aware (BUG C / C0c): domain-shaped fields compare on registrable
     domain via ``_domain_of``, so ``https://www.boeing.com/careers`` and
     ``boeing.com`` register as LEVEL_EXACT instead of LEVEL_WEAK.
+
+    ``token_df`` (P14, D-14): this field's ``({token: df}, N)``. When given
+    and either value is multi-word text, the level is chosen from the
+    IDF-weighted cosine instead of plain string similarity, so a shared
+    high-df token cannot make two different names look alike.
+    Atomic values (no whitespace: emails, phones, ids) keep the plain path.
+    ponytail: four levels cannot tell "two rare tokens agree" from "five
+    common ones agree" (report D-14 ceiling). Deferred: a continuous
+    ``sum(-log2(df/N))`` text weight, once this version is measured.
     """
     if v1 is None or v2 is None:
         return LEVEL_NULL, None
@@ -1748,7 +1775,11 @@ def _comparison_level(
     if len(s1) < 3 or len(s2) < 3:
         return LEVEL_DISAGREE, None
 
-    sim = _string_similarity(s1, s2)
+    sim: float | None = None
+    if token_df is not None and (" " in s1 or " " in s2):
+        sim = idf_cosine(set(_tokenize(s1)), set(_tokenize(s2)), *token_df)
+    if sim is None:
+        sim = _string_similarity(s1, s2)
     if sim >= 0.90:
         return LEVEL_STRONG, None
     if sim >= 0.70:
@@ -1761,6 +1792,7 @@ def _build_comparison_vector(
     rec2: dict[str, Any],
     normalise: Any = _normalize,
     record_cache: RecordCache | None = None,
+    token_df: tuple[dict[str, dict[str, int]], dict[str, int]] | None = None,
 ) -> dict[str, tuple[str, str | None]]:
     """Per-field comparison outcomes for one candidate pair.
 
@@ -1774,8 +1806,15 @@ def _build_comparison_vector(
     """
     proj1, _, _ = _cached_projection(rec1, record_cache)
     proj2, _, _ = _cached_projection(rec2, record_cache)
+    df, totals = token_df if token_df is not None else ({}, {})
     return {
-        field: _comparison_level(proj1.get(field), proj2.get(field), normalise, field_name=field)
+        field: _comparison_level(
+            proj1.get(field),
+            proj2.get(field),
+            normalise,
+            field_name=field,
+            token_df=(df[field], totals[field]) if field in df else None,
+        )
         for field in set(proj1) & set(proj2)
     }
 

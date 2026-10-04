@@ -36,9 +36,12 @@ from __future__ import annotations
 import logging
 import math
 import random
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
+
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 logger = logging.getLogger("merge-engine.tools.fellegi_sunter")
 
@@ -116,12 +119,69 @@ class FieldModel:
         return math.log2(m / u)
 
 
+def build_token_document_frequencies(
+    records: list[dict[str, Any]],
+) -> tuple[dict[str, dict[str, int]], dict[str, int]]:
+    """Token document frequencies per field: ``({field: {token: df}}, {field: N})``.
+
+    P14: ``build_term_frequencies`` is IDF at the WHOLE-VALUE grain, so a
+    token shared by most names (a legal-form word, say) is never down-weighted.
+    Here a document is one record's value of the field and the corpus is every
+    record given (both origins together); a token's ``df`` is how many values
+    contain it. Under Fellegi-Sunter's own assumptions the per-token log-odds
+    increment is ``-log2(df/N)`` [C03] -- measured, not estimated. The
+    value-level table stays beside this one for atomic fields, where value
+    grain IS token grain.
+
+    ponytail: the table is a per-run artifact (Part 1); persisting a global,
+    per-run-snapshotted table (report D-23) is Part 3 storage.
+    """
+    df: dict[str, Counter] = {}
+    n: dict[str, int] = {}
+    for rec in records:
+        for key, value in rec.items():
+            if key.startswith("_") or value is None:
+                continue
+            tokens = set(_TOKEN_RE.findall(str(value).lower()))
+            if not tokens:
+                continue
+            df.setdefault(key, Counter()).update(tokens)
+            n[key] = n.get(key, 0) + 1
+    return {k: dict(c) for k, c in df.items()}, n
+
+
+def idf_cosine(tokens1: set[str], tokens2: set[str], df: dict[str, int], n: int) -> float | None:
+    """TF-IDF cosine of two token sets, IDF = ``log2(N/df)`` (binary TF).
+
+    ``None`` when either side carries no information (every token occurs in
+    every document), so the caller cannot mistake "no evidence" for
+    "disagree". A token missing from the table counts as seen once.
+    ponytail: plain TF-IDF, not SoftTFIDF -- ~17x cheaper per [C03]; a typo
+    inside a token is invisible here (the level falls back on exact/strong).
+    """
+    if n <= 0:
+        return None
+
+    def w(t: str) -> float:
+        return math.log2(n / min(max(df.get(t, 1), 1), n))
+
+    norm1 = math.fsum(w(t) ** 2 for t in tokens1)
+    norm2 = math.fsum(w(t) ** 2 for t in tokens2)
+    if norm1 == 0 or norm2 == 0:
+        return None
+    shared = math.fsum(w(t) ** 2 for t in tokens1 & tokens2)
+    return shared / math.sqrt(norm1 * norm2)
+
+
 class MatchModel:
     """Per-field m/u probabilities plus the log-odds scoring rule."""
 
     def __init__(self, fields: dict[str, FieldModel], match_prior: float):
         self.fields = fields
         self.match_prior = min(max(match_prior, 1e-4), 0.9)
+        # P14: ({field: {token: df}}, {field: N}) the comparison vectors were
+        # built with; scoring must build its vectors with the same table.
+        self.token_df: tuple[dict[str, dict[str, int]], dict[str, int]] | None = None
 
     @property
     def prior_weight(self) -> float:
