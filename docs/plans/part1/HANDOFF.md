@@ -5,7 +5,7 @@ Overwrite this file at every commit. A fresh session reads it first, then
 
 **Lock:** none · **Autonomy:** off · **Last heartbeat:** n/a
 
-(Lock/heartbeat protocol: plan §7. A session sets `Lock: <ISO time>`, pushes it, and refreshes it at every commit; a lock older than 75 min is stale. `Autonomy: unattended-through-phase-5` is set by the user's first launch and authorises the supervisor to chain phases.)
+(Lock/heartbeat protocol: plan §7. A session sets `Lock: <ISO time>`, pushes it, and refreshes it at every commit; a lock older than 75 min is stale. `Autonomy` is `off`, `dryrun` (a tick only records what works and exits) or `unattended-through-phase-5` (authorises the supervisor to chain phases). Only the user changes it.)
 
 **Branch:** `feat/part1-fixes` · **Current phase:** 0 done (see [PHASE0_REPORT.md](PHASE0_REPORT.md)); cloud re-checks #1 and #2 done (see [CLOUD_RECHECK.md](CLOUD_RECHECK.md), [CLOUD_RECHECK2.md](CLOUD_RECHECK2.md)) · **Last usage reading:** 5-hour window `allowed_warning`, resets 12:00Z, at 2026-10-04 10:28Z via cloud `get_session` (no percentage available in the cloud)
 
@@ -103,12 +103,12 @@ lists files an item must **edit**. Paths are under `src/` unless stated. Abbrevi
 | 4 | P10 (after P16, P17, P18) | P16 (quality module + `N/load_data.py` report) |
 
 ## Next action
-Cloud re-check #2 done: **not yet viable unattended** ([CLOUD_RECHECK2.md](CLOUD_RECHECK2.md)). A routine
-created by the in-session tool starts a session with no repo, so the setup script fails (exit 127) and
-Claude never runs. Waiting for the user: create the hourly routine in the claude.ai Routines UI with
-repo + branch `feat/part1-fixes` (or choose the persistent-session option), harden the setup-script
-line, decide `allowed_warning`; then repeat the item-4 dry run. Until it passes, Phase 1 runs in an
-attended session. Phase 1, step 1 (derive acceptance for P2, P1, P18, P13) is next either way.
+Cloud re-check #2 found one blocker: a routine made from inside a session starts with **no repo**
+([CLOUD_RECHECK2.md](CLOUD_RECHECK2.md)). Repo-side fixes are committed (vendored Ponytail skills,
+Bootstrap workflow, supervisor `dryrun` mode and `allowed_warning` handling). The user now creates the
+hourly routine in the claude.ai Routines UI with `Autonomy: dryrun`, confirms one tick pushed
+`.handoff/supervisor_dryrun.txt`, then sets `Autonomy: unattended-through-phase-5`. Then Phase 1,
+step 1 (derive acceptance for P2, P1, P18, P13).
 
 ## Open escalations (worker/verifier results that passed only written tests or one case)
 none

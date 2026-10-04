@@ -218,8 +218,10 @@ local verification pass).
   step. If a usage percentage *is* readable (local `get_usage`), stop at ≥ 90 %: finish the
   commit, write `HANDOFF.md`, push.
 - **Supervisor.** A scheduled cloud routine (cron `0 * * * *`, branch `feat/part1-fixes`)
-  starts a fresh session whose prompt is [part1/SUPERVISOR.md](part1/SUPERVISOR.md). It exits
-  at once when: the rate limit is not `allowed`; `HANDOFF.md` says `Autonomy: off`; the next
+  (created in the claude.ai Routines UI with the repo and GitHub connector — a routine made from
+  inside a session has no repo) starts a fresh session whose prompt is
+  [part1/SUPERVISOR.md](part1/SUPERVISOR.md). It exits
+  at once when: the rate limit is a hard stop (`allowed_warning` is not one); `HANDOFF.md` says `Autonomy: off`; the next
   action is "done" or "waiting for the user"; or `Lock` is younger than 75 minutes (another
   session is alive). Otherwise it takes the lock and acts as **lead** for as long as it can.
   An idle tick costs almost nothing, so hourly resumes soon after each window reset.
@@ -500,7 +502,9 @@ beyond what Part 1 itself specifies (e.g. P9's file is Part 3's backfill source)
 
 Phase 0 ran in a **local** desktop session ([part1/PHASE0_REPORT.md](part1/PHASE0_REPORT.md)). CI had been red since 2026-09-27 from dependency drift (splink 5, SQLAlchemy 2.1); fixed on this branch by `splink<5`, `sqlalchemy[asyncio]<2.2`, regenerated requirements, and `bootstrap.py` installing CI's extras. A **cloud re-check** (S1, S3, S4, S5, `check.py all`) precedes Phase 1, because S3/S4/S5 did not transfer from the local run. If the cloud cannot read usage or resume itself, Phases 1–5 run in a local session instead, and §7 stays "user launches each phase".
 
-**Cloud re-check outcome** ([part1/CLOUD_RECHECK.md](part1/CLOUD_RECHECK.md)): `check.py all` is green in the cloud (156 s) and matches CI; scheduled wake-ups work; the cloud shows no usage percentage, had no graph tools, no Ponytail, and push notifications do not reach the user. None is a real blocker: the supervisor design (§7) removes the need for a percentage; `scripts/cloud_setup.sh`, `.mcp.json` and `.claude/settings.json` supply the graph tools and Ponytail; notifications move into `HANDOFF.md` and commit prefixes. **Cloud re-check #2** must prove the setup script, Ponytail, the MCP server and a routine-started session. If it fails, Phases 1–5 run in a local session with the same protocol.
+**Cloud re-check outcome** ([part1/CLOUD_RECHECK.md](part1/CLOUD_RECHECK.md)): `check.py all` is green in the cloud (156 s) and matches CI; scheduled wake-ups work; the cloud shows no usage percentage, had no graph tools, no Ponytail, and push notifications do not reach the user. None is a real blocker: the supervisor design (§7) removes the need for a percentage; `scripts/cloud_setup.sh` supplies the graph tools (proven in re-check #2: 3/3 graphs built, all lookups answer); notifications move into `HANDOFF.md` and commit prefixes.
+
+**Cloud re-check #2** ([part1/CLOUD_RECHECK2.md](part1/CLOUD_RECHECK2.md)) found the cloud sets `SKIP_PLUGIN_MARKETPLACE=true`, so the Ponytail plugin never loads there; its six skills (MIT) are therefore **vendored in `.claude/skills/`**, which loads without a marketplace. It also found a routine created from inside a session starts with no repo, so the supervisor routine is created in the Routines UI (§7). A `dryrun` tick (SUPERVISOR.md) proves the end-to-end path before `Autonomy` is set to unattended. If that fails, Phases 1–5 run in an attended session with the same protocol.
 
 ## 12. Known limits of this plan (stated, not hidden)
 

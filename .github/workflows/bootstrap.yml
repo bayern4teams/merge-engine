@@ -85,11 +85,14 @@ jobs:
       - name: .env was created from the example
         run: test -f .env && echo ".env present"
 
-      # graphify/graft/codebase-memory-mcp are not installed on the runner, so
-      # refresh_graphs skips them by design and bootstrap still succeeds. That
-      # skip path is the thing worth asserting here: a clone without the graph
-      # tooling must still bootstrap cleanly.
-      - name: Graph refresh degrades cleanly without the tools
+      # graphify/graft/codebase-memory-mcp are not installed on the runner. A clone
+      # without them must still bootstrap, but refresh_graphs must SAY the graphs
+      # were not built (exit 1 + "NOT BUILT"), never report success: bootstrap once
+      # printed "Code graphs ready" having built nothing.
+      - name: Graph refresh reports missing tools instead of hiding them
         run: |
-          .venv/bin/python scripts/refresh_graphs.py
+          rc=0
+          .venv/bin/python scripts/refresh_graphs.py || rc=$?
           cat .tmp/refresh_graphs.log
+          test "$rc" -eq 1
+          grep -q "NOT BUILT" .tmp/refresh_graphs.log
