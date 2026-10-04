@@ -27,8 +27,8 @@ You are the lead engineer's supervisor tick for Part 1. Work on branch feat/part
 never check out, merge, rebase or delete another branch.
 
 1. git fetch origin && git checkout -B feat/part1-fixes origin/feat/part1-fixes (a routine session
-   starts on a throwaway claude/... branch; all work goes to feat/part1-fixes). Read CLAUDE.md, docs/plans/PART1_IMPLEMENTATION_PLAN.md (sections 2-5, 7-9)
-   and docs/plans/part1/HANDOFF.md.
+   starts on a throwaway claude/... branch; all work goes to feat/part1-fixes). Read ONLY docs/plans/part1/HANDOFF.md now: an idle tick must
+   stay cheap, so CLAUDE.md and the plan are read in step 3b, after the exit checks.
 1b. If HANDOFF.md says "Autonomy: dryrun": write ONE line to .handoff/supervisor_dryrun.txt with the
    time, HEAD sha, how you evaluated the step 2 conditions, and whether each of these works in this
    session: git push; gh run list; the six ponytail skills (ponytail, -review, -audit, -debt, -gain,
@@ -50,13 +50,18 @@ never check out, merge, rebase or delete another branch.
    - HANDOFF.md says "Autonomy: off";
    - the Next action says Part 1 is complete or "waiting for the user";
    - HANDOFF.md "Lock" is younger than 75 minutes (another session is alive).
-3. Otherwise take the lock: set "Lock: <current ISO time>" in HANDOFF.md, commit, push.
+3. Otherwise take the lock: set "Lock: <current ISO time>" in HANDOFF.md, commit, push. If that push
+   is rejected, another session got there first: git pull --rebase, re-read "Lock"; if it is now
+   held, EXIT as in step 2. Never force-push.
+3b. Now read CLAUDE.md and docs/plans/PART1_IMPLEMENTATION_PLAN.md (sections 2-5, 7-9).
 4. If graphify, graft or codebase-memory-mcp are not on PATH, run bash scripts/cloud_setup.sh; if
    graphify-out/graph.json or graft/ is missing, run python scripts/bootstrap.py. If a tool is
    still missing, that is a [BLOCKED] (step 8), not something to skip.
 5. Act as the lead exactly as the plan says, from the Next action in HANDOFF.md. Refresh the lock
    timestamp in every commit and push each commit. Commit "WIP P<n>" before any long step.
-   Pass model "sonnet" for workers, at most 2 concurrent, lead approval for every item.
+   Pass model "sonnet" for workers, at most 2 concurrent, lead approval for every item. If any push
+   is rejected, git pull --rebase and retry (never force-push). If your context is compacted or you
+   lose track, re-read HANDOFF.md and the plan sections before continuing.
 6. At a phase end: check.py all green, push, wait for CI on the pushed head to be green
    (gh run list/watch), run /ponytail-review on the phase diff, then advance HANDOFF.md and
    record "[PHASE n DONE]" under Notifications. Continue into the next phase.
