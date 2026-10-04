@@ -3,11 +3,11 @@
 Overwrite this file at every commit. A fresh session reads it first, then
 [the plan](../PART1_IMPLEMENTATION_PLAN.md). Git is the memory; a session's context is not.
 
-**Lock:** 2026-10-04T14:29:30Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-04T14:29:30Z
+**Lock:** 2026-10-04T14:32:35Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-04T14:32:35Z
 
 (Lock/heartbeat protocol: plan §7. A session sets `Lock: <ISO time>`, pushes it, and refreshes it at every commit; a lock older than 75 min is stale. `Autonomy` is `off`, `dryrun` (a tick only records what works and exits) or `unattended-through-phase-5` (authorises the supervisor to chain phases). Only the user changes it.)
 
-**Branch:** `feat/part1-fixes` · **Current phase:** 0 done (see [PHASE0_REPORT.md](PHASE0_REPORT.md)); cloud re-checks #1 and #2 done (see [CLOUD_RECHECK.md](CLOUD_RECHECK.md), [CLOUD_RECHECK2.md](CLOUD_RECHECK2.md)) · **Last usage reading:** 5-hour window `allowed_warning`, resets 12:00Z, at 2026-10-04 10:28Z via cloud `get_session` (no percentage available in the cloud)
+**Branch:** `feat/part1-fixes` · **Current phase:** 1 done, 2 next (Phase 0: [PHASE0_REPORT.md](PHASE0_REPORT.md)); cloud re-checks #1 and #2 done (see [CLOUD_RECHECK.md](CLOUD_RECHECK.md), [CLOUD_RECHECK2.md](CLOUD_RECHECK2.md)) · **Last usage reading:** 5-hour window `allowed_warning`, resets 12:00Z, at 2026-10-04 10:28Z via cloud `get_session` (no percentage available in the cloud)
 
 | item | phase | state | commit | lead verdict |
 |---|---|---|---|---|
@@ -103,16 +103,14 @@ lists files an item must **edit**. Paths are under `src/` unless stated. Abbrevi
 | 4 | P10 (after P16, P17, P18) | P16 (quality module + `N/load_data.py` report) |
 
 ## Next action
-**Phase 1 in progress.** Accepted: P1, P2, P18 (all `unverified-live`). In flight: P13 worker
-(`fellegi_sunter.py`, acceptance in tests/part1/test_p13_acceptance.py) and P12 derive. Then, in order:
-attack P13 → lead does the P13 call site in `_fit_match_model` (seeded sample of random record pairs
-→ `estimate_model`) → derive + implement P14 (lead) → P12 worker → P11 (derive, worker). Phase gate:
-`check.py all`, `pytest tests/part1`, CI green, `/ponytail-review` of the phase diff.
-Deviation (one line, §3.2): the lead edited `N/resolve_entities.py` (owned by lane B / P12) to
-re-raise `CandidatePairBudgetExceeded` and surface P2's pruned counts — lane B had not started.
-Deviation (P13): the report says "m from EM, u sampled" only; the attack showed that pairs random-pair u
-with a prior fitted on blocked pairs (precision@0.5 0.83-0.98 -> 0.61-0.82). Lead decision: the prior is
-rescaled to the random-pair population (EM match mass / C(n,2)) so m, u and prior describe one population.
+**Phase 2, step 1:** derive acceptance for P5 (lead) and P3 (lane E worker) with `part1-verifier`
+agents, then implement: lead does P5 in `T/resolve_entities.py` (P2 is accepted); lane E worker does
+P3 → P4 (lead reviews line by line). Then the Phase 2 gate. Runs only while `Autonomy` is
+`unattended-through-phase-5`.
+Phase 1 deviations (one line each, §3.2): the lead edited `N/resolve_entities.py` (lane B) for P2's
+guard re-raise and pruned counts; the lead threaded `metadata_overrides` through `api/main.py` and
+`orchestrator/graph.py` for P12; P11 accepted on lead line review (10-line diff) without a separate
+attack agent. P13: prior rescaled to the random-pair population (lead decision, see verdict).
 
 ## Open escalations (worker/verifier results that passed only written tests or one case)
 - `tests/part1/` is NOT run by `check.py test` (CI runs tests/unit + tests/integration only). The lead runs `pytest tests/part1` at every phase gate; folding it into CI is a Phase 5 decision.
@@ -121,3 +119,6 @@ rescaled to the random-pair population (EM match mass / C(n,2)) so m, u and prio
 - P14: person-name initials/middle initials score lower than before (level debt above); the 0.90/0.70 level cut-offs were calibrated for difflib and are reused on the IDF similarity — revisit with the restored ground truth (LOCAL_VERIFY P14).
 - P12: a mapping pinned in a saved profile before P12 is reused verbatim, so it can still map a metadata column (profile replay is not re-filtered). Decide in Phase 5 or with the profile owner.
 - P13 side effect for P14/P6: Phase 0 P6 case a (same email, truth Match) on the model path moved 0.76 (review) -> 0.67 (excluded). Cause measured: consistent random-pair prior (-11 bits at n=156) vs two unique exact agreements (+6.04 bits each); the fixture's match count is fixed while n grows, so the prior shrinks as 1/n^2. Real wrinkle: `build_term_frequencies` counts the record's own value (u = df/N, not (df-1)/(N-1)), ~1 bit per exact field. P14 (token-grain TF) must decide this; P6's outcome-class tests on both paths are the gate.
+
+## Notifications
+- [PHASE 1 DONE] 2026-10-04: P1, P2, P11, P12, P13, P14, P18 accepted (all `unverified-live`, see LOCAL_VERIFY.md). `check.py all` green locally; CI green on the phase head; `/ponytail-review` of the phase diff: net -6 lines possible, deferred (discover_schemas `run_kwargs` kept for a dozen one-argument test stubs; `_names` str-or-list and the two metadata lookups too small to churn).
