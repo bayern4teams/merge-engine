@@ -6,7 +6,7 @@ be changed through git without editing the UI:
 ```
 You are the Part 1 supervisor tick. Run: git fetch origin feat/part1-fixes, then read
 docs/plans/part1/SUPERVISOR.md with: git show origin/feat/part1-fixes:docs/plans/part1/SUPERVISOR.md
-Follow the fenced block under "Paste the fenced block" in that file exactly. Do nothing else.
+Follow the LAST fenced block in that file exactly. Do nothing else.
 ```
 
 Use a **dedicated cloud environment** whose setup line first checks out the work branch (a routine clones the repo's default branch, `main`, which has none of the cloud kit, and skills load only at session start):
