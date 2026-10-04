@@ -80,3 +80,10 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Independent check: the run's `map_fields` result for zoominfo `company` (`field_mapping`, `unmapped_fields`, new `ambiguous_splits`); SQL `SELECT count(*) FILTER (WHERE name IS NULL), count(*) FROM company` on the destination.
 - Expected evidence: zoominfo `company` mapped fields > 1 of 29 (before: 28 unmapped); `companyname` tokenised `company`,`name`; `company.name` NULL count below 78 / 99. Note `ambiguous_splits` is not yet surfaced by `map_fields_node` (lane B, P11/P12).
 - Result (filled in locally):
+
+### P2 — purging + meta-blocking replace the 250k comparison cap
+- Why cloud could not verify: no origin databases (the `staff` entity).
+- Command: full merge run; then read `resolution_stats.<entity>` (`candidate_pairs`, `pairs_pruned_by_purging`, `pairs_pruned_by_meta_blocking`, `uncompared_pairs`).
+- Independent check: count distinct blocking pairs independently (`_blocking_keys_for` over the restored `staff` rows) and compare against `candidate_pairs` + pruned counts; score the run against ground truth (pair completeness on the restored truth set).
+- Expected evidence: `uncompared_pairs` = 0 (before: 711 670 for `staff`); either the run completes with the pruned counts shown, or it FAILS with `CandidatePairBudgetExceeded` (guard 5M pairs) — never `completed` with silent discards. Watch memory (~300 B/pair) and the WNP loss: synthetic attack measured 4-19 % of pairs the uncapped old code found are pruned (accepted ceiling; P5 revisits blocking).
+- Result (filled in locally):
