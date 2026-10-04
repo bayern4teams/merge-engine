@@ -53,6 +53,7 @@ Split from the old root `TECHNICAL_README.md`, by subsystem, in reading order:
   wins. Each branch's own `Branch_Plan.md` (at that branch's root, not on
   `main`) contains its section of this file copied verbatim, so a branch
   never needs to check out `main` to read its own spec.
+- [PART1_IMPLEMENTATION_PLAN.md](plans/PART1_IMPLEMENTATION_PLAN.md) — cloud multi-agent plan to implement TECHNICAL_REPORT Part 1 (P1–P20) on `feat/part1-fixes`; live state in `plans/part1/HANDOFF.md`, unverified-live items in `plans/part1/LOCAL_VERIFY.md`
 - [PHASE_Q_PLAN.md](plans/PHASE_Q_PLAN.md) — Splink/GX/lineage research, superseded in scheduling by the plan above but still the source of truth for *why* those features are shaped the way they are
 
 ## verification/ — recorded proof, not prose claims

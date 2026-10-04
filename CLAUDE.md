@@ -219,6 +219,13 @@ unreferenced, the audit decides whether it should exist at all. Neither
 conclusion is safe alone — `affected "X"` returning nothing means the *graph*
 sees no caller, not that there is none. Confirm with grep before deleting.
 
+## Part 1 implementation (cloud, multi-agent)
+
+If told to implement the technical report's Part 1: read
+[docs/plans/PART1_IMPLEMENTATION_PLAN.md](docs/plans/PART1_IMPLEMENTATION_PLAN.md) and
+`docs/plans/part1/HANDOFF.md` first. Branch `feat/part1-fixes` only; the plan, not this
+file, defines roles, phases and the approval protocol.
+
 ## Where to look next
 
 `docs/INDEX.md` for the full map. `TODO.md` for live task status (changes far
