@@ -40,7 +40,7 @@ from src.mcp_server.tools.fellegi_sunter import (
     LEVEL_NULL,
     LEVEL_STRONG,
     LEVEL_WEAK,
-    idf_cosine,
+    idf_soft_similarity,
 )
 from src.utils.id_utils import deterministic_uuid
 from src.utils.tracing import span
@@ -1283,6 +1283,11 @@ def _ordered(a: str, b: str) -> tuple[str, str]:
     return (a, b) if a <= b else (b, a)
 
 
+def _token_ratio(t1: str, t2: str) -> float:
+    """Symmetric, cached character similarity of two tokens (P14)."""
+    return 1.0 if t1 == t2 else _seq_ratio(*_ordered(t1, t2))
+
+
 @lru_cache(maxsize=_SIMILARITY_CACHE_SIZE)
 def _seq_ratio(a: str, b: str) -> float:
     """difflib's sequence ratio, computed once per distinct pair."""
@@ -1746,9 +1751,11 @@ def _comparison_level(
 
     ``token_df`` (P14, D-14): this field's ``({token: df}, N)``. When given
     and either value is multi-word text, the level is chosen from the
-    IDF-weighted cosine instead of plain string similarity, so a shared
+    IDF-weighted soft token similarity instead of plain string similarity, so a shared
     high-df token cannot make two different names look alike.
-    Atomic values (no whitespace: emails, phones, ids) keep the plain path.
+    Atomic values (no whitespace, or no letters: emails, phones, ids,
+    timestamps) keep the plain path. Tokens compare character by character,
+    so a misspelling is not mistaken for a different name.
     ponytail: four levels cannot tell "two rare tokens agree" from "five
     common ones agree" (report D-14 ceiling). Deferred: a continuous
     ``sum(-log2(df/N))`` text weight, once this version is measured.
@@ -1776,8 +1783,17 @@ def _comparison_level(
         return LEVEL_DISAGREE, None
 
     sim: float | None = None
-    if token_df is not None and (" " in s1 or " " in s2):
-        sim = idf_cosine(set(_tokenize(s1)), set(_tokenize(s2)), *token_df)
+    # Text = words: both values carry letters and one has several tokens.
+    # A spaced phone or a timestamp is still atomic.
+    if (
+        token_df is not None
+        and (" " in s1 or " " in s2)
+        and any(c.isalpha() for c in s1)
+        and any(c.isalpha() for c in s2)
+    ):
+        sim = idf_soft_similarity(
+            set(_tokenize(s1)), set(_tokenize(s2)), *token_df, token_sim=_token_ratio
+        )
     if sim is None:
         sim = _string_similarity(s1, s2)
     if sim >= 0.90:

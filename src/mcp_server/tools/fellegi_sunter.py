@@ -38,6 +38,7 @@ import math
 import random
 import re
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -150,27 +151,47 @@ def build_token_document_frequencies(
     return {k: dict(c) for k, c in df.items()}, n
 
 
-def idf_cosine(tokens1: set[str], tokens2: set[str], df: dict[str, int], n: int) -> float | None:
-    """TF-IDF cosine of two token sets, IDF = ``log2(N/df)`` (binary TF).
+def idf_soft_similarity(
+    tokens1: set[str],
+    tokens2: set[str],
+    df: dict[str, int],
+    n: int,
+    token_sim: Callable[[str, str], float],
+) -> float | None:
+    """IDF-weighted soft token similarity of two names, in [0, 1].
+
+    Each token scores the best ``token_sim`` it finds on the other side
+    (character-level, so "jonh" still earns most of "john"), and the scores
+    are averaged with IDF weights ``log2(N/df)``; the two directions are then
+    averaged (a symmetric Monge-Elkan). A token shared by most names carries
+    almost no weight, so "Acme X Ltd" vs "Beta X Ltd" no longer looks alike
+    because of "X" and "Ltd" -- the inversion the report names (P14).
 
     ``None`` when either side carries no information (every token occurs in
-    every document), so the caller cannot mistake "no evidence" for
-    "disagree". A token missing from the table counts as seen once.
-    ponytail: plain TF-IDF, not SoftTFIDF -- ~17x cheaper per [C03]; a typo
-    inside a token is invisible here (the level falls back on exact/strong).
+    every document), so the caller falls back rather than reading "no
+    evidence" as "disagree". A token missing from the table counts as seen
+    once.
+    ponytail: report D-14 asks for TF-IDF; plain token cosine was measured to
+    turn every typo into DISAGREE (person recall 0.85 -> 0.26), so the token
+    match is soft. No SoftTFIDF theta: the caller's own character similarity
+    is used as is. Deferred: a continuous sum(-log2(df/N)) text weight.
     """
-    if n <= 0:
+    if n <= 0 or not tokens1 or not tokens2:
         return None
 
     def w(t: str) -> float:
         return math.log2(n / min(max(df.get(t, 1), 1), n))
 
-    norm1 = math.fsum(w(t) ** 2 for t in tokens1)
-    norm2 = math.fsum(w(t) ** 2 for t in tokens2)
-    if norm1 == 0 or norm2 == 0:
+    def directed(src: set[str], dst: set[str]) -> float | None:
+        total = math.fsum(w(t) for t in src)
+        if total == 0:
+            return None
+        return math.fsum(w(t) * max(token_sim(t, u) for u in dst) for t in src) / total
+
+    d1, d2 = directed(tokens1, tokens2), directed(tokens2, tokens1)
+    if d1 is None or d2 is None:
         return None
-    shared = math.fsum(w(t) ** 2 for t in tokens1 & tokens2)
-    return shared / math.sqrt(norm1 * norm2)
+    return (d1 + d2) / 2
 
 
 class MatchModel:

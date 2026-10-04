@@ -3,7 +3,7 @@
 Overwrite this file at every commit. A fresh session reads it first, then
 [the plan](../PART1_IMPLEMENTATION_PLAN.md). Git is the memory; a session's context is not.
 
-**Lock:** 2026-10-04T14:14:10Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-04T14:14:10Z
+**Lock:** 2026-10-04T14:29:30Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-04T14:29:30Z
 
 (Lock/heartbeat protocol: plan §7. A session sets `Lock: <ISO time>`, pushes it, and refreshes it at every commit; a lock older than 75 min is stale. `Autonomy` is `off`, `dryrun` (a tick only records what works and exits) or `unattended-through-phase-5` (authorises the supervisor to chain phases). Only the user changes it.)
 
@@ -24,7 +24,7 @@ Overwrite this file at every commit. A fresh session reads it first, then
 | P11 | 1 | unverified-live | (this commit) | ACCEPT on lead review (10-line Semaphore(_LLM_CONCURRENCY) around the existing gather; attack step replaced by line review — deviation, trivial diff): 25/25 acceptance incl. bound 1/2/4 peak tests; report's "serial" was stale, the defect was the missing bound |
 | P12 | 1 | unverified-live | (this commit) | ACCEPT: 25/26 acceptance (4c documented skip); attack: generic audit/ETL/DBMS vocabulary (report sanctions name patterns), no corpus literal, overrides run>origin>default, corpus rows unchanged; ceilings: value patterns not implemented, dw_load_id/ingestion_time missed; per-run layer threaded via RunConfig.metadata_overrides (lead) |
 | P13 | 1 | unverified-live | (this commit) | ACCEPT r2: 17/17 acceptance (lead adapted fit() to pass population_pairs) + consistency test (precision@0.5 1.0 / 0 FP vs old 0.97-0.99 / 1-2 FP on 3 seeds); prior rescaled to random-pair population (lead deviation); call site samples 3000 pairs from records sorted by id, seed 0 |
-| P14 | 1 | todo | | |
+| P14 | 1 | unverified-live | (this commit) | ACCEPT r2 (lead item): 24/24 acceptance. Attack r1 rejected binary-token cosine (typos -> DISAGREE, person recall@0.7 0.85 -> 0.26). r2 = IDF-weighted symmetric Monge-Elkan over `_seq_ratio` (no new constant); text path only when both values have letters + a space. e2e synthetic: company recall@0.7 0.497 -> 0.611, @0.95 0.250 -> 0.296, precision 1.0; person @0.95 0.577 -> 0.552 and @0.7 0.845 -> 0.552 = knife edge (old truth pairs sat at 0.705, new m(strong) 0.52 vs 0.60 puts them at ~0.67). Debt: initials ("j. smith") weak -> disagree, middle initial strong -> weak; 0.90/0.70 cut-offs carried over from difflib, not recalibrated |
 | P15 | 3 | todo | | |
 | P16 | 4 | todo | | |
 | P17 | 3 | todo | | |
@@ -118,5 +118,6 @@ rescaled to the random-pair population (EM match mass / C(n,2)) so m, u and prio
 - `tests/part1/` is NOT run by `check.py test` (CI runs tests/unit + tests/integration only). The lead runs `pytest tests/part1` at every phase gate; folding it into CI is a Phase 5 decision.
 - P1 `ambiguous_splits` is returned by `map_fields_impl` but dropped by `map_fields_node` — surface it in lane B (P11/P12).
 - P18 `field_priorities` has no API/UI surface yet (config-only).
+- P14: person-name initials/middle initials score lower than before (level debt above); the 0.90/0.70 level cut-offs were calibrated for difflib and are reused on the IDF similarity — revisit with the restored ground truth (LOCAL_VERIFY P14).
 - P12: a mapping pinned in a saved profile before P12 is reused verbatim, so it can still map a metadata column (profile replay is not re-filtered). Decide in Phase 5 or with the profile owner.
 - P13 side effect for P14/P6: Phase 0 P6 case a (same email, truth Match) on the model path moved 0.76 (review) -> 0.67 (excluded). Cause measured: consistent random-pair prior (-11 bits at n=156) vs two unique exact agreements (+6.04 bits each); the fixture's match count is fixed while n grows, so the prior shrinks as 1/n^2. Real wrinkle: `build_term_frequencies` counts the record's own value (u = df/N, not (df-1)/(N-1)), ~1 bit per exact field. P14 (token-grain TF) must decide this; P6's outcome-class tests on both paths are the gate.

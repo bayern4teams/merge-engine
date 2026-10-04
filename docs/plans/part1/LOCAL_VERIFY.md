@@ -115,3 +115,10 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Independent check: endpoint request log shows at most `_LLM_CONCURRENCY` (4) concurrent map_fields calls; mapping output identical to a run with `_LLM_CONCURRENCY = 1`.
 - Expected evidence: `map_fields` share of wall clock below 44 % (before); no endpoint rate-limit errors; dest_connector sampling stays correct under concurrent callers.
 - Result (filled in locally):
+
+### P14 — token-grain IDF for text fields
+- Why cloud could not verify: no restored corpus / ground truth.
+- Command: full merge run vs the parent of the "P14:" commit; score both with ground truth.
+- Independent check: ground-truth precision/recall for `company` and person entities, stratified; list the company FPs that share only a legal-form token.
+- Expected evidence: fewer company FPs carried by a shared high-df token (report: 4 company FPs were parent/subsidiary or jurisdictional variants); person recall not lower beyond the initials/middle-initial debt; inspect the 0.70 band edge.
+- Result (filled in locally):
