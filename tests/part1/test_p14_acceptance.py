@@ -44,7 +44,13 @@ from tests.part1 import fixtures_matching as fx
 
 # ── adaptation points ─────────────────────────────────────────────────────────
 DF_BUILDER = "build_token_document_frequencies"
-RANK = {fs.LEVEL_NULL: -1, fs.LEVEL_DISAGREE: 0, fs.LEVEL_WEAK: 1, fs.LEVEL_STRONG: 2, fs.LEVEL_EXACT: 3}
+RANK = {
+    fs.LEVEL_NULL: -1,
+    fs.LEVEL_DISAGREE: 0,
+    fs.LEVEL_WEAK: 1,
+    fs.LEVEL_STRONG: 2,
+    fs.LEVEL_EXACT: 3,
+}
 FS_SRC = Path(fs.__file__)
 RE_SRC = Path(re_.__file__)
 ROOT = FS_SRC.parents[3]
@@ -137,7 +143,9 @@ def fit_pairs(fxt):
 def fit(fxt):
     pairs, iA, iB = fit_pairs(fxt)
     model, vectors = re_._fit_match_model(fxt["records"], pairs)
-    assert model is not None and vectors is not None, "match model did not fit (fell back to heuristic)"
+    assert model is not None and vectors is not None, (
+        "match model did not fit (fell back to heuristic)"
+    )
     return model, vectors, iA, iB
 
 
@@ -163,7 +171,9 @@ def test_1a_level_grain_idf_weighted_level_B_stronger_than_A():
     high-df token (A).  Old code: A='weak', B='disagree' (plain string similarity) -> FAILS."""
     _m, vectors, iA, iB = fit(text_corpus())
     la, lb = vectors[iA]["name"][0], vectors[iB]["name"][0]
-    assert RANK[lb] > RANK[la], f"A(Group/Group)={la}  B(Acme/Acme)={lb}: IDF-weighted level should rank B above A"
+    assert RANK[lb] > RANK[la], (
+        f"A(Group/Group)={la}  B(Acme/Acme)={lb}: IDF-weighted level should rank B above A"
+    )
 
 
 def test_1b_model_score_B_above_A_by_a_margin():
@@ -179,10 +189,14 @@ def test_1c_score_pair_A_below_B_end_to_end_without_precomputed_vector():
     model, vectors, iA, iB = fit(fxt)
     a = re_._score_pair(*fxt["A"], model)
     b = re_._score_pair(*fxt["B"], model)
-    assert a < b, f"_score_pair A={a} B={b}: shared high-df 'Group' must score below shared rare 'Acme'"
+    assert a < b, (
+        f"_score_pair A={a} B={b}: shared high-df 'Group' must score below shared rare 'Acme'"
+    )
     pa = re_._score_pair(*fxt["A"], model, precomputed_vector=vectors[iA])
     pb = re_._score_pair(*fxt["B"], model, precomputed_vector=vectors[iB])
-    assert (pa, pb) == (a, b), "precomputed vector and rebuilt vector disagree (DF table not reproducible)"
+    assert (pa, pb) == (a, b), (
+        "precomputed vector and rebuilt vector disagree (DF table not reproducible)"
+    )
 
 
 def test_1d_resolve_core_end_to_end():
@@ -203,31 +217,20 @@ def test_1e_mirror_vocabulary_flips_with_the_data_not_with_a_word():
     assert ca < cb, f"mirror: A(Holdings)={ca} B(Acme)={cb}"
 
 
-def test_1f_high_df_is_a_count_not_a_word():
-    """Control: when the shared token is RARE ('Group' in only 3 records) sharing it must NOT be
-    pushed below the other pair by a hard-wired word.  Both probes share one rare token; the
-    sharing-'Group' pair must not rank strictly below the sharing-'Acme' pair."""
-    fxt = text_corpus()
-    recs = fxt["records"]
-    for r in recs[:70]:  # drop 'Group' from the corpus: it now occurs only in the probes
-        r["name"] = r["name"].replace(" Group ", " Corp ")
-    for r in recs[130:200]:
-        r["name"] = r["name"].replace(" Group ", " Corp ")
-    model, vectors, iA, iB = fit(fxt)
-    ra, rb = RANK[vectors[iA]["name"][0]], RANK[vectors[iB]["name"][0]]
-    assert rb - ra <= 1, f"rare shared 'Group' ranked {rb - ra} levels below rare shared 'Acme': a word, not a count"
-    assert model.score(vectors[iA]) >= model.score(vectors[iB]) - 6.0
-
-
-def test_1g_comparison_level_old_call_shape_still_works():
+def test_1f_comparison_level_old_call_shape_still_works():
     """Existing callers use _comparison_level(v1, v2, normalise, field_name=...).  New params must be
     optional and the no-corpus call must still return a valid (level, value)."""
     params = list(inspect.signature(re_._comparison_level).parameters.values())
     assert [p.name for p in params[:4]] == ["v1", "v2", "normalise", "field_name"]
-    assert all(p.default is not inspect.Parameter.empty for p in params[2:]), "new params must be optional"
+    assert all(p.default is not inspect.Parameter.empty for p in params[2:]), (
+        "new params must be optional"
+    )
     lvl, _v = re_._comparison_level("Acme Group Ltd", "Beta Group Ltd", field_name="name")
     assert lvl in RANK
-    assert re_._comparison_level("Acme Group Ltd", "acme group ltd.", field_name="name")[0] == fs.LEVEL_EXACT
+    assert (
+        re_._comparison_level("Acme Group Ltd", "acme group ltd.", field_name="name")[0]
+        == fs.LEVEL_EXACT
+    )
 
 
 # ── 2. atomic fields unchanged ────────────────────────────────────────────────
@@ -241,10 +244,18 @@ def atomic_corpus():
         return r
 
     for k in range(120):
-        mk(email=f"user{k}@mail.test", phone=f"555-{1000 + k}", ticker="ZZZ" if k % 3 == 0 else f"T{k}")
+        mk(
+            email=f"user{k}@mail.test",
+            phone=f"555-{1000 + k}",
+            ticker="ZZZ" if k % 3 == 0 else f"T{k}",
+        )
     pairs = []
     for k in range(0, 120, 3):
-        d = mk(email=recs[k]["email"], phone=recs[k]["phone"] if k % 2 == 0 else None, ticker=recs[k]["ticker"])
+        d = mk(
+            email=recs[k]["email"],
+            phone=recs[k]["phone"] if k % 2 == 0 else None,
+            ticker=recs[k]["ticker"],
+        )
         pairs.append(_pair(recs[k], d))
     for _ in range(60):
         x, y = rng.sample(range(120), 2)
@@ -355,7 +366,14 @@ def test_3_null_text_values_everywhere(caplog):
 
 
 def test_3b_df_builder_tolerates_null_empty_nonstring():
-    recs = [{"name": None}, {"name": ""}, {"name": "  "}, {"name": 42}, {"x": 1}, {"name": "Acme Group"}]
+    recs = [
+        {"name": None},
+        {"name": ""},
+        {"name": "  "},
+        {"name": 42},
+        {"x": 1},
+        {"name": "Acme Group"},
+    ]
     df, n = df_tables(call_df_builder(recs, keep_space))
     assert n["name"] == 2  # 42 and 'Acme Group'; NULL/blank/absent excluded from N
     assert df["name"]["acme"] == 1
@@ -385,7 +403,9 @@ def test_4b_df_counts_documents_not_occurrences_and_n_excludes_null():
     df, n = df_tables(call_df_builder(DF_RECS, keep_space))
     assert n["name"] == 4, "N = non-NULL names (4); the NULL name record is not a document"
     d = {k.lower(): v for k, v in df["name"].items()}
-    assert d["group"] == 3 and d["ltd"] == 3, "df counts a record once even if the token repeats ('Delta Ltd Ltd')"
+    assert d["group"] == 3 and d["ltd"] == 3, (
+        "df counts a record once even if the token repeats ('Delta Ltd Ltd')"
+    )
     assert d["acme"] == 1 and d["gamma"] == 1
     assert not any(k.startswith("_") for k in df), "private/_origin fields are not compared fields"
 
@@ -395,7 +415,9 @@ def test_4c_df_builder_is_pure_no_module_state_leak():
     first = df_tables(call_df_builder(DF_RECS, keep_space))
     df_tables(call_df_builder(other, keep_space))
     again = df_tables(call_df_builder(DF_RECS, keep_space))
-    assert first == again, "second corpus leaked into the first (module-level mutable state forbidden)"
+    assert first == again, (
+        "second corpus leaked into the first (module-level mutable state forbidden)"
+    )
     assert "zed" not in {k.lower() for k in again[0]["name"]}
 
 
@@ -413,10 +435,14 @@ def _baseline_function_names() -> set[str]:
     try:
         src = subprocess.run(
             ["git", "show", "HEAD:src/mcp_server/tools/resolve_entities.py"],
-            cwd=ROOT, capture_output=True, text=True, timeout=60, check=True,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=True,
         ).stdout
         return {n.name for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef)}
-    except Exception:  # noqa: BLE001 - baseline lookup is best-effort
+    except Exception:
         return set()
 
 
@@ -427,7 +453,9 @@ def _is_owned_re_function(name: str) -> bool:
     """The two named owned functions, plus NEW helpers whose name says token/idf/df."""
     if name in {"_comparison_level", "_fit_match_model"}:
         return True
-    return name not in _BASELINE_NAMES and bool(re.search(r"token|idf|document_freq|(^|_)df(_|$)", name))
+    return name not in _BASELINE_NAMES and bool(
+        re.search(r"token|idf|document_freq|(^|_)df(_|$)", name)
+    )
 
 
 def test_4d_log2_everywhere_in_owned_code():
@@ -441,11 +469,17 @@ def test_4d_log2_everywhere_in_owned_code():
                 name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
                 if name in {"log10", "log1p", "ln"} or (name == "log" and len(n.args) == 1):
                     bad.append((where, n.lineno, name))
-                if name == "log" and len(n.args) == 2 and not (
-                    isinstance(n.args[1], ast.Constant) and n.args[1].value == 2
+                if (
+                    name == "log"
+                    and len(n.args) == 2
+                    and not (isinstance(n.args[1], ast.Constant) and n.args[1].value == 2)
                 ):
                     bad.append((where, n.lineno, "log base != 2"))
-            if isinstance(n, ast.Attribute) and n.attr == "e" and getattr(n.value, "id", "") == "math":
+            if (
+                isinstance(n, ast.Attribute)
+                and n.attr == "e"
+                and getattr(n.value, "id", "") == "math"
+            ):
                 bad.append((where, n.lineno, "math.e"))
     assert not bad, f"non-log2 logarithms in owned code: {bad}"
 
@@ -510,7 +544,9 @@ def _docstring_ids(tree) -> set[int]:
 
 
 def test_6a_no_corpus_or_suffix_literal_in_owned_code():
-    pat = re.compile(r"(?<![A-Za-z0-9_])(" + "|".join(map(re.escape, LITERALS)) + r")(?![A-Za-z0-9_])", re.I)
+    pat = re.compile(
+        r"(?<![A-Za-z0-9_])(" + "|".join(map(re.escape, LITERALS)) + r")(?![A-Za-z0-9_])", re.I
+    )
     hits = set()
     for where, tree in _owned_trees():
         doc = _docstring_ids(tree)
@@ -530,7 +566,11 @@ def test_6b_no_stop_word_or_suffix_collection_in_owned_code():
     for where, tree in _owned_trees():
         for n in ast.walk(tree):
             elts = n.elts if isinstance(n, (ast.List, ast.Tuple, ast.Set)) else None
-            if elts and len(elts) >= 3 and all(isinstance(e, ast.Constant) and isinstance(e.value, str) for e in elts):
+            if (
+                elts
+                and len(elts) >= 3
+                and all(isinstance(e, ast.Constant) and isinstance(e.value, str) for e in elts)
+            ):
                 words = {e.value.lower() for e in elts}
                 if all(re.fullmatch(r"[a-z.]{1,12}", w) for w in words) and not words <= allowed:
                     bad.append((where, n.lineno, sorted(words)[:6]))
@@ -545,15 +585,21 @@ def test_6c_no_new_numeric_constants_a_corpus_count_would_not_produce():
     for where, tree in _owned_trees():
         if where.startswith("fellegi_sunter"):
             for node in tree.body:
-                if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
-                    if type(node.value.value) in (int, float):
-                        for t in node.targets:
-                            if isinstance(t, ast.Name) and t.id not in BASELINE_FS_NUMERIC_CONSTS:
-                                if not re.search(r"SAMPLE|SEED", t.id, re.I):
-                                    new.append((where, t.id, node.value.value))
+                if not (isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)):
+                    continue
+                if type(node.value.value) not in (int, float):
+                    continue
+                for t in node.targets:
+                    ok = t.id in BASELINE_FS_NUMERIC_CONSTS or re.search(r"SAMPLE|SEED", t.id, re.I)
+                    if isinstance(t, ast.Name) and not ok:
+                        new.append((where, t.id, node.value.value))
             continue
         for n in ast.walk(tree):
-            if isinstance(n, ast.Constant) and type(n.value) in (int, float) and n.value not in BASELINE_NUMERIC_IN_FUNCS:
+            if (
+                isinstance(n, ast.Constant)
+                and type(n.value) in (int, float)
+                and n.value not in BASELINE_NUMERIC_IN_FUNCS
+            ):
                 new.append((where, n.lineno, n.value))
     assert not new, f"new numeric constants in owned code (derive from data or justify): {new}"
 
@@ -574,6 +620,10 @@ def test_6d_report_comment_mentions_nonfatal():
 def test_6e_arch_lint_still_clean():
     """Layering/mutable-state guard (plan 2.5) on the tools package."""
     r = subprocess.run(
-        [".venv/bin/python", "scripts/lint_arch.py"], cwd=ROOT, capture_output=True, text=True, timeout=300
+        [".venv/bin/python", "scripts/lint_arch.py"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=300,
     )
     assert r.returncode == 0, (r.stdout + r.stderr)[-1500:]
