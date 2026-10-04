@@ -35,7 +35,14 @@ never check out, merge, rebase or delete another branch.
    -help) loadable; the output of `git branch --show-current` at session start; the lines of `/tmp/env-manager.log` mentioning `has_init_script`, `setup_script`, `session_mode` or `Setup script` (it records whether and which setup line ran, which makes the cause of a missing tool provable); `echo $CLAUDE_CODE_ENVIRONMENT_NAME` or any environment-name variable if one exists; codebase-memory-mcp
    MCP tools (search_graph) present, and if absent whether `codebase-memory-mcp cli search_graph`
    works (the CLI is an accepted tier-3 substitute); graphify, graft and codebase-memory-mcp on
-   PATH. Commit, push, stop. Do nothing else (no lock, no code).
+   PATH. Also record: `cat /tmp/cloud_setup.log` (the environment's setup line writes it; if the file is
+   absent the setup line did NOT run at session start), `grep -in 'init\|script\|setup'
+   /tmp/env-manager.log | tail -20`, and `ls -la /opt/graphtools /usr/local/bin | head -20`.
+   If graphify, graft or codebase-memory-mcp are missing, run `bash scripts/cloud_setup.sh 2>&1 |
+   tail -40` ONCE by hand, record its exit code, wall time and the last lines, then re-check PATH
+   and `python scripts/refresh_graphs.py` (record exit code and `.tmp/refresh_graphs.log`). That
+   install is the only action beyond the one-line file allowed in dryrun. Commit, push, stop. Do
+   nothing else (no lock, no code).
 2. EXIT IMMEDIATELY, doing nothing else and writing nothing, if any of these hold:
    - your session's rate limit is a hard stop (any status other than "allowed" or
      "allowed_warning"; the warning band is NOT a reason to stop: work, commit per step, and let
