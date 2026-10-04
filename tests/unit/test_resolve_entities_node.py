@@ -173,6 +173,21 @@ class TestResolveEntities:
         assert "has_quality_failure" not in result
 
     @pytest.mark.asyncio
+    async def test_a_binding_pair_guard_fails_the_run(self, base_state: dict[str, Any]) -> None:
+        """P2: the out-of-memory guard must stop the run, not just one entity —
+        an entity left unresolved would let the run end `completed`."""
+        from src.mcp_server.tools.resolve_entities import CandidatePairBudgetExceeded
+
+        with (
+            patch(
+                "src.orchestrator.nodes.resolve_entities.resolve_entities_impl",
+                AsyncMock(side_effect=CandidatePairBudgetExceeded("too many pairs")),
+            ),
+            pytest.raises(CandidatePairBudgetExceeded),
+        ):
+            await resolve_entities(base_state)
+
+    @pytest.mark.asyncio
     async def test_resolve_entities_no_records_skipped(self, base_state: dict[str, Any]) -> None:
         """Test that entities with no records are skipped."""
         base_state["extracted_data"]["person"] = []

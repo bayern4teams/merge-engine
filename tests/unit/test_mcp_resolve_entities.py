@@ -344,6 +344,43 @@ class TestGenerateCandidatePairs:
         ):
             _generate_candidate_pairs(records)
 
+    def test_purging_can_lose_a_pair_whose_only_shared_block_is_purged(self) -> None:
+        """P2 ceiling, pinned: purging checks coverage per RECORD, not per pair.
+
+        40 records share one first token; each also sits in a small decoy
+        block via a ref. The dominant shared block is purged because every
+        member is still covered elsewhere — so a true pair that co-occurs ONLY
+        there is not proposed. The loss is counted, never silent.
+        """
+        records = []
+        for i in range(40):
+            records.append(
+                {
+                    "_origin_id": "o",
+                    "_origin_table": "t",
+                    "_origin_id_row": str(i),
+                    "name": f"acme {i % 20}longword" + ("" if i < 20 else "x"),
+                    "ref": f"R{i}",
+                }
+            )
+            records.append(
+                {
+                    "_origin_id": "o",
+                    "_origin_table": "t",
+                    "_origin_id_row": str(100 + i),
+                    "name": "".join(
+                        chr(97 + (i * 7 + k * k * 3 + i // 3 * k) % 26) for k in range(7)
+                    )
+                    + f" w{i}",
+                    "ref": f"R{i}",
+                }
+            )
+        stats: dict[str, int] = {}
+        pairs = {(a, b) for a, b, _1, _2 in _generate_candidate_pairs(records, stats=stats)}
+        assert ("o:t:0", "o:t:20") not in pairs
+        assert stats["blocks_purged"] >= 1
+        assert stats["pairs_pruned_by_purging"] > 0
+
     def test_skips_self_comparisons(self) -> None:
         """Test that identical record IDs are skipped."""
         records = [

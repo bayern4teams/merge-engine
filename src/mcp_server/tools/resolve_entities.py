@@ -52,10 +52,10 @@ logger = logging.getLogger("merge-engine.tools.resolve_entities")
 # computed from the block collection. If the surviving blocks could still
 # propose more pairs than this, the run fails loudly
 # (CandidatePairBudgetExceeded) instead of silently truncating: the old
-# 250,000 cap discarded 711,670 pairs of one entity unexamined while the run ended
-# `completed`. Sized for memory: a materialised pair costs a few hundred
-# bytes (tuple, edge key, weight), so 20M pairs is several GB.
-_MAX_CANDIDATE_PAIRS = 20_000_000
+# 250,000 cap discarded 711,670 pairs of one entity unexamined while the
+# run ended `completed`. Sized for memory, not quality: measured ~300 bytes per
+# materialised pair (tuple, edge key, weight), so 5M pairs is ~1.5 GB.
+_MAX_CANDIDATE_PAIRS = 5_000_000
 
 
 class CandidatePairBudgetExceeded(RuntimeError):
@@ -771,6 +771,10 @@ async def resolve_entities_impl(
         # than have it hidden in a log line.
         "uncompared_pairs": blocking_stats.get("uncompared_pairs", 0),
         "candidate_pairs": blocking_stats.get("candidate_pairs", 0),
+        # P2: pairs excluded by a computed property of the block collection
+        # (not by a budget) — the measurable cost of meta-blocking.
+        "pairs_pruned_by_purging": blocking_stats.get("pairs_pruned_by_purging", 0),
+        "pairs_pruned_by_meta_blocking": blocking_stats.get("pairs_pruned_by_meta_blocking", 0),
         "blocks_purged": blocking_stats.get("blocks_purged", 0),
         # Clustering cost profile (BUG D.1) — largest component, how many
         # exceeded the visibility threshold, and total wall time through
@@ -1076,6 +1080,9 @@ def _generate_candidate_pairs(
     2. **Block purging** — largest blocks first, a block is purged while it
        holds more comparisons than every smaller block together *and* each of
        its members still sits in another surviving block. Nothing to tune.
+       Coverage is per record, not per pair: a true pair whose ONLY shared
+       block is purged is lost (pinned by a test; counted in
+       ``pairs_pruned_by_purging``).
     3. **Meta-blocking (WNP, ARCS weights)** — each candidate edge weighs
        ``sum(1 / comparisons(b))`` over the blocks it shares; an edge survives
        when it reaches the mean weight of at least one endpoint's edges.

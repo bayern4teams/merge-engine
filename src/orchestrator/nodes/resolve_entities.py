@@ -15,6 +15,7 @@ from typing import Any
 
 from src.mcp_server.tools.resolve_entities import (
     _PROCESS_POOL_MIN_RECORDS,
+    CandidatePairBudgetExceeded,
     build_relationship_index,
     resolve_entities_impl,
 )
@@ -281,6 +282,11 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
     # ordering deterministic across runs, exactly as when this loop ran
     # strictly sequentially (same pattern as B.1's map_fields_node.py).
     for (entity_type, _records), outcome in zip(prepared, results, strict=True):
+        if isinstance(outcome, CandidatePairBudgetExceeded):
+            # P2: the out-of-memory guard bound. Failing one entity and
+            # carrying on would end the run `completed` with that entity
+            # unresolved — the silent loss the guard exists to prevent.
+            raise outcome
         if isinstance(outcome, Exception):
             msg = f"Entity resolution failed for '{entity_type}': {outcome}"
             logger.error(msg, exc_info=outcome)
@@ -327,6 +333,10 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
             # never compared, rather than have it sit in a log file.
             "uncompared_pairs": uncompared,
             "candidate_pairs": result.get("candidate_pairs", 0),
+            # P2: pairs excluded by purging / meta-blocking (computed, not
+            # budgeted) — the reviewer sees what blocking chose not to compare.
+            "pairs_pruned_by_purging": result.get("pairs_pruned_by_purging", 0),
+            "pairs_pruned_by_meta_blocking": result.get("pairs_pruned_by_meta_blocking", 0),
             # Uncertain pairs left unmerged. They form no multi-record
             # cluster, so without this the matches gate would auto-skip
             # and the human would never learn they existed.
