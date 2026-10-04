@@ -208,6 +208,10 @@ class RunConfig(BaseModel):
     # WorkflowManager.start_workflow — "handle_error" can never be one of
     # these, its resume semantics aren't a plain approve.
     auto_approve_gates: list[str] = Field(default_factory=list)
+    # P12: per-run override of the detected catalog/metadata classification,
+    # the top of the three layers (detected -> per-origin -> per-run). Shape:
+    # see src/mcp_server/tools/metadata_classification.py.
+    metadata_overrides: dict[str, Any] | None = None
 
 
 class WorkflowStart(BaseModel):

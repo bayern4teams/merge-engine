@@ -604,6 +604,9 @@ class MergeState(TypedDict):
     matching_rules: dict[str, Any]
     # {field: [rule, ...]} survivorship, "_default" covers the rest (O.3)
     conflict_policy: dict[str, Any]
+    # P12 per-run layer over the detected catalog/metadata classification
+    # (from RunConfig.metadata_overrides); {} = detected default + per-origin.
+    metadata_overrides: dict[str, Any]
     # Name of the profile this run was started from, "" when ad-hoc (O.4)
     profile_name: str
     # Phase A4: the applied profile's per-stage fingerprints/artefacts
@@ -893,6 +896,7 @@ def get_initial_state(
             "_profile_cache": {},
             "reused_stages": [],
             "auto_approve_gates": list((run_config or {}).get("auto_approve_gates") or []),
+            "metadata_overrides": dict((run_config or {}).get("metadata_overrides") or {}),
             "force_full_extraction": False,
             "extracted_data": {},
             "extraction_watermarks": {},
@@ -991,6 +995,7 @@ def get_initial_state(
             # 0.8, found stale relative to that path).
             "conflict_policy": conflict_policy or {},
             "auto_approve_gates": list((run_config or {}).get("auto_approve_gates") or []),
+            "metadata_overrides": dict((run_config or {}).get("metadata_overrides") or {}),
             "profile_name": "",
             "_profile_cache": {},
             "reused_stages": [],

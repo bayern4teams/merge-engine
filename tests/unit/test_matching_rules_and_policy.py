@@ -624,3 +624,23 @@ class TestAutoApproveGatesThreading:
             run_config={"auto_approve_gates": ["human_review_deps", "human_review_matches"]},
         )
         assert state["auto_approve_gates"] == ["human_review_deps", "human_review_matches"]
+
+
+class TestMetadataOverridesThreading:
+    """P12: the per-run override layer reaches state, defaulting to {}."""
+
+    def test_run_config_metadata_overrides_reach_state(self) -> None:
+        overrides = {"treat_as_business": ["crm.customer.signup_date"]}
+        state = get_initial_state(
+            "merge companies",
+            origins=[{"id": "o1"}],
+            destination={"type": "postgresql"},
+            run_config={"metadata_overrides": overrides},
+        )
+        assert state["metadata_overrides"] == overrides
+
+    def test_no_run_config_defaults_to_empty(self) -> None:
+        state = get_initial_state(
+            "merge companies", origins=[{"id": "o1"}], destination={"type": "postgresql"}
+        )
+        assert state["metadata_overrides"] == {}
