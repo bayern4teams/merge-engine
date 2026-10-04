@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from src.mcp_server.tools.resolve_entities import (
-    _MAX_COMPARISONS,
+    _MAX_CANDIDATE_PAIRS,
     _generate_candidate_pairs,
     _ordered,
     _seq_ratio,
@@ -96,9 +96,9 @@ class TestMemoisationPreservesSemantics:
 
 
 class TestComparisonBudget:
-    def test_budget_is_high_enough_for_ordinary_merges(self) -> None:
+    def test_guard_is_high_enough_for_ordinary_merges(self) -> None:
         """2,484 records generate ~28k pairs; the old 10k budget dropped 2/3."""
-        assert _MAX_COMPARISONS >= 100_000
+        assert _MAX_CANDIDATE_PAIRS >= 100_000
 
     def test_a_realistic_merge_compares_every_candidate_pair(self) -> None:
         records = [
@@ -110,20 +110,15 @@ class TestComparisonBudget:
 
         assert stats["uncompared_pairs"] == 0
 
-    def test_shortfall_is_reported_when_the_budget_does_bind(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A dropped pair must be counted, never silently discarded."""
+    def test_the_guard_fails_loudly_when_it_binds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """P2: a binding guard raises; it never returns a silently truncated list."""
         import src.mcp_server.tools.resolve_entities as mod
 
-        monkeypatch.setattr(mod, "_MAX_COMPARISONS", 5)
+        monkeypatch.setattr(mod, "_MAX_CANDIDATE_PAIRS", 5)
         records = [_rec(i, "same", "name") for i in range(20)]
 
-        stats: dict[str, int] = {}
-        pairs = mod._generate_candidate_pairs(records, stats=stats)
-
-        assert len(pairs) == 5
-        assert stats["uncompared_pairs"] > 0
+        with pytest.raises(mod.CandidatePairBudgetExceeded):
+            mod._generate_candidate_pairs(records, stats={})
 
 
 class TestDeterminism:
@@ -138,19 +133,10 @@ class TestDeterminism:
 
         assert first == second
 
-    def test_truncation_picks_the_same_pairs_every_time(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Equal-sized blocks used to fall back on dict insertion order.
+    def test_pairs_do_not_depend_on_record_order(self) -> None:
+        """Pruning is a computed property of the blocks, so input order cannot matter."""
+        records = self._records()
+        first = {(a, b) for a, b, _1, _2 in _generate_candidate_pairs(records)}
+        second = {(a, b) for a, b, _1, _2 in _generate_candidate_pairs(records[::-1])}
 
-        That made a truncated run unreproducible: the same data could yield
-        a different set of comparisons, and therefore a different row count.
-        """
-        import src.mcp_server.tools.resolve_entities as mod
-
-        monkeypatch.setattr(mod, "_MAX_COMPARISONS", 25)
-        first = [(a, b) for a, b, _1, _2 in mod._generate_candidate_pairs(self._records())]
-        second = [(a, b) for a, b, _1, _2 in mod._generate_candidate_pairs(self._records())]
-
-        assert len(first) == 25
         assert first == second

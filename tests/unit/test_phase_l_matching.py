@@ -138,8 +138,8 @@ def test_oversized_approximate_blocks_are_admitted_but_dont_merge() -> None:
     """BUG C / C1: a non-discriminative block is admitted, not annihilated.
 
     A phonetic code shared by dozens of records is weak evidence, but the
-    block must still be proposed for scoring (budget-limited, honestly
-    counted) rather than silently dropped — that silent drop is exactly how
+    block must still be proposed for scoring (meta-blocked, never
+    truncated) rather than silently dropped — that silent drop is exactly how
     a real scoped merge went from hundreds of candidate pairs to zero.
     Scoring, not blocking, is what keeps this from producing a false merge
     (see test_no_unique_id_and_a_constant_field_does_not_merge).
@@ -148,7 +148,8 @@ def test_oversized_approximate_blocks_are_admitted_but_dont_merge() -> None:
     stats: dict[str, int] = {}
     pairs = _generate_candidate_pairs(records, stats=stats)
     assert len(pairs) > 0
-    assert stats["blocks_purged"] >= 1
+    # P2: purging never takes a record's only block, however large.
+    assert stats["blocks_purged"] == 0
     assert stats["uncompared_pairs"] == 0
 
 

@@ -6,7 +6,8 @@ matching ones with a hybrid pipeline:
 
 1. Blocking (cheap): candidate pairs are only generated within blocks
    sharing a normalized first name-token, so comparisons stay far below
-   the O(n^2) all-pairs count. ``_MAX_COMPARISONS`` is enforced.
+   the O(n^2) all-pairs count. Blocks are purged and meta-blocked
+   (P2), never truncated; an out-of-memory guard fails loudly.
 2. Heuristic scoring (cheap): token-set Jaccard + difflib sequence
    similarity over common fields. Confident pairs (>=0.95 match,
    <=0.70 non-match) are settled here without any LLM call.
@@ -26,6 +27,7 @@ import asyncio
 import difflib
 import json
 import logging
+import math
 import re
 import time
 from functools import lru_cache
@@ -45,18 +47,20 @@ from src.utils.tracing import span
 logger = logging.getLogger("merge-engine.tools.resolve_entities")
 
 
-# Maximum pairwise comparisons per call (safety limit)
-# How many candidate pairs may be scored for one entity. This is a runaway
-# guard, not a tuning knob: every pair it excludes is evidence the matcher
-# never saw, so it should bind rarely.
-#
-# It was 10,000, which a 2,484-record merge already exceeded (28,170 pairs) —
-# so ordinary runs were silently dropping two thirds of their evidence, and
-# two runs of identical data could disagree. That budget existed because
-# scoring cost ~2ms/pair; memoising the string comparators took it to
-# ~0.085ms, so 250,000 pairs now costs about 20 seconds rather than eight
-# minutes. Overridable per run via extraction_config["max_comparisons"].
-_MAX_COMPARISONS = 250_000
+# Out-of-memory guard for candidate generation (P2) — NOT a quality knob.
+# Pairs are excluded only by block purging and meta-blocking, properties
+# computed from the block collection. If the surviving blocks could still
+# propose more pairs than this, the run fails loudly
+# (CandidatePairBudgetExceeded) instead of silently truncating: the old
+# 250,000 cap discarded 711,670 pairs of one entity unexamined while the run ended
+# `completed`. Sized for memory: a materialised pair costs a few hundred
+# bytes (tuple, edge key, weight), so 20M pairs is several GB.
+_MAX_CANDIDATE_PAIRS = 20_000_000
+
+
+class CandidatePairBudgetExceeded(RuntimeError):
+    """Blocking would materialise more candidate pairs than memory allows."""
+
 
 # Confidence thresholds (shared by scoring and clustering)
 _AUTO_MATCH = 0.95
@@ -173,10 +177,6 @@ _CANONICAL_FIELD_HINTS: dict[str, tuple[str, ...]] = {
 # overlap across origins is a surrogate key — it must never be scored as
 # ``disagree``, because that actively punishes every true cross-origin match.
 _SURROGATE_KEY_HINTS = ("id", "_id", "uuid", "guid", "pk", "rowid", "recordid")
-
-# A ref block bigger than this is a non-discriminative key (e.g. a shared
-# prefix across a whole origin) — skip it rather than flood comparisons.
-_MAX_REF_BLOCK = 25
 
 # At most this many borderline pairs are LLM-judged per entity type (closest
 # to auto-match first); the rest keep their heuristic score.
@@ -1063,213 +1063,194 @@ def _generate_candidate_pairs(
     stats: dict[str, int] | None = None,
     extra_pairs: list[tuple[str, str]] | None = None,
 ) -> list[tuple[str, str, dict, dict]]:
-    """Generate candidate record pairs via multi-pass blocking.
+    """Generate candidate record pairs: block building, block cleaning, comparison cleaning.
 
-    Pass 1 blocks on the normalized first token of each record's own best
-    name-ish field (falling back to explicit ``blocking_keys`` when given);
-    pass 2 blocks on identifier-like fields (``*_ref``, ``*code*``, ...) so
-    records whose names differ but share a business reference are still
-    compared. The union of intra-block pairs is scored. Records with no
-    usable key land in a shared fallback block so missing data never
-    silently excludes a record. Enforces ``_MAX_COMPARISONS``.
+    P2 (TECHNICAL_REPORT_2026-09-26.md): a pair is excluded only because a
+    property computed from the block collection says so, never because a
+    counter ran out.
 
-    ``extra_pairs`` (B.1.3): additional ``(record_id, record_id)`` pairs
-    from an external source (e.g. ``trigram_candidate_pairs``'s pg_trgm
-    SQL blocking) — UNIONED into the result, deduped against the ordinary
-    blocking pairs, never a replacement. A pair naming an id not present in
-    ``records`` is silently ignored (the caller may have sampled a
-    superset).
+    1. **Block building** — every rule in ``_blocking_keys_for``; records with
+       no usable key share a fallback block, so missing data never silently
+       excludes a record. Blocks with an identical member set (one block
+       reached under two keys) are kept once.
+    2. **Block purging** — largest blocks first, a block is purged while it
+       holds more comparisons than every smaller block together *and* each of
+       its members still sits in another surviving block. Nothing to tune.
+    3. **Meta-blocking (WNP, ARCS weights)** — each candidate edge weighs
+       ``sum(1 / comparisons(b))`` over the blocks it shares; an edge survives
+       when it reaches the mean weight of at least one endpoint's edges.
 
-    ``stats``, when given, is filled with this call's blocking outcome
-    (``uncompared_pairs``, ``candidate_pairs``, ``blocks_used``,
-    ``blocks_purged``). It belongs to the caller: these counts used to live in
-    a module-level dict, so two concurrent entity resolutions each reported
-    the other's numbers (Phase 0 Sec 0.8).
+    Block filtering (the report's second cleaning step) is deliberately not
+    used: its ratio ``r`` is a constant fitted on benchmark data (plan §2.4),
+    and WNP already prunes per record against a local mean.
+
+    ponytail: meta-blocking is lossy by design — a recall/cost trade, measured
+    here as pruned counts (``pairs_pruned_by_purging`` /
+    ``pairs_pruned_by_meta_blocking``); pair completeness needs ground truth
+    and is computed by the eval harness, never guessed here (P19). Deferred
+    alternative: progressive (pay-as-you-go) resolution, if a run is ever
+    time-boxed rather than quality-boxed.
+
+    ``_MAX_CANDIDATE_PAIRS`` is an out-of-memory guard only: when the
+    surviving blocks could propose more pairs than that, the call RAISES
+    ``CandidatePairBudgetExceeded`` instead of truncating.
+
+    ``extra_pairs`` (B.1.3): additional ``(record_id, record_id)`` pairs from
+    an external source (e.g. ``trigram_candidate_pairs``) — unioned into the
+    result after pruning, deduped, never a replacement. A pair naming an id
+    not present in ``records`` is silently ignored.
+
+    ``stats``, when given, is filled with this call's blocking outcome. It
+    belongs to the caller: these counts used to live in a module-level dict,
+    so two concurrent entity resolutions each reported the other's numbers
+    (Phase 0 Sec 0.8). ``uncompared_pairs`` stays for the run report and is
+    always 0: no pair is dropped by a budget any more.
     """
     if stats is None:
         stats = {}
     explicit = [f for f in (blocking_keys or []) if f]
     fields = explicit or _blockable_fields(records)
-    if not fields:
+    if not fields and records:
         fields = [f for f in (_best_name_field(records[0]) or "",) if f]
 
-    # Build every block, from every rule, in one pass.
-    blocks: dict[str, list[dict[str, Any]]] = {}
+    # 1. Block building — one entry per record id, so a record reached twice
+    # (same id) never pairs with itself.
+    records_by_id: dict[str, dict[str, Any]] = {}
+    raw_blocks: dict[str, set[str]] = {}
     for rec in records:
-        keys = _blocking_keys_for(rec, fields)
-        if not keys:
-            # No usable key at all — a shared fallback block, so missing data
-            # never silently excludes a record from consideration entirely.
-            keys = {"__nokey__"}
-        for key in keys:
-            blocks.setdefault(key, []).append(rec)
+        rid = _record_id(rec)
+        records_by_id.setdefault(rid, rec)
+        # No usable key at all — a shared fallback block.
+        for key in _blocking_keys_for(rec, fields) or {"__nokey__"}:
+            raw_blocks.setdefault(key, set()).add(rid)
 
-    # Non-discriminative blocks (BUG C / C1): a phonetic code, a first token,
-    # or a reference prefix shared by dozens of records is weak evidence —
-    # but a purge must degrade, never annihilate. These blocks used to be
-    # dropped from `usable` entirely, which is how a scoped merge (every
-    # record shares the subject token, so the one block that holds
-    # everything exceeds the old threshold) went from 465 candidate pairs to
-    # exactly zero while still reporting `uncompared_pairs=0` — the one
-    # honesty signal the whole design depends on, silently lying. Now every
-    # block — however non-discriminative — is admitted into `usable` and
-    # left to the size-sorted budget below: smaller, more discriminating
-    # blocks are scored first (see the sort key a few lines down), and only
-    # once the budget is exhausted does a large block fall back to the
-    # cheap overflow *estimate* instead of being scored — the same honest
-    # degradation `_MAX_COMPARISONS` already provides. "full:" (an exact
-    # match on a complete identifying value) is real evidence at any size
-    # and was never purged; everything else now shares its fate instead of
-    # vanishing.
-    usable: dict[str, list[dict[str, Any]]] = {}
-    purged: list[tuple[str, int]] = []
-    for key, members in blocks.items():
-        if len(members) < 2:
-            continue
-        approximate = not key.startswith("full:")
-        if approximate and len(members) > _MAX_REF_BLOCK:
-            purged.append((key, len(members)))
-        usable[key] = members
-    if purged:
-        purged.sort(key=lambda kv: -kv[1])
-        logger.info(
-            "Blocking: %d non-discriminative block(s) over %d records "
-            "(largest: %s) — still admitted for scoring, budget-limited "
-            "rather than dropped.",
-            len(purged),
-            _MAX_REF_BLOCK,
-            ", ".join(f"{k}={n}" for k, n in purged[:3]),
-        )
+    # The same member set under two keys (e.g. ``tok:`` and ``snd:`` both
+    # holding every record) is one block: counting it twice inflated both the
+    # weights and the old overflow estimate (5.6x on the Phase 0 fixture).
+    by_members: dict[frozenset[str], str] = {}
+    for key in sorted(raw_blocks):
+        member_set = frozenset(raw_blocks[key])
+        if len(member_set) >= 2:
+            by_members.setdefault(member_set, key)
+    blocks = [(key, sorted(member_set)) for member_set, key in by_members.items()]
 
-    logger.debug(
-        "Blocking on %s: %d records -> %d usable blocks (of %d)",
-        fields,
-        len(records),
-        len(usable),
-        len(blocks),
+    # 2. Block purging.
+    def _comparisons(members: list[str]) -> int:
+        return len(members) * (len(members) - 1) // 2
+
+    blocks.sort(key=lambda kb: (-_comparisons(kb[1]), kb[0]))
+    membership: dict[str, int] = {}
+    for _key, members in blocks:
+        for rid in members:
+            membership[rid] = membership.get(rid, 0) + 1
+    smaller_total = sum(_comparisons(m) for _k, m in blocks)
+    purged: set[str] = set()
+    purged_comparisons = 0
+    for key, members in blocks:
+        size = _comparisons(members)
+        smaller_total -= size
+        if size <= smaller_total:
+            break  # no longer dominates the rest of the work
+        if all(membership[rid] > 1 for rid in members):
+            purged.add(key)
+            purged_comparisons += size
+            for rid in members:
+                membership[rid] -= 1
+    kept = sorted(
+        ((key, members) for key, members in blocks if key not in purged),
+        key=lambda kb: (len(kb[1]), kb[0]),
     )
-
-    pairs: list[tuple[str, str, dict, dict]] = []
-    seen_pairs: set[tuple[str, str]] = set()
-
-    # B.1.3: seed with the external (e.g. pg_trgm) pairs first, so they
-    # win any tie against the block loop below and are cheap to dedupe
-    # against (block-derived pairs just skip anything already in
-    # seen_pairs).
-    if extra_pairs:
-        records_by_id = {_record_id(r): r for r in records}
-        for raw_id1, raw_id2 in extra_pairs:
-            if raw_id1 == raw_id2 or len(pairs) >= _MAX_COMPARISONS:
-                continue
-            rec1 = records_by_id.get(raw_id1)
-            rec2 = records_by_id.get(raw_id2)
-            if rec1 is None or rec2 is None:
-                continue
-            pair_key = (raw_id1, raw_id2) if raw_id1 < raw_id2 else (raw_id2, raw_id1)
-            if pair_key in seen_pairs:
-                continue
-            seen_pairs.add(pair_key)
-            pairs.append((raw_id1, raw_id2, rec1, rec2))
-
-    # Smallest blocks first: they are the most discriminating, so if the
-    # budget does run out it is the weakest evidence that gets dropped.
-    # The block key breaks size ties, so two runs over the same records
-    # always compare the same pairs in the same order — without it, equal
-    # sized blocks fell back on dict insertion order and a truncated run
-    # was not reproducible.
-    #
-    # Once the budget is already met from smaller blocks, a later (larger)
-    # block is *never* going to be scored — but a "full:" exact-match block
-    # is never purged regardless of size (see above), so a single block of
-    # thousands of records sharing one value (e.g. many "experience" rows
-    # with the same company+title) used to still get fully expanded into
-    # O(n^2) (id, id, dict, dict) tuples just to be sliced off at the end.
-    # On a live 34,782-row run this alone took the process from a ~11-minute
-    # entity to one that never finished materializing pairs. Once the budget
-    # is met, remaining blocks are only counted (cheap combinatorics), never
-    # expanded.
-    overflow_pairs_estimate = 0
-    budget_reached = False
-    for _key, block_records in sorted(usable.items(), key=lambda kv: (len(kv[1]), kv[0])):
-        n = len(block_records)
-        if budget_reached:
-            overflow_pairs_estimate += n * (n - 1) // 2
-            continue
-        # Part 1.5 A.4: _record_id(rec) is a pure function of one record (3
-        # dict.get calls + an f-string build) but was being recomputed on
-        # every (i, j) pair — id1 alone was rebuilt n-i-1 times for a fixed
-        # i. Hoisted to one pass over the block before the O(n^2) loop; this
-        # is the exact same defect BUG D.2 already fixed in
-        # _partition_component, just never applied here.
-        ids = [_record_id(r) for r in block_records]
-        pairs_before_this_block = len(pairs)
-        for i in range(n):
-            if budget_reached:
-                break
-            for j in range(i + 1, n):
-                id1 = ids[i]
-                id2 = ids[j]
-                if id1 == id2:
-                    continue
-                pair_key = (id1, id2) if id1 < id2 else (id2, id1)
-                if pair_key in seen_pairs:
-                    continue
-                seen_pairs.add(pair_key)
-                pairs.append((id1, id2, block_records[i], block_records[j]))
-                if len(pairs) >= _MAX_COMPARISONS:
-                    # Part 1.5 A.6: this check used to sit AFTER the whole
-                    # block finished expanding (outside both loops), so the
-                    # ONE block being processed when the budget was hit
-                    # could still grow unbounded before ever being trimmed —
-                    # a purge-exempt "full:dom:" block covering a whole
-                    # scoped corpus (e.g. 34,782 records sharing one
-                    # domain) would fully materialize n(n-1)/2 four-tuples
-                    # first. Checked here instead, so a block is cut off
-                    # mid-expansion the moment the budget is met.
-                    #
-                    # This provably selects the SAME pairs as before: the
-                    # final result was always `pairs[:_MAX_COMPARISONS]`,
-                    # a positional slice in block-then-(i,j) insertion
-                    # order — stopping insertion at that exact position
-                    # instead of over-inserting-then-slicing produces an
-                    # identical list, just without the wasted allocation.
-                    budget_reached = True
-                    break
-        if budget_reached:
-            # The block's remaining un-enumerated pairs, folded into the
-            # same honest overflow estimate a block skipped entirely above
-            # already uses (same "lower bound, not exact" caveat below —
-            # this doesn't dedupe against `seen_pairs` either).
-            expanded_this_block = len(pairs) - pairs_before_this_block
-            overflow_pairs_estimate += max(n * (n - 1) // 2 - expanded_this_block, 0)
-
-    if len(pairs) > _MAX_COMPARISONS or overflow_pairs_estimate:
-        # Previously this silently dropped records mid-loop and logged a
-        # warning nobody saw. Now it is a reported, quantified outcome —
-        # see _uncompared_pairs in the reconciliation report. Once overflow
-        # blocks are only estimated (not deduped against what was already
-        # scored), the count is a lower bound, not exact — worth knowing
-        # either way, so still reported.
-        uncompared = max(len(pairs) - _MAX_COMPARISONS, 0) + overflow_pairs_estimate
-        logger.warning(
-            "Blocking produced at least %d candidate pairs, above the %d "
-            "comparison budget. Scoring the %d most discriminating; at "
-            "least %d pair(s) were NOT compared and are reported in the "
-            "reconciliation report.",
-            len(pairs) + overflow_pairs_estimate,
-            _MAX_COMPARISONS,
-            _MAX_COMPARISONS,
-            uncompared,
+    if purged:
+        logger.info(
+            "Blocking: purged %d dominant block(s) (%d comparisons); every member "
+            "remains in another block.",
+            len(purged),
+            purged_comparisons,
         )
-        stats["uncompared_pairs"] = uncompared
-        pairs = pairs[:_MAX_COMPARISONS]
-    else:
-        stats["uncompared_pairs"] = 0
-    stats["candidate_pairs"] = len(pairs)
-    stats["blocks_used"] = len(usable)
-    stats["blocks_purged"] = len(purged)
 
-    logger.debug("_generate_candidate_pairs: generated %d pairs", len(pairs))
+    # Out-of-memory guard: the surviving blocks' comparisons bound the edges
+    # about to be materialised.
+    proposed_bound = sum(_comparisons(m) for _k, m in kept) + len(extra_pairs or ())
+    if proposed_bound > _MAX_CANDIDATE_PAIRS:
+        raise CandidatePairBudgetExceeded(
+            f"Blocking would materialise up to {proposed_bound} candidate pairs "
+            f"(guard {_MAX_CANDIDATE_PAIRS}) over {len(records)} records. Refusing "
+            "to truncate silently; tighten the blocking keys or raise the guard."
+        )
+
+    # 3. Meta-blocking: ARCS edge weights, then WNP against each node's mean.
+    weight: dict[tuple[str, str], float] = {}
+    for _key, members in kept:
+        w = 1.0 / _comparisons(members)
+        n = len(members)
+        for i in range(n):
+            a = members[i]
+            for j in range(i + 1, n):
+                edge = (a, members[j])
+                weight[edge] = weight.get(edge, 0.0) + w
+    # Per node, the distinct weights and their counts: equal weights then sum
+    # as one product, so a node whose edges all tie keeps all of them (a
+    # running float sum would drift by an ulp and could prune every edge).
+    node_weights: dict[str, dict[float, int]] = {}
+    for (a, b), w in weight.items():
+        for node in (a, b):
+            counts = node_weights.setdefault(node, {})
+            counts[w] = counts.get(w, 0) + 1
+    node_total = {
+        node: (math.fsum(w * c for w, c in counts.items()), sum(counts.values()))
+        for node, counts in node_weights.items()
+    }
+
+    def _passes(node: str, w: float) -> bool:
+        total, degree = node_total[node]
+        return w * degree >= total
+
+    seen_pairs: set[tuple[str, str]] = set()
+    pairs: list[tuple[str, str, dict, dict]] = []
+    # External (e.g. pg_trgm) pairs first: evidence from outside the block
+    # collection, never pruned by it.
+    for raw_id1, raw_id2 in extra_pairs or ():
+        rec1 = records_by_id.get(raw_id1)
+        rec2 = records_by_id.get(raw_id2)
+        if raw_id1 == raw_id2 or rec1 is None or rec2 is None:
+            continue
+        edge = _ordered(raw_id1, raw_id2)
+        if edge not in seen_pairs:
+            seen_pairs.add(edge)
+            pairs.append((raw_id1, raw_id2, rec1, rec2))
+    meta_pruned = 0
+    # Smallest blocks first, key breaking ties: a deterministic order.
+    for _key, members in kept:
+        n = len(members)
+        for i in range(n):
+            a = members[i]
+            for j in range(i + 1, n):
+                edge = (a, members[j])
+                if edge in seen_pairs:
+                    continue
+                seen_pairs.add(edge)
+                w = weight[edge]
+                if _passes(edge[0], w) or _passes(edge[1], w):
+                    pairs.append((edge[0], edge[1], records_by_id[edge[0]], records_by_id[edge[1]]))
+                else:
+                    meta_pruned += 1
+
+    stats["uncompared_pairs"] = 0
+    stats["candidate_pairs"] = len(pairs)
+    stats["blocks_used"] = len(kept)
+    stats["blocks_purged"] = len(purged)
+    # Comparisons inside purged blocks (an upper bound on distinct pairs lost:
+    # a purged pair may still come back through another block).
+    stats["pairs_pruned_by_purging"] = purged_comparisons
+    stats["pairs_pruned_by_meta_blocking"] = meta_pruned
+    logger.debug(
+        "_generate_candidate_pairs: %d pairs (%d pruned by meta-blocking, %d block "
+        "comparisons purged) from %d blocks",
+        len(pairs),
+        meta_pruned,
+        purged_comparisons,
+        len(kept),
+    )
     return pairs
 
 

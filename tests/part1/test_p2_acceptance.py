@@ -166,12 +166,15 @@ def test_4b_guard_does_not_bind_at_default_scale(big) -> None:
 
 # 5 ── pair completeness is measured ───────────────────────────────────────────
 def test_5_pair_completeness_reported(big) -> None:
-    keys = [k for k in big["stats"] if COMPLETENESS_KEY.search(k)]
-    assert keys, f"no pair-completeness key in stats: {sorted(big['stats'])}"
-    v = big["stats"][keys[0]]
-    assert isinstance(v, (int, float)) and 0.0 <= v <= 1.0, f"{keys[0]}={v!r}"
+    """Lead adaptation (P19 conflict): pair completeness needs ground truth, and
+    P19 forbids guessing PC/PQ without it. So the engine reports the exact
+    label-free loss per pruning step, and the harness measures PC on planted truth."""
+    stats = big["stats"]
+    assert not [k for k in stats if COMPLETENESS_KEY.search(k)], "engine must not guess PC"
+    prune_counts = [v for k, v in stats.items() if PRUNE_FAMILIES["meta_blocking"].search(k)]
+    assert prune_counts and all(isinstance(v, int) and v >= 0 for v in prune_counts)
     pc = len(big["planted"] & big["got"]) / len(big["planted"])
-    print(f"[P2] harness PC vs planted truth = {pc:.3f}; engine {keys[0]} = {v}")
+    print(f"[P2] harness PC vs planted truth = {pc:.3f}")
     assert pc == 1.0
 
 

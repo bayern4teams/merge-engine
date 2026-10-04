@@ -60,7 +60,7 @@ def p2() -> dict:
     return {
         "shape": "one block (every name shares token 'widget') larger than _MAX_COMPARISONS",
         "records": n,
-        "max_comparisons": re_._MAX_COMPARISONS,
+        "max_comparisons": getattr(re_, "_MAX_COMPARISONS", None),
         "pairs_in_block": possible,
         "planted_true_pairs": len(planted),
         "stats": stats,

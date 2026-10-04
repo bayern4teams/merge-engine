@@ -99,6 +99,7 @@ async def map_fields_impl(
             },
             "unmapped_fields": [{"field": str, "reason": str}],
             "schema_changes": [{"column": str, "data_type": str, "table": str}],
+            "ambiguous_splits": [{"field": str, "reason": str, "candidates": [str]}],
         }
     """
     logger.debug(
@@ -237,6 +238,7 @@ async def map_fields_impl(
     # already claimed, e.g. `entityName` once `name` is taken).
     heuristic_scores_any: dict[str, tuple[tuple[str, str] | None, float]] = {}
 
+    vocabulary = _destination_vocabulary(dest_candidates)
     heuristic_matches = 0
     for field in remaining_fields:
         best_key: tuple[str, str] | None = None
@@ -244,7 +246,7 @@ async def map_fields_impl(
         best_key_any: tuple[str, str] | None = None
         best_score_any = 0.0
         for key in dest_candidates:
-            score = _heuristic_match(field, key[1])
+            score = _heuristic_match(field, key[1], vocabulary)
             if score > best_score_any:
                 best_score_any = score
                 best_key_any = key
@@ -366,11 +368,22 @@ async def map_fields_impl(
         len(unmapped_fields),
         len(schema_changes),
     )
+    # Ambiguous splits are reported, never guessed (report P1, "Ceiling").
+    ambiguous = [
+        {
+            "field": f,
+            "reason": "ambiguous split, left unsplit: " + " or ".join(splits),
+            "candidates": splits,
+        }
+        for f in source_fields
+        if f not in field_mapping and (splits := _ambiguous_splits(f, vocabulary))
+    ]
     return {
         "entity_type": entity_type,
         "field_mapping": field_mapping,
         "unmapped_fields": unmapped_fields,
         "schema_changes": schema_changes,
+        "ambiguous_splits": ambiguous,
     }
 
 
@@ -818,16 +831,78 @@ async def _decide_fields_with_llm(
 _CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
-def _tokenize_field(name: str) -> list[str]:
+def _vocab_splits(token: str, vocabulary: Any) -> list[tuple[str, ...]]:
+    """Every fewest-words split of ``token`` into words the vocabulary knows.
+
+    A segment is known when it equals a vocabulary word or, via ``_stem``,
+    differs from one only by inflection (``founding`` ~ ``founded``) -- the
+    same equivalence ``_token_overlap`` already scores with, so no word or
+    suffix list is added here. ``[]`` = no complete split; more than one
+    entry = genuinely ambiguous (``barton`` = bar|ton or bart|on).
+
+    ponytail: ceiling (report P1) -- a dictionary split cannot resolve real
+    ambiguity (``presspoint`` is not ``press|point`` in every schema), so ties
+    are returned for the caller to REPORT, never to pick from.
+    """
+    stems = {_stem(w) for w in vocabulary}
+    memo: dict[int, list[tuple[str, ...]]] = {}
+
+    def from_(i: int) -> list[tuple[str, ...]]:
+        if i == len(token):
+            return [()]
+        if i not in memo:
+            found = [
+                (token[i:j], *rest)
+                for j in range(i + 1, len(token) + 1)
+                if _stem(token[i:j]) in stems
+                for rest in from_(j)
+            ]
+            fewest = min(map(len, found), default=0)
+            memo[i] = [f for f in found if len(f) == fewest]
+        return memo[i]
+
+    return from_(0)
+
+
+def _tokenize_field(name: str, vocabulary: Any = None) -> list[str]:
     """Split a field name into lowercase words, camelCase included.
 
     ``foundingDate`` -> ``["founding", "date"]``, so it can be compared with
     the destination's ``founded_date``. Raw string comparison could not see
     those as the same concept, which is how origin1's camelCase names ended
     up unmapped.
+
+    ``vocabulary`` (words observed in the destination schema at runtime)
+    additionally splits a no-delimiter word -- ``postalcode`` ->
+    ``["postal", "code"]`` -- when exactly one split exists. Ambiguous or
+    impossible splits leave the word whole. Without it, behaviour is unchanged.
     """
     spaced = _CAMEL_BOUNDARY_RE.sub("_", name)
-    return [t for t in re.split(r"[^a-z0-9]+", spaced.lower()) if t]
+    tokens = [t for t in re.split(r"[^a-z0-9]+", spaced.lower()) if t]
+    if not vocabulary:
+        return tokens
+    out: list[str] = []
+    for t in tokens:
+        splits = _vocab_splits(t, vocabulary)
+        out.extend(splits[0] if len(splits) == 1 else (t,))
+    return out
+
+
+def _destination_vocabulary(dest_candidates: dict[tuple[str, str], Any]) -> frozenset[str]:
+    """Words of every destination table and column name (finite, runtime)."""
+    return frozenset(
+        w for table, column in dest_candidates for n in (table, column) for w in _tokenize_field(n)
+    )
+
+
+def _ambiguous_splits(field: str, vocabulary: Any) -> list[str]:
+    """``a|b`` renderings of every competing split of ``field``'s words."""
+    out: list[str] = []
+    for t in _tokenize_field(field) if vocabulary else []:
+        splits = _vocab_splits(t, vocabulary)
+        if len(splits) > 1:
+            out.extend("|".join(sp) for sp in splits)
+    return out
 
 
 def _stem(token: str) -> str:
@@ -851,9 +926,9 @@ def _tokens_equivalent(a: str, b: str) -> bool:
     return a == b or _stem(a) == _stem(b)
 
 
-def _token_overlap(source: str, dest: str) -> float:
+def _token_overlap(source: str, dest: str, vocabulary: Any = None) -> float:
     """Jaccard overlap of two field names' word tokens (0.0-1.0)."""
-    st, dt = _tokenize_field(source), _tokenize_field(dest)
+    st, dt = _tokenize_field(source, vocabulary), _tokenize_field(dest, vocabulary)
     if not st or not dt:
         return 0.0
     matched = [t for t in st if any(_tokens_equivalent(t, u) for u in dt)]
@@ -921,7 +996,7 @@ def _has_unsafe_role_prefix(shorter: str, longer: str) -> bool:
     return prefix in _ROLE_QUALIFIER_PREFIXES
 
 
-def _heuristic_match(source: str, dest: str) -> float:
+def _heuristic_match(source: str, dest: str, vocabulary: Any = None) -> float:
     """Compute a heuristic match score between a source field and dest column.
 
     Returns 0.0-1.0 confidence score.
@@ -949,7 +1024,7 @@ def _heuristic_match(source: str, dest: str) -> float:
     # `ceoName` and `founderName` both share the token `name` with the `name`
     # column and must NOT be mapped onto it, so a single shared token
     # (Jaccard 0.5) stays below the bar and is left for the LLM to judge.
-    overlap = _token_overlap(source, dest)
+    overlap = _token_overlap(source, dest, vocabulary)
     if overlap >= 0.6:
         return 0.5 + 0.35 * overlap
     # Check common aliases

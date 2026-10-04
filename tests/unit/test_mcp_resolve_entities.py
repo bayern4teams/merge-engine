@@ -308,42 +308,28 @@ class TestGenerateCandidatePairs:
         pairs = _generate_candidate_pairs(records, blocking_keys=["city"])
         assert len(pairs) == 1
 
-    def test_max_comparisons_enforced(self) -> None:
-        """Pairs are truncated at _MAX_COMPARISONS."""
+    def test_guard_raises_instead_of_truncating(self) -> None:
+        """P2: the out-of-memory guard fails loudly; it never returns a prefix."""
         from src.mcp_server.tools import resolve_entities as mod
 
         records = [
             {"_origin_id": "a", "_origin_table": "t", "_origin_id_row": str(i), "name": "Acme Corp"}
             for i in range(30)
         ]
-        with patch.object(mod, "_MAX_COMPARISONS", 5):
-            pairs = _generate_candidate_pairs(records)
-        assert len(pairs) == 5
+        with (
+            patch.object(mod, "_MAX_CANDIDATE_PAIRS", 5),
+            pytest.raises(mod.CandidatePairBudgetExceeded),
+        ):
+            _generate_candidate_pairs(records)
 
-    def test_a_large_block_past_budget_is_not_materialized(self) -> None:
-        """The real bug this guards against: a single never-purged 'full:'
-        exact-match block with thousands of records used to be fully expanded
-        into O(n^2) (id, id, dict, dict) tuples even once the comparison
-        budget was already met from smaller blocks — on a live 34,782-row
-        run this alone made one entity's blocking pass never finish. Once
-        the budget is met, a later (larger) block must only be COUNTED, not
-        expanded, while still reporting an honest uncompared-pairs estimate."""
+    def test_a_block_past_the_guard_is_never_materialized(self) -> None:
+        """The real bug this guards against: a single exact-match block with
+        thousands of records was fully expanded into O(n^2) tuples — on a live
+        34,782-row run one entity's blocking pass never finished. The guard
+        is checked on the block sizes before any pair is built."""
         from src.mcp_server.tools import resolve_entities as mod
 
-        # A small block (3 records, unique name) that alone meets a budget
-        # of 3, sorted first because it is smaller...
-        small_block = [
-            {
-                "_origin_id": "a",
-                "_origin_table": "t",
-                "_origin_id_row": f"s{i}",
-                "name": "Small Block Co",
-            }
-            for i in range(3)
-        ]
-        # ...and a much larger block (1000 records, one shared exact name)
-        # that must never be expanded once the budget above is already met.
-        large_block = [
+        records = [
             {
                 "_origin_id": "a",
                 "_origin_table": "t",
@@ -352,16 +338,11 @@ class TestGenerateCandidatePairs:
             }
             for i in range(1000)
         ]
-        records = small_block + large_block
-
-        stats: dict[str, int] = {}
-        with patch.object(mod, "_MAX_COMPARISONS", 3):
-            pairs = _generate_candidate_pairs(records, stats=stats)
-
-        assert len(pairs) == 3
-        # The large block (1000 choose 2 = 499500 pairs) was only counted,
-        # not built — reported as (at least) that much uncompared evidence.
-        assert stats["uncompared_pairs"] >= 1000 * 999 // 2
+        with (
+            patch.object(mod, "_MAX_CANDIDATE_PAIRS", 3),
+            pytest.raises(mod.CandidatePairBudgetExceeded, match="499500"),
+        ):
+            _generate_candidate_pairs(records)
 
     def test_skips_self_comparisons(self) -> None:
         """Test that identical record IDs are skipped."""
@@ -419,7 +400,7 @@ class TestGenerateCandidatePairs:
         the old behaviour of dropping the whole block silently zeroed out
         candidate generation for real scoped-merge corpora (every record
         shares the subject token). It must still be admitted and left to
-        the size-sorted comparison budget — scoring, not blocking, decides
+        meta-blocking — scoring, not blocking, decides
         whether any of these pairs actually match.
         """
         records = [
@@ -437,7 +418,8 @@ class TestGenerateCandidatePairs:
         stats: dict[str, int] = {}
         pairs = _generate_candidate_pairs(records, stats=stats)
         assert len(pairs) > 0
-        assert stats["blocks_purged"] >= 1
+        # P2: purging never takes a record's only block, however large.
+        assert stats["blocks_purged"] == 0
         assert stats["uncompared_pairs"] == 0
 
     def test_no_duplicate_pairs_across_passes(self) -> None:
