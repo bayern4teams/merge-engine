@@ -35,7 +35,7 @@ usage API in the cloud session.
 | S1 worker model/effort | model **honoured** (Sonnet 5.5); effort **not high** (worker sees `reasoning_effort` 10) |
 | S2 parallel + `SendMessage` | **pass** |
 | S3 usage readable | **partial**: state, window and reset readable; no percentage |
-| S4 scheduled task | **fires**: delivered into this session at 09:12:49Z; execution recorded below |
+| S4 scheduled task | **pass**: delivered at 09:12:49Z, executed at 09:16:09Z when the session went idle |
 | S5 push notification | tool replied `Mobile push requested.`; delivery **unconfirmed** |
 | Ponytail | **unavailable**: 0 of 6 commands; review done by hand |
 
@@ -188,7 +188,12 @@ implemented. The lead would only learn of the limit by hitting it.
 - `get_trigger` afterwards: `ended_reason: run_once_fired`, `last_fired_at: 09:12:49Z`,
   `last_run.status: ROUTINE_RUN_STATUS_SUCCEEDED` into this session. That proves delivery, not
   execution. The session was mid-turn, so the message was queued until the turn ended.
-- **Execution:** *pending at the time of the first commit, filled in below once the queued turn runs.*
+- **Execution: done.** The queued turn ran as soon as the lead's turn ended. It appended
+  `S4 fired at 2026-10-04T09:16:09Z` to `.tmp/cloud_recheck/s4/fired.txt`, then the first 5 lines of
+  `HANDOFF.md` read with `git show origin/feat/part1-fixes:…` (title line
+  `# Part 1 handoff — the only memory that survives a session`). That is 3 min 20 s after delivery,
+  because the turn waited for the lead to go idle. A Routine prompt can wake an idle cloud session
+  and do repo work.
 
 **Not tested:** whether a session that has been *stopped* (limit hit, container reclaimed) is
 woken by such a trigger. Here the session was alive and attended.
