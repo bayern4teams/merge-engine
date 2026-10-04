@@ -14,6 +14,7 @@ from typing import Any
 
 from src.mcp_server.tools.dest_family import build_family_map
 from src.mcp_server.tools.map_fields import map_fields_impl
+from src.mcp_server.tools.resolve_entities import _LLM_CONCURRENCY
 from src.orchestrator.spool import unified_for
 from src.orchestrator.utils.retry_hints import with_retry_hint
 
@@ -340,10 +341,18 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
     # `return_exceptions=True` so one entity's failure degrades to that
     # entity's error entry, matching the per-entity try/except semantics
     # this replaces, rather than cancelling its siblings.
+    # P11: bounded by the same _LLM_CONCURRENCY resolve_entities uses (the endpoint, not this
+    # code, is the ceiling). Built per call so it binds to the running loop.
     logger.debug("Dispatching %d field-mapping LLM call(s) concurrently", len(llm_tasks))
+    semaphore = asyncio.Semaphore(_LLM_CONCURRENCY)
+
+    async def _bounded(**kwargs: Any) -> dict[str, Any]:
+        async with semaphore:
+            return await map_fields_impl(**kwargs)
+
     llm_results = await asyncio.gather(
         *(
-            map_fields_impl(
+            _bounded(
                 entity_type=entity_type,
                 unified_schema=unified_schema,
                 destination_schema=dest_schema_info,
