@@ -101,3 +101,10 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Independent check: ground-truth pair precision/recall per entity, stratified cross- vs within-source (counts, not rates), plus the review-band volume.
 - Expected evidence: `log2(m/u)` for the blocking field no longer ~0 (synthetic: 0.29 bits -> ~4.5 bits); precision at the auto-match bar not lower than before; watch for true matches with few agreeing fields dropping below auto_exclude (see HANDOFF escalation on P6 case a).
 - Result (filled in locally):
+
+### P12 — catalog tables and ETL metadata columns excluded, with overrides
+- Why cloud could not verify: no origin databases.
+- Command: full merge run; inspect `schemas[<origin>]["classification"]` in the run state and the mapping result.
+- Independent check: list origin tables/columns with SQL (`information_schema.columns`) and compare with what was mapped and what matching saw (`resolution_stats`), and with the destination rows.
+- Expected evidence: catalog tables and `created_at` / `etl_batch_id` / `_row_version` absent from mapping and matching (before: profiled and mapped); metadata columns still present in the run output; a `RunConfig.metadata_overrides` business override restores a flagged column.
+- Result (filled in locally):
