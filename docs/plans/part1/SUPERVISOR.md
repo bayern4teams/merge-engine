@@ -22,7 +22,7 @@ never check out, merge, rebase or delete another branch.
 1b. If HANDOFF.md says "Autonomy: dryrun": write ONE line to .handoff/supervisor_dryrun.txt with the
    time, HEAD sha, how you evaluated the step 2 conditions, and whether each of these works in this
    session: git push; gh run list; the six ponytail skills (ponytail, -review, -audit, -debt, -gain,
-   -help) loadable; the output of `git branch --show-current` at session start; codebase-memory-mcp
+   -help) loadable; the output of `git branch --show-current` at session start; the lines of `/tmp/env-manager.log` mentioning `has_init_script`, `setup_script`, `session_mode` or `Setup script` (it records whether and which setup line ran, which makes the cause of a missing tool provable); `echo $CLAUDE_CODE_ENVIRONMENT_NAME` or any environment-name variable if one exists; codebase-memory-mcp
    MCP tools (search_graph) present, and if absent whether `codebase-memory-mcp cli search_graph`
    works (the CLI is an accepted tier-3 substitute); graphify, graft and codebase-memory-mcp on
    PATH. Commit, push, stop. Do nothing else (no lock, no code).
