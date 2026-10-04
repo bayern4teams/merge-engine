@@ -74,4 +74,9 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Result (filled in locally): 
 ```
 
-(no entries yet)
+### P1 — vocabulary-driven field-name tokeniser
+- Why cloud could not verify: no origin databases / destination schema.
+- Command: `python -m src.main --mode gradio --port 7860`, run the full two-origin merge.
+- Independent check: the run's `map_fields` result for zoominfo `company` (`field_mapping`, `unmapped_fields`, new `ambiguous_splits`); SQL `SELECT count(*) FILTER (WHERE name IS NULL), count(*) FROM company` on the destination.
+- Expected evidence: zoominfo `company` mapped fields > 1 of 29 (before: 28 unmapped); `companyname` tokenised `company`,`name`; `company.name` NULL count below 78 / 99. Note `ambiguous_splits` is not yet surfaced by `map_fields_node` (lane B, P11/P12).
+- Result (filled in locally):

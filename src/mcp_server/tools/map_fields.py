@@ -324,6 +324,7 @@ async def map_fields_impl(
             unmapped_fields,
             taken,
             dest_candidates,
+            vocabulary,
         )
 
     # Enrich mapping results with origin metadata and coalesced flag
@@ -633,6 +634,7 @@ def _apply_heuristic_tier(
     unmapped_fields: list[dict[str, Any]],
     taken: set[tuple[str, str]],
     dest_candidates: dict[tuple[str, str], Any] | None = None,
+    vocabulary: Any = None,
 ) -> None:
     """Original heuristic fallback tiers for a single field."""
     dest_candidates = dest_candidates or {}
@@ -672,7 +674,7 @@ def _apply_heuristic_tier(
     # name silently overwrote the correct `name` value. The qualifier
     # allowlist only trusts unambiguous scope-narrowing prefixes.
     any_key, any_score = best_any
-    if any_key and any_key in taken and _safe_coalesce_target(field, any_key[1]):
+    if any_key and any_key in taken and _safe_coalesce_target(field, any_key[1], vocabulary):
         incompatible, reason = _incompatible_with_column(
             field, dest_candidates.get(any_key), unified_schema
         )
@@ -844,6 +846,9 @@ def _vocab_splits(token: str, vocabulary: Any) -> list[tuple[str, ...]]:
     ponytail: ceiling (report P1) -- a dictionary split cannot resolve real
     ambiguity (``presspoint`` is not ``press|point`` in every schema), so ties
     are returned for the caller to REPORT, never to pick from.
+    ponytail: debt -- a 1-letter vocabulary word (from e.g. ``x_coord``) can
+    yield absurd unique splits (``idea`` -> id|e|a). A minimum segment length
+    would be a fitted constant; not added. Pay it if such a vocabulary appears.
     """
     if not isinstance(vocabulary, frozenset):
         vocabulary = frozenset(vocabulary)
@@ -855,23 +860,19 @@ def _vocab_splits(token: str, vocabulary: Any) -> list[tuple[str, ...]]:
 @lru_cache(maxsize=4096)
 def _cached_vocab_splits(token: str, vocabulary: frozenset[str]) -> list[tuple[str, ...]]:
     stems = {_stem(w) for w in vocabulary}
-    memo: dict[int, list[tuple[str, ...]]] = {}
-
-    def from_(i: int) -> list[tuple[str, ...]]:
-        if i == len(token):
-            return [()]
-        if i not in memo:
-            found = [
-                (token[i:j], *rest)
-                for j in range(i + 1, len(token) + 1)
-                if _stem(token[i:j]) in stems
-                for rest in from_(j)
-            ]
-            fewest = min(map(len, found), default=0)
-            memo[i] = [f for f in found if len(f) == fewest]
-        return memo[i]
-
-    return from_(0)
+    # Iterative right-to-left DP (no recursion, so any token length is safe):
+    # best[i] = every fewest-words split of token[i:], [] if none.
+    best: list[list[tuple[str, ...]]] = [[] for _ in range(len(token))] + [[()]]
+    for i in range(len(token) - 1, -1, -1):
+        found = [
+            (token[i:j], *rest)
+            for j in range(i + 1, len(token) + 1)
+            if best[j] and _stem(token[i:j]) in stems
+            for rest in best[j]
+        ]
+        fewest = min(map(len, found), default=0)
+        best[i] = [f for f in found if len(f) == fewest]
+    return best[0]
 
 
 def _tokenize_field(name: str, vocabulary: Any = None) -> list[str]:
@@ -969,7 +970,7 @@ _SAFE_COALESCE_QUALIFIERS = frozenset(
 )
 
 
-def _safe_coalesce_target(field: str, dest_col: str) -> bool:
+def _safe_coalesce_target(field: str, dest_col: str, vocabulary: Any = None) -> bool:
     """True when ``field`` is *only* ``dest_col`` behind one safe qualifier.
 
     e.g. ``entityName`` -> ``name``. Heuristic string similarity cannot
@@ -980,8 +981,8 @@ def _safe_coalesce_target(field: str, dest_col: str) -> bool:
     column another field already claimed; anything else is left unmapped
     for the LLM or a human to resolve.
     """
-    field_tokens = _tokenize_field(field)
-    dest_tokens = _tokenize_field(dest_col)
+    field_tokens = _tokenize_field(field, vocabulary)
+    dest_tokens = _tokenize_field(dest_col, vocabulary)
     if len(field_tokens) != len(dest_tokens) + 1:
         return False
     # Every field token must either match a destination token, or be the

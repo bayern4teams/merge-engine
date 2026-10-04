@@ -3,7 +3,7 @@
 Overwrite this file at every commit. A fresh session reads it first, then
 [the plan](../PART1_IMPLEMENTATION_PLAN.md). Git is the memory; a session's context is not.
 
-**Lock:** 2026-10-04T13:48:19Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-04T13:48:19Z
+**Lock:** 2026-10-04T13:48:50Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-04T13:48:50Z
 
 (Lock/heartbeat protocol: plan §7. A session sets `Lock: <ISO time>`, pushes it, and refreshes it at every commit; a lock older than 75 min is stale. `Autonomy` is `off`, `dryrun` (a tick only records what works and exits) or `unattended-through-phase-5` (authorises the supervisor to chain phases). Only the user changes it.)
 
@@ -11,7 +11,7 @@ Overwrite this file at every commit. A fresh session reads it first, then
 
 | item | phase | state | commit | lead verdict |
 |---|---|---|---|---|
-| P1 | 1 | todo | | |
+| P1 | 1 | unverified-live | (this commit) | ACCEPT r2: 63 acceptance + 2 attack tests pass; 0 of 73 names regressed on a 50-column schema; debt: 1-letter vocabulary words |
 | P2 | 1 | todo | | |
 | P3 | 2 | todo | | |
 | P4 | 2 | todo | | |
