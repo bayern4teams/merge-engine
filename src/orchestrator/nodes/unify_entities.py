@@ -42,7 +42,7 @@ async def unify_entity_groups(state: dict[str, Any]) -> dict[str, Any]:
     target_entities: list[str] = state.get("target_entities", [])
     origins: list[dict] = state.get("origins", [])
     # Per-field survivorship rules (Phase O.3). Absent means the historical
-    # priority -> completeness -> recency chain, so an unconfigured run
+    # priority -> longest -> recency chain, so an unconfigured run
     # behaves exactly as it did before profiles existed.
     conflict_policy: dict = state.get("conflict_policy") or {}
     # Only THIS call's own errors (Phase 0 Sec 0.8) - see load_data_node's

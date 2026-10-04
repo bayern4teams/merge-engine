@@ -49,7 +49,7 @@ class TestConflictTiebreaks:
             origins=[{"id": "a", "priority": 1}, {"id": "b", "priority": 1}],
         )
         conflict = _conflict_for(result, "description")
-        assert conflict["winning_rule"] == "completeness"
+        assert conflict["winning_rule"] == "longest"
         assert result["unified_record"]["description"] == "Acme International Corp"
 
     @pytest.mark.asyncio
@@ -71,7 +71,7 @@ class TestConflictTiebreaks:
             origins=[{"id": "a", "priority": 1}, {"id": "b", "priority": 1}],
         )
         conflict = _conflict_for(result, "name")
-        assert conflict["winning_rule"] != "completeness"
+        assert conflict["winning_rule"] != "longest"
 
     @pytest.mark.asyncio
     async def test_recency_breaks_completeness_tie(self):
@@ -256,7 +256,7 @@ class TestReconciliationReport:
                         "name": "Acme",
                         "_conflicts": [
                             {"field": "city", "winning_rule": "priority"},
-                            {"field": "city", "winning_rule": "completeness"},
+                            {"field": "city", "winning_rule": "longest"},
                         ],
                     },
                     {"name": "Globex"},
@@ -282,7 +282,7 @@ class TestReconciliationReport:
         assert ent["unified_records"] == 2
         assert ent["conflicts"] == 2
         assert ent["conflict_fields"] == {"city": 2}
-        assert ent["conflict_winning_rules"] == {"priority": 1, "completeness": 1}
+        assert ent["conflict_winning_rules"] == {"priority": 1, "longest": 1}
         assert ent["rows_inserted"] == 2
         assert ent["rows_updated"] == 1
         assert report["run_id"] == "run-42"

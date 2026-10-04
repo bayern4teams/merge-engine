@@ -1,7 +1,7 @@
 """Measured per-origin field reliability — Phase A6.
 
 ``unify_entity_group.py`` already has a real, per-field-class rule chain
-(``priority`` -> ``completeness`` -> ``recency``, with smart defaults for
+(``priority`` -> ``longest`` -> ``recency``, with smart defaults for
 revenue/counts/identity fields) — not the single uniform policy an earlier
 audit assumed. The genuine gap: its ``"priority"`` rule is a STATIC number a
 user types in when adding an origin (``origin.priority``), not anything
@@ -27,8 +27,8 @@ def measure_field_reliability(records: list[dict[str, Any]]) -> dict[str, dict[s
     origin contributed to one entity type.
 
     Completeness is the plain non-null, non-blank fraction — the same
-    measure ``_completeness`` already uses per-value, just aggregated across
-    an origin's whole contribution instead of one record at a time. An
+    measure of non-blank values, aggregated across an origin's whole
+    contribution instead of one record at a time. An
     origin with only 1-2 records still gets a score (rather than being
     excluded), since even a small sample beats no signal at all when it is
     the only evidence available for that origin.

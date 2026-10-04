@@ -125,6 +125,7 @@ def build_reconciliation_report(
         unified = unified_for(state, entity)
         conflict_fields: dict[str, int] = {}
         winning_rules: dict[str, int] = {}
+        numeric_disagreements: dict[str, dict[str, Any]] = {}
         total_conflicts = 0
         for rec in unified:
             for conflict in rec.get("_conflicts", []) or []:
@@ -135,6 +136,17 @@ def build_reconciliation_report(
                 conflict_fields[f] = conflict_fields.get(f, 0) + 1
                 rule = conflict.get("winning_rule", "priority")
                 winning_rules[rule] = winning_rules.get(rule, 0) + 1
+                # P18-5: numeric_max/min resolved, but the sources disagreed.
+                nd = conflict.get("numeric_disagreement")
+                if isinstance(nd, dict):
+                    agg = numeric_disagreements.setdefault(
+                        f, {"clusters": 0, "max_spread": 0, "max_relative_spread": 0}
+                    )
+                    agg["clusters"] += 1
+                    agg["max_spread"] = max(agg["max_spread"], nd["spread"])
+                    agg["max_relative_spread"] = max(
+                        agg["max_relative_spread"], nd["relative_spread"]
+                    )
 
         result = load_results.get(entity, {})
         stats = (state.get("resolution_stats") or {}).get(entity, {})
@@ -179,6 +191,8 @@ def build_reconciliation_report(
             "type_coercion_failures": type_coercion_failures,
             "fields_dropped_from_mapping": dropped_fields,
         }
+        if numeric_disagreements:
+            entity_report["numeric_disagreements"] = numeric_disagreements
         if entity == subject_entity and extracted_total:
             entity_report["subject_unification_ratio"] = round(len(unified) / extracted_total, 4)
         entities[entity] = entity_report

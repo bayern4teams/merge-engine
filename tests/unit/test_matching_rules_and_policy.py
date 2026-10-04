@@ -93,11 +93,12 @@ class TestDeclaredUniqueIdentifiers:
 class TestConflictPolicy:
     def test_unconfigured_uses_the_historical_chain(self) -> None:
         assert resolve_policy("email", None) == DEFAULT_POLICY
-        assert DEFAULT_POLICY == ("priority", "completeness", "recency")
+        assert DEFAULT_POLICY == ("priority", "longest", "recency")
 
     def test_a_named_field_overrides_the_default(self) -> None:
         policy = {"_default": ["priority"], "email": ["completeness"]}
-        assert resolve_policy("email", policy) == ("completeness",)
+        # "completeness" is the pre-P18 config alias of "longest"
+        assert resolve_policy("email", policy) == ("longest",)
         assert resolve_policy("phone", policy) == ("priority",)
 
     def test_a_single_rule_may_be_given_as_a_string(self) -> None:
@@ -107,7 +108,7 @@ class TestConflictPolicy:
         assert resolve_policy("email", {"email": ["newest"]}) == DEFAULT_POLICY
 
     def test_unknown_rules_are_dropped_but_known_ones_survive(self) -> None:
-        assert resolve_policy("email", {"email": ["newest", "completeness"]}) == ("completeness",)
+        assert resolve_policy("email", {"email": ["newest", "completeness"]}) == ("longest",)
 
 
 class TestSmartFieldClassDefaults:
@@ -138,12 +139,12 @@ class TestSmartFieldClassDefaults:
             "customer_id",
         ):
             chain = _default_policy_for_field(field)
-            assert "completeness" not in chain, field
+            assert "longest" not in chain, field
             assert chain[0] == "priority", field
 
-    def test_narrative_fields_prefer_completeness(self) -> None:
+    def test_narrative_fields_prefer_longest(self) -> None:
         for field in ("description", "summary", "internal_notes"):
-            assert _default_policy_for_field(field)[0] == "completeness", field
+            assert _default_policy_for_field(field)[0] == "longest", field
 
     def test_timestamp_fields_prefer_recency(self) -> None:
         for field in ("created_at", "updated_at", "last_synced_at"):
@@ -272,12 +273,12 @@ class TestUnifyUsesThePolicy:
         conflict = result["conflicts"][0]
         assert conflict["winning_rule"] == "priority"
 
-    async def test_a_completeness_policy_overrides_priority(self) -> None:
+    async def test_a_longest_policy_overrides_priority(self) -> None:
         result = await unify_entity_group_impl(
             "c1", self.RECORDS, origins=self.ORIGINS, conflict_policy={"email": ["completeness"]}
         )
         assert result["unified_record"]["email"] == "a-much-longer@x.com"
-        assert result["conflicts"][0]["winning_rule"] == "completeness"
+        assert result["conflicts"][0]["winning_rule"] == "longest"
 
     async def test_a_recency_policy_picks_the_newer_record(self) -> None:
         result = await unify_entity_group_impl(
