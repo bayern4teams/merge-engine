@@ -205,30 +205,34 @@ local verification pass).
 - Report counts, not rates, with cross-source vs within-source stratified (report §0.4).
   Review rate is reported beside every precision figure.
 
-## 7. Sessions, compaction, limits, notifications
+## 7. Sessions, limits, supervisor, notifications
 
-**Provisional until Phase 0's smoke tests report.** These are the defaults; the user
-will confirm them (or change them) after Phase 0.
+**Target: unattended cloud runs, resumed by an hourly supervisor routine** (cloud re-check
+#2 must first prove it; fallback is a local session, same protocol).
 
-- **State is in git.** After every accepted item: commit, update `HANDOFF.md`, push.
-  A new or resumed session needs only the plan + `HANDOFF.md`.
-- **Between phases:** default is a **fresh session per phase** (cheaper and lossless
-  versus compaction). The lead finishes the phase, pushes, notifies, and either starts
-  the next phase via a scheduled run (only if smoke test S4 proved that works) or stops
-  and waits for the user to launch it. Inside a long phase the lead may `/compact`.
-  Compaction's model is the session's model — it cannot be set to Sonnet low-effort;
-  this plan does not depend on that.
-- **Usage limit.** If usage is readable (smoke test S3), the lead checks it at each
-  item boundary. At ≥ **90 %** of the 5-hour window: finish the current commit, write
-  `HANDOFF.md` (exact next step), push, and schedule a resume after the reset (S4).
-  If usage is *not* readable: phases are sized to fit one window, work is committed
-  per item, and a limit stop simply resumes from `HANDOFF.md` when relaunched.
-  Whether a stopped cloud session resumes by itself is **unknown** and is tested, not
-  assumed. Never let a half-done item sit uncommitted: commit work-in-progress as
-  `WIP P<n>` on the work branch if the limit is near.
-- **Notifications** (push-notification tool if available, else the final chat message):
-  one at the end of each phase (what was accepted, what is `unverified-live`, any open
-  escalation), one on any blocker, and one final notification when Part 1 is complete.
+- **State is in git.** After every accepted item (and every `WIP P<n>` step): commit, update
+  `HANDOFF.md`, push. A new session needs only the plan + `HANDOFF.md`. Sessions are short-lived
+  *slices*; nothing depends on a session's memory, so no compaction is needed.
+- **Usage limit.** The cloud shows no percentage (S3), so there is no 90 % rule there: work
+  until the limit stops the session. Nothing is lost because everything is committed per
+  step. If a usage percentage *is* readable (local `get_usage`), stop at ≥ 90 %: finish the
+  commit, write `HANDOFF.md`, push.
+- **Supervisor.** A scheduled cloud routine (cron `0 * * * *`, branch `feat/part1-fixes`)
+  starts a fresh session whose prompt is [part1/SUPERVISOR.md](part1/SUPERVISOR.md). It exits
+  at once when: the rate limit is not `allowed`; `HANDOFF.md` says `Autonomy: off`; the next
+  action is "done" or "waiting for the user"; or `Lock` is younger than 75 minutes (another
+  session is alive). Otherwise it takes the lock and acts as **lead** for as long as it can.
+  An idle tick costs almost nothing, so hourly resumes soon after each window reset.
+- **Phases chain automatically** once the user sets `Autonomy: unattended-through-phase-5`:
+  the phase gate (§8) must pass, including a green CI run on the pushed head, before
+  `HANDOFF.md` advances to the next phase. After Phase 5 the supervisor stops and never merges.
+- **Never lose an item.** Commit `WIP P<n>` before any long operation. A session that finds
+  uncommitted work or a stale lock inspects `git status`, finishes or discards it deliberately,
+  and records which in `HANDOFF.md`.
+- **Notifications.** Cloud push does not reach the user (confirmed). The record is
+  `HANDOFF.md` + commits: every phase end, blocker and the final completion are written to its
+  "Notifications" section, and a `[PHASE n DONE]` / `[BLOCKED]` / `[PART 1 COMPLETE]` commit
+  message prefix makes them visible in GitHub. Try the push tool anyway; do not rely on it.
 - **Cost discipline:** Sonnet for the mechanical work in §3.2; batch independent
   lookups; keep worker reports in files; do not re-read what the graphs already answered.
 
@@ -496,11 +500,11 @@ beyond what Part 1 itself specifies (e.g. P9's file is Part 3's backfill source)
 
 Phase 0 ran in a **local** desktop session ([part1/PHASE0_REPORT.md](part1/PHASE0_REPORT.md)). CI had been red since 2026-09-27 from dependency drift (splink 5, SQLAlchemy 2.1); fixed on this branch by `splink<5`, `sqlalchemy[asyncio]<2.2`, regenerated requirements, and `bootstrap.py` installing CI's extras. A **cloud re-check** (S1, S3, S4, S5, `check.py all`) precedes Phase 1, because S3/S4/S5 did not transfer from the local run. If the cloud cannot read usage or resume itself, Phases 1–5 run in a local session instead, and §7 stays "user launches each phase".
 
-**Cloud re-check outcome** ([part1/CLOUD_RECHECK.md](part1/CLOUD_RECHECK.md)): `check.py all` is green in the cloud (156 s) and matches CI; scheduled wake-ups work there; but the cloud shows no usage percentage, has no graph tools and no Ponytail. **Decision: Phases 1–5 run in a local desktop session** (usage via `get_usage`, graphs, Ponytail all work). The cloud stays the upgrade path once its setup script installs the graph tools, the project enables Ponytail, and a limit-stopped session is shown to be woken by a scheduled trigger. Local rules: check `get_usage` at every item boundary and stop at 90 % of the 5-hour window (commit, write `HANDOFF.md`, notify). Auto-resume needs the user to allow scheduled tasks for this project; otherwise the user relaunches from `HANDOFF.md`.
+**Cloud re-check outcome** ([part1/CLOUD_RECHECK.md](part1/CLOUD_RECHECK.md)): `check.py all` is green in the cloud (156 s) and matches CI; scheduled wake-ups work; the cloud shows no usage percentage, had no graph tools, no Ponytail, and push notifications do not reach the user. None is a real blocker: the supervisor design (§7) removes the need for a percentage; `scripts/cloud_setup.sh`, `.mcp.json` and `.claude/settings.json` supply the graph tools and Ponytail; notifications move into `HANDOFF.md` and commit prefixes. **Cloud re-check #2** must prove the setup script, Ponytail, the MCP server and a routine-started session. If it fails, Phases 1–5 run in a local session with the same protocol.
 
 ## 12. Known limits of this plan (stated, not hidden)
 
-- Orchestration choices in §7 are settled by §11: local session, fresh session per phase, user-launched unless scheduled tasks are allowed.
+- Orchestration (§7) is the supervisor design; it is proven only after cloud re-check #2. A session stopped by the limit being woken by the routine (rather than a fresh session) is not relied on.
 - Cloud-verifiable evidence is mechanism-level (synthetic fixtures). The report's live
   numbers can only be confirmed locally — which is why `LOCAL_VERIFY.md` exists.
 - Parallelism is modest: roughly half of Part 1 is a serial chain through one file. The
