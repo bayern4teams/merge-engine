@@ -1,0 +1,834 @@
+{
+  "p1": {
+    "camel": {
+      "correct": 11,
+      "false_map": 0,
+      "fields": {
+        "colorCode": {
+          "best_heuristic": [
+            "org_label",
+            0.0
+          ],
+          "mapped_confidence": null,
+          "mapped_to": null,
+          "status": "ok_unmapped",
+          "tokens": [
+            "color",
+            "code"
+          ],
+          "truth": null,
+          "unmapped_reason": "No matching destination column found; destination schema is authoritative",
+          "unmapped_suggested": null
+        },
+        "contactEmail": {
+          "best_heuristic": [
+            "primary_contact_email",
+            0.7333
+          ],
+          "mapped_confidence": 0.7333333333333333,
+          "mapped_to": "primary_contact_email",
+          "status": "ok",
+          "tokens": [
+            "contact",
+            "email"
+          ],
+          "truth": "primary_contact_email",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "employeeCount": {
+          "best_heuristic": [
+            "employee_count",
+            0.85
+          ],
+          "mapped_confidence": 0.85,
+          "mapped_to": "employee_count",
+          "status": "ok",
+          "tokens": [
+            "employee",
+            "count"
+          ],
+          "truth": "employee_count",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "foundingDate": {
+          "best_heuristic": [
+            "founded_date",
+            0.85
+          ],
+          "mapped_confidence": 0.85,
+          "mapped_to": "founded_date",
+          "status": "ok",
+          "tokens": [
+            "founding",
+            "date"
+          ],
+          "truth": "founded_date",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "legacyFlag": {
+          "best_heuristic": [
+            "org_label",
+            0.0
+          ],
+          "mapped_confidence": null,
+          "mapped_to": null,
+          "status": "ok_unmapped",
+          "tokens": [
+            "legacy",
+            "flag"
+          ],
+          "truth": null,
+          "unmapped_reason": "No matching destination column found; destination schema is authoritative",
+          "unmapped_suggested": null
+        },
+        "legalTitle": {
+          "best_heuristic": [
+            "legal_title",
+            0.85
+          ],
+          "mapped_confidence": 0.85,
+          "mapped_to": "legal_title",
+          "status": "ok",
+          "tokens": [
+            "legal",
+            "title"
+          ],
+          "truth": "legal_title",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "orgLabel": {
+          "best_heuristic": [
+            "org_label",
+            0.85
+          ],
+          "mapped_confidence": 0.85,
+          "mapped_to": "org_label",
+          "status": "ok",
+          "tokens": [
+            "org",
+            "label"
+          ],
+          "truth": "org_label",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "parentOrgRef": {
+          "best_heuristic": [
+            "parent_org_ref",
+            0.85
+          ],
+          "mapped_confidence": 0.85,
+          "mapped_to": "parent_org_ref",
+          "status": "ok",
+          "tokens": [
+            "parent",
+            "org",
+            "ref"
+          ],
+          "truth": "parent_org_ref",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "phoneNumber": {
+          "best_heuristic": [
+            "phone_number",
+            0.85
+          ],
+          "mapped_confidence": 0.85,
+          "mapped_to": "phone_number",
+          "status": "ok",
+          "tokens": [
+            "phone",
+            "number"
+          ],
+          "truth": "phone_number",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "postalAddress": {
+          "best_heuristic": [
+            "postal_address",
+            0.85
+          ],
+          "mapped_confidence": 0.85,
+          "mapped_to": "postal_address",
+          "status": "ok",
+          "tokens": [
+            "postal",
+            "address"
+          ],
+          "truth": "postal_address",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "postalCode": {
+          "best_heuristic": [
+            "mailing_postal_code",
+            0.7333
+          ],
+          "mapped_confidence": 0.7333333333333333,
+          "mapped_to": "mailing_postal_code",
+          "status": "ok",
+          "tokens": [
+            "postal",
+            "code"
+          ],
+          "truth": "mailing_postal_code",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "pressPoint": {
+          "best_heuristic": [
+            "org_label",
+            0.0
+          ],
+          "mapped_confidence": null,
+          "mapped_to": null,
+          "status": "ok_unmapped",
+          "tokens": [
+            "press",
+            "point"
+          ],
+          "truth": null,
+          "unmapped_reason": "No matching destination column found; destination schema is authoritative",
+          "unmapped_suggested": null
+        },
+        "taxRegistration": {
+          "best_heuristic": [
+            "tax_registration_number",
+            0.7333
+          ],
+          "mapped_confidence": 0.7333333333333333,
+          "mapped_to": "tax_registration_number",
+          "status": "ok",
+          "tokens": [
+            "tax",
+            "registration"
+          ],
+          "truth": "tax_registration_number",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "websiteUrl": {
+          "best_heuristic": [
+            "website_url",
+            0.85
+          ],
+          "mapped_confidence": 0.85,
+          "mapped_to": "website_url",
+          "status": "ok",
+          "tokens": [
+            "website",
+            "url"
+          ],
+          "truth": "website_url",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        }
+      },
+      "mapped_total": 11,
+      "missed": 0,
+      "n_fields": 14,
+      "n_should_map": 11,
+      "unmapped_total": 3,
+      "wrong_target": 0
+    },
+    "concat": {
+      "correct": 7,
+      "false_map": 0,
+      "fields": {
+        "colorcode": {
+          "best_heuristic": [
+            "org_label",
+            0.0
+          ],
+          "mapped_confidence": null,
+          "mapped_to": null,
+          "status": "ok_unmapped",
+          "tokens": [
+            "colorcode"
+          ],
+          "truth": null,
+          "unmapped_reason": "No matching destination column found; destination schema is authoritative",
+          "unmapped_suggested": null
+        },
+        "contactemail": {
+          "best_heuristic": [
+            "org_label",
+            0.0
+          ],
+          "mapped_confidence": null,
+          "mapped_to": null,
+          "status": "MISSED",
+          "tokens": [
+            "contactemail"
+          ],
+          "truth": "primary_contact_email",
+          "unmapped_reason": "No matching destination column found; destination schema is authoritative",
+          "unmapped_suggested": null
+        },
+        "employeecount": {
+          "best_heuristic": [
+            "employee_count",
+            0.85
+          ],
+          "mapped_confidence": 0.85,
+          "mapped_to": "employee_count",
+          "status": "ok",
+          "tokens": [
+            "employeecount"
+          ],
+          "truth": "employee_count",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "foundingdate": {
+          "best_heuristic": [
+            "org_label",
+            0.0
+          ],
+          "mapped_confidence": null,
+          "mapped_to": null,
+          "status": "MISSED",
+          "tokens": [
+            "foundingdate"
+          ],
+          "truth": "founded_date",
+          "unmapped_reason": "No matching destination column found; destination schema is authoritative",
+          "unmapped_suggested": null
+        },
+        "legacyflag": {
+          "best_heuristic": [
+            "org_label",
+            0.0
+          ],
+          "mapped_confidence": null,
+          "mapped_to": null,
+          "status": "ok_unmapped",
+          "tokens": [
+            "legacyflag"
+          ],
+          "truth": null,
+          "unmapped_reason": "No matching destination column found; destination schema is authoritative",
+          "unmapped_suggested": null
+        },
+        "legaltitle": {
+          "best_heuristic": [
+            "legal_title",
+            0.85
+          ],
+          "mapped_confidence": 0.85,
+          "mapped_to": "legal_title",
+          "status": "ok",
+          "tokens": [
+            "legaltitle"
+          ],
+          "truth": "legal_title",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "orglabel": {
+          "best_heuristic": [
+            "org_label",
+            0.85
+          ],
+          "mapped_confidence": 0.85,
+          "mapped_to": "org_label",
+          "status": "ok",
+          "tokens": [
+            "orglabel"
+          ],
+          "truth": "org_label",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "parentorgref": {
+          "best_heuristic": [
+            "parent_org_ref",
+            0.85
+          ],
+          "mapped_confidence": 0.85,
+          "mapped_to": "parent_org_ref",
+          "status": "ok",
+          "tokens": [
+            "parentorgref"
+          ],
+          "truth": "parent_org_ref",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "phonenumber": {
+          "best_heuristic": [
+            "phone_number",
+            0.85
+          ],
+          "mapped_confidence": 0.85,
+          "mapped_to": "phone_number",
+          "status": "ok",
+          "tokens": [
+            "phonenumber"
+          ],
+          "truth": "phone_number",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "postaladdress": {
+          "best_heuristic": [
+            "postal_address",
+            0.85
+          ],
+          "mapped_confidence": 0.85,
+          "mapped_to": "postal_address",
+          "status": "ok",
+          "tokens": [
+            "postaladdress"
+          ],
+          "truth": "postal_address",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "postalcode": {
+          "best_heuristic": [
+            "org_label",
+            0.0
+          ],
+          "mapped_confidence": null,
+          "mapped_to": null,
+          "status": "MISSED",
+          "tokens": [
+            "postalcode"
+          ],
+          "truth": "mailing_postal_code",
+          "unmapped_reason": "No matching destination column found; destination schema is authoritative",
+          "unmapped_suggested": null
+        },
+        "presspoint": {
+          "best_heuristic": [
+            "org_label",
+            0.0
+          ],
+          "mapped_confidence": null,
+          "mapped_to": null,
+          "status": "ok_unmapped",
+          "tokens": [
+            "presspoint"
+          ],
+          "truth": null,
+          "unmapped_reason": "No matching destination column found; destination schema is authoritative",
+          "unmapped_suggested": null
+        },
+        "taxregistration": {
+          "best_heuristic": [
+            "org_label",
+            0.0
+          ],
+          "mapped_confidence": null,
+          "mapped_to": null,
+          "status": "MISSED",
+          "tokens": [
+            "taxregistration"
+          ],
+          "truth": "tax_registration_number",
+          "unmapped_reason": "No matching destination column found; destination schema is authoritative",
+          "unmapped_suggested": null
+        },
+        "websiteurl": {
+          "best_heuristic": [
+            "website_url",
+            0.85
+          ],
+          "mapped_confidence": 0.85,
+          "mapped_to": "website_url",
+          "status": "ok",
+          "tokens": [
+            "websiteurl"
+          ],
+          "truth": "website_url",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        }
+      },
+      "mapped_total": 7,
+      "missed": 4,
+      "n_fields": 14,
+      "n_should_map": 11,
+      "unmapped_total": 7,
+      "wrong_target": 0
+    },
+    "snake": {
+      "correct": 11,
+      "false_map": 0,
+      "fields": {
+        "color_code": {
+          "best_heuristic": [
+            "org_label",
+            0.0
+          ],
+          "mapped_confidence": null,
+          "mapped_to": null,
+          "status": "ok_unmapped",
+          "tokens": [
+            "color",
+            "code"
+          ],
+          "truth": null,
+          "unmapped_reason": "No matching destination column found; destination schema is authoritative",
+          "unmapped_suggested": null
+        },
+        "contact_email": {
+          "best_heuristic": [
+            "primary_contact_email",
+            0.8
+          ],
+          "mapped_confidence": 0.8,
+          "mapped_to": "primary_contact_email",
+          "status": "ok",
+          "tokens": [
+            "contact",
+            "email"
+          ],
+          "truth": "primary_contact_email",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "employee_count": {
+          "best_heuristic": [
+            "employee_count",
+            1.0
+          ],
+          "mapped_confidence": 1.0,
+          "mapped_to": "employee_count",
+          "status": "ok",
+          "tokens": [
+            "employee",
+            "count"
+          ],
+          "truth": "employee_count",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "founding_date": {
+          "best_heuristic": [
+            "founded_date",
+            0.85
+          ],
+          "mapped_confidence": 0.85,
+          "mapped_to": "founded_date",
+          "status": "ok",
+          "tokens": [
+            "founding",
+            "date"
+          ],
+          "truth": "founded_date",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "legacy_flag": {
+          "best_heuristic": [
+            "org_label",
+            0.0
+          ],
+          "mapped_confidence": null,
+          "mapped_to": null,
+          "status": "ok_unmapped",
+          "tokens": [
+            "legacy",
+            "flag"
+          ],
+          "truth": null,
+          "unmapped_reason": "No matching destination column found; destination schema is authoritative",
+          "unmapped_suggested": null
+        },
+        "legal_title": {
+          "best_heuristic": [
+            "legal_title",
+            1.0
+          ],
+          "mapped_confidence": 1.0,
+          "mapped_to": "legal_title",
+          "status": "ok",
+          "tokens": [
+            "legal",
+            "title"
+          ],
+          "truth": "legal_title",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "org_label": {
+          "best_heuristic": [
+            "org_label",
+            1.0
+          ],
+          "mapped_confidence": 1.0,
+          "mapped_to": "org_label",
+          "status": "ok",
+          "tokens": [
+            "org",
+            "label"
+          ],
+          "truth": "org_label",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "parent_org_ref": {
+          "best_heuristic": [
+            "parent_org_ref",
+            1.0
+          ],
+          "mapped_confidence": 1.0,
+          "mapped_to": "parent_org_ref",
+          "status": "ok",
+          "tokens": [
+            "parent",
+            "org",
+            "ref"
+          ],
+          "truth": "parent_org_ref",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "phone_number": {
+          "best_heuristic": [
+            "phone_number",
+            1.0
+          ],
+          "mapped_confidence": 1.0,
+          "mapped_to": "phone_number",
+          "status": "ok",
+          "tokens": [
+            "phone",
+            "number"
+          ],
+          "truth": "phone_number",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "postal_address": {
+          "best_heuristic": [
+            "postal_address",
+            1.0
+          ],
+          "mapped_confidence": 1.0,
+          "mapped_to": "postal_address",
+          "status": "ok",
+          "tokens": [
+            "postal",
+            "address"
+          ],
+          "truth": "postal_address",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "postal_code": {
+          "best_heuristic": [
+            "mailing_postal_code",
+            0.8
+          ],
+          "mapped_confidence": 0.8,
+          "mapped_to": "mailing_postal_code",
+          "status": "ok",
+          "tokens": [
+            "postal",
+            "code"
+          ],
+          "truth": "mailing_postal_code",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "press_point": {
+          "best_heuristic": [
+            "org_label",
+            0.0
+          ],
+          "mapped_confidence": null,
+          "mapped_to": null,
+          "status": "ok_unmapped",
+          "tokens": [
+            "press",
+            "point"
+          ],
+          "truth": null,
+          "unmapped_reason": "No matching destination column found; destination schema is authoritative",
+          "unmapped_suggested": null
+        },
+        "tax_registration": {
+          "best_heuristic": [
+            "tax_registration_number",
+            0.8
+          ],
+          "mapped_confidence": 0.8,
+          "mapped_to": "tax_registration_number",
+          "status": "ok",
+          "tokens": [
+            "tax",
+            "registration"
+          ],
+          "truth": "tax_registration_number",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        },
+        "website_url": {
+          "best_heuristic": [
+            "website_url",
+            1.0
+          ],
+          "mapped_confidence": 1.0,
+          "mapped_to": "website_url",
+          "status": "ok",
+          "tokens": [
+            "website",
+            "url"
+          ],
+          "truth": "website_url",
+          "unmapped_reason": null,
+          "unmapped_suggested": null
+        }
+      },
+      "mapped_total": 11,
+      "missed": 0,
+      "n_fields": 14,
+      "n_should_map": 11,
+      "unmapped_total": 3,
+      "wrong_target": 0
+    }
+  },
+  "p17": {
+    "calls": [
+      "ensure_table(topic_link)",
+      "get_table_schema(topic_link)",
+      "load_batch(topic_link, "
+    ],
+    "defect_reported": false,
+    "dest_columns": [
+      "id"
+    ],
+    "errors_reported": [],
+    "failed_entities": [],
+    "linkage_fields_needed": [
+      "org_ref",
+      "topic_ref"
+    ],
+    "load_results": {
+      "topic_link": {
+        "inserted": 40,
+        "total": 40,
+        "type_coercion_failures": 0,
+        "type_coercions_attempted": 0,
+        "updated": 0
+      }
+    },
+    "map_fields": {
+      "field_mapping": {},
+      "schema_changes": [],
+      "unmapped": [
+        {
+          "field": "org_ref",
+          "reason": "No matching destination column found; destination schema is authoritative"
+        },
+        {
+          "field": "topic_ref",
+          "reason": "No matching destination column found; destination schema is authoritative"
+        }
+      ]
+    },
+    "n_alter_issued": 0,
+    "n_create_issued": 1,
+    "persisted_nonid_values": 0,
+    "persisted_row_shapes": [
+      [
+        "id"
+      ]
+    ],
+    "rows_written_to_table": 40,
+    "source_link_rows": 40,
+    "source_linkage_values_lost": 80,
+    "sql_issued": [
+      "CREATE TABLE IF NOT EXISTS \"public\".\"topic_link\" (id TEXT PRIMARY KEY)",
+      "INSERT INTO \"public\".\"topic_link\" (id) ON CONFLICT (\"id\") DO NOTHING"
+    ]
+  },
+  "p3": {
+    "analyze_dependencies_node": {
+      "column_dependencies": [
+        [
+          "ticket",
+          "orgid",
+          "org",
+          "_id"
+        ]
+      ],
+      "dependency_tree": {
+        "member": [],
+        "note": [],
+        "org": [],
+        "ticket": [
+          "org"
+        ]
+      },
+      "llm_calls_stub": 0,
+      "origin": "ALGORITHMIC",
+      "warning": ""
+    },
+    "candidate_edges_proposed": [
+      [
+        "note",
+        "org_id",
+        "org",
+        "_id"
+      ],
+      [
+        "ticket",
+        "orgid",
+        "org",
+        "_id"
+      ]
+    ],
+    "decoy_accepted": [
+      [
+        "ticket",
+        "orgid",
+        "org",
+        "_id"
+      ]
+    ],
+    "graph_edges": {
+      "ticket|orgid|org|_id": [
+        "verified",
+        1.0
+      ]
+    },
+    "join_graph_to_dependency_tree": {
+      "fully_covered": true,
+      "n_confirmed_edges": 1,
+      "n_nonempty_dependencies": 1,
+      "tree": {
+        "member": [],
+        "note": [],
+        "org": [],
+        "ticket": [
+          "org"
+        ]
+      },
+      "tree_is_empty_dict": false
+    },
+    "planted_true_tree": {
+      "member": [
+        "org"
+      ],
+      "note": [
+        "org"
+      ],
+      "org": [],
+      "ticket": []
+    },
+    "tree_matches_truth": false,
+    "true_edges_in_graph": [],
+    "true_edges_proposed": [],
+    "true_edges_total": 2
+  }
+}
