@@ -10,7 +10,7 @@ Steps:
        requires-python (>=3.11) — fail loudly rather than build a venv that
        can't actually run the app.
     2. Create .venv/ if it doesn't exist.
-    3. pip install -e ".[dev,perf]" into that venv.
+    3. pip install -e ".[dev,perf,splink,dspy,schema_matching,dq,lineage,swarm]" (the same extras CI installs) into that venv.
     4. npm install && npm run build in src/ui/frontend, if npm is on PATH —
        skipped (with a clear message) if it isn't, matching check.py
        frontend's own graceful-skip behaviour.
@@ -69,15 +69,19 @@ def create_venv() -> None:
         _fail("python -m venv failed.")
 
 
+# The same extras CI installs; fewer makes `check.py types` report phantom errors.
+_EXTRAS = "dev,perf,splink,dspy,schema_matching,dq,lineage,swarm"
+
+
 def install_python_deps() -> None:
     py = _venv_python()
-    print("Installing merge-engine[dev,perf,schema_matching,dq] ...")
+    print(f"Installing merge-engine[{_EXTRAS}] ...")
     result = subprocess.run(
-        [str(py), "-m", "pip", "install", "-e", f"{ROOT}[dev,perf,schema_matching,dq]"],
+        [str(py), "-m", "pip", "install", "-e", f"{ROOT}[{_EXTRAS}]"],
         cwd=ROOT,
     )
     if result.returncode != 0:
-        _fail("pip install -e '.[dev,perf,schema_matching,dq]' failed — see output above.")
+        _fail(f"pip install -e '.[{_EXTRAS}]' failed — see output above.")
 
 
 def build_frontend() -> None:

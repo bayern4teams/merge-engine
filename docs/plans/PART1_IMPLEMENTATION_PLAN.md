@@ -110,8 +110,9 @@ the repo's `.tmp/`.
 | **part1-worker** (`.claude/agents/part1-worker.md`) | Sonnet 5.5, high | implements one item inside named files; reports to `.handoff/<id>.report.md` |
 | **part1-verifier** (`.claude/agents/part1-verifier.md`) | Sonnet 5.5, high | *derive*: writes acceptance checks from the report before implementation; *attack*: tries to break the result afterwards; read-only on `src/` |
 
-If the frontmatter `model` / `effort` keys are not honoured by the cloud runtime,
-Phase 0 detects it (smoke test S1) and the lead passes `model` at spawn time instead.
+Phase 0 (S1) showed the frontmatter `model` key is honoured but a worker's `effort` could not
+be confirmed as high (one worker reported low). So: the lead **always passes `model: "sonnet"`
+at spawn**, treats worker effort as unverified, and keeps judgement-heavy work (§3.2 lead column) itself.
 
 ### 3.2 Routing table — who gets what
 
@@ -129,8 +130,8 @@ The lead may deviate **only** with a one-line reason in `HANDOFF.md`.
 
 ### 3.3 Concurrency and conflict avoidance
 
-- **At most 3 concurrent subagents.** Parallel agents burn the 5-hour limit fast; the
-  cap is raised only by the user.
+- **At most 2 concurrent subagents.** The user is on the Pro plan (Phase 0, S3), where the
+  5-hour window is small; parallel agents burn it fast. The cap is raised only by the user.
 - **A lane = a set of files.** Two lanes never share a file. Phase 0.5 locks the real
   ownership table with `graphify affected` per item (the report names files only for
   P1, P2, P3, P7, P8, P13, P14, P15, P18; the rest are inferred and must be confirmed)
@@ -285,7 +286,7 @@ Output: `docs/plans/part1/PHASE0_REPORT.md` (written in 0.8), a commit, a notifi
 | C | worker | **P18** (five sub-fixes) | `unify_entity_group.py`, `survivorship.py` |
 | D | worker | **P13** (then lead takes P14) | `fellegi_sunter.py` |
 
-Lanes B, C, D run concurrently (cap 3); the lead does P2 meanwhile, then P14 once P13 is accepted.
+At most 2 lanes run at once (cap 2): start B and C, then D when one finishes; the lead does P2 meanwhile, then the P13 call site and P14. File ownership and the P13 split are fixed in `part1/HANDOFF.md` (Phase 0.5) and override the table above where they differ.
 
 ### Phase 2 — Structure and blocking
 
@@ -327,9 +328,9 @@ Each item: **report section → files → what to build → acceptance beyond "t
 → live check deferred to the user.** Constants and the "Ceiling / Deferred" text come
 from the report; read the full section before starting.
 
-**P1 — tokeniser** (`map_fields.py`). Dictionary-driven split of no-delimiter names
+**P1 — tokeniser** (`map_fields.py`). Phase 0 baseline: 7 of 11 concatenated-lowercase fields already map via the underscore-collapse rule; the tokeniser only matters for the other 4 (`foundingdate`, `taxregistration`, `contactemail`, `postalcode`). Dictionary-driven split of no-delimiter names
 against the vocabulary *observed in the destination schema* (runtime, finite);
-ambiguous splits are reported, never guessed. *Accept:* `companyname` → `company`,`name`;
+ambiguous splits are reported, never guessed. *Accept:* those 4 fields now map and the 3 planted negatives still do not (a no-op fix must fail); `companyname` → `company`,`name`;
 `businessaddress` → `business`,`address`; camelCase/delimited behaviour unchanged
 (regression snapshot); an ambiguous name yields a report entry; no hard-coded prefix
 list (grep); the failure reason string for an unsplittable name remains. *Live:*
@@ -338,7 +339,7 @@ zoominfo `company` mapped fields rise from 1 of 29 (28 unmapped before).
 **P2 — comparison budget** (`resolve_entities.py`). Replace the 250k cap with block
 purging (parameter-free) → block filtering → meta-blocking (WNP local mean). Keep a
 budget only as an out-of-memory guard that **fails the run loudly** when it binds.
-*Accept:* a fixture with one block far beyond the old cap loses no pair to a counter —
+*Accept:* also fix the reported `uncompared_pairs`, which over-counts 5.6× (389,200 reported vs 69,600 truly discarded, because one block arrives under two keys and the overflow estimate is not deduped) — it must equal the true count (or be gone because nothing is discarded). A fixture with one block far beyond the old cap (the Phase 0 800-record block; 9 of 40 planted pairs lost today) loses no pair to a counter —
 every excluded pair is excluded by a *computed property*; the guard raises instead of
 truncating; pair completeness is measured and printed; the old truncation reproduced on
 the parent commit. *Live:* `staff` 962k candidates / 711,670 previously discarded; a run
@@ -399,7 +400,7 @@ largest score gap — no parameter), name-agnostic. **Do not** adopt the acyclic
 (it would reject junction tables and self-referencing hierarchies — exactly what P4/P7
 need) and do not use the fitted name features. *Accept:* a fixture shaped like
 `child.main_entity_id → parent.business_key` (name does not match `<parent>id`) yields an
-edge and a **non-empty** `dependency_tree`; the surrogate-`_id` false edge is still
+that edge, and the whole `dependency_tree` **equals the planted truth** (non-empty is not enough: today it is non-empty but wrong, and the coincidental-overlap decoy `ticket.orgid → org._id` is wrongly accepted — it must be rejected); the surrogate-`_id` false edge is still
 rejected; renaming columns leaves the INDs unchanged; a junction table and a
 self-referencing column both survive; the cliff has no tunable constant (grep).
 *Live:* 26 tables → `dependency_tree` non-empty; `staff.main_entity_id =
@@ -427,7 +428,7 @@ the comparator (P14); **conflicting exclusive identifiers suppress the matching 
 never the pair**, with exclusivity decided from value-sharing frequency in the data, not
 a list; three-way outcome Match / Possible Match (HITL) / Possibly Related (typed edge,
 no human). Honest limit: no hierarchy *direction* without a declared edge. *Accept:* the
-report's own three examples as fixtures — same email → Match; same address + different
+report's own three examples as fixtures, checked as outcome *classes* (not exact scores) on **both** the heuristic and the fitted-model paths, since today they diverge (fitted: same-email lands in review, different-tax-ID is silently excluded) — same email → Match; same address + different
 tax IDs → Possible Match (not rejected, not auto-merged); same address + phone,
 different company → Possibly Related edge; a value shared by many entities is labelled
 generic and prior records re-evaluated; **no** `France`/`US`/`SAS`/`Berhad`/`Global`/
@@ -449,8 +450,7 @@ an open item (report P13/§2.17) — noted, not invented. *Live:* endpoint behav
 **P20 — clustering** (`resolve_entities.py`). Prune weak edges with meta-blocking's own
 threshold (no hand-set confidence cut) → `scipy.sparse.csgraph.connected_components` →
 coherence split using P16's name-variation rate → LP 1:1 reduction where strictly
-one-to-one is required. *Accept:* a weak bridge between two true clusters no longer merges
-them; the giant-component fixture is broken up; an incoherent cluster is split; no
+one-to-one is required. *Accept:* the report's weak-bridge shape already passes today, so it is a regression guard only. The real failing shapes (Phase 0): (i) the bridge is the strongest edge (0.99 over internal 0.96) → both clusters currently shatter (FN 20); (ii) a true cluster seen only as a chain → 5 singletons (FN 10). Both must be fixed; an incoherent cluster is split; no
 literal confidence threshold (grep).
 
 **P19 — non-circular blocking tuning** (after P5). Tune only on zero-label quantities
@@ -492,7 +492,11 @@ restored databases, then merges to `main` locally. Part 3 (§3.x of the report) 
 planned afterwards, informed by Part 1's measured results; nothing here prepares Part 3
 beyond what Part 1 itself specifies (e.g. P9's file is Part 3's backfill source).
 
-## 11. Known limits of this plan (stated, not hidden)
+## 11. Phase 0 outcome and standing corrections
+
+Phase 0 ran in a **local** desktop session ([part1/PHASE0_REPORT.md](part1/PHASE0_REPORT.md)). CI had been red since 2026-09-27 from dependency drift (splink 5, SQLAlchemy 2.1); fixed on this branch by `splink<5`, `sqlalchemy[asyncio]<2.2`, regenerated requirements, and `bootstrap.py` installing CI's extras. A **cloud re-check** (S1, S3, S4, S5, `check.py all`) precedes Phase 1, because S3/S4/S5 did not transfer from the local run. If the cloud cannot read usage or resume itself, Phases 1–5 run in a local session instead, and §7 stays "user launches each phase".
+
+## 12. Known limits of this plan (stated, not hidden)
 
 - Orchestration choices in §7 are provisional until Phase 0's smoke tests report.
 - Cloud-verifiable evidence is mechanism-level (synthetic fixtures). The report's live

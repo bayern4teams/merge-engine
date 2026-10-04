@@ -19,7 +19,8 @@ dependencies = [
     # MCP server
     "mcp>=1.0.0",
     # Database connectors
-    "sqlalchemy>=2.0.0",
+    # <2.2: 2.1 stopped pulling in greenlet, so async collection failed in CI; [asyncio] restores it.
+    "sqlalchemy[asyncio]>=2.0.0,<2.2",
     "psycopg2-binary>=2.9.0",
     "asyncpg>=0.29.0",
     "pymongo>=4.6.0",
@@ -83,7 +84,8 @@ dev = [
 # docs/plans/ — the harness-foundation plan's branch ownership table);
 # installing one does not pull in another branch's engine.
 dspy = ["dspy-ai>=2.6"]
-splink = ["splink>=4.0.0"]
+# <5: splink 5.0.0 broke the Linker/DuckDBAPI API that src/mcp_server/tools/splink_*.py use (9 mypy errors in CI).
+splink = ["splink>=4.0.0,<5"]
 dq = ["great-expectations>=1.0.0"]
 lineage = ["sqlglot>=25.0.0"]
 swarm = ["langgraph-swarm>=0.0.11"]

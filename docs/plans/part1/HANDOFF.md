@@ -91,7 +91,7 @@ lists files an item must **edit**. Paths are under `src/` unless stated. Abbrevi
 
 ## Lane plan (with the flags applied)
 
-| phase | lead (serial) | worker lanes (≤ 3 concurrent, disjoint files) |
+| phase | lead (serial) | worker lanes (≤ 2 concurrent, disjoint files) |
 |---|---|---|
 | 1 | P2 → P13 call site → P14 (`T/resolve_entities.py`, `T/fellegi_sunter.py` after P13) | **B** P1 → P12 → P11 (`T/map_fields.py`, `N/discover_schemas.py`, `T/discover_schema.py`, `N/map_fields_node.py`, `N/resolve_entities.py`) · **C** P18 (`T/unify_entity_group.py`, `T/survivorship.py`, `N/unify_entities.py`, `N/load_data.py`) · **D** P13 (`T/fellegi_sunter.py` only) |
 | 2 | P5 (needs P2 accepted) | **E** P3 → P4 (`T/join_graph.py`, `N/analyze_dependencies.py`, `T/plan_scope.py`, `T/map_fields.py`, `N/map_fields_node.py`, `N/load_data.py`, `N/human_nodes.py`) — lead reviews line by line |
@@ -99,7 +99,7 @@ lists files an item must **edit**. Paths are under `src/` unless stated. Abbrevi
 | 4 | P10 (after P16, P17, P18) | P16 (quality module + `N/load_data.py` report) |
 
 ## Next action
-**Waiting for the user.** Phase 0 is finished. Before Phase 1 starts, the user resolves the
+**Cloud re-check** (S1, S3, S4, S5, `check.py all` in the cloud; no Part 1 code), then Phase 1. Phase 0 is finished; B1/B2 fixed on the branch. Before Phase 1 starts, the user resolves the
 two blockers in [PHASE0_REPORT.md](PHASE0_REPORT.md) §"Blockers" (CI red on dependency drift;
 `bootstrap.py` hard-coded to the 3.14 `.venv`) and confirms the §7 orchestration choices.
 After that: Phase 1, step 1 (derive acceptance for P2, P1, P18, P13).
