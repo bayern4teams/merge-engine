@@ -30,6 +30,9 @@ import logging
 import math
 import re
 import time
+from collections import Counter
+from dataclasses import dataclass
+from datetime import date
 from functools import lru_cache
 from typing import Any
 
@@ -40,6 +43,7 @@ from src.mcp_server.tools.fellegi_sunter import (
     LEVEL_NULL,
     LEVEL_STRONG,
     LEVEL_WEAK,
+    build_token_document_frequencies,
     idf_soft_similarity,
 )
 from src.utils.id_utils import deterministic_uuid
@@ -299,6 +303,7 @@ def _resolve_core(
     t_fit_start = time.monotonic()
 
     record_cache: RecordCache = {}
+    corpus = _corpus_evidence(records, record_cache)
     match_model, fitted_vectors = _fit_match_model(
         records, candidate_pairs, unique_ids, normalise, record_cache
     )
@@ -314,6 +319,7 @@ def _resolve_core(
     # float/None), so this stays picklable across the ProcessPoolExecutor
     # boundary like every other value this function returns.
     pair_evidence: dict[tuple[str, str], dict[str, Any]] = {}
+    possibly_related: list[list[str]] = []
     for pair_idx, (id1, id2, rec1, rec2) in enumerate(candidate_pairs):
         precomputed_vector = fitted_vectors[pair_idx] if fitted_vectors is not None else None
         conf = _score_pair(
@@ -326,7 +332,11 @@ def _resolve_core(
             record_cache,
             precomputed_vector,
             relationship_index,
+            corpus,
         )
+        conf = _three_way(conf, rec1, rec2, corpus, auto_match, auto_exclude, record_cache)
+        if conf < auto_exclude and _shares_identifying_value(rec1, rec2, corpus, record_cache):
+            possibly_related.append([id1, id2] if id1 < id2 else [id2, id1])
         if auto_exclude <= conf < auto_match:
             borderline.append((id1, id2, rec1, rec2, conf))
         else:
@@ -361,6 +371,7 @@ def _resolve_core(
         "borderline": borderline,
         "pair_evidence": pair_evidence,
         "model_fitted": match_model is not None,
+        "possibly_related": possibly_related,
         "blocking_seconds": t_fit_start - t_blocking_start,
         "fit_model_seconds": t_scoring_start - t_fit_start,
         "scoring_seconds": t_end - t_scoring_start,
@@ -803,6 +814,8 @@ async def resolve_entities_impl(
             scored_pairs, auto_match, auto_exclude
         ),
         **_band_fields(scored_pairs, auto_match, auto_exclude, core.get("model_fitted", False)),
+        # P6: Possibly Related -- typed edges, no human, never a merge.
+        "possibly_related": _related_edges(core.get("possibly_related", []), clusters),
     }
     # Part 1.5 D.7: cached cluster_id values are meaningless (they were
     # derived from THIS run's known_cluster_ids) — apply_known_cluster_ids
@@ -810,6 +823,16 @@ async def resolve_entities_impl(
     # here is harmless, not just convenient.
     resolve_cache.put(cache_key, entity_type, result)
     return result
+
+
+def _related_edges(pairs: list[list[str]], clusters: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Possibly Related edges (report P6 / §3.7) between records left in different clusters."""
+    cluster_of = {r: c.get("cluster_id") for c in clusters for r in c.get("record_ids", [])}
+    return [
+        {"record_ids": [a, b], "type": "possibly_related"}
+        for a, b in sorted({(a, b) for a, b in pairs})
+        if cluster_of.get(a) != cluster_of.get(b)
+    ]
 
 
 def _pending_merge_candidates(
@@ -1571,6 +1594,7 @@ def _score_pair(
     record_cache: RecordCache | None = None,
     precomputed_vector: dict[str, tuple[str, str | None]] | None = None,
     relationship_index: dict[str, set[str]] | None = None,
+    corpus: CorpusEvidence | None = None,
 ) -> float:
     """Confidence that two records are the same entity.
 
@@ -1591,8 +1615,19 @@ def _score_pair(
     """
     fields1 = {k: v for k, v in rec1.items() if not k.startswith("_")}
     fields2 = {k: v for k, v in rec2.items() if not k.startswith("_")}
-    conflicting = _has_conflicting_identity(fields1, fields2, extra_unique_ids) or (
-        bool(deterministic_fields) and _deterministic_conflict(rec1, rec2, deterministic_fields)
+    # P6: with the corpus in hand, exclusivity is measured (and a generic value
+    # conflicts with nothing); an operator-declared unique id still counts.
+    suppressed = (
+        _conflicting_exclusives(rec1, rec2, corpus, record_cache) if corpus is not None else set()
+    )
+    conflicting = (
+        bool(suppressed)
+        or _has_conflicting_identity(
+            fields1, fields2, extra_unique_ids, declared_only=corpus is not None
+        )
+        or (
+            bool(deterministic_fields) and _deterministic_conflict(rec1, rec2, deterministic_fields)
+        )
     )
 
     if (
@@ -1603,7 +1638,7 @@ def _score_pair(
         return 1.0
 
     heuristic = _compute_heuristic_confidence(
-        rec1, rec2, extra_unique_ids, record_cache, relationship_index
+        rec1, rec2, extra_unique_ids, record_cache, relationship_index, corpus, suppressed
     )
     if conflicting:
         # A disagreeing deterministic field (different domain, different
@@ -1622,7 +1657,11 @@ def _score_pair(
                 rec1, rec2, normalise, record_cache, getattr(model, "token_df", None)
             )
         )
-        probability = model.probability(vector)
+        # P6: a conflicting exclusive suppresses its own rule, never the pair --
+        # the rest of the evidence decides, and the pair stays out of Match below.
+        probability = model.probability(
+            {f: c for f, c in vector.items() if f not in suppressed} if suppressed else vector
+        )
     except Exception:
         return heuristic
 
@@ -2192,6 +2231,8 @@ def _compute_heuristic_confidence(
     extra_unique_ids: set[str] | None = None,
     record_cache: RecordCache | None = None,
     relationship_index: dict[str, set[str]] | None = None,
+    corpus: CorpusEvidence | None = None,
+    suppressed: set[str] | None = None,
 ) -> float:
     """Compute a match confidence based on field comparison.
 
@@ -2227,6 +2268,12 @@ def _compute_heuristic_confidence(
 
         if v1 is None or v2 is None:
             continue
+        # P6: a suppressed (conflicting exclusive) field and a generic value
+        # carry no evidence either way.
+        if suppressed and field in suppressed:
+            continue
+        if corpus is not None and (corpus.generic(field, v1) or corpus.generic(field, v2)):
+            continue
 
         total += 1
 
@@ -2253,14 +2300,20 @@ def _compute_heuristic_confidence(
             s1 = str(v1).strip().lower()
             s2 = str(v2).strip().lower()
             if len(s1) > 2 and len(s2) > 2:
-                sim = _string_similarity(s1, s2)
+                sim = (
+                    _text_similarity(
+                        s1, s2, corpus.token_df.get(field), corpus.token_n.get(field, 0)
+                    )
+                    if corpus is not None
+                    else _string_similarity(s1, s2)
+                )
                 if sim > 0.5:
                     if name_needs_cap:
                         sim = min(sim, _FUZZY_NAME_CAP)
                     score += sim
 
     field_score = score / total if total > 0 else 0.0
-    confidence = max(field_score, _cross_name_similarity(rec1, rec2, record_cache))
+    confidence = max(field_score, _cross_name_similarity(rec1, rec2, record_cache, corpus))
 
     if relationship_index:
         confidence = min(1.0, confidence + _relational_agreement(rec1, rec2, relationship_index))
@@ -2269,16 +2322,267 @@ def _compute_heuristic_confidence(
     # since _has_conflicting_identity needs the raw fields.
     fields1 = {k: v for k, v in rec1.items() if not k.startswith("_")}
     fields2 = {k: v for k, v in rec2.items() if not k.startswith("_")}
-    if _has_conflicting_identity(fields1, fields2, extra_unique_ids):
+    if suppressed or _has_conflicting_identity(
+        fields1, fields2, extra_unique_ids, declared_only=corpus is not None
+    ):
         # Never auto-merge over a contradicting unique id — route it to review.
         return min(confidence, 0.93)
     return confidence
+
+
+# ── P6: what the record set says about its own values ─────────────────
+
+
+@dataclass(frozen=True)
+class CorpusEvidence:
+    """Value sharing measured over one entity's whole record set (report P6, §3.5).
+
+    Built once per run from the canonical projections, before any pair is
+    scored, so every label below is a property of the corpus and record
+    order cannot change it (the report's "re-evaluates all prior records").
+
+    ``cut``: the most records one entity can contribute -- one per origin,
+    and never fewer than the two records of a compared pair. A value held by
+    more records than that belongs to more than one entity: it is *generic*
+    ("labels that SSN as generic"), so it is neither a conflict nor evidence.
+    ``exclusive``: fields measured as exclusive identifiers (class 4), see
+    ``_exclusive_fields``. ``token_df``: P14's per-field token document
+    frequencies; ``name_token_df`` the same over each record's best name, for
+    comparing names stored under different field names.
+    """
+
+    cut: int
+    value_df: dict[str, dict[str, int]]
+    exclusive: frozenset[str]
+    token_df: dict[str, dict[str, int]]
+    token_n: dict[str, int]
+    name_token_df: dict[str, int]
+    name_n: int
+
+    def generic(self, field: str, value: Any) -> bool:
+        return self.value_df.get(field, {}).get(_identity_value(field, value), 0) > self.cut
+
+
+def _identity_value(field: str, value: Any) -> str:
+    """The value as identity sees it: a registrable domain for a domain field (a bare
+    domain and a full URL are one website), else the normalised value."""
+    return (_domain_of(value) or "") if _is_domain_field(field) else _normalize(value)
+
+
+def _identity_view(rec: dict[str, Any], record_cache: RecordCache | None) -> dict[str, Any]:
+    """The canonical projection plus any raw field the identity hints name that the
+    projection dropped as a surrogate key (``tax_id`` contains ``id``): the fields
+    exclusivity and conflicts are measured on."""
+    proj, _, _ = _cached_projection(rec, record_cache)
+    extra = {
+        k: v
+        for k, v in rec.items()
+        if v is not None
+        and k not in proj
+        and not k.startswith("_")
+        and any(hint in k.lower() for hint in _UNIQUE_IDENTITY_HINTS)
+    }
+    return {**proj, **extra} if extra else proj
+
+
+def _corpus_evidence(
+    records: list[dict[str, Any]], record_cache: RecordCache | None = None
+) -> CorpusEvidence:
+    projections = [_cached_projection(r, record_cache) for r in records]
+    value_df: dict[str, Counter[str]] = {}
+    text: set[str] = set()  # fields with a value that is not one identifier-shaped token
+    for rec in records:
+        for field, value in _identity_view(rec, record_cache).items():
+            norm = _identity_value(field, value)
+            if norm:
+                value_df.setdefault(field, Counter())[norm] += 1
+                raw = str(value).strip()
+                if any(ch.isspace() for ch in raw) or _is_quantity_or_date(raw):
+                    text.add(field)
+    origins = {r.get("_origin_id") for r in records}
+    cut = max(len(origins), 2)
+    token_df, token_n = build_token_document_frequencies([p for p, _a, _n in projections])
+    names = [
+        {"name": r[name]} for r, (_p, _a, name) in zip(records, projections, strict=True) if name
+    ]
+    name_df, name_n = build_token_document_frequencies(names)
+    return CorpusEvidence(
+        cut=cut,
+        value_df={f: dict(c) for f, c in value_df.items()},
+        exclusive=_exclusive_fields(value_df, text, cut),
+        token_df=token_df,
+        token_n=token_n,
+        name_token_df=name_df.get("name", {}),
+        name_n=name_n.get("name", 0),
+    )
+
+
+def _is_quantity_or_date(value: str) -> bool:
+    try:
+        float(value)
+        return True
+    except ValueError:
+        pass
+    try:
+        date.fromisoformat(value.split("T")[0])
+        return True
+    except ValueError:
+        return False
+
+
+def _exclusive_fields(
+    value_df: dict[str, Counter[str]], text: set[str], cut: int
+) -> frozenset[str]:
+    """Fields that behave as exclusive identifiers (report §3.5 class 4), measured.
+
+    Class 4 is "near-unique across the corpus and one value per entity". A
+    field qualifies when (a) most of its records hold a value no other entity
+    holds (non-generic), (b) its values have an identifier's shape -- one
+    whitespace-free token, not a quantity or a date (a name or an address is
+    text and varies between origins for one entity; a quantity or a date is
+    an attribute two origins may disagree on), or the field is one the
+    existing identity hints name; and (c) it is not one of a set of repeated
+    columns (``phone1``/``phone2``: one origin already holds several values
+    for one entity, the report's class-2 test).
+
+    ponytail: Ceiling -- an identifier written as spaced text, or a class-2
+    field with no repeated column or child table in view (one phone per
+    origin), is misclassified; the report's full classifier (D-26: entropy,
+    length distribution, FD membership, child-table cardinality) is the
+    upgrade. Deferred: classify once per origin in the corpus (Part 3).
+    """
+    stems = Counter(re.sub(r"\d+$", "", f) for f in value_df)
+    exclusive = set()
+    for field, counts in value_df.items():
+        if stems[re.sub(r"\d+$", "", field)] > 1:
+            continue
+        total = sum(counts.values())
+        held_once = sum(c for c in counts.values() if c <= cut)
+        if 2 * held_once <= total:
+            continue
+        if field not in text or any(hint in field.lower() for hint in _UNIQUE_IDENTITY_HINTS):
+            exclusive.add(field)
+    return frozenset(exclusive)
+
+
+def _conflicting_exclusives(
+    rec1: dict[str, Any],
+    rec2: dict[str, Any],
+    corpus: CorpusEvidence,
+    record_cache: RecordCache | None = None,
+) -> set[str]:
+    """Exclusive fields on which the two records hold different, non-generic values.
+
+    A conflict suppresses the matching rule, never the pair (report P6): the
+    caller scores the pair without these fields and keeps it out of Match.
+    A generic value conflicts with nothing -- it never identified anyone.
+    """
+    proj1 = _identity_view(rec1, record_cache)
+    proj2 = _identity_view(rec2, record_cache)
+    return {
+        f
+        for f in corpus.exclusive & set(proj1) & set(proj2)
+        if _identity_value(f, proj1[f]) != _identity_value(f, proj2[f])
+        and not corpus.generic(f, proj1[f])
+        and not corpus.generic(f, proj2[f])
+    }
+
+
+def _text_similarity(s1: str, s2: str, df: dict[str, int] | None, n: int) -> float:
+    """``_string_similarity``, IDF-weighted for multi-word text (P14's comparator,
+    used by the heuristic too, so a shared common token such as a legal form
+    cannot make two different names look alike on either path)."""
+    if (
+        df
+        and (" " in s1 or " " in s2)
+        and any(c.isalpha() for c in s1)
+        and any(c.isalpha() for c in s2)
+    ):
+        t1, t2 = set(_tokenize(s1)), set(_tokenize(s2))
+        # The two names under comparison are not evidence that a token is
+        # common: count each token once for the pair, so a two-record corpus
+        # weighs its tokens evenly instead of zeroing the one they share.
+        pair_df = {t: max(df.get(t, 1) - (t in t1) - (t in t2) + 1, 1) for t in t1 | t2}
+        sim = idf_soft_similarity(t1, t2, pair_df, n, token_sim=_token_ratio)
+        if sim is not None:
+            return sim
+    return _string_similarity(s1, s2)
+
+
+def _shares_identifying_value(
+    rec1: dict[str, Any],
+    rec2: dict[str, Any],
+    corpus: CorpusEvidence,
+    record_cache: RecordCache | None = None,
+) -> bool:
+    """Do two records hold the same non-generic value on a field other than a name?
+
+    The Possibly Related test (report P6, §3.7): a pair the score excludes
+    that still shares an address, a phone, ... held by no other entity is
+    related, not unrelated -- a typed edge, no human. No direction is
+    claimed (the report's honest limit: direction needs a declared edge).
+    """
+    proj1, _, _ = _cached_projection(rec1, record_cache)
+    proj2, _, _ = _cached_projection(rec2, record_cache)
+    for f in set(proj1) & set(proj2):
+        if f in _NAME_LIKE_CANONICAL_FIELDS or f.lower() in _PARTIAL_NAME_FIELDS:
+            continue
+        n1 = _identity_value(f, proj1[f])
+        if n1 and n1 == _identity_value(f, proj2[f]) and not corpus.generic(f, proj1[f]):
+            return True
+    return False
+
+
+def _three_way(
+    conf: float,
+    rec1: dict[str, Any],
+    rec2: dict[str, Any],
+    corpus: CorpusEvidence,
+    auto_match: float,
+    auto_exclude: float,
+    record_cache: RecordCache | None = None,
+) -> float:
+    """The report's three outcomes as rules over measured evidence (P6, [S] p. 4).
+
+    The rules fire only on an *anchor*: the pair holds the same non-generic
+    value on a field other than a name (an email, an address, a phone ...
+    no other entity holds). Then the names decide:
+
+    - names agree, no conflicting exclusive          -> Match ("same email");
+    - a conflicting exclusive, or names share only a
+      non-generic token                              -> at least Possible
+      Match, the review band ("same address, different tax IDs": the rule is
+      suppressed, the pair is not);
+    - names share nothing                            -> the score stands; if
+      it excludes the pair, it becomes a Possibly Related edge
+      (``_shares_identifying_value``), no human.
+
+    Without an anchor the score alone decides. The bars are the run's own.
+    """
+    if not _shares_identifying_value(rec1, rec2, corpus, record_cache):
+        return conf
+    _, _, f1 = _cached_projection(rec1, record_cache)
+    _, _, f2 = _cached_projection(rec2, record_cache)
+    if not f1 or not f2:
+        return conf
+    level, _value = _comparison_level(
+        rec1[f1], rec2[f2], _normalize, "name", (corpus.name_token_df, corpus.name_n)
+    )
+    if _conflicting_exclusives(rec1, rec2, corpus, record_cache):
+        return min(max(conf, auto_exclude), _FUZZY_NAME_CAP)
+    if level in (LEVEL_EXACT, LEVEL_STRONG):
+        return max(conf, auto_match)
+    shared = set(_tokenize(str(rec1[f1]).lower())) & set(_tokenize(str(rec2[f2]).lower()))
+    if any(corpus.name_token_df.get(t, 0) <= corpus.cut for t in shared):
+        return max(conf, auto_exclude)
+    return conf
 
 
 def _has_conflicting_identity(
     fields1: dict[str, Any],
     fields2: dict[str, Any],
     extra_unique_ids: set[str] | None = None,
+    declared_only: bool = False,
 ) -> bool:
     """True when both records carry a unique identifier and they disagree.
 
@@ -2289,7 +2593,9 @@ def _has_conflicting_identity(
     declared = extra_unique_ids or set()
     for key1, val1 in fields1.items():
         kl = key1.lower()
-        if key1 not in declared and not any(hint in kl for hint in _UNIQUE_IDENTITY_HINTS):
+        if key1 not in declared and (
+            declared_only or not any(hint in kl for hint in _UNIQUE_IDENTITY_HINTS)
+        ):
             continue
         val2 = fields2.get(key1)
         if val1 is None or val2 is None:
@@ -2300,7 +2606,10 @@ def _has_conflicting_identity(
 
 
 def _cross_name_similarity(
-    rec1: dict[str, Any], rec2: dict[str, Any], record_cache: RecordCache | None = None
+    rec1: dict[str, Any],
+    rec2: dict[str, Any],
+    record_cache: RecordCache | None = None,
+    corpus: CorpusEvidence | None = None,
 ) -> float:
     """Similarity of the records' best name fields, across field names.
 
@@ -2325,7 +2634,11 @@ def _cross_name_similarity(
     if s1 == s2:
         # A shared first name is evidence, not proof — keep it in the review band.
         return 0.93 if partial else 0.96
-    sim = _string_similarity(s1, s2)
+    sim = (
+        _text_similarity(s1, s2, corpus.name_token_df, corpus.name_n)
+        if corpus is not None
+        else _string_similarity(s1, s2)
+    )
     return min(sim, 0.93) if sim > 0.5 else 0.0
 
 
@@ -2567,6 +2880,7 @@ async def _build_clusters(
         stats = {}
     all_record_ids = {_record_id(r) for r in records}
     records_by_id = {_record_id(r): r for r in records}
+    corpus = _corpus_evidence(records)  # P6: the conflict repair measures exclusivity too
     parent: dict[str, str] = {rid: rid for rid in all_record_ids}
     rank: dict[str, int] = {rid: 0 for rid in all_record_ids}
 
@@ -2642,7 +2956,9 @@ async def _build_clusters(
                 _LARGE_COMPONENT_THRESHOLD,
             )
         if len(members) > 1:
-            parts, was_repaired, was_cut = _partition_component(members, edge_weight, records_by_id)
+            parts, was_repaired, was_cut = _partition_component(
+                members, edge_weight, records_by_id, corpus=corpus
+            )
             repaired += was_repaired
             cut += was_cut
         else:
@@ -2746,8 +3062,14 @@ def _partition_component(
     edge_weight: dict[tuple[str, str], float],
     records_by_id: dict[str, dict[str, Any]],
     min_cohesion: float = _MIN_COHESION,
+    corpus: CorpusEvidence | None = None,
 ) -> tuple[list[list[str]], int, int]:
     """Split one connected component into defensible clusters.
+
+    ``corpus`` (P6): when given, a conflict is one on a measured exclusive
+    field with non-generic values (``_conflicting_exclusives``), the same
+    test scoring used; without it, the identity hints decide (P15's gate
+    rebuild sees only the band's records, too few to measure sharing).
 
     ``min_cohesion`` is ``_MIN_COHESION`` unless the match bar sits below it
     (P15: an operator-committed bar): a pair the bar itself admits must not be
@@ -2768,7 +3090,11 @@ def _partition_component(
     conflict = False
     for i, a in enumerate(members):
         for b in members[i + 1 :]:
-            if _has_conflicting_identity(fields_by_id[a], fields_by_id[b]):
+            if (
+                _conflicting_exclusives(records_by_id.get(a, {}), records_by_id.get(b, {}), corpus)
+                if corpus is not None
+                else _has_conflicting_identity(fields_by_id[a], fields_by_id[b])
+            ):
                 conflict = True
                 break
         if conflict:
