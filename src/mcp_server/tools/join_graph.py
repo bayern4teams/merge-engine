@@ -38,8 +38,9 @@ from __future__ import annotations
 
 import logging
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import pairwise
+from math import exp, lgamma, log, log1p
 from typing import Any
 
 from src.mcp_server.connectors import create_connector
@@ -259,20 +260,97 @@ class _ColumnProfile:
     raw: tuple[Any, ...]  # as returned by the connector, empty-after-normalise dropped
     norm: frozenset[str]  # normalize_val() of each
     # True when the sample hit `sample_size`: more distinct values may exist,
-    # so this profile can be neither a complete value set nor a uniqueness proof.
+    # so this profile is neither a complete value set nor a uniqueness proof,
+    # and two such samples of different columns are independent draws.
     saturated: bool
-    # Exact uniqueness, asked of the database for a saturated column only (a
-    # complete sample already answers it); None = not established.
+    # Every sampled value is an integer: then `lo`/`hi` are ints, else strings.
+    numeric: bool = False
+    lo: Any = None
+    hi: Any = None
+    # Asked of the database (profile_column FULL), for columns that could be a
+    # parent; None = not established (no such connector method, or it failed).
     unique: bool | None = None
+    distinct: int | None = None
+
+
+def _make_profile(raw: tuple[Any, ...], saturated: bool) -> _ColumnProfile:
+    norm = frozenset(normalize_val(v) for v in raw)
+    try:
+        ints = [int(v) for v in norm]
+    except ValueError:
+        return _ColumnProfile(raw, norm, saturated, False, min(norm), max(norm))
+    return _ColumnProfile(raw, norm, saturated, True, min(ints), max(ints))
+
+
+def _binomial_cdf(k: int, n: int, p: float) -> float:
+    """P(X <= k) for X ~ Binomial(n, p), summed in log space (n can be large)."""
+    if p >= 1:
+        return 1.0 if k >= n else 0.0
+    return sum(
+        exp(lgamma(n + 1) - lgamma(i + 1) - lgamma(n - i + 1) + i * log(p) + (n - i) * log1p(-p))
+        for i in range(min(k, n) + 1)
+    )
+
+
+def _may_include(child: _ColumnProfile, parent: _ColumnProfile, miss: float = 0.0) -> bool:
+    """In-memory pre-prune: could `child` be contained in `parent` at all?
+
+    A complete parent sample must share a value with the child. A truncated one
+    (a big table) cannot be compared like that, so value kind and range are
+    compared and, once the parent's distinct count D is known, the overlap of
+    the two samples is weighed: if the child were contained, each of its m
+    sampled values would land in the parent's s-value sample with probability
+    s/D, so seeing k or fewer shared values has probability BinomialCDF(k; m,
+    s/D). Below `miss` (the caller passes 1 / pairs: fewer than one expected
+    wrongly pruned pair) the pair is dropped. A small child against a huge
+    parent has a large tail and goes to a query.
+    """
+    if not parent.saturated:
+        return not child.norm.isdisjoint(parent.norm)
+    if child.numeric != parent.numeric or child.lo > parent.hi or parent.lo > child.hi:
+        return False
+    if parent.distinct:
+        shared = len(child.norm & parent.norm)
+        return _binomial_cdf(shared, len(child.norm), len(parent.norm) / parent.distinct) >= miss
+    return True
+
+
+def _chance(child: _ColumnProfile, parent: _ColumnProfile) -> float:
+    """The containment an unrelated numeric column would show by coincidence:
+    the parent's density over the child's value range, |parent ∩ [min, max]| /
+    (max - min + 1). 0.0 unless both are integer columns (non-numeric values
+    collide with probability ~0).
+
+    A truncated parent's density is its full distinct count (profile_column)
+    over its sampled span (the child's range is taken to lie inside that span,
+    since the sampled extremes understate the true ones); without a distinct
+    count the span is assumed dense.
+
+    ponytail: a real FK into a dense surrogate sequence (1..N) is
+    indistinguishable from coincidence by values alone, so it is NOT inferred;
+    a declared FK still covers it. Sparse or non-numeric keys are unaffected.
+    """
+    if not (child.numeric and parent.numeric):
+        return 0.0
+    width: int = child.hi - child.lo + 1
+    if not parent.saturated:
+        return sum(1 for v in parent.norm if child.lo <= int(v) <= child.hi) / width
+    span: int = parent.hi - parent.lo + 1
+    return min(1.0, (parent.distinct or span) / span)
 
 
 async def _profile_columns(
     connector: Any, tables: list[dict[str, Any]], sample_size: int
 ) -> dict[tuple[str, str], _ColumnProfile]:
-    """Sample every column's distinct values once: the data every later step reads.
+    """Sample every column's distinct values once, then ask the database whether
+    each column that could be a parent is unique.
 
     A column that fails to sample is simply absent from the result -- one bad
     column must not abort the graph. Sequential on purpose.
+
+    ponytail: a FULL profile scan per column that survives the in-memory
+    pre-prune (not per column): the price of exact RHS-uniqueness. A connector
+    without profile_column (MongoDB) leaves it None.
     """
     profiles: dict[tuple[str, str], _ColumnProfile] = {}
     for table in tables:
@@ -292,27 +370,23 @@ async def _profile_columns(
                 logger.debug("Column sampling failed for %s.%s: %s", table_name, col_name, exc)
                 continue
             raw = tuple(v for v in vals if normalize_val(v))
-            if not raw:
-                continue
-            saturated = len(vals) >= sample_size
-            unique = None
-            if saturated:
-                # ponytail: a FULL scan per saturated column -- the price of an
-                # exact RHS-uniqueness answer on a table bigger than the sample.
-                # A connector without profile_column (MongoDB) leaves it None.
-                try:
-                    stats = await connector.profile_column(full_name, col_name, mode="FULL")
-                    unique = stats["distinct_count"] == stats["total_count"] - stats["null_count"]
-                except Exception as exc:
-                    logger.debug(
-                        "Uniqueness check unavailable for %s.%s: %s", table_name, col_name, exc
-                    )
-            profiles[(table_name, col_name)] = _ColumnProfile(
-                raw=raw,
-                norm=frozenset(normalize_val(v) for v in raw),
-                saturated=saturated,
-                unique=unique,
-            )
+            if raw:
+                profiles[(table_name, col_name)] = _make_profile(raw, len(vals) >= sample_size)
+
+    full_names = {t["name"]: str(t.get("full_name") or t["name"]) for t in tables if t.get("name")}
+    for (table_name, col_name), parent in list(profiles.items()):
+        if not any(
+            _may_include(c, parent) for k, c in profiles.items() if k != (table_name, col_name)
+        ):
+            continue
+        try:
+            stats = await connector.profile_column(full_names[table_name], col_name, mode="FULL")
+            distinct = stats["distinct_count"]
+            unique = distinct == stats["total_count"] - stats["null_count"]
+        except Exception as exc:
+            logger.debug("Uniqueness check unavailable for %s.%s: %s", table_name, col_name, exc)
+            continue
+        profiles[(table_name, col_name)] = replace(parent, unique=unique, distinct=distinct)
     return profiles
 
 
@@ -324,66 +398,75 @@ def _find_candidate_edges(
 
     Value-based IND discovery, name-agnostic: nothing here reads a column or
     table NAME to decide anything -- only the sampled values in `profiles`
-    and the table's resolved primary key. Two parameter-free filters
+    and the table's resolved primary key. Parameter-free filters
     (Hoppe/Papenbrock "HoPF"; see TECHNICAL_REPORT P3):
 
-    * RHS-uniqueness: a parent column must be unique in its table. A column
-      is unique when the database says so (saturated columns), else when its
-      distinct count equals the table's largest distinct count (the table's
-      row count, whenever some column is a key). Without this a repeated
-      value column becomes a "parent" of everything inside it.
-    * PK subset of PK: a column whose values equal its own table's primary
-      key IS that key, and an edge between two keys is a coincidence of two
-      surrogate sequences (1..60 inside 1..200), not a reference. This is what
-      rejects the surrogate-key false edge, by the data.
+    * RHS-uniqueness: a parent column must be unique in its table. Decided by
+      the database when it can say (`profile_column`), else for a complete
+      sample by distinct count == the table's largest distinct count (the row
+      count, whenever some column is a key); a truncated column of unknown
+      uniqueness is admitted only if it is the table's resolved primary key.
+    * PK subset of PK: an edge between two keys is two surrogate sequences, not
+      a reference. A key is the resolved single primary key, or (only where both
+      samples are complete, so equality is exact) a column holding its values.
+    * In-memory pruning (`_may_include`) before any query.
 
     The acyclicity rule HoPF also uses is deliberately NOT applied: it would
     reject junction tables and self-references, which P4/P7 must find.
 
-    ponytail: unary INDs only (no composite keys). Uniqueness is only
-    decidable below the sampling cap or with a connector that can profile a
-    column, and only if the table has a unique column at all; otherwise the
-    filter passes vacuously and the containment test decides alone. A genuine FK that is itself equal to its own
-    table's key (a shared-key 1:1 extension table) is dropped by the PK-subset
-    filter; a declared FK still finds it. A nullable unique column in a
-    small table has fewer distinct values than the key and is not treated as
-    unique.
+    ponytail: unary INDs only (no composite keys). A key-less table whose
+    largest column is not unique, and a nullable unique column in a small
+    table with no profile_column, are misjudged by the size rule. Above the
+    sample cap a copy of the primary key under another name is not recognised
+    as a key (two independent samples cannot be compared); the coincidence test
+    in `_verify_inclusion` still catches integer ones. A genuine FK that is
+    itself its table's key (a shared-key 1:1 extension table) is dropped by
+    the PK-subset filter; a declared FK still finds it.
     """
     full_names = {t["name"]: str(t.get("full_name") or t["name"]) for t in tables if t.get("name")}
     table_size: dict[str, int] = {}
     for (t, _c), p in profiles.items():
         table_size[t] = max(table_size.get(t, 0), len(p.norm))
 
-    key_values: dict[str, frozenset[str]] = {}
+    pk_of: dict[str, tuple[str, str]] = {}
     for table in tables:
-        name = table.get("name")
         pk = _resolve_primary_key(table)
-        if name and len(pk) == 1 and (name, pk[0]) in profiles:
-            key_values[name] = profiles[(name, pk[0])].norm
+        if table.get("name") and len(pk) == 1:
+            pk_of[table["name"]] = (table["name"], pk[0])
 
-    def is_key(table: str, column: str) -> bool:
-        return table in key_values and profiles[(table, column)].norm == key_values[table]
+    def is_key(key: tuple[str, str]) -> bool:
+        pk = pk_of.get(key[0])
+        if pk is None:
+            return False
+        if key == pk:
+            return True
+        a, b = profiles[key], profiles.get(pk)
+        return b is not None and not a.saturated and not b.saturated and a.norm == b.norm
 
+    def is_unique(key: tuple[str, str]) -> bool:
+        p = profiles[key]
+        if p.unique is not None:
+            return p.unique
+        return key == pk_of.get(key[0]) if p.saturated else len(p.norm) == table_size[key[0]]
+
+    miss = 1 / len(profiles) ** 2 if profiles else 0.0
     candidates: list[_EdgeCandidate] = []
-    for (parent_t, parent_c), parent in profiles.items():
-        unique = (
-            parent.unique if parent.unique is not None else len(parent.norm) == table_size[parent_t]
-        )
-        if not unique:
+    for parent_key, parent in profiles.items():
+        if not is_unique(parent_key):
             continue  # RHS-uniqueness prefilter
-        for (child_t, child_c), _child in profiles.items():
-            if (child_t, child_c) == (parent_t, parent_c):
+        for child_key, child in profiles.items():
+            if child_key == parent_key or not _may_include(child, parent, miss):
                 continue
-            if is_key(child_t, child_c) and is_key(parent_t, parent_c):
+            if is_key(child_key) and is_key(parent_key):
                 continue  # PK subset of PK
             candidates.append(
                 _EdgeCandidate(
-                    child_table=child_t,
-                    child_column=child_c,
-                    parent_table=parent_t,
-                    parent_column=parent_c,
-                    child_full_table=full_names[child_t],
-                    parent_full_table=full_names[parent_t],
+                    child_table=child_key[0],
+                    child_column=child_key[1],
+                    parent_table=parent_key[0],
+                    parent_column=parent_key[1],
+                    child_full_table=full_names[child_key[0]],
+                    parent_full_table=full_names[parent_key[0]],
                 )
             )
     return candidates
@@ -395,7 +478,13 @@ async def _verify_inclusion(
     profiles: dict[tuple[str, str], _ColumnProfile],
     sample_size: int,
 ) -> float | None:
-    """|child ∩ parent| / |child| over the child's sampled distinct values.
+    """|child ∩ parent| / |child| over the child's sampled distinct values, or
+    None when it is no evidence.
+
+    No evidence means: the containment does not exceed what coincidence gives
+    (`_chance`: `status` 1..3 or `ticket.orgid` inside a dense id sequence), or
+    the lookup failed -- never raises, since one bad candidate must not abort
+    building the rest of the graph.
 
     When the parent's value set was sampled completely the answer is read from
     memory. When it was truncated (a big table), the parent is asked directly
@@ -404,34 +493,36 @@ async def _verify_inclusion(
     sampling scored 0.069 for a 100% referentially intact pair (thousands of
     parents, 29 children).
 
-    Returns None if the lookup failed -- never raises, since one bad candidate
-    must not abort building the rest of the graph.
-
-    ponytail: one filtered query per candidate pair against a saturated
-    parent; the RHS-uniqueness filter bounds how many parents that is.
+    ponytail: one filtered query per surviving pair against a truncated parent;
+    `_find_candidate_edges` bounds how many pairs that is.
     """
     child = profiles[(candidate.child_table, candidate.child_column)]
     parent = profiles[(candidate.parent_table, candidate.parent_column)]
+    chance = _chance(child, parent)
+    if chance >= 1:
+        return None  # nothing can exceed full coincidence: skip the query
     if not parent.saturated:
-        return len(child.norm & parent.norm) / len(child.norm)
-    try:
-        matches = await connector.sample_distinct_values(
-            candidate.parent_full_table,
-            candidate.parent_column,
-            limit=sample_size,
-            filter_values=list(child.raw),
-        )
-    except Exception as exc:
-        logger.debug(
-            "Inclusion-dependency parent lookup failed for %s.%s -> %s.%s: %s",
-            candidate.child_table,
-            candidate.child_column,
-            candidate.parent_table,
-            candidate.parent_column,
-            exc,
-        )
-        return None
-    return len(child.norm & {normalize_val(v) for v in matches}) / len(child.norm)
+        overlap = len(child.norm & parent.norm) / len(child.norm)
+    else:
+        try:
+            matches = await connector.sample_distinct_values(
+                candidate.parent_full_table,
+                candidate.parent_column,
+                limit=sample_size,
+                filter_values=list(child.raw),
+            )
+        except Exception as exc:
+            logger.debug(
+                "Inclusion-dependency parent lookup failed for %s.%s -> %s.%s: %s",
+                candidate.child_table,
+                candidate.child_column,
+                candidate.parent_table,
+                candidate.parent_column,
+                exc,
+            )
+            return None
+        overlap = len(child.norm & {normalize_val(v) for v in matches}) / len(child.norm)
+    return overlap if overlap > chance else None
 
 
 def _cut_at_cliff(scored: list[tuple[float, _EdgeCandidate]]) -> list[tuple[float, _EdgeCandidate]]:

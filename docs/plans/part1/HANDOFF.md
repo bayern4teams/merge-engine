@@ -3,7 +3,7 @@
 Overwrite this file at every commit. A fresh session reads it first, then
 [the plan](../PART1_IMPLEMENTATION_PLAN.md). Git is the memory; a session's context is not.
 
-**Lock:** 2026-10-05T06:05:56Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-05T06:05:56Z
+**Lock:** 2026-10-05T06:07:19Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-05T06:07:19Z
 
 (Lock/heartbeat protocol: plan §7. A session sets `Lock: <ISO time>`, pushes it, and refreshes it at every commit; a lock older than 75 min is stale. `Autonomy` is `off`, `dryrun` (a tick only records what works and exits) or `unattended-through-phase-5` (authorises the supervisor to chain phases). Only the user changes it.)
 
@@ -13,7 +13,7 @@ Overwrite this file at every commit. A fresh session reads it first, then
 |---|---|---|---|---|
 | P1 | 1 | unverified-live | (this commit) | ACCEPT r2: 63 acceptance + 2 attack tests pass; 0 of 73 names regressed on a 50-column schema; debt: 1-letter vocabulary words |
 | P2 | 1 | unverified-live | 5431075 | ACCEPT after attack F1-F3,F5 fixed: 40/40 planted (was 31/40), uncompared 0 (was 389,200), guard raises and fails the run; F4 WNP loss 4-19 % vs uncapped = accepted ceiling; block filtering omitted (ratio r is fitted, §2.4) |
-| P3 | 2 | todo | | |
+| P3 | 2 | unverified-live | (this commit) | ACCEPT r2 (worker, lead diff review): 34/34 acceptance; value-based INDs, RHS-uniqueness (profile_column or complete sample), PK-subset filter, binomial pre-prune (miss < 1/pairs), coincidence test vs the parent's density over the child's range, cliff; decoy rejected at caps 50/500; cost 0-6,084 filtered queries vs 439,886 naive. Ceilings: FK into a DENSE surrogate sequence not inferred (declared FKs cover it); 1:1 extension tables dropped; lone low-overlap string edge stays `probable` (no floor); Mongo key-less tables |
 | P4 | 2 | todo | | |
 | P5 | 2 | todo | | |
 | P6 | 3 | todo | | |
@@ -116,6 +116,7 @@ attack agent. P13: prior rescaled to the random-pair population (lead decision, 
 - `tests/part1/` is NOT run by `check.py test` (CI runs tests/unit + tests/integration only). The lead runs `pytest tests/part1` at every phase gate; folding it into CI is a Phase 5 decision.
 - P1 `ambiguous_splits` is returned by `map_fields_impl` but dropped by `map_fields_node` — surface it in lane B (P11/P12).
 - P18 `field_priorities` has no API/UI surface yet (config-only).
+- P3 LIVE RISK: if `company.companyid` is a dense integer sequence, the coincidence rule drops the very `staff.main_entity_id -> company.companyid` edge the report targets (LOCAL_VERIFY P3). `tests/part1/baseline_schema.py` still calls the old `_find_candidate_edges` signature (script, not a test).
 - P14: person-name initials/middle initials score lower than before (level debt above); the 0.90/0.70 level cut-offs were calibrated for difflib and are reused on the IDF similarity — revisit with the restored ground truth (LOCAL_VERIFY P14).
 - P12: a mapping pinned in a saved profile before P12 is reused verbatim, so it can still map a metadata column (profile replay is not re-filtered). Decide in Phase 5 or with the profile owner.
 - P13 side effect for P14/P6: Phase 0 P6 case a (same email, truth Match) on the model path moved 0.76 (review) -> 0.67 (excluded). Cause measured: consistent random-pair prior (-11 bits at n=156) vs two unique exact agreements (+6.04 bits each); the fixture's match count is fixed while n grows, so the prior shrinks as 1/n^2. Real wrinkle: `build_term_frequencies` counts the record's own value (u = df/N, not (df-1)/(N-1)), ~1 bit per exact field. P14 (token-grain TF) must decide this; P6's outcome-class tests on both paths are the gate.

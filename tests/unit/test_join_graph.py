@@ -12,18 +12,23 @@ plan_scope.py's single-junction `_find_junction` could never express.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from src.mcp_server.tools.join_graph import (
     JoinEdge,
     JoinGraph,
     JoinPath,
-    _ColumnProfile,
     _cut_at_cliff,
+    _EdgeCandidate,
     _find_candidate_edges,
     _hop_from,
+    _make_profile,
     _resolve_primary_key,
+    _verify_inclusion,
     build_join_graph,
     find_paths,
     normalize_val,
@@ -87,14 +92,7 @@ class TestResolvePrimaryKey:
 
 
 def _profiles(columns: dict[tuple[str, str], list[Any]], *, saturated=()):
-    return {
-        key: _ColumnProfile(
-            raw=tuple(vals),
-            norm=frozenset(normalize_val(v) for v in vals),
-            saturated=key in saturated,
-        )
-        for key, vals in columns.items()
-    }
+    return {key: _make_profile(tuple(vals), key in saturated) for key, vals in columns.items()}
 
 
 def _tbl(name: str, *cols: str, **extra: Any) -> dict[str, Any]:
@@ -109,10 +107,10 @@ class TestFindCandidateEdges:
         tables = [_tbl("a", "k", "x"), _tbl("b", "pk", "ref")]
         profiles = _profiles(
             {
-                ("a", "k"): ["1", "2", "3"],
+                ("a", "k"): ["k1", "k2", "k3"],
                 ("a", "x"): ["p", "q", "r"],
                 ("b", "pk"): ["p", "q", "r", "s"],
-                ("b", "ref"): ["1", "2"],
+                ("b", "ref"): ["k1", "k2"],
             }
         )
         got = {
@@ -126,7 +124,7 @@ class TestFindCandidateEdges:
         tables = [_tbl("dim", "k", "grp"), _tbl("fact", "ref")]
         profiles = _profiles(
             {
-                ("dim", "k"): ["1", "2", "3", "4"],
+                ("dim", "k"): ["k1", "k2", "k3", "k4"],
                 ("dim", "grp"): ["a", "b"],  # fewer distinct values than the table has rows
                 ("fact", "ref"): ["a", "b"],
             }
@@ -135,20 +133,39 @@ class TestFindCandidateEdges:
             (c.parent_table, c.parent_column) for c in _find_candidate_edges(tables, profiles)
         }
         assert ("dim", "grp") not in parents
-        assert ("dim", "k") in parents
+        assert ("dim", "k") not in parents  # nothing inside it
+        assert ("fact", "ref") in parents  # fact has a single column: its own size
 
     def test_exact_uniqueness_from_the_database_overrides_the_size_rule(self) -> None:
         tables = [_tbl("t", "a", "b"), _tbl("u", "c")]
-        profiles = {
-            ("t", "a"): _ColumnProfile(("1", "2"), frozenset({"1", "2"}), True, unique=False),
-            ("t", "b"): _ColumnProfile(("3", "4"), frozenset({"3", "4"}), True, unique=True),
-            ("u", "c"): _ColumnProfile(("1",), frozenset({"1"}), False),
-        }
+        profiles = _profiles(
+            {("t", "a"): ["x", "y"], ("t", "b"): ["z", "w"], ("u", "c"): ["x", "z"]}
+        )
+        profiles[("t", "a")] = replace(profiles[("t", "a")], unique=False)
+        profiles[("t", "b")] = replace(profiles[("t", "b")], unique=True)
         parents = {
             (c.parent_table, c.parent_column) for c in _find_candidate_edges(tables, profiles)
         }
         assert ("t", "a") not in parents
         assert ("t", "b") in parents
+
+    def test_truncated_column_of_unknown_uniqueness_is_a_parent_only_if_the_primary_key(
+        self,
+    ) -> None:
+        tables = [_tbl("t", "key", "other", primary_key=["key"]), _tbl("u", "c")]
+        profiles = _profiles(
+            {
+                ("t", "key"): ["a", "b", "c"],
+                ("t", "other"): ["a", "b", "c"],
+                ("u", "c"): ["a", "b"],
+            },
+            saturated={("t", "key"), ("t", "other")},
+        )
+        parents = {
+            (c.parent_table, c.parent_column) for c in _find_candidate_edges(tables, profiles)
+        }
+        assert ("t", "key") in parents
+        assert ("t", "other") not in parents
 
     def test_pk_inside_pk_is_not_an_edge_even_when_the_copy_has_another_name(self) -> None:
         tables = [
@@ -157,16 +174,16 @@ class TestFindCandidateEdges:
         ]
         profiles = _profiles(
             {
-                ("big", "pk"): ["1", "2", "3", "4"],
-                ("small", "pk"): ["1", "2"],
-                ("small", "dup"): ["1", "2"],  # same values as its own key: it IS that key
+                ("big", "pk"): ["a", "b", "c", "d"],
+                ("small", "pk"): ["a", "b"],
+                ("small", "dup"): ["a", "b"],  # same values as its own key: it IS that key
             }
         )
         assert _find_candidate_edges(tables, profiles) == []
 
     def test_self_reference_survives(self) -> None:
         tables = [_tbl("p", "code", "boss", primary_key=["code"])]
-        profiles = _profiles({("p", "code"): ["1", "2", "3"], ("p", "boss"): ["1", "2"]})
+        profiles = _profiles({("p", "code"): ["a", "b", "c"], ("p", "boss"): ["a", "b"]})
         got = {(c.child_column, c.parent_column) for c in _find_candidate_edges(tables, profiles)}
         assert got == {("boss", "code")}
 
@@ -180,8 +197,8 @@ class TestFindCandidateEdges:
         ]
         profiles = _profiles(
             {
-                ("company", "k"): ["1", "2", "3"],
-                ("fin", "ref"): ["1", "2"],
+                ("company", "k"): ["a", "b", "c"],
+                ("fin", "ref"): ["a", "b"],
                 ("fin", "n"): ["x", "y", "z", "w"],
             }
         )
@@ -193,13 +210,47 @@ class TestFindCandidateEdges:
         tables = [_tbl("company", "k"), _tbl("fin", "ref", "n")]
         profiles = _profiles(
             {
-                ("company", "k"): ["1", "2", "3"],
-                ("fin", "ref"): ["1", "2"],
+                ("company", "k"): ["a", "b", "c"],
+                ("fin", "ref"): ["a", "b"],
                 ("fin", "n"): ["x", "y", "z", "w"],
             }
         )
         c = next(c for c in _find_candidate_edges(tables, profiles) if c.child_table == "fin")
         assert (c.child_full_table, c.parent_full_table) == ("fin", "company")
+
+
+class TestCoincidence:
+    """An inclusion is evidence only when it beats chance (integer columns)."""
+
+    async def _verify(self, child, parent, *, parent_saturated=False, distinct=None):
+        profiles = {("c", "x"): _make_profile(tuple(child), False)}
+        pp = _make_profile(tuple(parent), parent_saturated)
+        profiles[("p", "y")] = replace(pp, distinct=distinct)
+        conn = AsyncMock()
+        conn.sample_distinct_values = AsyncMock(
+            side_effect=lambda t, c, limit=500, filter_values=None: [
+                v for v in parent if str(v) in {str(f) for f in filter_values}
+            ]
+        )
+        cand = _EdgeCandidate("c", "x", "p", "y")
+        return await _verify_inclusion(conn, cand, profiles, 500)
+
+    async def test_low_cardinality_ints_inside_a_dense_sequence_are_no_evidence(self) -> None:
+        assert await self._verify([1, 2, 3], list(range(1, 200))) is None
+
+    async def test_ints_in_a_sparse_parent_are_evidence(self) -> None:
+        parent = list(range(0, 2000, 7))
+        assert await self._verify(parent[:10], parent) == 1.0
+
+    async def test_non_numeric_values_have_no_chance_level(self) -> None:
+        assert await self._verify(["a", "b"], ["a", "b", "c"]) == 1.0
+
+    async def test_truncated_parent_uses_its_full_distinct_count(self) -> None:
+        dense = list(range(1, 501))
+        assert await self._verify([1, 2], dense, parent_saturated=True, distinct=500) is None
+        # same sample, but the database says 500 distinct values spread over a wide span
+        sparse = list(range(0, 500 * 40, 40))
+        assert await self._verify(sparse[:5], sparse, parent_saturated=True, distinct=500) == 1.0
 
 
 class TestCutAtCliff:
@@ -272,6 +323,7 @@ class TestBuildJoinGraph:
             return values
 
         fake_connector = AsyncMock()
+        fake_connector.profile_column = AsyncMock(side_effect=NotImplementedError)
         fake_connector.sample_distinct_values = AsyncMock(side_effect=fake_sample)
         fake_connector.close = AsyncMock()
 
@@ -299,6 +351,7 @@ class TestBuildJoinGraph:
             }
         }
         fake_connector = AsyncMock()
+        fake_connector.profile_column = AsyncMock(side_effect=NotImplementedError)
         fake_connector.sample_distinct_values = AsyncMock(return_value=[])
         fake_connector.close = AsyncMock()
         with patch(
@@ -440,8 +493,8 @@ class TestBuildJoinGraph:
             # approach would wrongly "verify" against that instead.
             table = {
                 ("Company", "companyID"): [1, 2, 3],
-                ("Company", "foundedYear"): [77, 88, 99],
-                ("CompanyRelation", "companyID"): [77, 88, 99],
+                ("Company", "foundedYear"): list(range(1990, 2025)),
+                ("CompanyRelation", "companyID"): [1990, 2000, 2010],
             }
             values = table.get((table_name, column), [])
             if filter_values is not None:
@@ -449,6 +502,7 @@ class TestBuildJoinGraph:
             return values
 
         fake_connector = AsyncMock()
+        fake_connector.profile_column = AsyncMock(side_effect=NotImplementedError)
         fake_connector.sample_distinct_values = AsyncMock(side_effect=fake_sample)
         fake_connector.close = AsyncMock()
         with patch(
@@ -459,15 +513,15 @@ class TestBuildJoinGraph:
                 schemas, [{"id": "origin_1", "type": "postgresql", "connection": {}}]
             )
 
-        # P3: discovery is value-based and name-agnostic, so the edge that
-        # exists is the one the values support -- to foundedYear, the column
-        # that actually contains them -- and nothing targets companyID.
+        # P3: discovery is value-based. The only containment is the child's
+        # values inside the dense foundedYear range, which is coincidence (the
+        # parent's density over the child's range), so it is no edge at all.
         edges = [
             e
             for e in graph.neighbors(("origin_1", "CompanyRelation"))
             if e.parent_table == "Company"
         ]
-        assert [(e.child_column, e.parent_column) for e in edges] == [("companyID", "foundedYear")]
+        assert edges == []
 
     async def test_filtered_parent_lookup_finds_real_overlap_independent_sampling_would_miss(
         self,
@@ -521,6 +575,7 @@ class TestBuildJoinGraph:
 
     async def test_connector_is_closed_even_on_sampling_error(self) -> None:
         fake_connector = AsyncMock()
+        fake_connector.profile_column = AsyncMock(side_effect=NotImplementedError)
         fake_connector.sample_distinct_values = AsyncMock(side_effect=RuntimeError("boom"))
         fake_connector.close = AsyncMock()
         with patch(
@@ -980,6 +1035,7 @@ class TestBuildJoinGraphHeuristicTier:
             return ["c1"]
 
         fake_connector = AsyncMock()
+        fake_connector.profile_column = AsyncMock(side_effect=NotImplementedError)
         fake_connector.sample_distinct_values = AsyncMock(side_effect=fake_sample)
         fake_connector.close = AsyncMock()
 
@@ -1016,3 +1072,79 @@ def _path_hop(
         child_table, "x_id", parent_table, "id", confidence=confidence, overlap_ratio=overlap_ratio
     )
     return PathHop(edge=edge, direction="narrow")
+
+
+class _SamplingDB:
+    """Column store whose unfiltered sample is RANDOM and capped (as a real
+    DISTINCT ... ORDER BY random() LIMIT is), so two samples of equal columns
+    differ above the cap. profile_column is optional (MongoDB has none)."""
+
+    def __init__(self, rows: dict[str, dict[str, list[Any]]], with_profile: bool) -> None:
+        import random
+
+        self.rows, self.rng = rows, random.Random(1)
+        if not with_profile:
+            self.profile_column = AsyncMock(side_effect=NotImplementedError)
+
+    async def sample_distinct_values(self, table, column, limit=500, filter_values=None):
+        vals = list(dict.fromkeys(self.rows[table][column]))
+        if filter_values is not None:
+            keep = {normalize_val(v) for v in filter_values}
+            return [v for v in vals if normalize_val(v) in keep][:limit]
+        return self.rng.sample(vals, limit) if len(vals) > limit else vals
+
+    async def profile_column(self, table, column, mode="FULL"):
+        v = self.rows[table][column]
+        return {"total_count": len(v), "null_count": 0, "distinct_count": len(set(v))}
+
+    async def close(self) -> None:
+        return None
+
+
+class TestAboveTheSampleCap:
+    """Tables bigger than the sample: key-ness and uniqueness cannot come from
+    comparing two independent samples."""
+
+    @staticmethod
+    async def _edges(rows, with_profile, **kw):
+        schemas = {
+            "o": {"tables": [_tbl(t, *cols) for t, cols in ((t, list(c)) for t, c in rows.items())]}
+        }
+        with patch(
+            "src.mcp_server.tools.join_graph.create_connector",
+            return_value=_SamplingDB(rows, with_profile),
+        ):
+            g = await build_join_graph(schemas, [{"id": "o", "type": "x", "connection": {}}], **kw)
+        return {
+            (e.child_table, e.child_column, e.parent_table, e.parent_column)
+            for lst in g._adjacency.values()
+            for e in lst
+        }
+
+    @pytest.mark.parametrize("with_profile", [True, False])
+    async def test_surrogate_decoy_is_rejected_at_scale(self, with_profile: bool) -> None:
+        n = 2000
+        ids = [f"{i:05d}" for i in range(n // 2)]
+        rows = {
+            "org": {"_id": [f"{i:05d}" for i in range(n)]},
+            "ticket": {"_id": ids, "orgid": list(ids)},  # a copy of its own key
+        }
+        assert await self._edges(rows, with_profile, sample_size=500) == set()
+
+    @pytest.mark.parametrize("with_profile", [True, False])
+    async def test_real_fk_above_the_cap_is_found_with_profile_column_and_reverse_never(
+        self, with_profile
+    ) -> None:
+        n = 3000
+        keys = [f"BK{i:06d}" for i in range(n)]
+        rows = {
+            "ent": {"_id": [f"e{i}" for i in range(n)], "bk": keys},
+            "lnk": {
+                "_id": [f"l{i}" for i in range(2 * n)],
+                "ref": [keys[i % n] for i in range(2 * n)],  # every key twice: not unique
+            },
+        }
+        got = await self._edges(rows, with_profile, sample_size=500)
+        # Without profile_column (MongoDB) a truncated non-PK column's uniqueness
+        # is unknown, so it is not admitted as a parent: a documented ceiling.
+        assert got == ({("lnk", "ref", "ent", "bk")} if with_profile else set())

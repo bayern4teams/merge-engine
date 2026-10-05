@@ -122,3 +122,10 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Independent check: ground-truth precision/recall for `company` and person entities, stratified; list the company FPs that share only a legal-form token.
 - Expected evidence: fewer company FPs carried by a shared high-df token (report: 4 company FPs were parent/subsidiary or jurisdictional variants); person recall not lower beyond the initials/middle-initial debt; inspect the 0.70 band edge.
 - Result (filled in locally):
+
+### P3 — value-based inclusion-dependency discovery
+- Why cloud could not verify: no origin databases.
+- Command: full merge run; read `dependency_tree` / `column_dependencies` from the analyze_dependencies state and the join graph edges.
+- Independent check: SQL `SELECT count(*) FROM staff s JOIN company c ON s.main_entity_id = c.companyid` (expect 13 518) and `SELECT min(companyid), max(companyid), count(DISTINCT companyid) FROM company` — **if companyid is dense (count = max - min + 1) the coincidence rule will NOT infer this edge**; then it must come from a declared FK or the gate.
+- Expected evidence: `dependency_tree` non-empty (before: `{}`); the `staff.main_entity_id -> company.companyid` edge present unless companyid is dense; no edge onto `company._id`.
+- Result (filled in locally):
