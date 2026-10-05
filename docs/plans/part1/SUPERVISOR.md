@@ -54,9 +54,11 @@ never check out, merge, rebase or delete another branch.
    is rejected, another session got there first: git pull --rebase, re-read "Lock"; if it is now
    held, EXIT as in step 2. Never force-push.
 3b. Now read CLAUDE.md and docs/plans/PART1_IMPLEMENTATION_PLAN.md (sections 2-5, 7-9).
-4. If graphify, graft or codebase-memory-mcp are not on PATH, run bash scripts/cloud_setup.sh; if
-   graphify-out/graph.json or graft/ is missing, run python scripts/bootstrap.py. If a tool is
-   still missing, that is a [BLOCKED] (step 8), not something to skip.
+4. If graphify or codebase-memory-mcp are not on PATH, run bash scripts/cloud_setup.sh; if
+   graphify-out/graph.json is missing, run python scripts/bootstrap.py. If one of those two is still
+   missing, that is a [BLOCKED] (step 8), not something to skip. graft is OPTIONAL (tier 2): its
+   install can hang, so if it is missing continue without it, note it once in HANDOFF.md, and use
+   graphify and codebase-memory-mcp instead. Run any install under `timeout -k 5 150`.
 5. Act as the lead exactly as the plan says, from the Next action in HANDOFF.md. Refresh the lock
    timestamp in every commit and push each commit. Commit "WIP P<n>" before any long step.
    Pass model "sonnet" for workers, at most 2 concurrent, lead approval for every item. If any push
