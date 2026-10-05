@@ -301,6 +301,96 @@ def build_reconciliation_report(
     }
 
 
+def _resolve_dest_table(destination: Any, entity_type: str, available: list[str]) -> str:
+    """The destination table an entity loads into (configured name, then alias match)."""
+    dest_tables = (
+        getattr(destination, "tables", {})
+        if hasattr(destination, "tables")
+        else (destination.get("tables", {}) if isinstance(destination, dict) else {})
+    )
+    table = (
+        dest_tables.get(entity_type, entity_type) if isinstance(dest_tables, dict) else entity_type
+    )
+    return (resolve_dest_table(entity_type, available) if available else None) or table
+
+
+def read_destination_schemas(connector: Any) -> dict[str, dict[str, Any]]:
+    """``{table: get_table_schema(table)}`` for every destination table (the I/O half of
+    :func:`destination_schema_defects`; a connector that cannot introspect yields ``{}``)."""
+    try:
+        return {t: connector.get_table_schema(t) for t in connector.list_tables()}
+    except Exception as exc:
+        logger.warning("Could not read destination schemas for the defect check: %s", exc)
+        return {}
+
+
+def destination_schema_defects(
+    state: dict[str, Any], schemas: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Destination tables that cannot hold the links this run would write (report P17).
+
+    PURE: no connector, no DDL. ``schemas`` is ``{table: {"columns": [{"name": ...}, ...],
+    ...}}`` for every destination table (see :func:`read_destination_schemas`);
+    the keys double as the available-table list. Callable from a gate payload builder, which
+    cannot rely on this node's body running.
+
+    A table is defective when every column it declares beyond its key and ``_`` provenance
+    columns is one the mapping/unmapped fields need, yet some needed column is not declared,
+    so its rows would be pure key. Needed columns come from the run itself (mapping
+    ``dest_column`` for this table, plus ``unmapped_fields`` the records carry); missing is
+    needed minus declared. Returns one JSON-safe dict per defective entity::
+
+        {"entity", "table", "missing_columns": [...], "unprojectable_rows": int,
+         "held_links": [{"id": ..., "values": {missing column: value}}, ...]}
+
+    ponytail: Ceiling - a table with its own payload column beside the missing links is not
+    judged (rows still land partially); a key column not named ``id`` counts as payload, so such
+    a table is never judged defective (no false positive); a mapped-but-absent column on a table whose other
+    columns are all mapped is reported and emptied. Deferred: hold the links in the corpus
+    and re-project once the schema's owner fixes the DDL (report §3.4); trigger = the corpus
+    lands. ``held_links`` grows with the row count until then.
+    """
+    destination = state.get("destination")
+    unified = state.get("unified_entities") or {}
+    available = list(schemas)
+    defects: list[dict[str, Any]] = []
+    for entity in unified:
+        table = _resolve_dest_table(destination, entity, available)
+        schema = schemas.get(table) or {}
+        declared = {c["name"] for c in schema.get("columns") or []}
+        if not declared:
+            continue  # no such table yet: ensure_table's business, not a column defect
+        # needed destination column -> the source field that feeds it
+        needed: dict[str, str] = {}
+        for src, info in ((state.get("field_mappings") or {}).get(entity) or {}).items():
+            if isinstance(info, dict) and (info.get("dest_table") or table) == table:
+                needed.setdefault(info.get("dest_column") or src, src)
+        for u in (state.get("unmapped_fields") or {}).get(entity) or []:
+            if isinstance(u, dict) and u.get("field"):
+                needed.setdefault(u["field"], u["field"])
+        missing = sorted(set(needed) - declared)
+        payload = {c for c in declared if c != "id" and not c.startswith("_")}
+        if not missing or not payload <= set(needed):
+            continue
+        held = []
+        for rec in collection_records(unified, entity, kind="unified"):
+            values = {c: rec.get(needed[c]) for c in missing}
+            if any(v is not None and str(v).strip() for v in values.values()):
+                held.append({"id": rec.get("_cluster_id") or rec.get("id"), "values": values})
+        if held:
+            defects.append(
+                {
+                    "entity": entity,
+                    "table": table,
+                    "missing_columns": missing,
+                    "unprojectable_rows": len(held),
+                    "held_links": held,
+                }
+            )
+    safe: list[dict[str, Any]] = json.loads(json.dumps(defects, default=str))  # JSON-safe values
+    return safe
+
+
 def _write_run_report(report: dict[str, Any]) -> str | None:
     """Write the reconciliation report to logs/run_reports/<run_id>.json."""
     run_id = report.get("run_id") or "unknown_run"
@@ -459,6 +549,20 @@ async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
     if dry_run:
         logger.info("DRY RUN: the load will be rolled back, not committed.")
 
+    # Report, never repair (P17): a table that cannot hold its links is left empty and named;
+    # no DDL is issued. Introspection is read-only and happens before the transaction.
+    defects = (
+        destination_schema_defects(state, read_destination_schemas(load_connector))
+        if load_connector is not None
+        else []
+    )
+    for d in defects:
+        errors.append(
+            f"Destination table '{d['table']}' cannot hold its linkage: missing column(s) "
+            f"{', '.join(d['missing_columns'])}; {d['unprojectable_rows']} row(s) cannot be "
+            f"projected and were not written."
+        )
+
     rolled_back = False
     try:
         with atomic(dry_run=dry_run) if dry_run else atomic():
@@ -481,6 +585,7 @@ async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
                 failed_entities=failed_entities,
                 errors=errors,
                 state=state,
+                skip_entities=frozenset(d["entity"] for d in defects),
             )
 
             # Record which entity each source record ended up in. Inside the
@@ -538,6 +643,14 @@ async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
         rolled_back=rolled_back,
     )
     report["load_rolled_back"] = rolled_back
+    if defects:
+        report["destination_defects"] = defects
+        report["data_quality"]["red_flags"].extend(
+            f"{d['table']}: destination table cannot hold its linkage "
+            f"(missing {', '.join(d['missing_columns'])}); {d['unprojectable_rows']} row(s) "
+            f"left unwritten"
+            for d in defects
+        )
     if dry_run:
         # Distinguished from a failure rollback: the numbers are real and
         # the destination is untouched *by design*.
@@ -571,7 +684,10 @@ async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
     logger.debug("Total errors: %d", len(errors))
     logger.debug("EXIT load_data_node")
 
-    return {"errors": errors, "reconciliation_report": report, "failure": failure}
+    update: dict[str, Any] = {"errors": errors, "reconciliation_report": report, "failure": failure}
+    if defects:
+        update["destination_defects"] = defects
+    return update
 
 
 class _LoadAborted(RuntimeError):
@@ -615,6 +731,7 @@ async def _load_all_entities(
     failed_entities: list[str],
     errors: list[str],
     state: dict[str, Any] | None = None,
+    skip_entities: frozenset[str] = frozenset(),
 ) -> None:
     """Load every entity through the shared connector/transaction.
 
@@ -631,20 +748,7 @@ async def _load_all_entities(
     # entity's table regardless of where the loop currently is.
     entity_type_by_dest_table: dict[str, str] = {}
     for entity_type in entity_order:
-        dest_tables = (
-            getattr(destination, "tables", {})
-            if hasattr(destination, "tables")
-            else (destination.get("tables", {}) if isinstance(destination, dict) else {})
-        )
-        candidate_table = (
-            dest_tables.get(entity_type, entity_type)
-            if isinstance(dest_tables, dict)
-            else entity_type
-        )
-        if available_dest_tables:
-            resolved = resolve_dest_table(entity_type, available_dest_tables)
-            if resolved:
-                candidate_table = resolved
+        candidate_table = _resolve_dest_table(destination, entity_type, available_dest_tables)
         entity_type_by_dest_table[candidate_table] = entity_type
 
     for entity_type in entity_order:
@@ -653,23 +757,15 @@ async def _load_all_entities(
         if not records:
             logger.info("No records to load for entity '%s', skipping.", entity_type)
             continue
+        if entity_type in skip_entities:
+            logger.error(
+                "Entity '%s' not loaded: its destination table cannot hold its links.", entity_type
+            )
+            continue
 
         mapping = field_mappings.get(entity_type, {})
         logger.debug("Field mapping for '%s': %d mappings", entity_type, len(mapping))
-        dest_tables = (
-            getattr(destination, "tables", {})
-            if hasattr(destination, "tables")
-            else (destination.get("tables", {}) if isinstance(destination, dict) else {})
-        )
-        dest_table = (
-            dest_tables.get(entity_type, entity_type)
-            if isinstance(dest_tables, dict)
-            else entity_type
-        )
-        if available_dest_tables:
-            resolved = resolve_dest_table(entity_type, available_dest_tables)
-            if resolved:
-                dest_table = resolved
+        dest_table = _resolve_dest_table(destination, entity_type, available_dest_tables)
         logger.debug("Destination table: %s", dest_table)
 
         # Foreign keys are resolved by load_data_impl AFTER it applies the
