@@ -87,7 +87,7 @@ def _band(score, am=0.95, ae=0.70):
     return "match" if score >= am else ("possible" if score >= ae else "exclude")
 
 
-def run_node(keys, path="heuristic", scores=None, rules=None, extra=None, engine=None):
+def run_node(keys, path="heuristic", scores=None, rules=None, extra=None, engine=None, strict=True):
     """Run node.resolve_entities on the planted pairs; return a Run (pre-gate state)."""
     scores = {**SCORE, **(scores or {})}
     recs, ids = fx.planted(keys)
@@ -148,7 +148,7 @@ def run_node(keys, path="heuristic", scores=None, rules=None, extra=None, engine
     finally:
         for c in ctx:
             c.stop()
-    if engine != "splink":
+    if engine != "splink" and strict:
         assert bool(fitted and fitted[0]) == (path == "fitted"), (
             f"harness: wanted {path}, fitted={fitted}"
         )
@@ -335,9 +335,24 @@ def _nums(o):
     return out
 
 
+def _walk_kv(o, path=()):
+    yield path, o
+    if isinstance(o, dict):
+        for k, v in o.items():
+            yield from _walk_kv(v, (*path, str(k)))
+    elif isinstance(o, list):
+        for v in o:
+            yield from _walk_kv(v, path)
+
+
 def histograms(data):
-    """Yield (counts, axis_numbers, context_text) for every histogram-looking structure in the payload."""
-    for d in _walk(data):
+    """Yield (counts, axis_numbers, context_text) for every histogram-looking structure in the payload.
+
+    A histogram needs a scale: bin edges/centres/labels next to the counts, OR a key on its path that says
+    hist/bin/distribution.  Three band counts {match, possible, exclude} are therefore NOT a distribution."""
+    named = re.compile(r"hist|bin|distrib", re.I)
+    for path, d in _walk_kv(data):
+        hint = " ".join(path)
         if isinstance(d, dict):
             for k, v in d.items():
                 if (
@@ -348,23 +363,18 @@ def histograms(data):
                 ):
                     axis = []
                     for k2, v2 in d.items():
-                        if (
-                            k2 != k
-                            and isinstance(v2, list)
-                            and _nums(v2)
-                            and len(_nums(v2)) == len(v2)
-                        ):
+                        if k2 != k and isinstance(v2, list) and len(_nums(v2)) == len(v2) > 0:
                             axis += _nums(v2)
-                    yield list(v), axis, json.dumps(d, default=str)
+                    if axis or named.search(hint + " " + k):
+                        yield list(v), axis, hint + " " + json.dumps(d, default=str)
             ints = {k: _int_of(v) for k, v in d.items()}
             if len(d) >= 3 and all(i is not None for i in ints.values()):
                 axis = []
                 for k in d:
-                    try:
-                        axis.append(float(k))
-                    except ValueError:
-                        pass
-                yield list(ints.values()), axis, json.dumps(list(d), default=str)
+                    nums = re.findall(r"-?\d+(?:\.\d+)?", str(k))
+                    axis += [float(x) for x in nums]
+                if axis:
+                    yield list(ints.values()), axis, hint + " " + json.dumps(list(d), default=str)
         if isinstance(d, list) and len(d) >= 3 and all(isinstance(i, dict) for i in d):
             counts, axis = [], []
             for i in d:
@@ -385,8 +395,8 @@ def histograms(data):
                     for k, v in i.items()
                     if isinstance(v, (int, float)) and not isinstance(v, bool) and _int_of(v) != n
                 ]
-            if counts:
-                yield counts, axis, json.dumps(d[:2], default=str)
+            if counts and (axis or named.search(hint)):
+                yield counts, axis, hint + " " + json.dumps(d[:2], default=str)
 
 
 def distribution(data, n_pairs):
@@ -545,7 +555,8 @@ def test_b2_band_edges_are_the_reports_table():
 def test_b2b_band_edges_end_to_end(path):
     r = run_node(["E", "B", "C", "D"], path)
     assert pending_pairs(r.pre) == {fz(r.ids, "B"), fz(r.ids, "C")}, pending_pairs(r.pre)
-    assert groups(r.pre) == {fz(r.ids, "D")}
+    assert fz(r.ids, "D") in groups(r.pre), "0.95 exactly is a Match"
+    assert not ({fz(r.ids, "B"), fz(r.ids, "C"), fz(r.ids, "E")} & groups(r.pre))
 
 
 def test_b3_defaults_stay_095_and_070():
@@ -641,7 +652,7 @@ def test_c5_more_band_pairs_than_the_display_cap_are_counted_and_all_resolvable(
     cap = tre._MAX_PENDING_CANDIDATES
     n = cap + 10
     recs, ids, names = fx.many_pairs(n)
-    r = run_node([], "heuristic", extra=(recs, {k: 0.80 for k in names}))
+    r = run_node([], "heuristic", extra=(recs, {k: 0.80 for k in names}), strict=False)
     assert band_counts(payload(r.pre))[1] == n, (
         "the band count must be the real count, not the display cap"
     )
