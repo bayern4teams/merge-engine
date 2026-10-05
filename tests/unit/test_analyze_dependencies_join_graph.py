@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.mcp_server.tools.join_graph import JoinEdge, JoinGraph
 from src.orchestrator.nodes.analyze_dependencies import analyze_dependencies
 from src.orchestrator.profiles import stage_cache_set
 
@@ -65,24 +66,34 @@ def _fully_covered_state() -> dict[str, Any]:
 
 
 def _partially_covered_state() -> dict[str, Any]:
-    """Same declared FK as above, plus a third entity ("person") whose
-    only join candidate is a name-heuristic match with no declared FK and
-    no origins list to verify it against -- build_join_graph tags that
-    "heuristic" confidence, which is NOT enough to skip the LLM.
+    """Same declared FK as above, plus a third entity ("person") whose only
+    edge is an unverified "heuristic" one, which is NOT enough to skip the
+    LLM. build_join_graph no longer emits heuristic edges (P3: value-based
+    discovery never guesses from names), but plan_scope's LLM-proposed hops
+    still do, and such a graph can arrive in state, so it is supplied here.
     """
     state = _fully_covered_state()
     state["target_entities"] = ["customer", "company", "person"]
     state["entity_tables"]["person"] = [{"origin_id": "pg1", "table": "persons"}]
-    state["schemas"]["pg1"]["tables"].append(
-        {
-            "name": "persons",
-            "columns": [
-                {"name": "id", "type": "INTEGER"},
-                {"name": "company_id", "type": "INTEGER"},
-            ],
-            "foreign_keys": [],
-        }
-    )
+    graph = JoinGraph()
+    for child, column, confidence in (
+        ("customers", "company_id", "declared"),
+        ("persons", "company_id", "heuristic"),
+    ):
+        graph.add_edge(
+            JoinEdge(
+                child_origin="pg1",
+                child_table=child,
+                child_column=column,
+                parent_origin="pg1",
+                parent_table="companies",
+                parent_column="id",
+                confidence=confidence,
+                overlap_ratio=None,
+                rationale="test",
+            )
+        )
+    state["join_graph"] = graph
     return state
 
 

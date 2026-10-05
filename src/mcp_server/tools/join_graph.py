@@ -451,7 +451,8 @@ def _cut_at_cliff(scored: list[tuple[float, _EdgeCandidate]]) -> list[tuple[floa
     """
     ranked = sorted(scored, key=lambda s: -s[0])
     gaps = [a[0] - b[0] for a, b in pairwise(ranked)]
-    return ranked[: gaps.index(max(gaps)) + 1] if gaps and max(gaps) else ranked
+    widest = max(gaps, default=0.0)
+    return ranked[: gaps.index(widest) + 1] if widest else ranked
 
 
 def _index_origins(origins: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:

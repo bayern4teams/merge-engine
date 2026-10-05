@@ -19,6 +19,8 @@ from src.mcp_server.tools.join_graph import (
     JoinEdge,
     JoinGraph,
     JoinPath,
+    _ColumnProfile,
+    _cut_at_cliff,
     _find_candidate_edges,
     _hop_from,
     _resolve_primary_key,
@@ -84,175 +86,135 @@ class TestResolvePrimaryKey:
         assert _resolve_primary_key(table) == ["surrogate_pk"]
 
 
+def _profiles(columns: dict[tuple[str, str], list[Any]], *, saturated=()):
+    return {
+        key: _ColumnProfile(
+            raw=tuple(vals),
+            norm=frozenset(normalize_val(v) for v in vals),
+            saturated=key in saturated,
+        )
+        for key, vals in columns.items()
+    }
+
+
+def _tbl(name: str, *cols: str, **extra: Any) -> dict[str, Any]:
+    return {"name": name, "columns": [{"name": c} for c in cols], **extra}
+
+
 class TestFindCandidateEdges:
-    def test_matches_id_style_column_to_real_pk(self) -> None:
-        tables = [
-            {"name": "Company", "primary_key": ["companyID"], "columns": [{"name": "companyID"}]},
+    """P3: candidates come from the sampled values, never from names."""
+
+    def test_pairs_come_from_values_not_names(self) -> None:
+        # The child column's name matches nothing; only its values do.
+        tables = [_tbl("a", "k", "x"), _tbl("b", "pk", "ref")]
+        profiles = _profiles(
             {
-                "name": "Experience",
-                "primary_key": ["experienceID"],
-                "columns": [{"name": "experienceID"}, {"name": "companyID"}],
-            },
+                ("a", "k"): ["1", "2", "3"],
+                ("a", "x"): ["p", "q", "r"],
+                ("b", "pk"): ["p", "q", "r", "s"],
+                ("b", "ref"): ["1", "2"],
+            }
+        )
+        got = {
+            (c.child_table, c.child_column, c.parent_table, c.parent_column)
+            for c in _find_candidate_edges(tables, profiles)
+        }
+        assert ("b", "ref", "a", "k") in got
+        assert ("a", "x", "b", "pk") in got
+
+    def test_rhs_must_be_unique_in_its_table(self) -> None:
+        tables = [_tbl("dim", "k", "grp"), _tbl("fact", "ref")]
+        profiles = _profiles(
+            {
+                ("dim", "k"): ["1", "2", "3", "4"],
+                ("dim", "grp"): ["a", "b"],  # fewer distinct values than the table has rows
+                ("fact", "ref"): ["a", "b"],
+            }
+        )
+        parents = {
+            (c.parent_table, c.parent_column) for c in _find_candidate_edges(tables, profiles)
+        }
+        assert ("dim", "grp") not in parents
+        assert ("dim", "k") in parents
+
+    def test_exact_uniqueness_from_the_database_overrides_the_size_rule(self) -> None:
+        tables = [_tbl("t", "a", "b"), _tbl("u", "c")]
+        profiles = {
+            ("t", "a"): _ColumnProfile(("1", "2"), frozenset({"1", "2"}), True, unique=False),
+            ("t", "b"): _ColumnProfile(("3", "4"), frozenset({"3", "4"}), True, unique=True),
+            ("u", "c"): _ColumnProfile(("1",), frozenset({"1"}), False),
+        }
+        parents = {
+            (c.parent_table, c.parent_column) for c in _find_candidate_edges(tables, profiles)
+        }
+        assert ("t", "a") not in parents
+        assert ("t", "b") in parents
+
+    def test_pk_inside_pk_is_not_an_edge_even_when_the_copy_has_another_name(self) -> None:
+        tables = [
+            _tbl("big", "pk", primary_key=["pk"]),
+            _tbl("small", "pk", "dup", primary_key=["pk"]),
         ]
-        candidates = _find_candidate_edges(tables)
-        matches = [c for c in candidates if c.child_table == "Experience"]
-        assert len(matches) == 1
-        assert matches[0].child_column == "companyID"
-        assert matches[0].parent_table == "Company"
-        # The parent's ACTUAL pk, never a hard-coded "id".
-        assert matches[0].parent_column == "companyID"
+        profiles = _profiles(
+            {
+                ("big", "pk"): ["1", "2", "3", "4"],
+                ("small", "pk"): ["1", "2"],
+                ("small", "dup"): ["1", "2"],  # same values as its own key: it IS that key
+            }
+        )
+        assert _find_candidate_edges(tables, profiles) == []
+
+    def test_self_reference_survives(self) -> None:
+        tables = [_tbl("p", "code", "boss", primary_key=["code"])]
+        profiles = _profiles({("p", "code"): ["1", "2", "3"], ("p", "boss"): ["1", "2"]})
+        got = {(c.child_column, c.parent_column) for c in _find_candidate_edges(tables, profiles)}
+        assert got == {("boss", "code")}
 
     def test_candidate_carries_schema_qualified_names_for_verification(self) -> None:
-        """Live regression: sample_distinct_values is called with only the
-        bare table name (matching discover_schemas' "name" field), and
-        silently defaults to the "public" schema when the name has no dot
-        in it. testdiffbot's real tables all live in "diffbot" -- every
-        verification query failed with "relation public.<table> does not
-        exist", caught by _verify_inclusion's own try/except, and every
-        candidate this correctly found (10 of them) came back unverified.
-        _EdgeCandidate must carry each side's schema-qualified full_name so
-        _verify_inclusion can actually query the right schema."""
+        """Live regression: sample_distinct_values is called with the
+        schema-qualified name; a bare name silently defaults to "public"
+        and every verification query failed on a non-public origin."""
         tables = [
-            {
-                "name": "company",
-                "full_name": "diffbot.company",
-                "primary_key": [],
-                "columns": [{"name": "companyid"}],
-            },
-            {
-                "name": "companyfinancials",
-                "full_name": "diffbot.companyfinancials",
-                "primary_key": [],
-                "columns": [{"name": "companyid"}],
-            },
+            _tbl("company", "k", full_name="diffbot.company"),
+            _tbl("fin", "ref", "n", full_name="diffbot.fin"),
         ]
-        candidates = _find_candidate_edges(tables)
-        assert len(candidates) == 1
-        c = candidates[0]
-        assert c.child_full_table == "diffbot.companyfinancials"
+        profiles = _profiles(
+            {
+                ("company", "k"): ["1", "2", "3"],
+                ("fin", "ref"): ["1", "2"],
+                ("fin", "n"): ["x", "y", "z", "w"],
+            }
+        )
+        c = next(c for c in _find_candidate_edges(tables, profiles) if c.child_table == "fin")
+        assert c.child_full_table == "diffbot.fin"
         assert c.parent_full_table == "diffbot.company"
 
     def test_candidate_full_table_falls_back_to_the_bare_name(self) -> None:
-        """A hand-built table dict with no "full_name" key (or a real
-        origin whose discover_schema never sets one) must not crash --
-        the candidate just uses the bare name, matching today's already-
-        working behaviour."""
-        tables = [
-            {"name": "Company", "primary_key": ["companyID"], "columns": [{"name": "companyID"}]},
+        tables = [_tbl("company", "k"), _tbl("fin", "ref", "n")]
+        profiles = _profiles(
             {
-                "name": "Experience",
-                "primary_key": ["experienceID"],
-                "columns": [{"name": "experienceID"}, {"name": "companyID"}],
-            },
-        ]
-        candidates = _find_candidate_edges(tables)
-        assert candidates[0].child_full_table == "Experience"
-        assert candidates[0].parent_full_table == "Company"
+                ("company", "k"): ["1", "2", "3"],
+                ("fin", "ref"): ["1", "2"],
+                ("fin", "n"): ["x", "y", "z", "w"],
+            }
+        )
+        c = next(c for c in _find_candidate_edges(tables, profiles) if c.child_table == "fin")
+        assert (c.child_full_table, c.parent_full_table) == ("fin", "company")
 
-    def test_does_not_match_via_bare_startswith(self) -> None:
-        """The exact bug this removal fixes: a column that merely starts
-        with another table's name (but isn't "<table>id"/"<table>_id"/
-        "<table>key"/"<table>_key") must not be fabricated into an edge --
-        e.g. "Person.company_name" must not point at "Company"."""
-        tables = [
-            {"name": "Company", "primary_key": ["companyID"], "columns": [{"name": "companyID"}]},
-            {
-                "name": "Person",
-                "primary_key": ["personID"],
-                "columns": [{"name": "personID"}, {"name": "company_name"}],
-            },
-        ]
-        candidates = _find_candidate_edges(tables)
-        assert not any(c.child_column == "company_name" for c in candidates)
 
-    def test_skips_own_table_primary_key(self) -> None:
-        tables = [
-            {"name": "Company", "primary_key": ["companyID"], "columns": [{"name": "companyID"}]},
-        ]
-        candidates = _find_candidate_edges(tables)
-        assert candidates == []
+class TestCutAtCliff:
+    def test_cuts_at_the_largest_gap(self) -> None:
+        kept = _cut_at_cliff([(1.0, "a"), (0.97, "b"), (0.4, "c"), (0.35, "d")])  # type: ignore[list-item]
+        assert [c for _, c in kept] == ["a", "b"]
 
-    def test_composite_pk_member_is_still_a_candidate_fk(self) -> None:
-        """Found live 2026-08-10: a real ClickHouse Experience table has a
-        COMPOSITE primary key (experienceID, companyID) -- companyID is
-        simultaneously part of Experience's own identity AND a real FK to
-        Company. The old `col_low in own_pk` check treated ANY membership
-        in the pk as disqualifying, so this column was silently skipped
-        and the whole structural tier found nothing for this table --
-        exactly the deep-chain scenario (Company->Experience->Person) this
-        whole join graph exists to support."""
-        tables = [
-            {"name": "Company", "primary_key": ["companyID"], "columns": [{"name": "companyID"}]},
-            {
-                "name": "Experience",
-                "primary_key": ["experienceID", "companyID"],
-                "columns": [{"name": "experienceID"}, {"name": "companyID"}],
-            },
-        ]
-        candidates = _find_candidate_edges(tables)
-        matches = [c for c in candidates if c.child_column == "companyID"]
-        assert len(matches) == 1
-        assert matches[0].parent_table == "Company"
+    def test_same_cut_whatever_the_scale(self) -> None:
+        kept = _cut_at_cliff([(10.0, "a"), (9.7, "b"), (4.0, "c")])  # type: ignore[list-item]
+        assert [c for _, c in kept] == ["a", "b"]
 
-    def test_single_column_pk_is_still_excluded(self) -> None:
-        """A column that IS the whole (single-column) primary key is still
-        excluded -- only composite-key membership stops disqualifying."""
-        tables = [
-            {"name": "Company", "primary_key": ["companyID"], "columns": [{"name": "companyID"}]},
-            {
-                "name": "Experience",
-                "primary_key": ["companyID"],
-                "columns": [{"name": "companyID"}],
-            },
-        ]
-        candidates = _find_candidate_edges(tables)
-        assert candidates == []
-
-    def test_no_candidate_when_other_table_has_no_resolvable_pk(self) -> None:
-        tables = [
-            {"name": "Weird", "columns": [{"name": "a"}, {"name": "b"}]},
-            {
-                "name": "Experience",
-                "primary_key": ["experienceID"],
-                "columns": [{"name": "experienceID"}, {"name": "weirdID"}],
-            },
-        ]
-        candidates = _find_candidate_edges(tables)
-        assert candidates == []
-
-    def test_matches_pluralised_table_name_convention(self) -> None:
-        """A common real convention this repo's own fixtures use (Pagila-
-        style): a plural table "companies" with FK columns named after the
-        SINGULAR concept ("company_id"), not the plural table name itself
-        ("companiesid"/"companies_id" would never occur in practice)."""
-        tables = [
-            {"name": "companies", "primary_key": ["id"], "columns": [{"name": "id"}]},
-            {
-                "name": "employees",
-                "primary_key": ["id"],
-                "columns": [{"name": "id"}, {"name": "company_id"}],
-            },
-        ]
-        candidates = _find_candidate_edges(tables)
-        matches = [c for c in candidates if c.child_column == "company_id"]
-        assert len(matches) == 1
-        assert matches[0].parent_table == "companies"
-
-    def test_irregular_plural_people_matches_person_id(self) -> None:
-        tables = [
-            {"name": "people", "primary_key": ["person_id"], "columns": [{"name": "person_id"}]},
-            {
-                "name": "jobs",
-                "primary_key": ["job_id"],
-                "columns": [{"name": "job_id"}, {"name": "person_id"}],
-            },
-        ]
-        candidates = _find_candidate_edges(tables)
-        matches = [
-            c for c in candidates if c.child_column == "person_id" and c.child_table == "jobs"
-        ]
-        assert len(matches) == 1
-        assert matches[0].parent_table == "people"
+    def test_no_gap_keeps_everything(self) -> None:
+        assert len(_cut_at_cliff([(1.0, "a"), (1.0, "b")])) == 2  # type: ignore[list-item]
+        assert len(_cut_at_cliff([(0.6, "a")])) == 1  # type: ignore[list-item]
+        assert _cut_at_cliff([]) == []
 
 
 def _schemas_for_issue_6() -> dict[str, Any]:
@@ -405,6 +367,9 @@ class TestBuildJoinGraph:
         graph, _ = await self._run_with_overlaps(
             {
                 ("Experience", "companyID"): ["c1", "c2"],
+                # Experience has more rows than distinct companyIDs, so it is
+                # not a unique (parent-eligible) column.
+                ("Experience", "experienceID"): ["e1", "e2", "e3"],
                 ("Company", "companyID"): ["c1"],  # only half of the child's values match
             }
         )
@@ -494,12 +459,15 @@ class TestBuildJoinGraph:
                 schemas, [{"id": "origin_1", "type": "postgresql", "connection": {}}]
             )
 
+        # P3: discovery is value-based and name-agnostic, so the edge that
+        # exists is the one the values support -- to foundedYear, the column
+        # that actually contains them -- and nothing targets companyID.
         edges = [
             e
             for e in graph.neighbors(("origin_1", "CompanyRelation"))
             if e.parent_table == "Company"
         ]
-        assert edges == []
+        assert [(e.child_column, e.parent_column) for e in edges] == [("companyID", "foundedYear")]
 
     async def test_filtered_parent_lookup_finds_real_overlap_independent_sampling_would_miss(
         self,
@@ -519,7 +487,9 @@ class TestBuildJoinGraph:
         # A "large" parent table an arbitrary LIMIT sample would draw from
         # -- deliberately does NOT include c1/c2 in that arbitrary slice,
         # even though c1/c2 are real rows that exist in the full table.
-        arbitrary_parent_sample = [f"c{i}" for i in range(3, 100)]
+        # 500 values = the sample limit: the parent sample is truncated, which
+        # is what makes the filtered lookup necessary.
+        arbitrary_parent_sample = [f"c{i}" for i in range(3, 503)]
         full_parent_table = set(arbitrary_parent_sample) | {"c1", "c2"}
 
         async def fake_sample(table_name, column, limit=500, filter_values=None):
@@ -533,6 +503,7 @@ class TestBuildJoinGraph:
 
         fake_connector = AsyncMock()
         fake_connector.sample_distinct_values = AsyncMock(side_effect=fake_sample)
+        fake_connector.profile_column = AsyncMock(side_effect=NotImplementedError)
         fake_connector.close = AsyncMock()
 
         with patch(
@@ -920,22 +891,64 @@ class TestPathHopDirectionAwareProperties:
 
 
 class TestBuildJoinGraphHeuristicTier:
-    async def test_missing_origin_config_adds_heuristic_edges_instead_of_dropping(self) -> None:
-        """The old behaviour silently lost the join whenever a connector
-        wasn't available for an origin -- unverified is a better outcome
-        than absent, since a human or a downstream check can still see and
-        discount a low-confidence edge, but cannot act on one that was
-        never recorded at all."""
+    async def test_missing_origin_config_proposes_no_name_guessed_edges(self) -> None:
+        """P3: with nothing to sample, value-based discovery proposes nothing.
+        The old tier guessed `<table>id` edges from names (confidence
+        "heuristic"); that guess is exactly what P3 removed."""
         with patch("src.mcp_server.tools.join_graph.create_connector") as mock_create:
             graph = await build_join_graph(_schemas_for_issue_6(), origins=[])
 
         mock_create.assert_not_called()
-        edges = [
-            e for e in graph.neighbors(("origin_2", "Experience")) if e.parent_table == "Company"
-        ]
-        assert len(edges) == 1
-        assert edges[0].confidence == "heuristic"
-        assert edges[0].overlap_ratio is None
+        assert len(graph) == 0
+        assert ("origin_2", "Experience") in graph.nodes
+
+    async def test_saturated_columns_use_the_databases_exact_uniqueness(self) -> None:
+        """Past the sample cap a distinct sample cannot show uniqueness, so
+        profile_column(FULL) decides: the non-unique side must not become the
+        parent even though both truncated samples look identical."""
+        parent = [f"k{i}" for i in range(6)]
+        data = {
+            ("ent", "code"): (parent, True),  # 6 rows, 6 distinct
+            ("ent", "title"): ([f"t{i}" for i in range(6)], True),
+            ("lnk", "ref"): (parent, False),  # 12 rows, 6 distinct (every key twice)
+            ("lnk", "row"): ([f"r{i}" for i in range(6)], True),
+        }
+
+        async def fake_sample(table_name, column, limit=500, filter_values=None):
+            vals = data[(table_name, column)][0]
+            if filter_values is not None:
+                return [v for v in vals if v in filter_values]
+            return vals[:limit]
+
+        async def fake_profile(table_name, column, mode="FULL"):
+            unique = data[(table_name, column)][1]
+            return {"total_count": 12, "null_count": 0, "distinct_count": 12 if unique else 6}
+
+        fake_connector = AsyncMock()
+        fake_connector.sample_distinct_values = AsyncMock(side_effect=fake_sample)
+        fake_connector.profile_column = AsyncMock(side_effect=fake_profile)
+        fake_connector.close = AsyncMock()
+        schemas = {
+            "o": {
+                "tables": [
+                    {"name": "ent", "columns": [{"name": "code"}, {"name": "title"}]},
+                    {"name": "lnk", "columns": [{"name": "ref"}, {"name": "row"}]},
+                ]
+            }
+        }
+        with patch(
+            "src.mcp_server.tools.join_graph.create_connector",
+            return_value=fake_connector,
+        ):
+            graph = await build_join_graph(
+                schemas, [{"id": "o", "type": "postgresql", "connection": {}}], sample_size=6
+            )
+        edges = {
+            (e.child_table, e.child_column, e.parent_table, e.parent_column)
+            for lst in graph._adjacency.values()
+            for e in lst
+        }
+        assert edges == {("lnk", "ref", "ent", "code")}
 
     async def test_verify_inclusion_queries_the_schema_qualified_table(self) -> None:
         """End-to-end regression for the real Boeing bug: a PK-less,

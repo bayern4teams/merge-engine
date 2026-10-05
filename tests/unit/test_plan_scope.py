@@ -167,7 +167,17 @@ class TestHeuristicPlan:
                             {"name": "company_id"},
                         ],
                         "primary_key": ["job_id"],
-                        "foreign_keys": [],
+                        # Declared: with no origin to sample, P3's value-based
+                        # discovery proposes nothing (it no longer guesses
+                        # edges from column names).
+                        "foreign_keys": [
+                            {
+                                "column": "person_id",
+                                "ref_table": "people",
+                                "ref_column": "person_id",
+                            },
+                            {"column": "company_id", "ref_table": "companies", "ref_column": "id"},
+                        ],
                     },
                 ],
             },
@@ -221,7 +231,17 @@ class TestHeuristicPlan:
                             {"name": "company_id"},
                         ],
                         "primary_key": ["job_id"],
-                        "foreign_keys": [],
+                        # Declared: with no origin to sample, P3's value-based
+                        # discovery proposes nothing (it no longer guesses
+                        # edges from column names).
+                        "foreign_keys": [
+                            {
+                                "column": "person_id",
+                                "ref_table": "people",
+                                "ref_column": "person_id",
+                            },
+                            {"column": "company_id", "ref_table": "companies", "ref_column": "id"},
+                        ],
                     },
                 ],
             },
@@ -436,7 +456,17 @@ class TestSanitizePlan:
                             {"name": "company_id"},
                         ],
                         "primary_key": ["job_id"],
-                        "foreign_keys": [],
+                        # Declared: with no origin to sample, P3's value-based
+                        # discovery proposes nothing (it no longer guesses
+                        # edges from column names).
+                        "foreign_keys": [
+                            {
+                                "column": "person_id",
+                                "ref_table": "people",
+                                "ref_column": "person_id",
+                            },
+                            {"column": "company_id", "ref_table": "companies", "ref_column": "id"},
+                        ],
                     },
                 ],
             },
@@ -537,7 +567,17 @@ class TestSanitizePlan:
                             {"name": "company_id"},
                         ],
                         "primary_key": ["job_id"],
-                        "foreign_keys": [],
+                        # Declared: with no origin to sample, P3's value-based
+                        # discovery proposes nothing (it no longer guesses
+                        # edges from column names).
+                        "foreign_keys": [
+                            {
+                                "column": "person_id",
+                                "ref_table": "people",
+                                "ref_column": "person_id",
+                            },
+                            {"column": "company_id", "ref_table": "companies", "ref_column": "id"},
+                        ],
                     },
                 ],
             },

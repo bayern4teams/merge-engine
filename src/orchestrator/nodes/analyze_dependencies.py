@@ -22,9 +22,9 @@ from src.orchestrator.utils.retry_hints import apply_retry_hint
 logger = logging.getLogger("merge-engine.orchestrator.analyze_dependencies")
 
 # Edge confidences the join graph itself stands behind -- "heuristic"
-# (a name-pattern guess build_join_graph couldn't verify against live
-# data, no origin connector, or the check failed) is explicitly NOT here;
-# an entity resting on only heuristic edges still needs the LLM.
+# (an unverified hop, e.g. one an LLM proposed in plan_scope; build_join_graph
+# itself no longer emits any, its discovery being value-based) is explicitly
+# NOT here; an entity resting on only heuristic edges still needs the LLM.
 _VERIFIED_CONFIDENCES = ("declared", "verified", "probable")
 
 
