@@ -3,7 +3,7 @@
 Overwrite this file at every commit. A fresh session reads it first, then
 [the plan](../PART1_IMPLEMENTATION_PLAN.md). Git is the memory; a session's context is not.
 
-**Lock:** 2026-10-05T06:07:19Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-05T06:07:19Z
+**Lock:** 2026-10-05T06:19:25Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-05T06:19:25Z
 
 (Lock/heartbeat protocol: plan §7. A session sets `Lock: <ISO time>`, pushes it, and refreshes it at every commit; a lock older than 75 min is stale. `Autonomy` is `off`, `dryrun` (a tick only records what works and exits) or `unattended-through-phase-5` (authorises the supervisor to chain phases). Only the user changes it.)
 
@@ -15,7 +15,7 @@ Overwrite this file at every commit. A fresh session reads it first, then
 | P2 | 1 | unverified-live | 5431075 | ACCEPT after attack F1-F3,F5 fixed: 40/40 planted (was 31/40), uncompared 0 (was 389,200), guard raises and fails the run; F4 WNP loss 4-19 % vs uncapped = accepted ceiling; block filtering omitted (ratio r is fitted, §2.4) |
 | P3 | 2 | unverified-live | (this commit) | ACCEPT r2 (worker, lead diff review): 34/34 acceptance; value-based INDs, RHS-uniqueness (profile_column or complete sample), PK-subset filter, binomial pre-prune (miss < 1/pairs), coincidence test vs the parent's density over the child's range, cliff; decoy rejected at caps 50/500; cost 0-6,084 filtered queries vs 439,886 naive. Ceilings: FK into a DENSE surrogate sequence not inferred (declared FKs cover it); 1:1 extension tables dropped; lone low-overlap string edge stays `probable` (no floor); Mongo key-less tables |
 | P4 | 2 | todo | | |
-| P5 | 2 | todo | | |
+| P5 | 2 | unverified-live | (this commit) | ACCEPT r3 (lead item): 19/19 acceptance. Attack r1: realistic company corpus raised the guard, CJK lost; r2: typo'd-surname persons PC 0.965 -> 0.522 (asymmetric per-record filter). r3: token blocking (Unicode) -> local-IDF block filtering (geometric mean, chosen by measurement — disclosed) with the either-end union rule -> purging (dominance over all other blocks, or IDF < 1 bit, coverage by kept blocks) -> node-centric WNP; guard counts retained pairs. Attacker corpora: persons 6.8k PC 0.985 (old 0.965 full-name / 0.785 split), companies 2k PC 1.000 (old 0.995), 20k PC 0.999 in 39 s; lead 6.4k persons 326/400 (old 296). Ceilings: CJK one-token names, runtime ~quadratic (55k ≈ 90 s) |
 | P6 | 3 | todo | | |
 | P7 | 3 | todo | | |
 | P8 | 3 | todo | | |
@@ -116,6 +116,7 @@ attack agent. P13: prior rescaled to the random-pair population (lead decision, 
 - `tests/part1/` is NOT run by `check.py test` (CI runs tests/unit + tests/integration only). The lead runs `pytest tests/part1` at every phase gate; folding it into CI is a Phase 5 decision.
 - P1 `ambiguous_splits` is returned by `map_fields_impl` but dropped by `map_fields_node` — surface it in lane B (P11/P12).
 - P18 `field_priorities` has no API/UI surface yet (config-only).
+- P4 ownership extended by the lead: `src/mcp_server/tools/load_data.py` `_write_child_rows` (dimension find-or-create); no other lane touches it.
 - P3 LIVE RISK: if `company.companyid` is a dense integer sequence, the coincidence rule drops the very `staff.main_entity_id -> company.companyid` edge the report targets (LOCAL_VERIFY P3). `tests/part1/baseline_schema.py` still calls the old `_find_candidate_edges` signature (script, not a test).
 - P14: person-name initials/middle initials score lower than before (level debt above); the 0.90/0.70 level cut-offs were calibrated for difflib and are reused on the IDF similarity — revisit with the restored ground truth (LOCAL_VERIFY P14).
 - P12: a mapping pinned in a saved profile before P12 is reused verbatim, so it can still map a metadata column (profile replay is not re-filtered). Decide in Phase 5 or with the profile owner.

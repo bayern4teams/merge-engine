@@ -129,3 +129,10 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Independent check: SQL `SELECT count(*) FROM staff s JOIN company c ON s.main_entity_id = c.companyid` (expect 13 518) and `SELECT min(companyid), max(companyid), count(DISTINCT companyid) FROM company` — **if companyid is dense (count = max - min + 1) the coincidence rule will NOT infer this edge**; then it must come from a declared FK or the gate.
 - Expected evidence: `dependency_tree` non-empty (before: `{}`); the `staff.main_entity_id -> company.companyid` edge present unless companyid is dense; no edge onto `company._id`.
 - Result (filled in locally):
+
+### P5 — schema-agnostic token blocking
+- Why cloud could not verify: no origin databases (the `staff` entity).
+- Command: full merge run vs the parent of the "P5:" commit; read `resolution_stats.<entity>` (`candidate_pairs`, pruned counts) and the blocking log lines.
+- Independent check: ground-truth pair completeness for `staff`/person and company (PC and RR computed from the truth set, not from the engine), plus wall time and peak memory of resolve_entities.
+- Expected evidence: `staff` candidates far below ~962 000 at higher precision than ≈ 0.0002 (before); no giant component; PC not below the parent commit's.
+- Result (filled in locally):

@@ -936,9 +936,12 @@ def _generate_candidate_pairs(
        excludes a record. Blocks with an identical member set (one block
        reached under two keys) are kept once.
     2. **Block filtering** — each record keeps only the blocks whose token IDF
-       is at least the mean IDF of its own tokens (geometric mean of sizes).
+       is at least the mean IDF of its own tokens (geometric mean of sizes;
+       chosen over the arithmetic mean by measurement — the arithmetic mean
+       let a 10k company corpus exceed the guard); a block links two records
+       when either keeps it.
        **Block purging** — largest blocks first, a block is purged while it
-       holds more comparisons than every smaller block together, or its token
+       holds more comparisons than every other surviving block together, or its token
        is held by most records (IDF < 1 bit), *and* each of its members still
        sits in another surviving block. Nothing to tune.
        Both work per record, not per pair: a true pair whose ONLY shared
@@ -1021,40 +1024,47 @@ def _generate_candidate_pairs(
         total, count = log_sum[rid]
         return count * math.log(size) <= total
 
-    by_members = {}
+    # A block links two records when EITHER of them keeps it (the union rule
+    # WNP also uses): filtering per record alone dropped a typo'd pair whose
+    # one side kept the first-name block and the other only its rarer
+    # surname block. So a block keeps all its members and remembers its
+    # keepers; a non-keeper is linked only to the keepers.
+    keepers_of: dict[str, frozenset[str]] = {}
     filtered_out = 0
     for key, members in blocks:
-        kept_members = frozenset(r for r in members if _keeps(r, len(members)))
-        filtered_out += len(members) - len(kept_members)
-        if len(kept_members) >= 2:
-            by_members.setdefault(kept_members, key)
-    blocks = [(key, sorted(member_set)) for member_set, key in by_members.items()]
+        keepers = frozenset(r for r in members if _keeps(r, len(members)))
+        filtered_out += len(members) - len(keepers)
+        keepers_of[key] = keepers
+    blocks = [(key, members) for key, members in blocks if keepers_of[key]]
 
     # 2b. Block purging.
     def _comparisons(members: list[str]) -> int:
         return len(members) * (len(members) - 1) // 2
 
     blocks.sort(key=lambda kb: (-_comparisons(kb[1]), kb[0]))
+    # Coverage counts only the blocks a record KEEPS: a record merely linked
+    # to another block's keepers is not covered by it.
     membership: dict[str, int] = {}
-    for _key, members in blocks:
-        for rid in members:
+    for key, _members in blocks:
+        for rid in keepers_of[key]:
             membership[rid] = membership.get(rid, 0) + 1
-    smaller_total = sum(_comparisons(m) for _k, m in blocks)
+    surviving_total = sum(_comparisons(m) for _k, m in blocks)
     purged: set[str] = set()
     purged_comparisons = 0
     population = len(records_by_id)
     for key, members in blocks:
         size = _comparisons(members)
-        smaller_total -= size
-        # Purge when the block dominates the rest of the work, or when its
-        # token is held by most records (IDF log2(N/df) < 1 bit: it cannot
-        # tell a record from the majority). Blocks arrive largest first.
-        if size <= smaller_total and 2 * len(members) <= population:
+        # Purge when the block holds more comparisons than every other
+        # surviving block together, or when its token is held by most records
+        # (IDF log2(N/df) < 1 bit: it cannot tell a record from the majority).
+        # Blocks arrive largest first, so once neither holds, none will.
+        if 2 * size <= surviving_total and 2 * len(members) <= population:
             break
-        if all(membership[rid] > 1 for rid in members):
+        if all(membership[rid] > 1 for rid in keepers_of[key]):
             purged.add(key)
             purged_comparisons += size
-            for rid in members:
+            surviving_total -= size
+            for rid in keepers_of[key]:
                 membership[rid] -= 1
     kept = sorted(
         ((key, members) for key, members in blocks if key not in purged),
@@ -1080,13 +1090,17 @@ def _generate_candidate_pairs(
         for rid in members:
             blocks_of.setdefault(rid, []).append(index)
 
+    keepers_at = [keepers_of[key] for key, _members in kept]
+
     def _neighbours(node: str) -> dict[str, float]:
         # Blocks are visited in one global order, so an edge's weight is the
-        # same float from both ends.
+        # same float from both ends; "either end keeps the block" is
+        # symmetric too.
         weights: dict[str, float] = {}
         for index in blocks_of[node]:
             w = inverse[index]
-            for other in kept[index][1]:
+            keepers = keepers_at[index]
+            for other in kept[index][1] if node in keepers else keepers:
                 if other != node:
                     weights[other] = weights.get(other, 0.0) + w
         return weights
