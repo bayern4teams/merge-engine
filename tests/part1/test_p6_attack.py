@@ -54,21 +54,12 @@ BASE = {"name": "Acme Widgets Ltd", "email": "info@acme.example", "address": "1 
 
 
 # ── D1: an operator-declared unique id conflict is overridden by the anchor Match rule ──────────
-@pytest.mark.xfail(
-    strict=True,
-    reason="D1: _three_way forces Match on anchor+agreeing names, ignoring a "
-    "declared unique_id_fields conflict (parent: pending)",
-)
 @pytest.mark.parametrize("rule", ["unique_id_fields", "deterministic_id_fields"])
 def test_declared_id_conflict_is_never_merged(rule):
     recs = [R("a", "1", **BASE, ref="R 100"), R("b", "1", **BASE, ref="R 200")]
     assert cls(run("company", recs, {rule: ["ref"]}), *recs) != "merged"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="D1: same, with the declared field low-cardinality (generic) in a larger corpus",
-)
 def test_declared_id_conflict_lowcard_corpus():
     fill = [
         R(
@@ -105,11 +96,6 @@ def _dupes(attr, n=30, differ=3):
     return recs, pairs
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="D2: phone differing between origins is read as an exclusive-id conflict; "
-    "true duplicates (same email, address, name) go to HITL (parent: merged)",
-)
 def test_true_duplicates_with_differing_phone_still_merge():
     recs, pairs = _dupes("phone")
     res = run("company", recs)
@@ -141,11 +127,6 @@ def _persons(kind, n=30):
     return recs, pairs
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="D2: single-token name columns (last_name) are measured 'exclusive'; a one-letter "
-    "surname typo on the same email now blocks the email Match (parent: merged)",
-)
 def test_person_same_email_surname_typo_still_merges():
     recs, pairs = _persons("typo")
     res = run("person", recs)
@@ -154,11 +135,6 @@ def test_person_same_email_surname_typo_still_merges():
 
 # ── D3: unrelated entities sharing a (2-held) address with different phones flood the review queue ─
 @pytest.mark.parametrize("origins", [2, 1])
-@pytest.mark.xfail(
-    strict=True,
-    reason="D3: same address + different phone (measured exclusive) forces the pair into "
-    "Possible Match even with entirely disjoint names (30 review items per 60 companies; parent: 0)",
-)
 def test_unrelated_companies_in_one_building_are_not_review_items(origins):
     recs = [
         R(
@@ -203,11 +179,6 @@ def test_building_shared_by_many_is_generic_no_edges():
 
 
 # ── D4: single-origin / within-origin triplicates: cut = max(#origins, 2) = 2 makes every shared value generic ─
-@pytest.mark.xfail(
-    strict=True,
-    reason="D4: a within-origin triplicate group shares email+address across 3 records > cut(2): "
-    "both labelled generic and dropped, names alone leave 18 true duplicate pairs pending (parent: merged)",
-)
 def test_single_origin_triplicates_with_name_variants_merge():
     recs, groups = [], []
     for g in range(6):
