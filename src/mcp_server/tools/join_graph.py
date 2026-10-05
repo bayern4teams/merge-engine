@@ -11,35 +11,27 @@ the join graph to search for that path did not exist, and even a 2-hop
 `Company -> Experience -> Person` chain was only a name-matching guess, never
 checked against real data.
 
-Edges come from three tiers, descending confidence:
+Edges come from two tiers, descending confidence:
 
 1. Declared foreign keys — real and authoritative when present, but ALWAYS
    EMPTY for ClickHouse and MongoDB origins (see clickhouse.py:248 /
    mongodb.py:172), which is what both real origins in the 4th run are.
-2. Name heuristics — a column named like `<OtherTable>ID` naming a
-   candidate parent, matched against that table's ACTUAL primary key
-   (never a hard-coded "id"), and never a bare `.startswith()` match (that
-   clause used to fabricate edges like `Person.company_name -> Company.id`
-   whenever the column merely started with another table's name).
-3. Inclusion-dependency verification — the tier that actually works on
-   these origins. Every name-heuristic candidate is checked against real
-   sampled data before being trusted: does the child column's value set
-   sit inside the parent key's value set? Built from B4-matching-precision's
-   identity_profile.py (normalize_val, verbatim), reshaped from a
-   bag-of-every-column-in-the-foreign-table (which cannot tell a real
-   inclusion dependency from an unrelated column collision — see
-   docs/plans, the country_code/ticker example) into a genuine per-column-
-   pair containment ratio, and pushed into SQL via each connector's new
-   `sample_distinct_values` rather than pulling full tables into Python.
-4. Heuristic (unverified) — when an origin has no connector config
-   available to sample with (e.g. scope planning runs before a live
-   connection was ever opened for that origin, or the origin is briefly
-   unreachable), a name-heuristic candidate is kept anyway rather than
-   silently dropped, tagged `confidence="heuristic"`. Losing the join
-   entirely because a connector happened to be unavailable would be worse
-   than surfacing an unverified hypothesis a human or a downstream check
-   can still see and discount — this is the weakest tier and always ranks
-   below `probable` when a `JoinPath` picks the strongest available route.
+2. Value-based inclusion-dependency (IND) discovery (P3) — the tier that
+   actually works on these origins, and it reads NO names. Every column's
+   distinct values are sampled; a pair (child column, parent column) is a
+   candidate when the parent column is unique in its table and the two are
+   not both their own table's primary key (PK subset of PK); each candidate
+   is scored by containment |child ∩ parent| / |child| (the primitive from
+   B4-matching-precision's identity_profile.py, pushed into SQL through each
+   connector's `sample_distinct_values` rather than pulling tables into
+   Python); and the ranked list is cut at its largest score gap, the "cliff"
+   -- no threshold. The earlier name-pattern tier (`<table>id` against the
+   surrogate key) is gone: it proposed `child.<parent>id -> parent._id`, which
+   the data rightly rejects, and never proposed a child column whose name does not match.
+
+With no connection to sample (scope planning before a live connection was
+ever opened, or an unreachable origin) tier 2 proposes nothing: a guess from
+names is exactly what it replaced.
 """
 
 from __future__ import annotations
@@ -47,6 +39,7 @@ from __future__ import annotations
 import logging
 from collections import deque
 from dataclasses import dataclass, field
+from itertools import pairwise
 from typing import Any
 
 from src.mcp_server.connectors import create_connector
@@ -54,8 +47,6 @@ from src.mcp_server.connectors import create_connector
 logger = logging.getLogger("merge-engine.tools.join_graph")
 
 _DEFAULT_SAMPLE_SIZE = 500
-_VERIFIED_THRESHOLD = 0.95
-_PROBABLE_THRESHOLD = 0.5
 _DEFAULT_MAX_HOPS = 6
 _HIGH_FANOUT_THRESHOLD = 2
 
@@ -241,10 +232,8 @@ class _EdgeCandidate:
             object.__setattr__(self, "parent_full_table", self.parent_table)
 
 
-# A tiny, deliberately conservative singulariser used only to widen FK-
-# column-name pattern matching: "companies" -> "company_id" is a common
-# convention this repo's own schemas use (e.g. Pagila), and the raw table
-# name alone ("companiesid"/"companies_id") would never match it. This is a
+# A tiny, deliberately conservative singulariser, now used only by
+# `_resolve_primary_key`'s PK-less fallback ("companies" -> "companyid"). A
 # local copy of entity_grouping.py's _singularise, not an import from it --
 # src/orchestrator/utils sits above src/mcp_server/tools in CLAUDE.md's
 # layering rule, so importing it here would be a reverse import.
@@ -263,123 +252,174 @@ def _singularise_table(name: str) -> str:
     return name
 
 
-def _find_candidate_edges(
-    tables: list[dict[str, Any]],
-) -> list[_EdgeCandidate]:
-    """Name-heuristic candidates within one origin — tier 2, feeding tier 3.
+@dataclass(frozen=True)
+class _ColumnProfile:
+    """One column's sampled distinct values (see `_profile_columns`)."""
 
-    Same matching rule analyze_dependencies.py's coverage matrix used to
-    use, MINUS the `col_low.startswith(ot_low)` clause: that clause matched
-    any column merely starting with another table's name (fabricating, e.g.,
-    "Person.company_name" -> "Company.id" — a real column, a real table, and
-    nothing at all to do with each other). Every remaining candidate here
-    still has to survive the inclusion-dependency check in build_join_graph
-    before becoming a real edge.
+    raw: tuple[Any, ...]  # as returned by the connector, empty-after-normalise dropped
+    norm: frozenset[str]  # normalize_val() of each
+    # True when the sample hit `sample_size`: more distinct values may exist,
+    # so this profile can be neither a complete value set nor a uniqueness proof.
+    saturated: bool
+    # Exact uniqueness, asked of the database for a saturated column only (a
+    # complete sample already answers it); None = not established.
+    unique: bool | None = None
+
+
+async def _profile_columns(
+    connector: Any, tables: list[dict[str, Any]], sample_size: int
+) -> dict[tuple[str, str], _ColumnProfile]:
+    """Sample every column's distinct values once: the data every later step reads.
+
+    A column that fails to sample is simply absent from the result -- one bad
+    column must not abort the graph. Sequential on purpose.
     """
-    table_by_name: dict[str, dict[str, Any]] = {
-        str(t.get("name")): t for t in tables if t.get("name")
-    }
-    pk_by_table = {name: _resolve_primary_key(t) for name, t in table_by_name.items()}
-
-    candidates: list[_EdgeCandidate] = []
+    profiles: dict[tuple[str, str], _ColumnProfile] = {}
     for table in tables:
         table_name = table.get("name")
         if not table_name:
             continue
-        own_pk = {c.lower() for c in pk_by_table.get(table_name, [])}
-        self_names = {table_name.lower(), _singularise_table(table_name.lower())}
+        full_name = str(table.get("full_name") or table_name)
         for col in table.get("columns", []) or []:
             col_name = col.get("name", "")
             if not col_name:
                 continue
-            col_low = col_name.lower()
-            # Skip this table's own primary key -- but only when that
-            # column, alone, IS the primary key. A composite primary key
-            # member is not excluded: (experienceID, companyID) as a
-            # composite PK on a fact/junction-shaped table is a real,
-            # common pattern, and companyID there is still a real FK to
-            # Company -- found live: a ClickHouse Experience table with
-            # exactly this composite PK meant every candidate on
-            # companyID was silently skipped, so the whole structural
-            # tier found nothing and the entire chain fell through to
-            # the much weaker single-hop concept fallback.
-            if col_low == "id" or own_pk == {col_low}:
+            try:
+                vals = await connector.sample_distinct_values(
+                    full_name, col_name, limit=sample_size
+                )
+            except Exception as exc:
+                logger.debug("Column sampling failed for %s.%s: %s", table_name, col_name, exc)
                 continue
-            if any(col_low in (f"{n}id", f"{n}_id") for n in self_names):
+            raw = tuple(v for v in vals if normalize_val(v))
+            if not raw:
                 continue
-            for other_name, other_pk in pk_by_table.items():
-                if other_name == table_name or not other_pk:
-                    continue
-                other_names = {other_name.lower(), _singularise_table(other_name.lower())}
-                if any(
-                    col_low in (f"{n}id", f"{n}_id", f"{n}key", f"{n}_key") for n in other_names
-                ):
-                    candidates.append(
-                        _EdgeCandidate(
-                            child_table=table_name,
-                            child_column=col_name,
-                            parent_table=other_name,
-                            # The other table's ACTUAL primary key -- never
-                            # a hard-coded "id".
-                            parent_column=other_pk[0],
-                            child_full_table=str(table.get("full_name") or table_name),
-                            parent_full_table=str(
-                                table_by_name.get(other_name, {}).get("full_name") or other_name
-                            ),
-                        )
+            saturated = len(vals) >= sample_size
+            unique = None
+            if saturated:
+                # ponytail: a FULL scan per saturated column -- the price of an
+                # exact RHS-uniqueness answer on a table bigger than the sample.
+                # A connector without profile_column (MongoDB) leaves it None.
+                try:
+                    stats = await connector.profile_column(full_name, col_name, mode="FULL")
+                    unique = stats["distinct_count"] == stats["total_count"] - stats["null_count"]
+                except Exception as exc:
+                    logger.debug(
+                        "Uniqueness check unavailable for %s.%s: %s", table_name, col_name, exc
                     )
+            profiles[(table_name, col_name)] = _ColumnProfile(
+                raw=raw,
+                norm=frozenset(normalize_val(v) for v in raw),
+                saturated=saturated,
+                unique=unique,
+            )
+    return profiles
+
+
+def _find_candidate_edges(
+    tables: list[dict[str, Any]],
+    profiles: dict[tuple[str, str], _ColumnProfile],
+) -> list[_EdgeCandidate]:
+    """Every (child column, parent column) pair worth testing for inclusion.
+
+    Value-based IND discovery, name-agnostic: nothing here reads a column or
+    table NAME to decide anything -- only the sampled values in `profiles`
+    and the table's resolved primary key. Two parameter-free filters
+    (Hoppe/Papenbrock "HoPF"; see TECHNICAL_REPORT P3):
+
+    * RHS-uniqueness: a parent column must be unique in its table. A column
+      is unique when the database says so (saturated columns), else when its
+      distinct count equals the table's largest distinct count (the table's
+      row count, whenever some column is a key). Without this a repeated
+      value column becomes a "parent" of everything inside it.
+    * PK subset of PK: a column whose values equal its own table's primary
+      key IS that key, and an edge between two keys is a coincidence of two
+      surrogate sequences (1..60 inside 1..200), not a reference. This is what
+      rejects the surrogate-key false edge, by the data.
+
+    The acyclicity rule HoPF also uses is deliberately NOT applied: it would
+    reject junction tables and self-references, which P4/P7 must find.
+
+    ponytail: unary INDs only (no composite keys). Uniqueness is only
+    decidable below the sampling cap or with a connector that can profile a
+    column, and only if the table has a unique column at all; otherwise the
+    filter passes vacuously and the containment test decides alone. A genuine FK that is itself equal to its own
+    table's key (a shared-key 1:1 extension table) is dropped by the PK-subset
+    filter; a declared FK still finds it. A nullable unique column in a
+    small table has fewer distinct values than the key and is not treated as
+    unique.
+    """
+    full_names = {t["name"]: str(t.get("full_name") or t["name"]) for t in tables if t.get("name")}
+    table_size: dict[str, int] = {}
+    for (t, _c), p in profiles.items():
+        table_size[t] = max(table_size.get(t, 0), len(p.norm))
+
+    key_values: dict[str, frozenset[str]] = {}
+    for table in tables:
+        name = table.get("name")
+        pk = _resolve_primary_key(table)
+        if name and len(pk) == 1 and (name, pk[0]) in profiles:
+            key_values[name] = profiles[(name, pk[0])].norm
+
+    def is_key(table: str, column: str) -> bool:
+        return table in key_values and profiles[(table, column)].norm == key_values[table]
+
+    candidates: list[_EdgeCandidate] = []
+    for (parent_t, parent_c), parent in profiles.items():
+        unique = (
+            parent.unique if parent.unique is not None else len(parent.norm) == table_size[parent_t]
+        )
+        if not unique:
+            continue  # RHS-uniqueness prefilter
+        for (child_t, child_c), _child in profiles.items():
+            if (child_t, child_c) == (parent_t, parent_c):
+                continue
+            if is_key(child_t, child_c) and is_key(parent_t, parent_c):
+                continue  # PK subset of PK
+            candidates.append(
+                _EdgeCandidate(
+                    child_table=child_t,
+                    child_column=child_c,
+                    parent_table=parent_t,
+                    parent_column=parent_c,
+                    child_full_table=full_names[child_t],
+                    parent_full_table=full_names[parent_t],
+                )
+            )
     return candidates
 
 
 async def _verify_inclusion(
     connector: Any,
     candidate: _EdgeCandidate,
+    profiles: dict[tuple[str, str], _ColumnProfile],
     sample_size: int,
 ) -> float | None:
-    """Sample the child, then check those SPECIFIC values against the
-    parent, and compute |child ∩ parent| / |child|.
+    """|child ∩ parent| / |child| over the child's sampled distinct values.
 
-    Deliberately NOT two independent samples. A parent table with (say)
-    50,000 rows and a child table with 30 rows: an independent `LIMIT 500`
-    sample of the parent has essentially no chance of coincidentally
-    containing the exact 30 rows the child references, even when every
-    single child row genuinely points at a real parent row — verified
-    live 2026-08-10 against a real ClickHouse Company/CompanyFinancials
-    pair (thousands of companies, 29 financial records): independent
-    sampling scored 0.069 overlap for a relationship that is, by
-    construction, 100% referentially intact. Querying the parent FILTERED
-    to the child's own sampled values (`sample_distinct_values`'s
-    `filter_values` parameter) answers the real question directly instead
-    of hoping two arbitrary samples happen to intersect.
+    When the parent's value set was sampled completely the answer is read from
+    memory. When it was truncated (a big table), the parent is asked directly
+    about the child's own sampled values (`filter_values`) rather than hoping
+    two independent samples intersect: verified live 2026-08-10, independent
+    sampling scored 0.069 for a 100% referentially intact pair (thousands of
+    parents, 29 children).
 
-    Returns None if either side failed to sample or the child column has no
-    usable values to test — never raises, since one bad candidate must not
-    abort building the rest of the graph.
+    Returns None if the lookup failed -- never raises, since one bad candidate
+    must not abort building the rest of the graph.
+
+    ponytail: one filtered query per candidate pair against a saturated
+    parent; the RHS-uniqueness filter bounds how many parents that is.
     """
+    child = profiles[(candidate.child_table, candidate.child_column)]
+    parent = profiles[(candidate.parent_table, candidate.parent_column)]
+    if not parent.saturated:
+        return len(child.norm & parent.norm) / len(child.norm)
     try:
-        child_vals = await connector.sample_distinct_values(
-            candidate.child_full_table, candidate.child_column, limit=sample_size
-        )
-    except Exception as exc:
-        logger.debug(
-            "Inclusion-dependency child sampling failed for %s.%s: %s",
-            candidate.child_table,
-            candidate.child_column,
-            exc,
-        )
-        return None
-
-    child_norm = {normalize_val(v) for v in child_vals if normalize_val(v)}
-    if not child_norm:
-        return None
-    raw_child_vals = [v for v in child_vals if normalize_val(v)]
-
-    try:
-        parent_matches = await connector.sample_distinct_values(
+        matches = await connector.sample_distinct_values(
             candidate.parent_full_table,
             candidate.parent_column,
             limit=sample_size,
-            filter_values=raw_child_vals,
+            filter_values=list(child.raw),
         )
     except Exception as exc:
         logger.debug(
@@ -391,9 +431,31 @@ async def _verify_inclusion(
             exc,
         )
         return None
+    return len(child.norm & {normalize_val(v) for v in matches}) / len(child.norm)
 
-    parent_norm = {normalize_val(v) for v in parent_matches}
-    return len(child_norm & parent_norm) / len(child_norm)
+
+def _cut_at_cliff(scored: list[tuple[float, _EdgeCandidate]]) -> list[tuple[float, _EdgeCandidate]]:
+    """Keep the candidates ranked above the largest gap between consecutive
+    scores. No parameter: the ranking itself says where it breaks (HoPF: 7.67e7
+    candidate key combinations to 1 on TPC-H, losing no true key). A list with
+    no gap (one candidate, or all scores equal) is kept whole.
+
+    ponytail: containment is the only score, so a coincidental IND with
+    overlap 1.0 (a low-cardinality column inside a surrogate sequence) ties
+    with the real ones and survives, and when an origin has no real FK the best
+    junk candidate is kept; a genuine FK with dirty data (overlap just below
+    the others) is cut whenever the gap above it is the largest. Ties for the
+    largest gap keep the higher group. The
+    deferred remedy is a classifier on non-name features (coverage ratio,
+    value distribution) trained on confirmed FKs after Part 3.
+    """
+    ranked = sorted(scored, key=lambda s: -s[0])
+    gaps = [a[0] - b[0] for a, b in pairwise(ranked)]
+    return ranked[: gaps.index(max(gaps)) + 1] if gaps and max(gaps) else ranked
+
+
+def _index_origins(origins: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {str(o.get("id")): o for o in origins or []}
 
 
 async def build_join_graph(
@@ -424,7 +486,7 @@ async def build_join_graph(
     JoinGraph
     """
     graph = JoinGraph()
-    origins_by_id = {str(o.get("id")): o for o in origins or []}
+    origins_by_id = _index_origins(origins)
 
     for origin_id, schema_data in (schemas or {}).items():
         for table in (schema_data or {}).get("tables", []) or []:
@@ -463,73 +525,52 @@ async def build_join_graph(
                     )
                 )
 
-        # Tiers 2+3: name-heuristic candidates, verified against real data.
-        candidates = _find_candidate_edges(tables)
-        if not candidates:
-            continue
-
+        # Tier 2: value-based IND discovery over the sampled data.
         origin_config = origins_by_id.get(origin_id)
         if origin_config is None:
+            # ponytail: a name guess is the one thing this tier must not do, so
+            # with nothing to sample there is nothing to propose. plan_scope's
+            # LLM-proposed hops still reach the graph through its own path.
             logger.warning(
-                "No origin config for '%s' -- %d candidate edge(s) added "
-                "unverified (confidence=heuristic) since inclusion-dependency "
-                "sampling has no connection to run against",
+                "No origin config for '%s' -- inclusion-dependency discovery has no "
+                "connection to sample, so no value-based edges were inferred",
                 origin_id,
-                len(candidates),
             )
-            for candidate in candidates:
-                graph.add_edge(
-                    JoinEdge(
-                        child_origin=origin_id,
-                        child_table=candidate.child_table,
-                        child_column=candidate.child_column,
-                        parent_origin=origin_id,
-                        parent_table=candidate.parent_table,
-                        parent_column=candidate.parent_column,
-                        confidence="heuristic",
-                        overlap_ratio=None,
-                        rationale=(
-                            f"{candidate.child_table}.{candidate.child_column} name-matches "
-                            f"{candidate.parent_table}.{candidate.parent_column} "
-                            "(unverified: no connection available to sample)"
-                        ),
-                    )
-                )
             continue
 
         connector = create_connector(
             origin_config.get("type", ""), origin_config.get("connection", {})
         )
         try:
-            for candidate in candidates:
-                overlap = await _verify_inclusion(connector, candidate, sample_size)
-                if overlap is None:
-                    continue
-                if overlap >= _VERIFIED_THRESHOLD:
-                    confidence = "verified"
-                elif overlap >= _PROBABLE_THRESHOLD:
-                    confidence = "probable"
-                else:
-                    continue
-                graph.add_edge(
-                    JoinEdge(
-                        child_origin=origin_id,
-                        child_table=candidate.child_table,
-                        child_column=candidate.child_column,
-                        parent_origin=origin_id,
-                        parent_table=candidate.parent_table,
-                        parent_column=candidate.parent_column,
-                        confidence=confidence,
-                        overlap_ratio=round(overlap, 4),
-                        rationale=(
-                            f"{candidate.child_table}.{candidate.child_column} values found in "
-                            f"{candidate.parent_table}.{candidate.parent_column} "
-                            f"({overlap:.0%} of sampled distinct values)"
-                        ),
-                    )
-                )
+            profiles = await _profile_columns(connector, tables, sample_size)
+            scored: list[tuple[float, _EdgeCandidate]] = []
+            for candidate in _find_candidate_edges(tables, profiles):
+                overlap = await _verify_inclusion(connector, candidate, profiles, sample_size)
+                if overlap:  # None (lookup failed) and 0.0 (no containment) both drop out
+                    scored.append((overlap, candidate))
         finally:
             await connector.close()
+
+        for overlap, candidate in _cut_at_cliff(scored):
+            graph.add_edge(
+                JoinEdge(
+                    child_origin=origin_id,
+                    child_table=candidate.child_table,
+                    child_column=candidate.child_column,
+                    parent_origin=origin_id,
+                    parent_table=candidate.parent_table,
+                    parent_column=candidate.parent_column,
+                    # Full containment is what an inclusion dependency IS;
+                    # anything less that survived the cliff is "probable".
+                    confidence="verified" if overlap == 1 else "probable",
+                    overlap_ratio=round(overlap, 4),
+                    rationale=(
+                        f"{candidate.child_table}.{candidate.child_column} values found in "
+                        f"{candidate.parent_table}.{candidate.parent_column} "
+                        f"({overlap:.0%} of sampled distinct values)"
+                    ),
+                )
+            )
 
     logger.info(
         "Join graph built: %d node(s), %d edge(s)",
