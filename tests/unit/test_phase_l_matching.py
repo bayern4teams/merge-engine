@@ -27,7 +27,6 @@ from src.mcp_server.tools.fellegi_sunter import (
 from src.mcp_server.tools.resolve_entities import (
     _generate_candidate_pairs,
     _normalize,
-    _phonetic_key,
     resolve_entities_impl,
 )
 
@@ -97,11 +96,6 @@ def test_estimate_model_survives_no_pairs() -> None:
 # ── L.2 Blocking ─────────────────────────────────────────────────────
 
 
-def test_phonetic_key_groups_spelling_variants() -> None:
-    assert _phonetic_key("Smith") == _phonetic_key("Smyth")
-    assert _phonetic_key("Robert") != _phonetic_key("Xylophone")
-
-
 def test_blocking_still_pairs_across_differently_named_fields() -> None:
     """Origins name the same concept differently — pairs must survive that.
 
@@ -125,8 +119,9 @@ def test_blocking_still_pairs_across_differently_named_fields() -> None:
     assert len(_generate_candidate_pairs(records)) == 1
 
 
-def test_blocking_pairs_on_a_typo_via_phonetic_key() -> None:
-    """An exact-match block would miss this pair entirely."""
+def test_blocking_pairs_a_surname_typo_through_shared_tokens() -> None:
+    """P5 token blocking: the typo'd surname shares no token, but the first
+    name and the email do, so the pair is still proposed."""
     records = [
         _person("1", "Katherine", "Smith", "k@x.com", origin="pg"),
         _person("2", "Katherine", "Smyth", "k@x.com", origin="crm"),

@@ -817,39 +817,6 @@ def _pending_merge_candidates(
 # ── Blocking ─────────────────────────────────────────────────────────
 
 
-def _pick_blocking_field(records: list[dict[str, Any]]) -> str | None:
-    """Pick the best name-ish field present in most records."""
-    field_counts: dict[str, int] = {}
-    for rec in records:
-        for k, v in rec.items():
-            if k.startswith("_") or v is None:
-                continue
-            if isinstance(v, str) and v.strip():
-                field_counts[k] = field_counts.get(k, 0) + 1
-
-    if not field_counts:
-        return None
-
-    def rank(field: str) -> tuple[int, int]:
-        f = field.lower()
-        # Lower hint index = better; unmatched fields rank last
-        for i, hint in enumerate(_NAME_FIELD_HINTS):
-            if hint in f:
-                return (i, -field_counts[field])
-        return (len(_NAME_FIELD_HINTS), -field_counts[field])
-
-    return min(field_counts, key=rank)
-
-
-def _block_key(rec: dict[str, Any], field: str) -> str:
-    """Normalized first token of the blocking field ('' if unavailable)."""
-    value = rec.get(field)
-    if value is None:
-        return ""
-    tokens = re.findall(r"[a-z0-9]+", str(value).lower())
-    return tokens[0] if tokens else ""
-
-
 def _best_name_field(rec: dict[str, Any]) -> str | None:
     """The record's own best name-ish string field, by hint rank.
 
@@ -872,141 +839,26 @@ def _best_name_field(rec: dict[str, Any]) -> str | None:
     return best
 
 
-def _ref_fields(records: list[dict[str, Any]]) -> list[str]:
-    """Identifier-like string fields present anywhere in the record set."""
-    seen: set[str] = set()
-    for rec in records:
-        for k, v in rec.items():
-            if k.startswith("_") or not isinstance(v, str) or not v.strip():
-                continue
-            kl = k.lower()
-            if any(h in kl for h in _REF_FIELD_HINTS):
-                seen.add(k)
-    return sorted(seen)
+def _token_keys(rec: dict[str, Any], fields: set[str] | None = None) -> set[str]:
+    """Token blocking (P5): every alphanumeric token of every data value.
 
-
-def _phonetic_key(value: str) -> str:
-    """A rough phonetic code, so spelling variants land in the same block.
-
-    A compact Soundex: keep the first letter, map the rest to consonant
-    classes, drop vowels and repeats. Catches Smith/Smyth and Katherine/
-    Catherine — the variants exact-match blocking misses entirely. Not as
-    accurate as Double Metaphone, but it needs no extra dependency and
-    blocking only has to be generous, not correct: scoring decides.
-    """
-    text = re.sub(r"[^a-z]", "", str(value).lower())
-    if not text:
-        return ""
-
-    codes = {
-        **dict.fromkeys("bfpv", "1"),
-        **dict.fromkeys("cgjkqsxz", "2"),
-        **dict.fromkeys("dt", "3"),
-        **dict.fromkeys("l", "4"),
-        **dict.fromkeys("mn", "5"),
-        **dict.fromkeys("r", "6"),
-    }
-    first = text[0]
-    encoded = []
-    previous = codes.get(first, "")
-    for char in text[1:]:
-        code = codes.get(char, "")
-        if code and code != previous:
-            encoded.append(code)
-        if char not in "hw":
-            previous = code
-    return (first + "".join(encoded) + "000")[:4]
-
-
-def _blocking_keys_for(rec: dict[str, Any], fields: list[str]) -> set[str]:
-    """Every block a record belongs to, across all blocking rules.
-
-    Multiple independent rules, unioned. One rule missing a pair (a typo in
-    the surname, say) no longer means the pair is never compared — another
-    rule still catches it. This replaces single-key blocking, where one bad
-    character silently excluded a record from consideration entirely.
-
-    Keys deliberately do NOT include the field name: origins name the same
-    concept differently (``company_name`` vs ``org_title``), and a key tied
-    to the field name would drop every cross-origin pair. Value collisions
-    across unrelated fields are harmless — blocking only proposes pairs,
-    scoring decides.
-
-    Keys derived from identifier-like fields are prefixed ``ref:`` so the
-    caller can purge over-large identifier blocks (a code shared by hundreds
-    of records is not evidence) without touching name blocks.
+    Schema-agnostic by construction -- attribute names are never read, so a
+    new origin with unfamiliar column names blocks exactly like a known one
+    ("one block for every token in the attribute values" [JED]). Engine
+    provenance fields (``_``-prefixed) are skipped; ``fields``, when given,
+    is the operator's explicit ``blocking_keys`` and limits the values used.
+    The blocks this produces are deliberately unselective; purging and
+    meta-blocking in ``_generate_candidate_pairs`` are what make it usable.
+    ponytail: a typo inside every shared token (Smith/Smyth with nothing else
+    in common) no longer co-blocks -- the old phonetic key did; token
+    blocking trades that for schema independence (report P5).
     """
     keys: set[str] = set()
-    for field_name in fields:
-        value = rec.get(field_name)
-        if value is None or not str(value).strip():
+    for key, value in rec.items():
+        if key.startswith("_") or value is None or (fields and key not in fields):
             continue
-        text = str(value).strip().lower()
-        norm = re.sub(r"[^a-z0-9]", "", text)
-        if not norm:
-            continue
-
-        field_lower = field_name.lower()
-
-        # Rule 0 (BUG C / C2): registrable-domain key for website/URL-shaped
-        # fields. `_domain_of` already normalises "https://www.boeing.com/
-        # careers" and "boeing.com" to the same value — the deterministic
-        # match path (`_deterministic_match`) already trusts it completely.
-        # Without this, two records sharing a domain never even get proposed
-        # as a candidate pair unless their (possibly differently-spelled)
-        # name fields also co-block. "full:" marks it a real identity key,
-        # never subject to size-based deprioritisation.
-        if any(h in field_lower for h in _DOMAIN_FIELD_HINTS):
-            dom = _domain_of(value)
-            if dom:
-                keys.add(f"full:dom:{dom}")
-            continue
-
-        is_ref = any(h in field_lower for h in _REF_FIELD_HINTS)
-        # An exact match on a COMPLETE value (full name, email, tax id)
-        # identifies a record. An exact match on PART of a name does not —
-        # a shared surname is a hint, and a block of every Smith in a
-        # million-row table is 50 billion pairs of almost no value. Partial
-        # names therefore get approximate keys, subject to purging.
-        is_partial_name = field_lower in _PARTIAL_NAME_FIELDS
-        prefix = "ref:" if is_ref else ("part:" if is_partial_name else "")
-
-        # Rule 1: whole normalised value (exact agreement).
-        keys.add(f"{prefix}full:{norm}")
-        # Rule 3: first token (the original single-key behaviour).
-        tokens = re.findall(r"[a-z0-9]+", text)
-        if tokens:
-            keys.add(f"{prefix}tok:{tokens[0]}")
-
-        if is_ref:
-            continue
-
-        # Rule 2: phonetic code — catches Smith/Smyth, Katherine/Catherine,
-        # which exact-match blocking misses entirely.
-        phonetic = _phonetic_key(text)
-        if phonetic:
-            keys.add(f"snd:{phonetic}")
-        # Rule 4: for emails, the local part alone — the same mailbox
-        # recorded against different domains still points at one person.
-        if "@" in text:
-            local = re.sub(r"[^a-z0-9]", "", text.split("@", 1)[0])
-            if local:
-                keys.add(f"eml:{local}")
+        keys.update(_tokenize(str(value).lower()))
     return keys
-
-
-def _blockable_fields(records: list[dict[str, Any]]) -> list[str]:
-    """String fields worth blocking on: names, identifiers, and domains."""
-    hints = _NAME_FIELD_HINTS + _REF_FIELD_HINTS + _UNIQUE_IDENTITY_HINTS + _DOMAIN_FIELD_HINTS
-    found: set[str] = set()
-    for rec in records[:200]:
-        for key, value in rec.items():
-            if key.startswith("_") or not isinstance(value, str) or not value.strip():
-                continue
-            kl = key.lower()
-            if any(h in kl for h in hints) or kl in _PARTIAL_NAME_FIELDS:
-                found.add(key)
-    return sorted(found)
 
 
 def trigram_candidate_pairs(
@@ -1074,7 +926,8 @@ def _generate_candidate_pairs(
     property computed from the block collection says so, never because a
     counter ran out.
 
-    1. **Block building** — every rule in ``_blocking_keys_for``; records with
+    1. **Block building** — token blocking (P5): every token of every data
+       value is a key, attribute names never read (``_token_keys``); records with
        no usable key share a fallback block, so missing data never silently
        excludes a record. Blocks with an identical member set (one block
        reached under two keys) are kept once.
@@ -1116,10 +969,7 @@ def _generate_candidate_pairs(
     """
     if stats is None:
         stats = {}
-    explicit = [f for f in (blocking_keys or []) if f]
-    fields = explicit or _blockable_fields(records)
-    if not fields and records:
-        fields = [f for f in (_best_name_field(records[0]) or "",) if f]
+    explicit = {f for f in (blocking_keys or []) if f}
 
     # 1. Block building — one entry per record id, so a record reached twice
     # (same id) never pairs with itself.
@@ -1129,7 +979,7 @@ def _generate_candidate_pairs(
         rid = _record_id(rec)
         records_by_id.setdefault(rid, rec)
         # No usable key at all — a shared fallback block.
-        for key in _blocking_keys_for(rec, fields) or {"__nokey__"}:
+        for key in _token_keys(rec, explicit) or {"__nokey__"}:
             raw_blocks.setdefault(key, set()).add(rid)
 
     # The same member set under two keys (e.g. ``tok:`` and ``snd:`` both
