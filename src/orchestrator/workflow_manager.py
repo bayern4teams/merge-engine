@@ -26,6 +26,7 @@ from src.orchestrator.graph import (
     build_graph,
     get_initial_state,
 )
+from src.orchestrator.nodes.resolve_entities import apply_band_decisions, resolves_band
 from src.orchestrator.profiles import (
     PINNED_KEYS,
     apply_profile,
@@ -1409,6 +1410,14 @@ class WorkflowManager:
                 if split_pairs:
                     state_update["human_split_pairs"] = split_pairs
                 logger.info("Workflow %s: cluster decisions applied (%s)", thread_id, stats)
+
+            # P15: per-pair band decisions and committed thresholds -- same
+            # reason as above (the gate body never runs on resume). Applied on
+            # top of any cluster decisions, through the helper the gate body
+            # also uses, so the two paths cannot drift.
+            if interrupt_node == "human_review_matches" and resolves_band(feedback):
+                live_values = self._safe_state_values(config)
+                state_update.update(apply_band_decisions({**live_values, **state_update}, feedback))
 
             # The error gate's bookkeeping. It has to happen here, not in the
             # node body: update_state(as_node=...) tells LangGraph the node

@@ -18,10 +18,13 @@ from src.mcp_server.tools.resolve_entities import (
     _PROCESS_POOL_MIN_RECORDS,
     CandidatePairBudgetExceeded,
     build_relationship_index,
+    rebuild_band_clusters,
     resolve_entities_impl,
 )
 from src.orchestrator.spool import (
     RunSpool,
+    clusters_for,
+    entity_records_by_id,
     entity_row_count,
     entity_rows,
     is_handle,
@@ -360,6 +363,11 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
             # cluster, so without this the matches gate would auto-skip
             # and the human would never learn they existed.
             "pending_merge_candidates": result.get("pending_merge_candidates", []),
+            # P15: thresholds, predicted counts per band and the score
+            # distribution shown at the gate, plus the pairs a gate decision
+            # re-clusters from (apply_band_decisions).
+            "band_summary": result.get("band_summary", {}),
+            "retained_pairs": result.get("retained_pairs", []),
         }
         if uncompared:
             logger.warning(
@@ -656,3 +664,118 @@ def has_low_confidence_clusters(state: dict[str, Any]) -> bool:
                 return True
 
     return False
+
+
+_MERGE_ACTIONS = {"merge", "accept", "approve", "match", "yes"}
+_KEEP_ACTIONS = {"keep_separate", "keep", "reject", "separate", "split", "no"}
+
+
+def resolves_band(feedback: dict[str, Any]) -> bool:
+    """Does this matches-gate feedback carry a band decision (P15)?"""
+    return bool(feedback.get("pair_decisions") or feedback.get("band_thresholds"))
+
+
+def apply_band_decisions(state: dict[str, Any], feedback: dict[str, Any]) -> dict[str, Any]:
+    """Resolve the review band within the run (report P15): the state update
+    the matches gate's decision produces.
+
+    ``feedback["pair_decisions"]``: ``[{entity_type, record_ids: [a, b],
+    action: "merge" | "keep_separate"}]``; ``feedback["band_thresholds"]``:
+    ``{entity: {auto_match, auto_exclude}}``, the bar the operator commits
+    after seeing the distribution. Thresholds that are not two numbers with
+    ``0 <= auto_exclude < auto_match <= 1`` are refused (the run's own stay).
+    An undecided pair or an unrecognised action never merges -- an unintended
+    merge is not recoverable. Once applied nothing in the band is pending:
+    approving the gate keeps every undecided pair apart.
+
+    Shared by ``WorkflowManager.resume_workflow`` (the live path: the gate
+    body never runs on resume) and ``human_review_matches`` (direct callers),
+    so the two cannot drift. Pure in ``state``; returns {} when there is
+    nothing to resolve.
+    """
+    decisions = [d for d in feedback.get("pair_decisions") or [] if isinstance(d, dict)]
+    committed = feedback.get("band_thresholds") or {}
+    all_stats = state.get("resolution_stats") or {}
+    run_id = str(state.get("run_id") or "unknown")
+    new_stats = dict(all_stats)
+    new_clusters = dict(state.get("entity_clusters") or {})
+    changed = False
+    for entity_type, stats in all_stats.items():
+        mine = [d for d in decisions if d.get("entity_type", entity_type) == entity_type]
+        if not (stats.get("pending_merge_candidates") or mine or entity_type in committed):
+            continue
+        changed = True
+        shown = (stats.get("band_summary") or {}).get("thresholds") or {}
+        auto_match = shown.get("auto_match")
+        requested = committed.get(entity_type) if isinstance(committed, dict) else None
+        if isinstance(requested, dict):
+            m, x = requested.get("auto_match"), requested.get("auto_exclude")
+            if (
+                isinstance(m, (int, float))
+                and isinstance(x, (int, float))
+                and not isinstance(m, bool)
+                and not isinstance(x, bool)
+                and 0 <= x < m <= 1
+            ):
+                auto_match = m
+                logger.info(
+                    "Entity '%s': operator committed thresholds match=%s exclude=%s",
+                    entity_type,
+                    m,
+                    x,
+                )
+                shown = {"auto_match": m, "auto_exclude": x}
+            else:
+                logger.warning(
+                    "Entity '%s': committed thresholds %r refused (need 0 <= exclude < match <= 1)",
+                    entity_type,
+                    requested,
+                )
+        accepted: set[frozenset[str]] = set()
+        rejected: set[frozenset[str]] = set()
+        for d in mine:
+            pair = frozenset(str(r) for r in d.get("record_ids") or [])
+            action = str(d.get("action") or "").strip().lower()
+            if len(pair) != 2:
+                continue
+            if action in _MERGE_ACTIONS:
+                accepted.add(pair)
+            elif action in _KEEP_ACTIONS:
+                rejected.add(pair)
+            else:
+                logger.warning("Unknown band action %r for %s: kept apart.", action, sorted(pair))
+                rejected.add(pair)
+        retained = stats.get("retained_pairs")
+        if retained is not None and auto_match is not None:
+            clusters = clusters_for(state, entity_type)
+            needed = sorted(
+                {str(r) for p in retained for r in p[:2]} | {r for p in accepted for r in p}
+            )
+            rebuilt = rebuild_band_clusters(
+                entity_type,
+                clusters,
+                retained,
+                accepted,
+                rejected,
+                float(auto_match),
+                entity_records_by_id(state, entity_type, needed),
+            )
+            new_clusters[entity_type] = store_clusters(
+                run_id,
+                entity_type,
+                rebuilt,
+                needs_review=sum(1 for c in rebuilt if c.get("required_human_review")),
+                multi_record=sum(1 for c in rebuilt if len(c.get("record_ids", [])) > 1),
+            )
+        new_stats[entity_type] = {
+            **stats,
+            "pending_merge_candidates": [],
+            "band_resolution": {
+                "accepted": len(accepted),
+                "kept_separate": len(rejected),
+                "thresholds": shown,
+            },
+        }
+    if not changed:
+        return {}
+    return {"entity_clusters": new_clusters, "resolution_stats": new_stats}

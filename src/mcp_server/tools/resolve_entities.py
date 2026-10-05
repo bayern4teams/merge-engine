@@ -327,7 +327,7 @@ def _resolve_core(
             precomputed_vector,
             relationship_index,
         )
-        if auto_exclude < conf < auto_match:
+        if auto_exclude <= conf < auto_match:
             borderline.append((id1, id2, rec1, rec2, conf))
         else:
             scored_pairs.append((id1, id2, conf))
@@ -360,6 +360,7 @@ def _resolve_core(
         "scored_pairs": scored_pairs,
         "borderline": borderline,
         "pair_evidence": pair_evidence,
+        "model_fitted": match_model is not None,
         "blocking_seconds": t_fit_start - t_blocking_start,
         "fit_model_seconds": t_scoring_start - t_fit_start,
         "scoring_seconds": t_end - t_scoring_start,
@@ -522,15 +523,26 @@ async def resolve_entities_impl(
     if engine == "splink":
         from src.mcp_server.tools.splink_matcher import resolve_with_splink
 
+        # P15: the band fields need Splink's scored pairs, which only reach
+        # this side through the clustering call -- captured there.
+        splink_pairs: list[tuple[str, str, float]] = []
+
+        async def _capture_and_cluster(
+            recs: list[dict[str, Any]], pairs: list[tuple[str, str, float]], **kwargs: Any
+        ) -> tuple[list[dict[str, Any]], int, int]:
+            splink_pairs.extend(pairs)
+            return await _build_clusters(recs, pairs, **kwargs)
+
         splink_res = await resolve_with_splink(
             entity_type,
             records,
             matching_rules=rules,
             known_cluster_ids=known_cluster_ids,
-            build_clusters_fn=_build_clusters,
+            build_clusters_fn=_capture_and_cluster,
         )
         if splink_res is not None:
-            return splink_res
+            # Splink scores are posterior probabilities: log-odds scale.
+            return {**splink_res, **_band_fields(splink_pairs, *_thresholds_for(rules), True)}
     blocking_keys = blocking_keys or rules.get("blocking_keys") or None
     # auto_match/unique_ids here are for the log line below and the cache
     # key only — _resolve_core (Part 1.5 B.3) re-derives its own copies
@@ -790,6 +802,7 @@ async def resolve_entities_impl(
         "pending_merge_candidates": _pending_merge_candidates(
             scored_pairs, auto_match, auto_exclude
         ),
+        **_band_fields(scored_pairs, auto_match, auto_exclude, core.get("model_fitted", False)),
     }
     # Part 1.5 D.7: cached cluster_id values are meaningless (they were
     # derived from THIS run's known_cluster_ids) — apply_known_cluster_ids
@@ -808,10 +821,143 @@ def _pending_merge_candidates(
     undecided = [
         {"record_ids": [id1, id2], "confidence": round(conf, 3)}
         for id1, id2, conf in scored_pairs
-        if auto_exclude < conf < auto_match
+        if auto_exclude <= conf < auto_match
     ]
     undecided.sort(key=lambda p: -p["confidence"])
     return undecided[:_MAX_PENDING_CANDIDATES]
+
+
+def _band_fields(
+    scored_pairs: list[tuple[str, str, float]],
+    auto_match: float,
+    auto_exclude: float,
+    log_odds: bool,
+) -> dict[str, Any]:
+    """What the matches gate needs to let the operator commit the band (P15).
+
+    ``band_summary``: the thresholds in force, the predicted pair count per
+    band at those thresholds, and the distribution of EVERY scored pair --
+    on the log2-odds scale when the score is a model posterior (log m/u plus
+    the prior: RELAIS's plotted mixture), else on the raw score. Bin count by
+    Sturges' rule, edges from the data's own range.
+    ``retained_pairs``: every pair at or above the exclude bar, unrounded, so
+    a decision or a committed threshold is resolved within the run
+    (``rebuild_band_clusters``) without re-scoring.
+
+    ponytail: pairs below the exclude bar are not retained, so a committed
+    exclude bar LOWER than the run's needs a retry of the stage; the band's
+    width is policy until the score is calibrated (report P15 Ceiling).
+    Deferred: Possible Match as a persisted, revocable state with its own
+    queue (report section 3.7), trigger Part 3.
+    """
+    scores = [conf for _a, _b, conf in scored_pairs]
+    values = scores
+    if log_odds:
+        finite = [math.log2(p / (1 - p)) for p in scores if 0 < p < 1]
+        lo, hi = (min(finite), max(finite)) if finite else (0, 0)
+        values = [math.log2(p / (1 - p)) if 0 < p < 1 else (hi if p >= 1 else lo) for p in scores]
+    counts: list[int] = []
+    edges: list[float] = []
+    if values:
+        bins = math.ceil(math.log2(len(values))) + 1
+        lo, hi = min(values), max(values)
+        width = (hi - lo) / bins
+        counts = [0] * bins
+        for v in values:
+            counts[min(int((v - lo) / width), bins - 1) if width else 0] += 1
+        edges = [round(lo + i * width, 4) for i in range(bins + 1)]
+    return {
+        "band_summary": {
+            "thresholds": {"auto_match": auto_match, "auto_exclude": auto_exclude},
+            "predicted_counts": {
+                "match": sum(1 for c in scores if c >= auto_match),
+                "possible": sum(1 for c in scores if auto_exclude <= c < auto_match),
+                "exclude": sum(1 for c in scores if c < auto_exclude),
+            },
+            "distribution": {
+                "scale": "log2 odds (log m/u + prior)" if log_odds else "match score",
+                "bin_edges": edges,
+                "counts": counts,
+            },
+        },
+        "retained_pairs": [[a, b, c] for a, b, c in scored_pairs if c >= auto_exclude],
+    }
+
+
+def rebuild_band_clusters(
+    entity_type: str,
+    clusters: list[dict[str, Any]],
+    retained_pairs: list[list[Any]],
+    accepted: set[frozenset[str]],
+    rejected: set[frozenset[str]],
+    auto_match: float,
+    records_by_id: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Re-derive one entity's clusters after the matches gate (P15).
+
+    Edges are the retained scored pairs; a human-accepted band pair counts as
+    certain, a rejected one is removed. Components over the (possibly
+    committed) ``auto_match`` bar go through the same conflict repair and
+    cohesion cut as ``_build_clusters``. A cluster whose membership is
+    unchanged is returned as it was; a changed one was formed by the
+    operator's decision, so it is not flagged for review again.
+
+    ponytail: a changed cluster's id is derived from its new membership, not
+    from a previous run's id (``known_cluster_ids`` are not in gate state).
+    """
+    edge_weight: dict[tuple[str, str], float] = {}
+    for a, b, conf in retained_pairs:
+        key = (a, b) if a < b else (b, a)
+        edge_weight[key] = max(edge_weight.get(key, float(conf)), float(conf))
+    for pair in accepted:
+        a, b = sorted(pair)
+        edge_weight[(a, b)] = 1  # a human-confirmed pair is certain
+    for pair in rejected:
+        a, b = sorted(pair)
+        edge_weight.pop((a, b), None)
+
+    all_ids = sorted({rid for c in clusters for rid in c.get("record_ids", [])})
+    parent = {rid: rid for rid in all_ids}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for (a, b), weight in edge_weight.items():
+        if weight >= auto_match and a in parent and b in parent:
+            parent[find(b)] = find(a)
+    components: dict[str, list[str]] = {}
+    for rid in all_ids:
+        components.setdefault(find(rid), []).append(rid)
+
+    old = {frozenset(c.get("record_ids", [])): c for c in clusters}
+    rebuilt: list[dict[str, Any]] = []
+    for members in components.values():
+        parts = (
+            _partition_component(
+                members, edge_weight, records_by_id, min(_MIN_COHESION, auto_match)
+            )[0]
+            if len(members) > 1
+            else [members]
+        )
+        for part in parts:
+            part_ids = sorted(part)
+            kept = old.get(frozenset(part_ids))
+            if kept is not None:
+                rebuilt.append(kept)
+                continue
+            cluster: dict[str, Any] = {
+                "cluster_id": _assign_cluster_id(entity_type, part_ids, None),
+                "record_ids": part_ids,
+                "match_confidence": round(_min_internal_confidence(part_ids, edge_weight), 3),
+                "required_human_review": False,
+            }
+            if len(part_ids) > 1:
+                cluster["reviewed_by_human"] = True
+            rebuilt.append(cluster)
+    return rebuilt
 
 
 # ── Blocking ─────────────────────────────────────────────────────────
@@ -2417,7 +2563,7 @@ async def _build_clusters(
         if conf >= auto_match:
             union(id1, id2)
             auto_matched_count += 1
-        elif conf <= auto_exclude:
+        elif conf < auto_exclude:
             auto_excluded_count += 1
         else:
             # Borderline: the system is NOT confident. Merging here is what
@@ -2459,7 +2605,9 @@ async def _build_clusters(
                 _LARGE_COMPONENT_THRESHOLD,
             )
         if len(members) > 1:
-            parts, was_repaired, was_cut = _partition_component(members, edge_weight, records_by_id)
+            parts, was_repaired, was_cut = _partition_component(
+                members, edge_weight, records_by_id, min(_MIN_COHESION, auto_match)
+            )
             repaired += was_repaired
             cut += was_cut
         else:
@@ -2562,8 +2710,13 @@ def _partition_component(
     members: list[str],
     edge_weight: dict[tuple[str, str], float],
     records_by_id: dict[str, dict[str, Any]],
+    min_cohesion: float = _MIN_COHESION,
 ) -> tuple[list[list[str]], int, int]:
     """Split one connected component into defensible clusters.
+
+    ``min_cohesion`` is ``_MIN_COHESION`` unless the match bar sits below it
+    (P15: an operator-committed bar): a pair the bar itself admits must not be
+    cut again by a stricter cohesion bar.
 
     Returns (partitions, repaired_flag, cut_flag).
     """
@@ -2593,10 +2746,10 @@ def _partition_component(
         return [[m] for m in members], 1, 0
 
     # ── Cohesion cut: break weak chains ──────────────────────────────
-    if _average_linkage(members, edge_weight) >= _MIN_COHESION:
+    if _average_linkage(members, edge_weight) >= min_cohesion:
         return [members], 0, 0
 
-    return _split_weakest_link(members, edge_weight), 0, 1
+    return _split_weakest_link(members, edge_weight, min_cohesion), 0, 1
 
 
 def _average_linkage(members: list[str], edge_weight: dict[tuple[str, str], float]) -> float:
@@ -2617,7 +2770,9 @@ def _average_linkage(members: list[str], edge_weight: dict[tuple[str, str], floa
 
 
 def _split_weakest_link(
-    members: list[str], edge_weight: dict[tuple[str, str], float]
+    members: list[str],
+    edge_weight: dict[tuple[str, str], float],
+    min_cohesion: float = _MIN_COHESION,
 ) -> list[list[str]]:
     """Drop the weakest edges and re-derive components, recursing as needed."""
     edges = sorted(
@@ -2661,8 +2816,8 @@ def _split_weakest_link(
 
     result: list[list[str]] = []
     for part in parts:
-        if len(part) > 1 and _average_linkage(part, edge_weight) < _MIN_COHESION:
-            result.extend(_split_weakest_link(part, edge_weight))
+        if len(part) > 1 and _average_linkage(part, edge_weight) < min_cohesion:
+            result.extend(_split_weakest_link(part, edge_weight, min_cohesion))
         else:
             result.append(part)
     return result

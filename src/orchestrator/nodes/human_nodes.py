@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from src.orchestrator.nodes.resolve_entities import apply_band_decisions, resolves_band
 from src.orchestrator.spool import (
     clusters_for,
     entity_records_by_id,
@@ -292,6 +293,16 @@ def _build_matches_interrupt(state: dict[str, Any]) -> dict[str, Any]:
                 }
             )
 
+    # P15: per entity, the thresholds in force, predicted pair counts per band
+    # and the score distribution, so the operator commits the band knowingly
+    # (feedback "pair_decisions" / "band_thresholds", applied by
+    # nodes.resolve_entities.apply_band_decisions).
+    band_summary = {
+        entity_type: stats["band_summary"]
+        for entity_type, stats in (state.get("resolution_stats") or {}).items()
+        if stats.get("band_summary")
+    }
+
     return {
         "node": "human_review_matches",
         "title": "Review Entity Matches",
@@ -302,10 +313,12 @@ def _build_matches_interrupt(state: dict[str, Any]) -> dict[str, Any]:
             "pending_merge_candidates": pending,
             "pending_merge_note": (
                 f"{len(pending)} pair(s) looked similar but not similar enough to merge "
-                "automatically. They were left as separate records — approve to keep them separate."
+                "automatically. Merge or keep each one apart; any left undecided stay "
+                "separate when you approve."
             )
             if pending
             else "",
+            "band_summary": band_summary,
         },
     }
 
@@ -325,6 +338,17 @@ async def human_review_matches(state: dict[str, Any]) -> dict[str, Any]:
     )
 
     human_feedback = state.get("human_feedback")
+    if human_feedback and resolves_band(human_feedback):
+        update: dict[str, Any] = {}
+        if "cluster_decisions" in human_feedback:
+            update = await human_review_matches(
+                {
+                    **state,
+                    "human_feedback": {"cluster_decisions": human_feedback["cluster_decisions"]},
+                }
+            )
+        update.update(apply_band_decisions({**state, **update}, human_feedback))
+        return update
     if human_feedback and "cluster_decisions" in human_feedback:
         logger.info("Human reviewed entity matches")
         logger.debug("Feedback keys: %s", list(human_feedback.keys()))
