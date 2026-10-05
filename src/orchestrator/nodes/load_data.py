@@ -324,6 +324,27 @@ def read_destination_schemas(connector: Any) -> dict[str, dict[str, Any]]:
         return {}
 
 
+def preview_destination_defects(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """:func:`destination_schema_defects` for the pre-load gate payload (P17): opens the
+    destination read-only, introspects, closes. ``held_links`` is left out (it grows with the
+    row count; the load's own report keeps it). An unreachable destination yields ``[]``: the
+    load itself then reports the connection failure."""
+    destination = state.get("destination")
+    try:
+        connector = _get_destination_connector(
+            destination if isinstance(destination, dict) else None
+        )
+    except Exception as exc:
+        logger.warning("Pre-load defect check: no destination connector (%s)", exc)
+        return []
+    try:
+        defects = destination_schema_defects(state, read_destination_schemas(connector))
+    finally:
+        with contextlib.suppress(Exception):
+            connector.close()
+    return [{k: v for k, v in d.items() if k != "held_links"} for d in defects]
+
+
 def _has_value(v: Any) -> bool:
     return v is not None and bool(str(v).strip())
 

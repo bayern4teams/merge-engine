@@ -737,7 +737,10 @@ class WorkflowManager:
             # Pre-load reconciliation preview: the user approves NUMBERS
             # (extraction/cluster/conflict counts), not vibes. Load results
             # are zero here — the load hasn't run yet.
-            from src.orchestrator.nodes.load_data import build_reconciliation_report
+            from src.orchestrator.nodes.load_data import (
+                build_reconciliation_report,
+                preview_destination_defects,
+            )
 
             reconciliation = build_reconciliation_report(values, {}, list(errors))
             field_mappings_rows, _unmapped = _build_mapping_rows(values)
@@ -768,6 +771,9 @@ class WorkflowManager:
                     # the reviewer approving THIS gate is the one signing off
                     # on every merge, not only the ambiguous ones.
                     "clusters_by_entity": WorkflowManager._clusters_by_entity(values),
+                    # P17: destination tables that cannot hold their links; they are left
+                    # empty and no DDL is issued -- the reviewer sees it before approving.
+                    "destination_defects": preview_destination_defects(values),
                 },
             }
         return {"node": node, "title": node, "data": {}}
