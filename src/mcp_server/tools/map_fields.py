@@ -228,6 +228,42 @@ async def map_fields_impl(
             exact_matches += 1
     logger.debug("Phase 1 complete: %d exact matches", exact_matches)
 
+    # ── Phase 1b (P4): a field named like a family table is that table's text ──
+    # Repeated text on a row is a dimension row plus a link, not a value for the
+    # column that links to it: the loader materialises one row per distinct text
+    # (load_data._materialise_dimensions) and sets the link itself, so the field
+    # must land on the dimension table, never on the primary table's own
+    # reference column. Name evidence only (a field vs a TABLE name, same tiers as
+    # `_heuristic_match`); no column is created.
+    # ponytail: the label column is the dimension's first non-provenance column
+    # the samples fit; a field whose name differs from the table's, or a
+    # dimension whose label is not first, still reaches the tiers below and the
+    # mapping gate (report P4 Ceiling).
+    family_tables = list(dict.fromkeys(k[0] for k in dest_candidates if k[0] != primary_table))
+    for field in source_fields:
+        if field in field_mapping:
+            continue
+        table = next(
+            (t for t in family_tables if _heuristic_match(field, t) >= _HEURISTIC_ACCEPT), None
+        )
+        label = next(
+            (
+                k
+                for k in dest_candidates
+                if k[0] == table
+                and not k[1].startswith("_")
+                and not _incompatible_with_column(field, dest_candidates[k], unified_schema)[0]
+            ),
+            None,
+        )
+        if label is not None:
+            field_mapping[field] = {
+                "dest_column": label[1],
+                "dest_table": label[0],
+                "confidence": _heuristic_match(field, label[0]),
+                "mapped_by": "dimension",
+            }
+
     # ── Phase 2: Confident heuristic matching (>= _HEURISTIC_ACCEPT) ──
     remaining_fields = [f for f in source_fields if f not in field_mapping]
     taken: set[tuple[str, str]] = {

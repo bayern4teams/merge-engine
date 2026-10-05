@@ -381,6 +381,16 @@ async def load_data_impl(
             len(transformed_records),
             upsert_key,
         )
+        # P4: dimension rows go in BEFORE the parent rows that link to them (the
+        # link is a real foreign key), and consume their mapping entries.
+        dimension_results = _materialise_dimensions(
+            connector,
+            dest_table,
+            records,
+            transformed_records,
+            mapping_by_table,
+            other_primary_tables,
+        )
         result = connector.load_batch(
             table_name=dest_table,
             records=transformed_records,
@@ -401,7 +411,7 @@ async def load_data_impl(
                 facts_written,
             )
 
-        child_results: dict[str, dict[str, Any]] = {}
+        child_results: dict[str, dict[str, Any]] = dict(dimension_results)
         if mapping_by_table:
             child_results = _write_child_rows(
                 connector=connector,
@@ -447,6 +457,111 @@ def _group_mapping_by_dest_table(
         table = (info.get("dest_table") if isinstance(info, dict) else None) or primary_table
         grouped.setdefault(table, {})[src_field] = info
     return grouped
+
+
+def _materialise_dimensions(
+    connector: Any,
+    primary_table: str,
+    source_records: list[dict[str, Any]],
+    transformed_parent_records: list[dict[str, Any]],
+    mapping_by_table: dict[str, dict[str, Any]],
+    other_primary_tables: set[str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Repeated text on a parent row -> one dimension row per DISTINCT text, plus a
+    link on the parent row (report P4). Zero new destination columns: only columns
+    the tables already declare are written, and the link is the parent's own
+    existing foreign-key column.
+
+    The direction ``_write_child_rows`` cannot take (it needs the child's FK to
+    point back at the primary): here the PRIMARY table holds the FK to the
+    dimension. A dimension id is derived from its table and text, so a re-run
+    upserts the same row instead of inserting another; a blank text writes no row
+    and no link. Handled tables are removed from ``mapping_by_table``; the
+    parents' link is set in place, so the caller must run this BEFORE the parent
+    load (the link is a real FK).
+
+    ponytail: find-or-create among rows THIS function wrote (deterministic id, no
+    lookup); a pre-existing row with the same text under another id is not
+    matched, and a dimension that is also its own entity this run is left to
+    that entity (report P4 Ceiling / Deferred: human-confirmed structure).
+    """
+    results: dict[str, dict[str, Any]] = {}
+    if (
+        not mapping_by_table  # a single-table mapping: nothing cross-table to look up
+        or not hasattr(connector, "get_foreign_keys")
+        or not hasattr(connector, "load_batch")
+    ):
+        return results
+    try:
+        own_fks = connector.get_foreign_keys(primary_table)
+    except Exception as exc:
+        logger.warning("Could not read foreign keys for '%s': %s", primary_table, exc)
+        return results
+    for dim_table in list(mapping_by_table):
+        field_mapping = mapping_by_table[dim_table]
+        links = [col for col, ref in own_fks.items() if ref == dim_table]
+        if not field_mapping or len(links) != 1 or dim_table in (other_primary_tables or set()):
+            continue
+        link = links[0]
+        try:
+            dim_fks = connector.get_foreign_keys(dim_table)
+        except Exception as exc:
+            logger.warning("Could not read foreign keys for '%s': %s", dim_table, exc)
+            continue
+        if primary_table in dim_fks.values():
+            continue  # the dimension also points back: an ordinary child table
+        # An origin value on one of the dimension's own FK columns is unresolved
+        # (same reasoning as _write_child_rows): dropped, reported.
+        dropped = sorted(f for f, i in field_mapping.items() if i.get("dest_column") in dim_fks)
+        field_mapping = {f: i for f, i in field_mapping.items() if f not in dropped}
+        dest_cols = [i.get("dest_column") for i in field_mapping.values()]
+        schema_columns = {
+            c["name"]: c for c in connector.get_table_schema(dim_table).get("columns", [])
+        }
+        required = [
+            c
+            for c in dim_fks
+            if c not in dest_cols and not schema_columns.get(c, {}).get("nullable", True)
+        ]
+        all_fields = sorted(mapping_by_table.pop(dim_table))
+        if required or not field_mapping:
+            results[dim_table] = {"inserted": 0, "updated": 0, "dropped_fields": all_fields}
+            continue
+
+        dim_rows: dict[str, dict[str, Any]] = {}
+        for src_rec, parent_rec in zip(source_records, transformed_parent_records, strict=True):
+            row = _transform_records([src_rec], field_mapping, dim_table)[0]
+            text = {c: row.get(c) for c in dest_cols}
+            if all(v is None or (isinstance(v, str) and not v.strip()) for v in text.values()):
+                parent_rec.setdefault(link, None)
+                continue
+            row["id"] = deterministic_uuid(
+                "dimension_row", dim_table, json.dumps(text, sort_keys=True, default=str)
+            )
+            row["_loaded_at"] = _get_timestamp()
+            dim_rows.setdefault(row["id"], row)
+            parent_rec[link] = row["id"]
+        if dim_rows:
+            if hasattr(connector, "ensure_table"):
+                connector.ensure_table(dim_table)
+            upsert_key = _resolve_upsert_key(connector, dim_table)
+            _align_identity_column(list(dim_rows.values()), upsert_key)
+            written = connector.load_batch(
+                table_name=dim_table,
+                records=list(dim_rows.values()),
+                mapping=field_mapping,
+                upsert_key=upsert_key,
+            )
+            results[dim_table] = {
+                "inserted": written.get("inserted", 0),
+                "updated": written.get("updated", 0),
+            }
+            logger.info(
+                "Materialised %d dimension row(s) in '%s' via '%s'", len(dim_rows), dim_table, link
+            )
+        if dropped:
+            results.setdefault(dim_table, {"inserted": 0, "updated": 0})["dropped_fields"] = dropped
+    return results
 
 
 def _write_child_rows(

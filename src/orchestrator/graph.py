@@ -595,6 +595,10 @@ class MergeState(TypedDict):
     # Phase A4: the input fingerprint join_graph was computed (or reused)
     # from -- same rationale as _entity_tables_fingerprint above.
     _join_graph_fingerprint: str
+    # P4: junction / weak-entity roles analyze_dependencies proposes for the
+    # dependency gate ({junction: [...], weak: [...]}). Declared so LangGraph
+    # keeps it for _build_deps_interrupt; nothing downstream acts on it.
+    table_roles: dict[str, Any]
 
     # Phase O — decisions a saved profile pins so a re-run is a re-run.
     # {entity: {blocking_keys, unique_id_fields, deterministic_id_fields,

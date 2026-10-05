@@ -13,6 +13,7 @@ from typing import Any
 
 from src.llm import PROMPT_TEMPLATES, LLMClient
 from src.mcp_server.tools.join_graph import _DEFAULT_SAMPLE_SIZE, JoinGraph, build_join_graph
+from src.mcp_server.tools.plan_scope import classify_junction_and_weak_tables
 from src.orchestrator.fingerprint import origins_fingerprint, stage_fingerprint
 from src.orchestrator.profiles import stage_cache_get
 from src.orchestrator.utils.dependency_sort import topological_sort
@@ -123,20 +124,26 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
     # fresh, e.g. a retry after this node failed downstream, or plan_scope
     # ran before this node for some reason) -- same reuse-then-build shape
     # plan_scope.py's own join_graph handling already uses.
+    sample_size = (state.get("scope_config") or {}).get(
+        "join_graph_sample_size"
+    ) or _DEFAULT_SAMPLE_SIZE
     join_graph_fp = stage_fingerprint(
         "join_graph",
         origins_fp=origins_fingerprint(origins, schemas),
-        sample_size=(state.get("scope_config") or {}).get("join_graph_sample_size")
-        or _DEFAULT_SAMPLE_SIZE,
+        sample_size=sample_size,
     )
     graph: JoinGraph | None = state.get("join_graph")
     if graph is None:
-        graph = await build_join_graph(
-            schemas,
-            origins,
-            sample_size=(state.get("scope_config") or {}).get("join_graph_sample_size")
-            or _DEFAULT_SAMPLE_SIZE,
-        )
+        graph = await build_join_graph(schemas, origins, sample_size=sample_size)
+
+    # P4: junction / weak-entity roles, from the graph's FK columns + the rows'
+    # own uniqueness. Proposed at the dependency gate (state["table_roles"] ->
+    # _build_deps_interrupt), never acted on here: the tree below is unchanged.
+    # ponytail: not recomputed when the whole tree is reused from a pinned
+    # profile above (that path returns before any graph exists).
+    table_roles = await classify_junction_and_weak_tables(
+        graph, schemas, origins, sample_size, _VERIFIED_CONFIDENCES
+    )
 
     tree_from_graph, fully_covered, confirmed_edges = _join_graph_to_dependency_tree(
         graph, target_entities, entity_tables
@@ -162,6 +169,7 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
             "entity_tables": entity_tables,
             "table_selection_notes": table_selection_notes,
             "join_graph": graph,
+            "table_roles": table_roles,
             "interrupt_data": None,
             "_dependency_tree_fingerprint": dep_tree_fp,
             "_join_graph_fingerprint": join_graph_fp,
@@ -311,6 +319,7 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
             "entity_tables": entity_tables,
             "table_selection_notes": table_selection_notes,
             "join_graph": graph,
+            "table_roles": table_roles,
             "interrupt_data": None,
             "_dependency_tree_fingerprint": dep_tree_fp,
             "_join_graph_fingerprint": join_graph_fp,
@@ -334,6 +343,7 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
             "entity_tables": entity_tables,
             "table_selection_notes": table_selection_notes,
             "join_graph": graph,
+            "table_roles": table_roles,
             "errors": errors,
             "interrupt_data": None,
             "_dependency_tree_fingerprint": dep_tree_fp,

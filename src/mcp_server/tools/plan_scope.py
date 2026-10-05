@@ -507,6 +507,138 @@ def _find_explicit_path_hops(
     return hops
 
 
+def _is_unique_combination(rows: list[dict[str, Any]], cols: list[str]) -> bool:
+    """True when no two rows share the same values on ``cols`` and none is NULL
+    (a NULL cannot identify a row). Decided from the rows, never from names."""
+    seen: set[tuple[str, ...]] = set()
+    for row in rows:
+        values = tuple(row.get(c) for c in cols)
+        if None in values:
+            return False
+        seen.add(tuple(map(str, values)))
+    return len(seen) == len(rows)
+
+
+def _minimal_unique_subset(rows: list[dict[str, Any]], cols: list[str]) -> list[str] | None:
+    """One minimal unique column combination inside ``cols`` (``None`` when ``cols``
+    itself is not unique). Uniqueness is monotone (a superset of a unique set is
+    unique), so dropping each column in turn while the rest stays unique ends on a
+    set no column of which can be removed.
+
+    ponytail: ONE minimal combination, in schema order; where several exist
+    inside ``cols`` the others are not enumerated (report P4 Ceiling).
+    """
+    if not _is_unique_combination(rows, cols):
+        return None
+    keep = list(cols)
+    for col in cols:
+        rest = [k for k in keep if k != col]
+        if rest and _is_unique_combination(rows, rest):
+            keep = rest
+    return keep
+
+
+async def classify_junction_and_weak_tables(
+    graph: JoinGraph,
+    schemas: dict[str, Any],
+    origins: list[dict[str, Any]],
+    sample_size: int = _DEFAULT_SAMPLE_SIZE,
+    confidences: tuple[str, ...] = ("declared", "verified", "probable"),
+) -> dict[str, list[dict[str, Any]]]:
+    """Propose table roles from the join graph's FK columns and the rows' own
+    uniqueness (report P4; the UCC test composed with P3's discovery is a
+    synthesis, not a published detector).
+
+    * junction: a MINIMAL unique column combination equals the union of two or
+      more FK columns (payload columns, a surrogate key: irrelevant).
+    * weak: the minimal key mixes FK columns with a local column (the
+      discriminator) and the FKs alone are not unique.
+
+    Returned, never acted on: the dependency gate shows it (``table_roles``).
+    A table is read through one bounded ``extract`` batch of ``sample_size``
+    rows, the same cap P3 samples with; ``complete`` says whether that batch was
+    the whole table.
+
+    ponytail: a sample of a larger table proves non-uniqueness but only
+    suggests uniqueness (``complete`` False); composite FKs are not looked for
+    (P3 finds unary INDs); one local discriminator column is tried, not a
+    combination. Junction-vs-weak errors surface at the gate (report P4
+    Ceiling). Deferred alternative: human-confirmed structure remembered
+    across runs, trigger Part 3 section 3.9.
+    """
+    # Imported here, not at module top: arch-lint-baseline.txt pins this file's
+    # one tolerated reverse import by line number, which new top imports would shift.
+    from src.mcp_server.connectors import create_connector
+    from src.mcp_server.tools.join_graph import _index_origins
+
+    roles: dict[str, list[dict[str, Any]]] = {"junction": [], "weak": []}
+    refs: dict[Node, dict[str, list[str]]] = {}
+    for node in graph.nodes:
+        for edge in graph.neighbors(node):
+            if (edge.child_origin, edge.child_table) == node and edge.confidence in confidences:
+                target = f"{edge.parent_table}.{edge.parent_column}"
+                refs.setdefault(node, {}).setdefault(edge.child_column, []).append(target)
+
+    configs = _index_origins(origins)
+    for origin_id, schema_data in (schemas or {}).items():
+        config = configs.get(str(origin_id))
+        tables = [
+            t
+            for t in (schema_data or {}).get("tables", []) or []
+            if t.get("name") and (origin_id, t["name"]) in refs
+        ]
+        if config is None or not tables:
+            continue
+        try:
+            connector = create_connector(config.get("type", ""), config.get("connection", {}))
+        except Exception as exc:
+            logger.warning("Table-role check skipped for '%s': %s", origin_id, exc)
+            continue
+        try:
+            for table in tables:
+                name = table["name"]
+                cols = [c["name"] for c in table.get("columns", []) or [] if c.get("name")]
+                fks = [c for c in cols if c in refs[(origin_id, name)]]
+                try:
+                    page = await connector.extract(
+                        str(table.get("full_name") or name), cols, batch_size=sample_size
+                    )
+                except Exception as exc:
+                    logger.debug("Table-role sample failed for %s: %s", name, exc)
+                    continue
+                rows = page.get("rows") or []
+                if not rows:
+                    continue
+                complete = page.get("total_count", len(rows)) <= len(rows)
+                found = _minimal_unique_subset(rows, fks)
+                if found is not None:
+                    kind, key, local = "junction", found, []
+                    if len(found) < 2:
+                        continue  # the key is a single FK (1:1 extension, all-FK card): no role
+                else:
+                    kind, key, local = "weak", [], [c for c in cols if c not in fks]
+                    for col in local:
+                        mixed = _minimal_unique_subset(rows, [*fks, col])
+                        if mixed is not None and col in mixed and len(mixed) > 1:
+                            key, local = [c for c in mixed if c != col], [col]
+                            break
+                    else:
+                        continue
+                entry: dict[str, Any] = {
+                    "table": name,
+                    "origin": origin_id,
+                    "fk_columns": key,
+                    "references": [f"{c} -> {r}" for c in key for r in refs[(origin_id, name)][c]],
+                    "complete": complete,
+                }
+                if kind == "weak":
+                    entry["discriminator"] = local
+                roles[kind].append(entry)
+        finally:
+            await connector.close()
+    return roles
+
+
 def _sanitize_plan(
     proposed: dict[str, Any],
     target_entities: list[str],

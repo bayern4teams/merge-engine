@@ -68,6 +68,10 @@ def _build_deps_interrupt(state: dict[str, Any]) -> dict[str, Any]:
             "entity_tables": state.get("entity_tables", {}),
             "origin_schemas": _build_origin_schemas(state.get("schemas", {})),
             "table_selection_notes": state.get("table_selection_notes", ""),
+            # P4: proposed table roles ({junction: [...], weak: [...]}), read from STATE
+            # because this body does not run at the pause (interrupt_before). Shown for
+            # confirmation only; nothing downstream acts on them (report P4 Ceiling).
+            "table_roles": state.get("table_roles") or {},
         },
     }
     warning = state.get("dependency_analysis_warning", "")
