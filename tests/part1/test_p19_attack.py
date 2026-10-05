@@ -120,7 +120,7 @@ def test_truth_changes_only_the_two_keys():
     base = br(EX1, CAND)
     for truth in ([P("a", "b")], [P("c", "d")], [], [P("x", "y")]):
         rep = br(EX1, CAND, truth)
-        assert {k: v for k, v in rep.items() if k not in GT_KEYS} == base
+        assert {k: v for k, v in rep.items() if k not in GT_KEYS | {"truth_ids_unmatched"}} == base
 
 
 def test_deterministic_shuffled_and_dict_order_and_hashseed():
@@ -218,10 +218,6 @@ def test_blocking_report_numeric_literals_and_corpus_greps():
 
 
 # ---------------------------------------------------------------- defects (strict xfail)
-@pytest.mark.xfail(
-    strict=True,
-    reason="D1: report ignores the engine's no-key fallback block (K/k=0 where engine blocks all 3)",
-)
 def test_tokenless_records_match_engines_fallback_block():
     recs = [R("a", ""), R("b", ""), R("c", "")]
     stats: dict = {}
@@ -233,10 +229,6 @@ def test_tokenless_records_match_engines_fallback_block():
     assert rep["block_assignments"] == 3 and rep["cep_K"] == 1.5 and rep["cnp_k"] == 1.0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="D2: operator blocking_keys cannot be passed; K/k silently cover every token",
-)
 def test_explicit_blocking_keys_are_honoured():
     recs = [
         {"_origin_id": "s", "_origin_table": "t", "id": str(i), "name": n, "city": c}
@@ -251,25 +243,16 @@ def test_explicit_blocking_keys_are_honoured():
     assert rep["block_assignments"] == 4 and rep["cep_K"] == 2.0 and rep["cnp_k"] == 1.0
 
 
-@pytest.mark.xfail(
-    strict=True, reason="D3: truth in a different id namespace gives a genuine-looking PC 0.0"
-)
 def test_truth_naming_no_corpus_record_is_not_reported_as_zero():
     rep = br(EX1, CAND, [("a", "b"), ("c", "d")])  # raw row ids, not engine ids: nothing can match
     assert "pair_completeness" not in rep or rep["pair_completeness"] != 0.0
 
 
-@pytest.mark.xfail(
-    strict=True, reason="D4: candidates outside the corpus drive reduction_ratio below 0 (-1.0)"
-)
 def test_reduction_ratio_stays_in_unit_interval_or_absent():
     rep = br(EX1, [(I(f"q{i}"), I(f"r{i}")) for i in range(20)])
     assert "reduction_ratio" not in rep or 0 <= rep["reduction_ratio"] <= 1
 
 
-@pytest.mark.xfail(
-    strict=True, reason="D5: cnp_k is 0 (a stand-in) for N=0, where sum|b|/N is undefined"
-)
 def test_k_absent_when_no_records():
     assert "cnp_k" not in br([], [])
 

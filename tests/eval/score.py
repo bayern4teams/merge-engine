@@ -430,58 +430,81 @@ def blocking_report(
     records: list[dict[str, Any]],
     candidates: Any,
     truth: Any = None,
-) -> dict[str, float]:
+    blocking_keys: list[str] | None = None,
+) -> dict[str, Any]:
     """Judge blocking on quantities that need no labels (P19); PC/PQ only with ``truth``.
 
     Tuning blocking against match quality is circular (the blocks decide which
     pairs can ever be scored), so every key but two comes from the block
-    collection itself: the raw token blocks (size >= 2, one per distinct
-    member set) over the distinct record ids. ``candidates`` items start with
-    ``(id1, id2)`` (engine 4-tuples are fine). ``pair_completeness`` and
-    ``pairs_quality`` exist only when ``truth`` is given and the ratio is
-    defined; they are absent otherwise, never 0 or a guess.
+    collection itself, built as the engine builds it: ``_token_keys`` (with the
+    operator's ``blocking_keys`` when given; a record with no key joins the
+    engine's shared no-key block), blocks of size >= 2, one per distinct member
+    set, over the distinct record ids. ``candidates`` items start with
+    ``(id1, id2)`` (engine 4-tuples are fine); ids outside ``records`` are
+    dropped and counted in ``candidates_outside_corpus`` so the ratio stays in
+    [0, 1].
+
+    ``block_assignments`` is sum|b| over that RAW collection (before block
+    filtering and purging). ``cep_K`` = sum|b|/2 and ``cnp_k`` = sum|b|/N are
+    the raw-collection volumes the CEP/CNP papers define their thresholds on;
+    the engine applies neither (it prunes with WNP), so read them as cost of
+    the raw blocks, not as applied cut-offs.
+
+    ``pair_completeness`` and ``pairs_quality`` exist only when ``truth`` is
+    given and the ratio is defined; otherwise absent, never 0 or a guess. If no
+    truth pair names two corpus records (another id namespace) they are absent
+    and ``truth_ids_unmatched`` says why.
 
     ponytail: without labels, blocking recall is unmeasured -- this reports
     cost (reduction ratio, K, k) and, where ground truth exists, PC/PQ.
     Deferred: PC/PQ against a labelled sample accumulated from HITL decisions
     (inverse-cluster-size weights if that sample is not random); trigger: the
-    first run that has such decisions.
+    first run that has such decisions. Also deferred (Part 4): nothing in the
+    eval harness calls this yet; wiring it into main() needs a labelled run.
     """
     from src.mcp_server.tools.resolve_entities import _record_id, _token_keys
 
+    explicit = {f for f in (blocking_keys or []) if f}
     raw: dict[str, set[str]] = {}
     ids: set[str] = set()
     for rec in records:
         rid = _record_id(rec)
         ids.add(rid)
-        for key in _token_keys(rec):
+        for key in _token_keys(rec, explicit) or {"__nokey__"}:
             raw.setdefault(key, set()).add(rid)
     blocks = {frozenset(m) for m in raw.values() if len(m) >= 2}
 
-    def pairs(items: Any) -> set[tuple[str, str]]:
-        return {tuple(sorted(p[:2])) for p in items if p[0] != p[1]}  # type: ignore[misc]
+    def pairs(items: Any) -> set[tuple[str, ...]]:
+        return {tuple(sorted(p[:2], key=str)) for p in items if p[0] != p[1]}
 
     n = len(ids)
     total = n * (n - 1) // 2
     assigned = sum(len(b) for b in blocks)
-    cand = pairs(candidates)
-    report: dict[str, float] = {
+    seen = pairs(candidates)
+    cand = {p for p in seen if set(p) <= ids}
+    report: dict[str, Any] = {
         "records": n,
         "total_comparisons": total,
         "candidate_pairs": len(cand),
         "block_assignments": assigned,
         "cep_K": assigned / 2,
-        "cnp_k": assigned / n if n else 0,
     }
+    if len(seen) > len(cand):
+        report["candidates_outside_corpus"] = len(seen) - len(cand)
+    if n:
+        report["cnp_k"] = assigned / n
     if total:
         report["reduction_ratio"] = 1 - len(cand) / total
     if truth is not None:
         true = pairs(truth)
-        hit = len(true & cand)
-        if true:
-            report["pair_completeness"] = hit / len(true)
-        if cand:
-            report["pairs_quality"] = hit / len(cand)
+        if true and not any(set(p) <= ids for p in true):
+            report["truth_ids_unmatched"] = len(true)
+        else:
+            hit = len(true & cand)
+            if true:
+                report["pair_completeness"] = hit / len(true)
+            if cand:
+                report["pairs_quality"] = hit / len(cand)
     return report
 
 
