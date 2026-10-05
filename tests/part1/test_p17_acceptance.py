@@ -400,7 +400,8 @@ NUM_BASELINE = {
     "orchestrator/load_data.py": {0.95, 3, 4, 5, 10, 100, 300, 400},
     "mcp_server/load_data.py": {5432, 8123},
 }
-ID_LITERAL_BASELINE = {"orchestrator/load_data.py": 14, "mcp_server/load_data.py": 2}
+# 15: +1 for the connector API key "primary_key" (P17 r2: the declared key column, not a corpus name)
+ID_LITERAL_BASELINE = {"orchestrator/load_data.py": 15, "mcp_server/load_data.py": 2}
 _TRIVIAL = {0, 1, 2, -1}
 _ID_LIT = re.compile(r"^[a-z][a-z0-9]*_(id|ref|key|fk)$", re.I)
 

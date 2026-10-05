@@ -9,8 +9,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pytest
-
 from src.orchestrator.nodes import load_data as nld
 from tests.part1.test_p17_acceptance import FakeDest, run_node
 
@@ -49,13 +47,6 @@ def test_healthy_table_with_pure_provenance_only_extra_cols():
     assert nld.destination_schema_defects(st, _sch(widget=["id", "name", "_loaded_at"])) == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="FALSE POSITIVE: unmapped_fields (source fields with no destination column, the normal "
-    "mapper output) are treated as 'needed' columns, so a healthy [id,name] table whose only "
-    "payload column is fully mapped is reported defective and EMPTIED because some unrelated "
-    "source field (fax) is unmapped",
-)
 def test_healthy_table_with_unrelated_unmapped_source_field_is_not_defective():
     st = _state(
         recs=_recs(5, name=1, fax=1),
@@ -65,10 +56,6 @@ def test_healthy_table_with_unrelated_unmapped_source_field_is_not_defective():
     assert nld.destination_schema_defects(st, _sch(widget=["id", "name", "_source_ids"])) == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="FALSE POSITIVE end to end (same cause): the healthy table receives 0 rows",
-)
 def test_healthy_table_with_unmapped_field_still_loads_all_rows(tmp_path):
     st = {
         **_state(
@@ -107,12 +94,6 @@ def test_missing_table_entirely_is_not_reported():
     assert nld.destination_schema_defects(st, {}) == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="GAP: a table whose only column is its key but is not literally named `id` "
-    "(get_table_schema().primary_key says so) is never judged: payload is computed against the "
-    "literal 'id'. The old key-only-row load is unchanged for it",
-)
 def test_pk_only_table_with_non_id_key_name_is_defective():
     st = _state(entity="x_y", recs=_recs(4, a_id=1, b_id=1), mapping=_m("a_id", "b_id"))
     s = {"x_y": {"primary_key": "x_y_pk", "columns": [{"name": "x_y_pk"}]}}
@@ -209,12 +190,6 @@ def test_partially_projectable_table_is_left_empty_and_no_ddl(tmp_path):
     assert df["missing_columns"] == ["b_id"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="INCONSISTENT COUNT: the whole entity is skipped, but unprojectable_rows counts only "
-    "rows with a value in a MISSING column; rows carrying only the present column are neither "
-    "written nor counted (5 rows skipped, defect says 3)",
-)
 def test_rows_skipped_equal_rows_reported(tmp_path):
     recs = _recs(5, a_id=1, b_id=1)
     for r in recs[:2]:
@@ -247,13 +222,6 @@ def test_two_defective_tables_node_level(tmp_path):
     assert d.rows == {"p_q": {}, "r_s": {}} and not d.ddl
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="OLD FAILURE VIA ANOTHER DOOR: when the table does not exist, destination_schema_defects "
-    "skips it ('ensure_table's business') and ensure_table then CREATEs a bare (id) table "
-    "(postgresql_destination.ensure_table) and key-only rows land. Real DDL + the 539-key-only-row "
-    "shape, unreported",
-)
 def test_missing_table_is_not_created_and_loaded_with_key_only_rows(tmp_path):
     class Dest(FakeDest):
         def ensure_table(self, table):

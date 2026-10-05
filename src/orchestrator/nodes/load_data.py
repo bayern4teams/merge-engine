@@ -324,6 +324,10 @@ def read_destination_schemas(connector: Any) -> dict[str, dict[str, Any]]:
         return {}
 
 
+def _has_value(v: Any) -> bool:
+    return v is not None and bool(str(v).strip())
+
+
 def destination_schema_defects(
     state: dict[str, Any], schemas: dict[str, dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -334,21 +338,30 @@ def destination_schema_defects(
     the keys double as the available-table list. Callable from a gate payload builder, which
     cannot rely on this node's body running.
 
-    A table is defective when every column it declares beyond its key and ``_`` provenance
-    columns is one the mapping/unmapped fields need, yet some needed column is not declared,
-    so its rows would be pure key. Needed columns come from the run itself (mapping
-    ``dest_column`` for this table, plus ``unmapped_fields`` the records carry); missing is
-    needed minus declared. Returns one JSON-safe dict per defective entity::
+    A table is defective when it cannot hold what this run maps into it: a mapped
+    ``dest_column`` it does not declare, or (rows that would be pure key) none of the columns
+    it declares beyond its primary key (``schema["primary_key"]``, else ``id``) and ``_``
+    provenance columns is fed by the mapping while the run carries values for some column the
+    table lacks. A table that does not exist while the destination has others is the same
+    case with no declared columns (``ensure_table`` would create a bare key table). An
+    unmapped field on a table that receives real payload is the normal ``unmapped_fields``
+    path, not a defect. Needed columns come from the run itself (mapping ``dest_column`` for
+    this table, plus the ``unmapped_fields`` the records carry); missing is needed minus
+    declared. Returns one JSON-safe dict per defective entity, whose whole entity is withheld::
 
         {"entity", "table", "missing_columns": [...], "unprojectable_rows": int,
          "held_links": [{"id": ..., "values": {missing column: value}}, ...]}
 
-    ponytail: Ceiling - a table with its own payload column beside the missing links is not
-    judged (rows still land partially); a key column not named ``id`` counts as payload, so such
-    a table is never judged defective (no false positive); a mapped-but-absent column on a table whose other
-    columns are all mapped is reported and emptied. Deferred: hold the links in the corpus
-    and re-project once the schema's owner fixes the DDL (report §3.4); trigger = the corpus
-    lands. ``held_links`` grows with the row count until then.
+    ``unprojectable_rows`` counts the withheld rows that carry a value in any needed column
+    (a row with no value anywhere holds no data to lose); ``held_links`` lists those with a
+    value in a missing column.
+
+    ponytail: Ceiling - a mapped column the table lacks empties the whole entity rather than
+    landing it partially (no repair, by spec); with no destination table at all (``schemas`` empty,
+    indistinguishable from a failed read) nothing is reported; a composite key is judged by
+    its first column. Deferred: hold the links in the corpus and re-project once the schema's
+    owner fixes the DDL (report §3.4); trigger = the corpus lands. ``held_links`` grows with
+    the row count until then.
     """
     destination = state.get("destination")
     unified = state.get("unified_entities") or {}
@@ -356,34 +369,44 @@ def destination_schema_defects(
     defects: list[dict[str, Any]] = []
     for entity in unified:
         table = _resolve_dest_table(destination, entity, available)
-        schema = schemas.get(table) or {}
-        declared = {c["name"] for c in schema.get("columns") or []}
-        if not declared:
-            continue  # no such table yet: ensure_table's business, not a column defect
+        schema = schemas.get(table)
+        declared = {c["name"] for c in (schema or {}).get("columns") or []}
+        if not schemas or (schema is not None and not declared):
+            continue  # nothing introspected, or a table the connector reports with no columns
+        schema = schema or {}
         # needed destination column -> the source field that feeds it
-        needed: dict[str, str] = {}
+        mapped: dict[str, str] = {}
         for src, info in ((state.get("field_mappings") or {}).get(entity) or {}).items():
             if isinstance(info, dict) and (info.get("dest_table") or table) == table:
-                needed.setdefault(info.get("dest_column") or src, src)
+                mapped.setdefault(info.get("dest_column") or src, src)
+        needed = dict(mapped)
         for u in (state.get("unmapped_fields") or {}).get(entity) or []:
             if isinstance(u, dict) and u.get("field"):
                 needed.setdefault(u["field"], u["field"])
-        missing = sorted(set(needed) - declared)
-        payload = {c for c in declared if c != "id" and not c.startswith("_")}
-        if not missing or not payload <= set(needed):
+        key = schema.get("primary_key") or "id"
+        fed = {c for c in declared if c != key and not c.startswith("_")} & set(mapped)
+        # a mapped column the table lacks always counts; unmapped fields only when no payload
+        # column is fed (an unmapped field on a healthy table is the normal unmapped_fields path)
+        missing = sorted(set(mapped if fed else needed) - declared)
+        if not missing:
             continue
-        held = []
+        held, rows = [], 0
         for rec in collection_records(unified, entity, kind="unified"):
-            values = {c: rec.get(needed[c]) for c in missing}
-            if any(v is not None and str(v).strip() for v in values.values()):
-                held.append({"id": rec.get("_cluster_id") or rec.get("id"), "values": values})
+            rows += any(_has_value(rec.get(needed[c])) for c in needed)
+            if any(_has_value(rec.get(needed[c])) for c in missing):
+                held.append(
+                    {
+                        "id": rec.get("_cluster_id") or rec.get("id"),
+                        "values": {c: rec.get(needed[c]) for c in missing},
+                    }
+                )
         if held:
             defects.append(
                 {
                     "entity": entity,
                     "table": table,
                     "missing_columns": missing,
-                    "unprojectable_rows": len(held),
+                    "unprojectable_rows": rows,
                     "held_links": held,
                 }
             )
