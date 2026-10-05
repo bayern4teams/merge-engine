@@ -3,11 +3,11 @@
 Overwrite this file at every commit. A fresh session reads it first, then
 [the plan](../PART1_IMPLEMENTATION_PLAN.md). Git is the memory; a session's context is not.
 
-**Lock:** 2026-10-05T09:20:15Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-05T09:20:15Z
+**Lock:** 2026-10-05T09:25:35Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-05T09:25:35Z
 
 (Lock/heartbeat protocol: plan §7. A session sets `Lock: <ISO time>`, pushes it, and refreshes it at every commit; a lock older than 75 min is stale. `Autonomy` is `off`, `dryrun` (a tick only records what works and exits) or `unattended-through-phase-5` (authorises the supervisor to chain phases). Only the user changes it.)
 
-**Branch:** `feat/part1-fixes` · **Current phase:** 1 done, 2 next (Phase 0: [PHASE0_REPORT.md](PHASE0_REPORT.md)); cloud re-checks #1 and #2 done (see [CLOUD_RECHECK.md](CLOUD_RECHECK.md), [CLOUD_RECHECK2.md](CLOUD_RECHECK2.md)) · **Last usage reading:** 5-hour window `allowed_warning`, resets 12:00Z, at 2026-10-04 10:28Z via cloud `get_session` (no percentage available in the cloud)
+**Branch:** `feat/part1-fixes` · **Current phase:** 1-2 done, 3 next (Phase 0: [PHASE0_REPORT.md](PHASE0_REPORT.md)); cloud re-checks #1 and #2 done (see [CLOUD_RECHECK.md](CLOUD_RECHECK.md), [CLOUD_RECHECK2.md](CLOUD_RECHECK2.md)) · **Last usage reading:** 5-hour window `allowed_warning`, resets 12:00Z, at 2026-10-04 10:28Z via cloud `get_session` (no percentage available in the cloud)
 
 | item | phase | state | commit | lead verdict |
 |---|---|---|---|---|
@@ -103,11 +103,14 @@ lists files an item must **edit**. Paths are under `src/` unless stated. Abbrevi
 | 4 | P10 (after P16, P17, P18) | P16 (quality module + `N/load_data.py` report) |
 
 ## Next action
-**Phase 2, step 2:** P3 and P5 accepted. P4 lane E worker implementing against `.handoff/P4.acceptance.md`
-(owned files incl. `T/load_data.py` `_write_child_rows`); then attack (`part1-verifier`), lead line review,
-then the Phase 2 gate (`check.py all`, `pytest tests/part1`, CI green, `/ponytail-review`). Runs only while
-`Autonomy` is `unattended-through-phase-5`.
-Supervisor tick 2026-10-05T08:53Z: graft not on PATH (optional tier 2; continuing with graphify + codebase-memory-mcp); `.venv` absent at session start, rebuilt by `bootstrap.py` (2m13s).
+**Phase 3, step 1:** lead serial chain in `T/resolve_entities.py`: P15 -> P6 -> P7 -> P8 -> P20 (derive acceptance
+with `part1-verifier` before each); side lanes beside it (cap 2): P9 (new decision-memory module only), P17
+(`N/load_data.py` only), P19 (`tests/eval/score.py` + tests). Gate hooks for P9/P17 in `human_nodes.py`/`graph.py`
+by the lead after P15 (flag 4; read `docs/architecture/orchestration_and_ui.md` first). Runs only while `Autonomy`
+is `unattended-through-phase-5`.
+Phase 2 deviations: lead added `MergeState.table_roles` (`orchestrator/graph.py`, P4); P4 worker added FK/PK info to
+`N/map_fields_node.py` `_key_info` and a new `_materialise_dimensions` in `T/load_data.py` (instead of `_write_child_rows`:
+dimension rows must exist before the parent load).
 Phase 1 deviations (one line each, §3.2): the lead edited `N/resolve_entities.py` (lane B) for P2's
 guard re-raise and pruned counts; the lead threaded `metadata_overrides` through `api/main.py` and
 `orchestrator/graph.py` for P12; P11 accepted on lead line review (10-line diff) without a separate
@@ -124,4 +127,5 @@ attack agent. P13: prior rescaled to the random-pair population (lead decision, 
 - P13 side effect for P14/P6: Phase 0 P6 case a (same email, truth Match) on the model path moved 0.76 (review) -> 0.67 (excluded). Cause measured: consistent random-pair prior (-11 bits at n=156) vs two unique exact agreements (+6.04 bits each); the fixture's match count is fixed while n grows, so the prior shrinks as 1/n^2. Real wrinkle: `build_term_frequencies` counts the record's own value (u = df/N, not (df-1)/(N-1)), ~1 bit per exact field. P14 (token-grain TF) must decide this; P6's outcome-class tests on both paths are the gate.
 
 ## Notifications
+- [PHASE 2 DONE] 2026-10-05: P3, P4, P5 accepted (all `unverified-live`, see LOCAL_VERIFY.md). `check.py all` green locally (11/11, 1m24s); `pytest tests/part1` 354 passed / 7 xfailed; CI green on c4894f6 (run 95). `/ponytail-review` of the phase diff: net -11 lines possible, deferred (`_named_like` no-FK fallback kept for acceptance 4f's direct caller; `_key_info` could reuse the schema cache; `_materialise_dimensions`' dropped/required guard duplicates `_write_child_rows`').
 - [PHASE 1 DONE] 2026-10-04: P1, P2, P11, P12, P13, P14, P18 accepted (all `unverified-live`, see LOCAL_VERIFY.md). `check.py all` green locally; CI green on the phase head; `/ponytail-review` of the phase diff: net -6 lines possible, deferred (discover_schemas `run_kwargs` kept for a dozen one-argument test stubs; `_names` str-or-list and the two metadata lookups too small to churn).
