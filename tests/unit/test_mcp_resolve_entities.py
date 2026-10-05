@@ -481,82 +481,51 @@ class TestGenerateCandidatePairs:
         assert len(pairs) == 1
 
 
-class TestJudgePairsChunking:
-    """Tests for the chunked, bounded-concurrency LLM judgment path."""
+class TestJudgePairsOnePerCall:
+    """P8: one pair per LLM call, bounded concurrency, a failure damages one pair."""
 
     @pytest.mark.asyncio
-    async def test_chunks_all_judged_and_combined(self) -> None:
+    async def test_every_pair_judged_in_its_own_call(self) -> None:
         from src.mcp_server.tools import resolve_entities as mod
 
         borderline = [
             (f"a:t:{i}", f"b:t:{i}", {"name": f"X {i}"}, {"name": f"X {i}b"}, 0.8)
             for i in range(10)
         ]
-
         calls: list[int] = []
 
         async def fake_call_json(system_prompt: str, user_prompt: str):
-            n_pairs = user_prompt.count("Pair ")
-            calls.append(n_pairs)
-            return {
-                "judgments": [
-                    {"pair_id": n, "match": True, "confidence": 0.99} for n in range(1, n_pairs + 1)
-                ]
-            }
+            calls.append(user_prompt.count("Record A:"))
+            return {"probability": 0.99, "reason": "same"}
 
         fake_client = MagicMock()
         fake_client.call_json = AsyncMock(side_effect=fake_call_json)
+        with patch("src.llm.LLMClient", return_value=fake_client):
+            results = await mod._judge_pairs_with_llm("company", borderline, {"provider": "openai"})
 
-        with (
-            patch.object(mod, "_LLM_CHUNK_SIZE", 4),
-            patch("src.llm.LLMClient", return_value=fake_client),
-        ):
-            results = await mod._judge_pairs_with_llm(
-                "company",
-                borderline,
-                {"provider": "openai"},
-            )
-
-        assert len(calls) == 3  # 4 + 4 + 2
-        assert len(results) == 10
+        assert calls == [1] * 10
+        assert [(i1, i2) for i1, i2, _s in results] == [(a, b) for a, b, *_r in borderline]
         assert all(score == 0.99 for _i1, _i2, score in results)
 
     @pytest.mark.asyncio
-    async def test_failed_chunk_keeps_heuristic_scores(self) -> None:
+    async def test_failed_call_keeps_that_pairs_heuristic_score_only(self) -> None:
         from src.mcp_server.tools import resolve_entities as mod
 
         borderline = [
             (f"a:t:{i}", f"b:t:{i}", {"name": f"X {i}"}, {"name": f"X {i}b"}, 0.75)
             for i in range(4)
         ]
-
         call_count = {"n": 0}
 
         async def flaky_call_json(system_prompt: str, user_prompt: str):
             call_count["n"] += 1
             if call_count["n"] == 1:
                 raise RuntimeError("LLM down")
-            n_pairs = user_prompt.count("Pair ")
-            return {
-                "judgments": [
-                    {"pair_id": n, "match": False, "confidence": 0.9} for n in range(1, n_pairs + 1)
-                ]
-            }
+            return {"probability": 0.1, "reason": "different"}
 
         fake_client = MagicMock()
         fake_client.call_json = AsyncMock(side_effect=flaky_call_json)
+        with patch("src.llm.LLMClient", return_value=fake_client):
+            results = await mod._judge_pairs_with_llm("company", borderline, {"provider": "openai"})
 
-        with (
-            patch.object(mod, "_LLM_CHUNK_SIZE", 2),
-            patch("src.llm.LLMClient", return_value=fake_client),
-        ):
-            results = await mod._judge_pairs_with_llm(
-                "company",
-                borderline,
-                {"provider": "openai"},
-            )
-
-        assert len(results) == 4
-        scores = sorted(score for _i1, _i2, score in results)
-        # Failed chunk: heuristic 0.75 kept; judged chunk: non-match pushed to 0.1
-        assert scores == [0.1, 0.1, 0.75, 0.75]
+        assert sorted(score for _i1, _i2, score in results) == [0.1, 0.1, 0.1, 0.75]

@@ -183,14 +183,13 @@ _CANONICAL_FIELD_HINTS: dict[str, tuple[str, ...]] = {
 # ``disagree``, because that actively punishes every true cross-origin match.
 _SURROGATE_KEY_HINTS = ("id", "_id", "uuid", "guid", "pk", "rowid", "recordid")
 
-# At most this many borderline pairs are LLM-judged per entity type (closest
-# to auto-match first); the rest keep their heuristic score.
+# At most this many review-band pairs are LLM-judged per entity type (those
+# nearest the band's middle, the most uncertain, first: P8); the rest keep
+# their heuristic score and stay in the review band. A cost budget, not a
+# property of the data.
 _MAX_LLM_PAIRS = 200
 
-# Pairs per LLM call — keeps each prompt well inside the context window.
-_LLM_CHUNK_SIZE = 40
-
-# Concurrent LLM judgment calls (chunks run in parallel up to this limit).
+# Concurrent LLM judgment calls (one pair per call: P8).
 _LLM_CONCURRENCY = 4
 
 # Below this many candidate pairs, m/u probabilities cannot be estimated
@@ -738,15 +737,17 @@ async def resolve_entities_impl(
     llm_enabled = bool(llm_config) and llm_config.get("entity_resolution_enabled", True)
     if borderline and llm_enabled:
         if len(borderline) > _MAX_LLM_PAIRS:
-            # Judge the pairs closest to auto-match; the rest keep their
-            # heuristic score (they stay in the review band).
-            borderline.sort(key=lambda p: p[4], reverse=True)
+            # P8: judge the most uncertain pairs -- nearest the middle of the
+            # band this run committed -- not the nearly-decided ones next to
+            # auto-match; the rest keep their heuristic score (still review).
+            middle = (auto_match + auto_exclude) / 2
+            borderline.sort(key=lambda p: (abs(p[4] - middle), p[0], p[1]))
             overflow = borderline[_MAX_LLM_PAIRS:]
             borderline = borderline[:_MAX_LLM_PAIRS]
             logger.warning(
                 "%d borderline pairs for entity '%s' exceed the LLM budget "
-                "(%d); keeping heuristic scores for the %d lowest-confidence "
-                "pairs",
+                "(%d); keeping heuristic scores for the %d pairs farthest "
+                "from the band's middle",
                 len(borderline) + len(overflow),
                 entity_type,
                 _MAX_LLM_PAIRS,
@@ -2846,15 +2847,23 @@ def _cross_name_similarity(
 def _format_pairs_block(
     borderline: list[tuple[str, str, dict, dict, float]],
 ) -> str:
-    """Format numbered pairs (non-null public fields only) for the prompt."""
+    """Format the pair(s) (non-null public fields only) for the prompt."""
     lines: list[str] = []
-    for n, (_id1, _id2, rec1, rec2, _conf) in enumerate(borderline, 1):
+    for _id1, _id2, rec1, rec2, _conf in borderline:
         f1 = {k: v for k, v in rec1.items() if not k.startswith("_") and v is not None}
         f2 = {k: v for k, v in rec2.items() if not k.startswith("_") and v is not None}
-        lines.append(f"Pair {n}:")
-        lines.append(f"  Record A: {json.dumps(f1, ensure_ascii=False, default=str)}")
-        lines.append(f"  Record B: {json.dumps(f2, ensure_ascii=False, default=str)}")
+        lines.append(f"Record A: {json.dumps(f1, ensure_ascii=False, default=str)}")
+        lines.append(f"Record B: {json.dumps(f2, ensure_ascii=False, default=str)}")
     return "\n".join(lines)
+
+
+def _probability(result: Any) -> float | None:
+    """The reply's ``probability`` when it is one: a finite number in [0, 1]
+    (not a bool). Anything else is malformed and judges nothing."""
+    p = result.get("probability") if isinstance(result, dict) else None
+    if isinstance(p, bool) or not isinstance(p, (int, float)):
+        return None
+    return float(p) if 0 <= p <= 1 else None  # NaN fails both comparisons
 
 
 async def _judge_pairs_with_llm(
@@ -2863,23 +2872,22 @@ async def _judge_pairs_with_llm(
     llm_config: dict[str, Any],
     evidence_sink: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> list[tuple[str, str, float]]:
-    """Judge borderline pairs in chunked batched LLM calls.
+    """Judge review-band pairs with the LLM, ONE pair per call (report P8).
 
-    Pairs are sent ``_LLM_CHUNK_SIZE`` at a time so each prompt stays well
-    inside the model's context window. Returns (id1, id2, confidence) per
-    pair; LLM match confidence maps to a clustering score (match ->
-    confidence, non-match -> 1 - confidence capped below the union
-    threshold). On any failure the affected chunk keeps its heuristic
-    scores so the pipeline never blocks on the LLM.
+    Each call returns ``{"probability": p, "reason": ...}``; ``p`` becomes the
+    pair's score, so the band the run committed decides what it does (merge,
+    review, apart). A pair per call means one malformed reply, a timeout or an
+    out-of-range number damages that pair only: it keeps its heuristic score.
+    Calls run concurrently, at most ``_LLM_CONCURRENCY`` in flight. Returns one
+    ``(id1, id2, score)`` per input pair, in input order.
 
     ``evidence_sink`` (Phase 7.1), when given, is filled in place with one
-    entry per pair the LLM actually judged — ``{"method": "llm", "reason":
-    ...}`` alongside the match/confidence it returned. Previously the
-    model's rationale was logged (truncated to 120 chars) and then
-    discarded; this is the same string, kept for the cluster's
-    ``match_evidence`` instead of only ever reaching a log file. A pair the
-    LLM didn't judge (missing from its response, or the whole chunk failed)
-    gets no entry — its heuristic score has no LLM rationale to attach.
+    entry per pair the LLM actually judged -- ``{"method": "llm", "reason":
+    ..., "llm_probability": p}``. A pair the LLM did not judge gets no entry.
+
+    ponytail: ``p`` is the model's stated probability, not a calibrated one --
+    calibration is the open item of report P13 / section 2.17 (a labelled
+    sample scored against the stated p); until then the band reads it as is.
     """
     from src.llm import PROMPT_TEMPLATES, LLMClient
     from src.orchestrator.utils.retry_hints import apply_retry_hint
@@ -2893,22 +2901,15 @@ async def _judge_pairs_with_llm(
         return [(i1, i2, c) for i1, i2, _r1, _r2, c in borderline]
 
     client = LLMClient(llm_config)
-    chunks = [
-        borderline[start : start + _LLM_CHUNK_SIZE]
-        for start in range(0, len(borderline), _LLM_CHUNK_SIZE)
-    ]
     semaphore = asyncio.Semaphore(_LLM_CONCURRENCY)
 
-    async def judge_chunk(
-        chunk: list[tuple[str, str, dict, dict, float]], offset: int
-    ) -> tuple[list[tuple[str, str, float]], int]:
-        chunk_results: list[tuple[str, str, float]] = []
-        chunk_judged = 0
+    async def judge(
+        pair: tuple[str, str, dict, dict, float],
+    ) -> tuple[str, str, float, bool]:
+        id1, id2, _r1, _r2, heuristic = pair
         try:
-            user_prompt = (
-                human_template.replace("{entity_type}", entity_type)
-                .replace("{pair_count}", str(len(chunk)))
-                .replace("{pairs_block}", _format_pairs_block(chunk))
+            user_prompt = human_template.replace("{entity_type}", entity_type).replace(
+                "{pairs_block}", _format_pairs_block([pair])
             )
             # Set when a reviewer sent the matches gate back for rework.
             user_prompt = apply_retry_hint(
@@ -2921,76 +2922,36 @@ async def _judge_pairs_with_llm(
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
                 )
-            judgments = result.get("judgments", []) if isinstance(result, dict) else []
-
-            by_pair_id: dict[int, dict[str, Any]] = {}
-            for j in judgments:
-                if isinstance(j, dict) and isinstance(j.get("pair_id"), int):
-                    by_pair_id[j["pair_id"]] = j
-
-            for n, (id1, id2, _r1, _r2, heuristic_conf) in enumerate(chunk, 1):
-                j = by_pair_id.get(n)
-                if j is None:
-                    chunk_results.append((id1, id2, heuristic_conf))
-                    continue
-                chunk_judged += 1
-                try:
-                    llm_conf = float(j.get("confidence", 0.5))
-                except (TypeError, ValueError):
-                    llm_conf = 0.5
-                llm_conf = max(0.0, min(1.0, llm_conf))
-                if j.get("match"):
-                    # Confident LLM "match" can auto-union; unsure ones stay
-                    # in the review band.
-                    score = max(heuristic_conf, llm_conf)
-                else:
-                    # "Not a match": push below the union threshold, more
-                    # decisively the more confident the LLM is.
-                    score = min(heuristic_conf, 1.0 - llm_conf, _AUTO_EXCLUDE)
-                reason = str(j.get("reason", ""))
-                logger.debug(
-                    "LLM judgment pair %d (%s vs %s): match=%s conf=%.2f -> score=%.2f (%s)",
-                    offset + n,
-                    id1,
-                    id2,
-                    j.get("match"),
-                    llm_conf,
-                    score,
-                    reason[:120],
-                )
-                if evidence_sink is not None:
-                    key = (id1, id2) if id1 < id2 else (id2, id1)
-                    evidence_sink[key] = {
-                        "a": id1,
-                        "b": id2,
-                        "confidence": round(score, 4),
-                        "method": "llm",
-                        "matched_fields": [],
-                        "mismatched_fields": [],
-                        "reason": reason,
-                        "llm_match": bool(j.get("match")),
-                    }
-                chunk_results.append((id1, id2, round(score, 3)))
-
         except Exception as exc:
+            logger.warning("LLM judgment failed for %s vs %s (%s); heuristic kept", id1, id2, exc)
+            return id1, id2, heuristic, False
+        p = _probability(result)
+        if p is None:
             logger.warning(
-                "LLM entity-resolution chunk failed (%s); keeping heuristic "
-                "scores for %d pairs in this chunk",
-                exc,
-                len(chunk),
+                "LLM reply for %s vs %s carries no probability in [0, 1]; heuristic kept",
+                id1,
+                id2,
             )
-            chunk_results = [(i1, i2, c) for i1, i2, _r1, _r2, c in chunk]
-        return chunk_results, chunk_judged
+            return id1, id2, heuristic, False
+        reason = str(result.get("reason", ""))
+        logger.debug("LLM judgment %s vs %s: p=%s (%s)", id1, id2, p, reason)
+        if evidence_sink is not None:
+            key = (id1, id2) if id1 < id2 else (id2, id1)
+            evidence_sink[key] = {
+                "a": id1,
+                "b": id2,
+                "confidence": p,
+                "method": "llm",
+                "matched_fields": [],
+                "mismatched_fields": [],
+                "reason": reason,
+                "llm_probability": p,
+            }
+        return id1, id2, p, True
 
-    chunk_outputs = await asyncio.gather(
-        *(judge_chunk(chunk, i * _LLM_CHUNK_SIZE) for i, chunk in enumerate(chunks))
-    )
-
-    results: list[tuple[str, str, float]] = []
-    judged = 0
-    for chunk_results, chunk_judged in chunk_outputs:
-        results.extend(chunk_results)
-        judged += chunk_judged
+    outputs = await asyncio.gather(*(judge(pair) for pair in borderline))
+    results = [(i1, i2, score) for i1, i2, score, _ok in outputs]
+    judged = sum(ok for *_rest, ok in outputs)
 
     logger.info(
         "LLM judged %d/%d borderline pairs for entity '%s'",

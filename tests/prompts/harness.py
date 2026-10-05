@@ -104,7 +104,7 @@ _REQUIRED_PLACEHOLDERS = {
     "dependency_analysis": ["{target_entities}", "{schema_info}"],
     "entity_table_selection": ["{target_entities}", "{table_catalog}"],
     "scope_planning": ["{subject}", "{subject_entity}", "{target_entities}", "{table_catalog}"],
-    "entity_resolution": ["{entity_type}", "{pair_count}", "{pairs_block}"],
+    "entity_resolution": ["{entity_type}", "{pairs_block}"],
     "field_mapping": [
         "{entity_type}",
         "{dest_table}",
@@ -212,10 +212,10 @@ def _build_prompt(stage: str, case: dict[str, Any]) -> tuple[str, str]:
         borderline = [
             (f"a{i}", f"b{i}", pair["a"], pair["b"], 0.8) for i, pair in enumerate(inp["pairs"], 1)
         ]
-        return system, (
-            human.replace("{entity_type}", inp["entity_type"])
-            .replace("{pair_count}", str(len(borderline)))
-            .replace("{pairs_block}", _format_pairs_block(borderline))
+        return system, (  # P8: one pair per call, so one pair per golden case
+            human.replace("{entity_type}", inp["entity_type"]).replace(
+                "{pairs_block}", _format_pairs_block(borderline)
+            )
         )
 
     if stage == "field_mapping":
@@ -344,11 +344,10 @@ def _score(stage: str, case: dict[str, Any], result: Any) -> tuple[bool, str]:
         return ok, f"missing={missing}" if not ok else "all scope entries correct"
 
     if stage == "entity_resolution":
-        judgments = result.get("judgments", []) or []
-        by_id = {j.get("pair_id"): bool(j.get("match")) for j in judgments if isinstance(j, dict)}
+        p = result.get("probability")
+        got = [p >= 0.5] if isinstance(p, (int, float)) and not isinstance(p, bool) else [None]
         want = expected["matches"]
-        got = [by_id.get(i) for i in range(1, len(want) + 1)]
-        return got == want, f"got={got} want={want}"
+        return got == want, f"got={got} (p={p}) want={want}"
 
     if stage == "field_mapping":
         details: list[str] = []

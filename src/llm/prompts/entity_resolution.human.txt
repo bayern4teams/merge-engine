@@ -1,6 +1,6 @@
 Entity type: {entity_type}
 
-Judge each of the following {pair_count} pairs. Fields starting with an underscore are internal metadata — ignore them.
+Judge whether these two records are the same real-world entity. Fields starting with an underscore are internal metadata — ignore them.
 
 {pairs_block}
 

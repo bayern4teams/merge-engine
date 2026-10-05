@@ -198,16 +198,7 @@ class TestResolveEntitiesImplMatchEvidence:
         ]
         client = MagicMock()
         client.call_json = AsyncMock(
-            return_value={
-                "judgments": [
-                    {
-                        "pair_id": 1,
-                        "match": True,
-                        "confidence": 0.97,
-                        "reason": "same company, abbreviated legal form",
-                    },
-                ],
-            }
+            return_value={"probability": 0.97, "reason": "same company, abbreviated legal form"}
         )
         with patch("src.llm.LLMClient", return_value=client):
             result = await resolve_entities_impl("company", records, llm_config=_LLM_CONFIG)
@@ -220,7 +211,7 @@ class TestResolveEntitiesImplMatchEvidence:
         assert len(pairs) == 1
         assert pairs[0]["method"] == "llm"
         assert pairs[0]["reason"] == "same company, abbreviated legal form"
-        assert pairs[0]["llm_match"] is True
+        assert pairs[0]["llm_probability"] == 0.97
 
     async def test_singleton_cluster_has_no_match_evidence_key(self) -> None:
         records = [

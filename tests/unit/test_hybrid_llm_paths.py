@@ -61,16 +61,7 @@ class TestEntityResolutionLLMPath:
     @pytest.mark.asyncio
     async def test_borderline_pair_sent_to_llm_and_match_unions(self) -> None:
         client = _mock_llm(
-            return_value={
-                "judgments": [
-                    {
-                        "pair_id": 1,
-                        "match": True,
-                        "confidence": 0.97,
-                        "reason": "same company, abbreviated name",
-                    },
-                ],
-            }
+            return_value={"probability": 0.97, "reason": "same company, abbreviated name"}
         )
         with patch("src.llm.LLMClient", return_value=client):
             result = await resolve_entities_impl(
@@ -90,14 +81,8 @@ class TestEntityResolutionLLMPath:
     async def test_llm_non_match_splits_pair(self) -> None:
         client = _mock_llm(
             return_value={
-                "judgments": [
-                    {
-                        "pair_id": 1,
-                        "match": False,
-                        "confidence": 0.9,
-                        "reason": "different companies sharing a generic word",
-                    },
-                ],
+                "probability": 0.1,
+                "reason": "different companies sharing a generic word",
             }
         )
         with patch("src.llm.LLMClient", return_value=client):
@@ -130,7 +115,7 @@ class TestEntityResolutionLLMPath:
 
     @pytest.mark.asyncio
     async def test_disabled_flag_skips_llm(self) -> None:
-        client = _mock_llm(return_value={"judgments": []})
+        client = _mock_llm(return_value={})
         cfg = dict(_LLM_CONFIG, entity_resolution_enabled=False)
         with patch("src.llm.LLMClient", return_value=client):
             result = await resolve_entities_impl(
@@ -144,9 +129,9 @@ class TestEntityResolutionLLMPath:
 
     @pytest.mark.asyncio
     async def test_missing_judgment_falls_back_per_pair(self) -> None:
-        # LLM answers with an empty judgments list -> every pair keeps its
+        # LLM answers without a probability -> every pair keeps its
         # heuristic score, which for a borderline pair means "undecided".
-        client = _mock_llm(return_value={"judgments": []})
+        client = _mock_llm(return_value={})
         with patch("src.llm.LLMClient", return_value=client):
             result = await resolve_entities_impl(
                 "company",

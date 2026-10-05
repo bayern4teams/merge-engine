@@ -1,135 +1,359 @@
 {
   "stage": "entity_resolution",
-  "description": "Golden borderline pairs mirroring the seeded test DBs. Score = LLM match verdict equals expected match.",
+  "description": "Golden borderline pairs mirroring the seeded test DBs. Score = LLM probability >= 0.5 equals expected match (one pair per case: P8 sends one pair per call).",
   "cases": [
     {
       "id": "er-01-abbreviated-company",
       "input": {
         "entity_type": "company",
         "pairs": [
-          {"a": {"name": "Acme International Corp", "city": "Berlin", "industry": "logistics"},
-           "b": {"name": "Acme Intl Corporation", "city": "Berlin", "industry": "Logistics"}}
+          {
+            "a": {
+              "name": "Acme International Corp",
+              "city": "Berlin",
+              "industry": "logistics"
+            },
+            "b": {
+              "name": "Acme Intl Corporation",
+              "city": "Berlin",
+              "industry": "Logistics"
+            }
+          }
         ]
       },
-      "expected": {"matches": [true]}
+      "expected": {
+        "matches": [
+          true
+        ]
+      }
     },
     {
       "id": "er-02-transliterated-person",
       "input": {
         "entity_type": "person",
         "pairs": [
-          {"a": {"name_full": "Mohammad Rezaei", "email_addr": "m.rezaei@acme.com"},
-           "b": {"full_name": "Muhammad Rezaee", "email": "m.rezaei@acme.com"}}
+          {
+            "a": {
+              "name_full": "Mohammad Rezaei",
+              "email_addr": "m.rezaei@acme.com"
+            },
+            "b": {
+              "full_name": "Muhammad Rezaee",
+              "email": "m.rezaei@acme.com"
+            }
+          }
         ]
       },
-      "expected": {"matches": [true]}
+      "expected": {
+        "matches": [
+          true
+        ]
+      }
     },
     {
       "id": "er-03-shared-generic-word",
       "input": {
         "entity_type": "company",
         "pairs": [
-          {"a": {"name": "Springfield Software", "city": "Chicago"},
-           "b": {"name": "Springfield Bakery", "city": "Portland"}}
+          {
+            "a": {
+              "name": "Springfield Software",
+              "city": "Chicago"
+            },
+            "b": {
+              "name": "Springfield Bakery",
+              "city": "Portland"
+            }
+          }
         ]
       },
-      "expected": {"matches": [false]}
+      "expected": {
+        "matches": [
+          false
+        ]
+      }
     },
     {
       "id": "er-04-same-name-different-person",
       "input": {
         "entity_type": "person",
         "pairs": [
-          {"a": {"name": "John Smith", "employer": "Globex", "city": "Boston"},
-           "b": {"name": "John Smith", "employer": "Initech", "city": "Austin"}}
+          {
+            "a": {
+              "name": "John Smith",
+              "employer": "Globex",
+              "city": "Boston"
+            },
+            "b": {
+              "name": "John Smith",
+              "employer": "Initech",
+              "city": "Austin"
+            }
+          }
         ]
       },
-      "expected": {"matches": [false]}
+      "expected": {
+        "matches": [
+          false
+        ]
+      }
     },
     {
       "id": "er-05-strong-identifier-wins",
       "input": {
         "entity_type": "company",
         "pairs": [
-          {"a": {"name": "TechNova", "tax_id": "DE811223344"},
-           "b": {"name": "TechNova GmbH & Co. KG", "tax_id": "DE811223344"}}
+          {
+            "a": {
+              "name": "TechNova",
+              "tax_id": "DE811223344"
+            },
+            "b": {
+              "name": "TechNova GmbH & Co. KG",
+              "tax_id": "DE811223344"
+            }
+          }
         ]
       },
-      "expected": {"matches": [true]}
+      "expected": {
+        "matches": [
+          true
+        ]
+      }
     },
     {
       "id": "er-06-typo-name-same-context",
       "input": {
         "entity_type": "person",
         "pairs": [
-          {"a": {"name_full": "Katarina Weiss", "employer_id": "17", "email_addr": "k.weiss@nova.io"},
-           "b": {"full_name": "Katarine Weiss", "org_ref": "17", "email": "k.weiss@nova.io"}}
+          {
+            "a": {
+              "name_full": "Katarina Weiss",
+              "employer_id": "17",
+              "email_addr": "k.weiss@nova.io"
+            },
+            "b": {
+              "full_name": "Katarine Weiss",
+              "org_ref": "17",
+              "email": "k.weiss@nova.io"
+            }
+          }
         ]
       },
-      "expected": {"matches": [true]}
+      "expected": {
+        "matches": [
+          true
+        ]
+      }
     },
     {
-      "id": "er-07-batch-mixed",
+      "id": "er-07-batch-mixed-1",
       "input": {
         "entity_type": "company",
         "pairs": [
-          {"a": {"name": "Northwind Traders", "city": "Seattle"},
-           "b": {"name": "Northwind Trading Co", "city": "Seattle"}},
-          {"a": {"name": "Delta Consulting", "city": "Oslo"},
-           "b": {"name": "Delta Airlines", "city": "Atlanta"}},
-          {"a": {"name": "Blue River Analytics", "domain": "blueriver.ai"},
-           "b": {"name": "BlueRiver Analytics", "domain": "blueriver.ai"}}
+          {
+            "a": {
+              "name": "Northwind Traders",
+              "city": "Seattle"
+            },
+            "b": {
+              "name": "Northwind Trading Co",
+              "city": "Seattle"
+            }
+          }
         ]
       },
-      "expected": {"matches": [true, false, true]}
+      "expected": {
+        "matches": [
+          true
+        ]
+      }
+    },
+    {
+      "id": "er-07-batch-mixed-2",
+      "input": {
+        "entity_type": "company",
+        "pairs": [
+          {
+            "a": {
+              "name": "Delta Consulting",
+              "city": "Oslo"
+            },
+            "b": {
+              "name": "Delta Airlines",
+              "city": "Atlanta"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "matches": [
+          false
+        ]
+      }
+    },
+    {
+      "id": "er-07-batch-mixed-3",
+      "input": {
+        "entity_type": "company",
+        "pairs": [
+          {
+            "a": {
+              "name": "Blue River Analytics",
+              "domain": "blueriver.ai"
+            },
+            "b": {
+              "name": "BlueRiver Analytics",
+              "domain": "blueriver.ai"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "matches": [
+          true
+        ]
+      }
     },
     {
       "id": "er-08-nickname-formal-match",
       "input": {
         "entity_type": "person",
         "pairs": [
-          {"a": {"name_full": "Bob Anderson", "employer_id": "42", "city": "Denver"},
-           "b": {"full_name": "Robert Anderson", "org_ref": "42", "city": "Denver"}}
+          {
+            "a": {
+              "name_full": "Bob Anderson",
+              "employer_id": "42",
+              "city": "Denver"
+            },
+            "b": {
+              "full_name": "Robert Anderson",
+              "org_ref": "42",
+              "city": "Denver"
+            }
+          }
         ]
       },
-      "expected": {"matches": [true]}
+      "expected": {
+        "matches": [
+          true
+        ]
+      }
     },
     {
       "id": "er-09-generic-name-different-branch",
       "input": {
         "entity_type": "company",
         "pairs": [
-          {"a": {"name": "Riverside Diner", "city": "Austin"},
-           "b": {"name": "Riverside Diner", "city": "Tampa"}}
+          {
+            "a": {
+              "name": "Riverside Diner",
+              "city": "Austin"
+            },
+            "b": {
+              "name": "Riverside Diner",
+              "city": "Tampa"
+            }
+          }
         ]
       },
-      "expected": {"matches": [false]}
+      "expected": {
+        "matches": [
+          false
+        ]
+      }
     },
     {
       "id": "er-10-name-changed-after-merger",
       "input": {
         "entity_type": "company",
         "pairs": [
-          {"a": {"name": "Global Systems Inc", "tax_id": "US-4471129"},
-           "b": {"name": "GS Holdings (formerly Global Systems)", "tax_id": "US-4471129"}}
+          {
+            "a": {
+              "name": "Global Systems Inc",
+              "tax_id": "US-4471129"
+            },
+            "b": {
+              "name": "GS Holdings (formerly Global Systems)",
+              "tax_id": "US-4471129"
+            }
+          }
         ]
       },
-      "expected": {"matches": [true]}
+      "expected": {
+        "matches": [
+          true
+        ]
+      }
     },
     {
-      "id": "er-11-conflicting-identifier-beats-name",
+      "id": "er-11-conflicting-identifier-beats-name-1",
       "input": {
         "entity_type": "company",
         "pairs": [
-          {"a": {"name": "Meridian Consulting", "city": "Denver"},
-           "b": {"name": "Meridian Consulting Group", "city": "Denver"}},
-          {"a": {"name": "Apex Industries", "tax_id": "GB-99213"},
-           "b": {"name": "Apex Industries", "tax_id": "GB-88104"}},
-          {"a": {"name": "Delta One Partners", "domain": "deltaone.com"},
-           "b": {"name": "Delta One Partners LLC", "domain": "deltaone.com"}}
+          {
+            "a": {
+              "name": "Meridian Consulting",
+              "city": "Denver"
+            },
+            "b": {
+              "name": "Meridian Consulting Group",
+              "city": "Denver"
+            }
+          }
         ]
       },
-      "expected": {"matches": [true, false, true]}
+      "expected": {
+        "matches": [
+          true
+        ]
+      }
+    },
+    {
+      "id": "er-11-conflicting-identifier-beats-name-2",
+      "input": {
+        "entity_type": "company",
+        "pairs": [
+          {
+            "a": {
+              "name": "Apex Industries",
+              "tax_id": "GB-99213"
+            },
+            "b": {
+              "name": "Apex Industries",
+              "tax_id": "GB-88104"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "matches": [
+          false
+        ]
+      }
+    },
+    {
+      "id": "er-11-conflicting-identifier-beats-name-3",
+      "input": {
+        "entity_type": "company",
+        "pairs": [
+          {
+            "a": {
+              "name": "Delta One Partners",
+              "domain": "deltaone.com"
+            },
+            "b": {
+              "name": "Delta One Partners LLC",
+              "domain": "deltaone.com"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "matches": [
+          true
+        ]
+      }
     }
   ]
 }
