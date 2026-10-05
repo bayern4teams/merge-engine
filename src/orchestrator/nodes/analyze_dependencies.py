@@ -12,7 +12,12 @@ import logging
 from typing import Any
 
 from src.llm import PROMPT_TEMPLATES, LLMClient
-from src.mcp_server.tools.join_graph import _DEFAULT_SAMPLE_SIZE, JoinGraph, build_join_graph
+from src.mcp_server.tools.join_graph import (
+    _DEFAULT_SAMPLE_SIZE,
+    JoinGraph,
+    build_join_graph,
+    derive_relationship_edges,
+)
 from src.mcp_server.tools.plan_scope import classify_junction_and_weak_tables
 from src.orchestrator.fingerprint import origins_fingerprint, stage_fingerprint
 from src.orchestrator.profiles import stage_cache_get
@@ -149,6 +154,17 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
         logger.warning("Table-role proposal failed (%s); none shown at the gate.", exc)
         table_roles = {}
 
+    # P7: typed row edges (DIRECT_PARENT / ULTIMATE_PARENT from self-INDs, RELATED
+    # from the junctions above); a cyclic hierarchy is listed in ``cycles`` and
+    # shown at the dependency gate. Reported, never acted on here.
+    try:
+        relationship_edges = await derive_relationship_edges(
+            graph, schemas, origins, sample_size=sample_size, roles=table_roles
+        )
+    except Exception as exc:  # a report must never fail the dependency analysis
+        logger.warning("Relationship edges not derived (%s).", exc)
+        relationship_edges = {"edges": [], "cycles": []}
+
     tree_from_graph, fully_covered, confirmed_edges = _join_graph_to_dependency_tree(
         graph, target_entities, entity_tables
     )
@@ -174,6 +190,7 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
             "table_selection_notes": table_selection_notes,
             "join_graph": graph,
             "table_roles": table_roles,
+            "relationship_edges": relationship_edges,
             "interrupt_data": None,
             "_dependency_tree_fingerprint": dep_tree_fp,
             "_join_graph_fingerprint": join_graph_fp,
@@ -324,6 +341,7 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
             "table_selection_notes": table_selection_notes,
             "join_graph": graph,
             "table_roles": table_roles,
+            "relationship_edges": relationship_edges,
             "interrupt_data": None,
             "_dependency_tree_fingerprint": dep_tree_fp,
             "_join_graph_fingerprint": join_graph_fp,
@@ -348,6 +366,7 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
             "table_selection_notes": table_selection_notes,
             "join_graph": graph,
             "table_roles": table_roles,
+            "relationship_edges": relationship_edges,
             "errors": errors,
             "interrupt_data": None,
             "_dependency_tree_fingerprint": dep_tree_fp,

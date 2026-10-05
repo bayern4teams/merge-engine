@@ -507,7 +507,10 @@ def rec(code):
 
 
 def shared(index, r1, r2):
-    return tre._shared_neighbors_beyond_common_parent(index, r1, r2)
+    # lead adaptation (P7): the index names the referenced key column a record's id is read from
+    idx = tre.RelationshipIndex(index)
+    idx.key_columns = frozenset({"code"})
+    return tre._shared_neighbors_beyond_common_parent(idx, r1, r2)
 
 
 def test_4f_shared_neighbours_work_with_a_neutral_identifier_column():

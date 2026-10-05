@@ -74,6 +74,8 @@ def _build_deps_interrupt(state: dict[str, Any]) -> dict[str, Any]:
             # because this body does not run at the pause (interrupt_before). Shown for
             # confirmation only; nothing downstream acts on them (report P4 Ceiling).
             "table_roles": state.get("table_roles") or {},
+            # P7: a cyclic hierarchy is reported here, never silently broken.
+            "relationship_cycles": (state.get("relationship_edges") or {}).get("cycles") or [],
         },
     }
     warning = state.get("dependency_analysis_warning", "")

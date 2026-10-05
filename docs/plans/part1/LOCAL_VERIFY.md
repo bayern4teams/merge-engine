@@ -157,3 +157,10 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Independent check: open the JSON file (one entry per answered pair, `merge`/`keep_separate` only); run 2's matches gate does not pause, `resolution_stats.<e>.decisions_from_memory` equals the answered count; an aborted gate adds nothing.
 - Expected evidence: run 2 asks zero; changing one record attribute re-asks exactly that pair.
 - Result (filled in locally):
+
+### P7 — typed relationship edges and the name-free relationship index
+- Why cloud could not verify: no origin databases; whether P3 finds the real self-reference / junction INDs (dense integer keys are skipped by the coincidence rule, see P3) and whether raw FK columns survive extraction.
+- Command: full merge run; read `relationship_edges` from the analyze_dependencies state and `data.relationship_cycles` in the deps-gate payload; check the log line "Relationship index built from N relation row(s)".
+- Independent check: SQL on the origin — `SELECT count(*) FROM company_relation` (report: 21 rows recovered before; true count higher) against the RELATED edges for that junction; for any self-referencing column `SELECT count(*) FROM <t> WHERE <ptr> IS NOT NULL` against the DIRECT_PARENT count for that `column`.
+- Expected evidence: RELATED edges = junction rows with both ends non-null; DIRECT_PARENT = non-null pointers to existing keys; cycles listed, not dropped; the relationship index non-empty only from junctions between company keys.
+- Result (filled in locally):

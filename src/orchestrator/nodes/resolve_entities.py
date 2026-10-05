@@ -19,6 +19,7 @@ from src.mcp_server.tools.resolve_entities import (
     _MIN_COHESION,
     _PROCESS_POOL_MIN_RECORDS,
     CandidatePairBudgetExceeded,
+    RelationshipIndex,
     build_relationship_index,
     rebuild_band_clusters,
     resolve_entities_impl,
@@ -87,20 +88,37 @@ def _relationship_index_for_companies(
 ) -> dict[str, set[str]]:
     """B.5.1: the relational-agreement signal's index, built once per run
     from every junction the dependency analysis found (P4's
-    ``state["table_roles"]["junction"]``) whose two FK columns reference the
-    same key — an id -> same-kind ids map (P7: structure, never a table or
-    concept name). The junction's rows are the extracted entity of that
+    ``state["table_roles"]["junction"]``) whose two FK columns reference one
+    key of a company table (``entity_tables``; every same-key junction when the
+    run has no table selection) — an id -> same-kind ids map (P7: structure,
+    never a table name). The junction's rows are the extracted entity of that
     name, else any extracted rows whose ``_origin_table`` is the junction —
     best-effort, never what stops a merge if this data isn't present.
     """
     try:
-        index: dict[str, set[str]] = {}
+        selected = state.get("entity_tables")
+        company_tables = (
+            {
+                (str(t.get("origin_id")), t.get("table"))
+                for et, tables in selected.items()
+                if concept_matches("company", et)
+                for t in tables or []
+                if isinstance(t, dict)
+            }
+            if isinstance(selected, dict) and selected
+            else None
+        )
+        index = RelationshipIndex()
         relation_records: list[dict[str, Any]] = []
         for role in (state.get("table_roles") or {}).get("junction") or []:
             cols = list(role.get("fk_columns") or [])
             targets = {str(r).split("->", 1)[-1].strip() for r in role.get("references") or []}
             if len(cols) != 2 or len(targets) != 1:
                 continue  # two kinds of thing, or not a pair: not a same-kind index
+            target_table, _, key_column = next(iter(targets)).rpartition(".")
+            origin = role.get("origin")
+            if company_tables is not None and (str(origin), target_table) not in company_tables:
+                continue  # relates rows of another entity: not company evidence
             table = role.get("table")
             if table in extracted_data:
                 rows = entity_rows(state, table)
@@ -111,7 +129,6 @@ def _relationship_index_for_companies(
                     for row in entity_rows(state, key)
                     if row.get("_origin_table") == table
                 ]
-            origin = role.get("origin")
             rows = [
                 r
                 for r in rows
@@ -119,8 +136,10 @@ def _relationship_index_for_companies(
                 and str(r.get("_origin_id", origin)) == str(origin)
             ]
             relation_records.extend(rows)
-            for k, v in build_relationship_index(rows, (cols[0], cols[1])).items():
+            part = build_relationship_index(rows, (cols[0], cols[1]), key_column)
+            for k, v in part.items():
                 index.setdefault(k, set()).update(v)
+            index.key_columns |= part.key_columns
         if not index:
             return {}
         logger.info(
@@ -293,7 +312,7 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
 
     # B.5.1: only worth building when "company" is actually being
     # resolved this run -- the relational-agreement signal is scoped to
-    # company_relation data, not every entity type.
+    # junctions between company keys (P7), not every entity type.
     relationship_index: dict[str, set[str]] = {}
     if any(concept_matches("company", et) for et, _records in prepared):
         relationship_index = _relationship_index_for_companies(state, extracted_data)

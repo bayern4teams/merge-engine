@@ -726,6 +726,7 @@ async def derive_relationship_edges(
     origins: list[dict[str, Any]],
     *,
     sample_size: int = _DEFAULT_SAMPLE_SIZE,
+    roles: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Typed edges between ROWS, from the discovered structure only (report P7):
 
@@ -742,9 +743,13 @@ async def derive_relationship_edges(
     subsidiary have the same shape (a pointer into the same key); telling them
     apart needs a declared pointer role.
 
+    Every edge and cycle carries its ``origin``; hierarchy edges also the pointer
+    ``column`` (two self-INDs on one table are two hierarchies). A pointer to a key
+    no row holds yields no edge.
+
     ponytail: the pointer and junction tables are read in full (paged by
-    ``sample_size``), while P3/P4 decide the structure on samples; one reference
-    per FK column (the first P3 kept). Deferred alternative:
+    ``sample_size``, held in memory), while P3/P4 decide the structure on samples;
+    one reference per FK column (the first P3 kept). Deferred alternative:
     relationship-based duplicate detection over these edges, trigger: a
     non-empty hierarchy on the real origins.
     """
@@ -759,8 +764,11 @@ async def derive_relationship_edges(
                 edge.confidence, 0
             ) >= trusted:
                 refs.setdefault(node, {}).setdefault(edge.child_column, edge)
-    roles = await classify_junction_and_weak_tables(graph, schemas, origins, sample_size)
-    junctions = {(str(j["origin"]), j["table"]): j["fk_columns"] for j in roles["junction"]}
+    if roles is None:  # the caller's P4 proposal when it has one, else computed here
+        roles = await classify_junction_and_weak_tables(graph, schemas, origins, sample_size)
+    junctions = {
+        (str(j["origin"]), j["table"]): j["fk_columns"] for j in roles.get("junction") or []
+    }
 
     out: dict[str, list[dict[str, Any]]] = {"edges": [], "cycles": []}
     configs = _index_origins(origins)
@@ -787,7 +795,8 @@ async def derive_relationship_edges(
                     continue
                 cols = [c["name"] for c in table.get("columns", []) or [] if c.get("name")]
                 rows: list[dict[str, Any]] = []
-                cursor = None
+                cursor: Any = None
+                seen: set[Any] = set()
                 try:
                     while True:  # every row: an edge is a fact about one row, not a sample
                         page = await connector.extract(
@@ -797,11 +806,17 @@ async def derive_relationship_edges(
                             cursor=cursor,
                         )
                         rows += page.get("rows") or []
+                        seen.add(cursor)
                         cursor = page.get("next_cursor")
-                        if not cursor or not page.get("rows"):
-                            break
+                        if not cursor or not page.get("rows") or cursor in seen:
+                            break  # done, or a cursor that does not advance
                 except Exception as exc:
-                    logger.debug("Relationship read failed for %s: %s", name, exc)
+                    logger.warning(
+                        "Relationship edges of %s.%s not derived (read failed): %s",
+                        origin_id,
+                        name,
+                        exc,
+                    )
                     continue
                 for edge in pointers:
                     up: dict[str, str] = {}
@@ -819,7 +834,11 @@ async def derive_relationship_edges(
                             shown.setdefault(p, ptr)
                         else:
                             roots.add(k)
+                    keys = roots | set(up)  # rows actually read
+                    up = {c: p for c, p in up.items() if p in keys}  # no edge to a phantom row
                     edges, cycles = _walk_hierarchy(name, up, roots, shown)
+                    for item in edges + cycles:  # whose rows, through which pointer column
+                        item.update(origin=origin_id, column=edge.child_column)
                     out["edges"] += edges
                     out["cycles"] += cycles
                 for i, col_a in enumerate(pair_cols):
@@ -831,6 +850,7 @@ async def derive_relationship_edges(
                                 out["edges"].append(
                                     {
                                         "type": "RELATED",
+                                        "origin": origin_id,
                                         "table": name,
                                         "a": [ea.parent_table, a],
                                         "b": [eb.parent_table, b],

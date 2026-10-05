@@ -470,8 +470,8 @@ async def resolve_entities_impl(
     relationship_index : dict, optional
         B.5.2. ``{company_native_id: {related_native_id, ...}}`` from
         ``build_relationship_index`` — built ONCE per entity-resolution
-        call by the caller (from the ``company_relation`` entity family's
-        own extracted rows) and threaded down as plain data, never
+        call by the caller (from the rows of the junctions P4 found
+        between company keys, P7) and threaded down as plain data, never
         rebuilt or cached at module scope. Feeds
         ``_compute_heuristic_confidence``'s bounded relational-agreement
         boost. ``None`` (the default) disables the signal entirely —
@@ -2157,9 +2157,18 @@ def _subject_stripped_normalize(subject_tokens: frozenset[str]):
     return normalise
 
 
+class RelationshipIndex(dict[str, set[str]]):
+    """``id -> related ids``, plus the referenced key column(s) a record's own id
+    is read from (P7: the column the junction's FKs point at, found by structure)."""
+
+    key_columns: frozenset[str] = frozenset()
+
+
 def build_relationship_index(
-    relation_records: list[dict[str, Any]] | None, columns: tuple[str, str]
-) -> dict[str, set[str]]:
+    relation_records: list[dict[str, Any]] | None,
+    columns: tuple[str, str],
+    key_column: str | None = None,
+) -> RelationshipIndex:
     """RELATER-style relational-matching signal, adopted natively rather
     than from RELATER's own unmaintained code (ADR 0018), B.5.1.
 
@@ -2171,9 +2180,13 @@ def build_relationship_index(
     pair can be checked in either order. Built once per entity-resolution
     call and threaded down as a parameter (like ``matching_rules``) — never
     module state (``scripts/lint_arch.py``'s no-module-mutable-state rule).
+    ``key_column``: the referenced key both FKs point at; a record's id is read
+    from that column only (without it no record finds itself in the index).
     """
     left, right = columns
-    index: dict[str, set[str]] = {}
+    index = RelationshipIndex()
+    if key_column:
+        index.key_columns = frozenset({key_column.lower()})
     for row in relation_records or []:
         a = row.get(left)
         b = row.get(right)
@@ -2189,17 +2202,14 @@ def build_relationship_index(
 
 
 def _company_native_id(rec: dict[str, Any], relationship_index: dict[str, set[str]]) -> set[str]:
-    """The record's own ids in the index: every non-metadata value, normalized
-    the way ``build_relationship_index`` normalizes its keys, that the index
-    knows. The index carries no column name (P7), so the record's key column
-    is whichever of its values the junction referenced.
-
-    ponytail: a non-key value equal to some indexed id (e.g. a numeric code)
-    would also count; the common-parent guard's >= 2 shared neighbours bounds
-    the effect. Upgrade: carry the referenced column alongside the index."""
+    """The record's own ids in the index: its values in the index's referenced key
+    column(s), normalized the way ``build_relationship_index`` normalizes its keys.
+    A plain index that names no key column finds no record (never a guess from
+    whatever value happens to equal an indexed id)."""
+    columns: frozenset[str] = getattr(relationship_index, "key_columns", frozenset())
     ids: set[str] = set()
     for key, value in rec.items():
-        if key.startswith("_") or value is None:
+        if value is None or key.lower() not in columns:
             continue
         text = str(value).strip().lower()
         if text in relationship_index:

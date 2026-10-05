@@ -599,6 +599,9 @@ class MergeState(TypedDict):
     # dependency gate ({junction: [...], weak: [...]}). Declared so LangGraph
     # keeps it for _build_deps_interrupt; nothing downstream acts on it.
     table_roles: dict[str, Any]
+    # P7: typed row edges derived from the join graph ({edges: [...], cycles:
+    # [...]}); cycles are shown at the dependency gate, nothing acts on them.
+    relationship_edges: dict[str, Any]
 
     # Phase O — decisions a saved profile pins so a re-run is a re-run.
     # {entity: {blocking_keys, unique_id_fields, deterministic_id_fields,
