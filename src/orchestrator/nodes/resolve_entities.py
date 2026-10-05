@@ -86,18 +86,43 @@ def _relationship_index_for_companies(
     state: dict[str, Any], extracted_data: dict[str, Any]
 ) -> dict[str, set[str]]:
     """B.5.1: the relational-agreement signal's index, built once per run
-    from every extracted table the ``company_relation`` concept matches
-    (pooled the same way target-entity records already are above) — best-
-    effort, never what stops a merge if this data isn't present.
+    from every junction the dependency analysis found (P4's
+    ``state["table_roles"]["junction"]``) whose two FK columns reference the
+    same key — an id -> same-kind ids map (P7: structure, never a table or
+    concept name). The junction's rows are the extracted entity of that
+    name, else any extracted rows whose ``_origin_table`` is the junction —
+    best-effort, never what stops a merge if this data isn't present.
     """
     try:
+        index: dict[str, set[str]] = {}
         relation_records: list[dict[str, Any]] = []
-        for key in list(extracted_data):
-            if concept_matches("company_relation", key):
-                relation_records.extend(entity_rows(state, key))
-        if not relation_records:
+        for role in (state.get("table_roles") or {}).get("junction") or []:
+            cols = list(role.get("fk_columns") or [])
+            targets = {str(r).split("->", 1)[-1].strip() for r in role.get("references") or []}
+            if len(cols) != 2 or len(targets) != 1:
+                continue  # two kinds of thing, or not a pair: not a same-kind index
+            table = role.get("table")
+            if table in extracted_data:
+                rows = entity_rows(state, table)
+            else:
+                rows = [
+                    row
+                    for key in list(extracted_data)
+                    for row in entity_rows(state, key)
+                    if row.get("_origin_table") == table
+                ]
+            origin = role.get("origin")
+            rows = [
+                r
+                for r in rows
+                if r.get("_origin_table", table) == table
+                and str(r.get("_origin_id", origin)) == str(origin)
+            ]
+            relation_records.extend(rows)
+            for k, v in build_relationship_index(rows, (cols[0], cols[1])).items():
+                index.setdefault(k, set()).update(v)
+        if not index:
             return {}
-        index = build_relationship_index(relation_records)
         logger.info(
             "Relationship index built from %d relation row(s): %d compan(y/ies) indexed.",
             len(relation_records),

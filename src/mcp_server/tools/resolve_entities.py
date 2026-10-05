@@ -2157,25 +2157,26 @@ def _subject_stripped_normalize(subject_tokens: frozenset[str]):
     return normalise
 
 
-def build_relationship_index(relation_records: list[dict[str, Any]] | None) -> dict[str, set[str]]:
+def build_relationship_index(
+    relation_records: list[dict[str, Any]] | None, columns: tuple[str, str]
+) -> dict[str, set[str]]:
     """RELATER-style relational-matching signal, adopted natively rather
     than from RELATER's own unmaintained code (ADR 0018), B.5.1.
 
-    Maps a company's own origin-native id -> the set of other companies'
-    ids it asserts a relationship with, from the ``company_relation``
-    entity family's own extracted rows — real origin columns
-    ``companyid``/``relatedcompanyid`` (``relationtype``/``confidence``
-    exist on the same rows but aren't needed for the set-membership check
-    below). Symmetric: a relation asserted from A's side also indexes B
-    as related to A, since a candidate pair can be checked in either
-    order. Built once per entity-resolution call and threaded down as a
-    parameter (like ``matching_rules``) — never module state
-    (``scripts/lint_arch.py``'s no-module-mutable-state rule).
+    Maps an entity's own origin-native id -> the set of other ids of the
+    same kind it is related to, from the rows of a junction whose two FK
+    ``columns`` reference the same key (P7: the junction is found by P4's
+    structure test, never by a table or column name). Symmetric: a relation
+    asserted from A's side also indexes B as related to A, since a candidate
+    pair can be checked in either order. Built once per entity-resolution
+    call and threaded down as a parameter (like ``matching_rules``) — never
+    module state (``scripts/lint_arch.py``'s no-module-mutable-state rule).
     """
+    left, right = columns
     index: dict[str, set[str]] = {}
     for row in relation_records or []:
-        a = row.get("companyid")
-        b = row.get("relatedcompanyid")
+        a = row.get(left)
+        b = row.get(right)
         if a is None or b is None:
             continue
         a_key = str(a).strip().lower()
@@ -2187,18 +2188,23 @@ def build_relationship_index(relation_records: list[dict[str, Any]] | None) -> d
     return index
 
 
-def _company_native_id(rec: dict[str, Any]) -> str | None:
-    """A record's own origin-native company id, normalized the same way
-    ``build_relationship_index`` normalizes its keys — the join key
-    between a resolve_entities record and its company_relation rows."""
+def _company_native_id(rec: dict[str, Any], relationship_index: dict[str, set[str]]) -> set[str]:
+    """The record's own ids in the index: every non-metadata value, normalized
+    the way ``build_relationship_index`` normalizes its keys, that the index
+    knows. The index carries no column name (P7), so the record's key column
+    is whichever of its values the junction referenced.
+
+    ponytail: a non-key value equal to some indexed id (e.g. a numeric code)
+    would also count; the common-parent guard's >= 2 shared neighbours bounds
+    the effect. Upgrade: carry the referenced column alongside the index."""
+    ids: set[str] = set()
     for key, value in rec.items():
         if key.startswith("_") or value is None:
             continue
-        if key.lower().replace("_", "") == "companyid":
-            text = str(value).strip().lower()
-            if text:
-                return text
-    return None
+        text = str(value).strip().lower()
+        if text in relationship_index:
+            ids.add(text)
+    return ids
 
 
 def _shared_neighbors_beyond_common_parent(
@@ -2216,13 +2222,13 @@ def _shared_neighbors_beyond_common_parent(
     Space" blob. Requires >= 2 distinct shared neighbors — never just the
     one common parent — before this counts as relational agreement.
     """
-    id1 = _company_native_id(rec1)
-    id2 = _company_native_id(rec2)
-    if id1 is None or id2 is None:
+    ids1 = _company_native_id(rec1, relationship_index)
+    ids2 = _company_native_id(rec2, relationship_index)
+    if not ids1 or not ids2:
         return set()
-    n1 = relationship_index.get(id1, set())
-    n2 = relationship_index.get(id2, set())
-    shared = (n1 & n2) - {id1, id2}
+    n1 = set().union(*(relationship_index[i] for i in ids1))
+    n2 = set().union(*(relationship_index[i] for i in ids2))
+    shared = (n1 & n2) - ids1 - ids2
     if len(shared) < 2:
         return set()
     return shared

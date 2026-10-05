@@ -672,6 +672,177 @@ async def build_join_graph(
     return graph
 
 
+# ── Typed relationship edges (P7) ─────────────────────────────────────────
+
+
+def _walk_hierarchy(
+    table: str, up: dict[str, str], roots: set[str], shown: dict[str, Any]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """DIRECT_PARENT per pointer, ULTIMATE_PARENT to the chain's root, cycles listed
+    once. ``up`` maps a row's normalised key to its parent's; ``roots`` are rows seen
+    with a NULL pointer. A chain ending in a cycle, or in a key absent from the rows
+    read, has no observed root, so no ULTIMATE_PARENT is invented for it."""
+    edges = [
+        {"type": "DIRECT_PARENT", "child": [table, shown[c]], "parent": [table, shown[p]]}
+        for c, p in up.items()
+    ]
+    cycles: list[dict[str, Any]] = []
+    root_of: dict[str, str | None] = {}
+    for start in up:
+        path: list[str] = []
+        on_path: dict[str, int] = {}
+        cur: str | None = start
+        while cur is not None and cur not in root_of:
+            if cur in on_path:  # back on this walk: a ring
+                ring = path[on_path[cur] :]
+                cycles.append({"table": table, "members": [shown[k] for k in ring]})
+                cur = None
+                break
+            if cur not in up:
+                root_of[cur] = cur if cur in roots else None
+                break
+            on_path[cur] = len(path)
+            path.append(cur)
+            cur = up[cur]
+        end = root_of.get(cur) if cur is not None else None
+        for k in path:
+            root_of[k] = end
+    for child in up:
+        root = root_of.get(child)
+        if root is not None:
+            edges.append(
+                {
+                    "type": "ULTIMATE_PARENT",
+                    "child": [table, shown[child]],
+                    "parent": [table, shown[root]],
+                }
+            )
+    return edges, cycles
+
+
+async def derive_relationship_edges(
+    graph: JoinGraph,
+    schemas: dict[str, Any],
+    origins: list[dict[str, Any]],
+    *,
+    sample_size: int = _DEFAULT_SAMPLE_SIZE,
+) -> dict[str, list[dict[str, Any]]]:
+    """Typed edges between ROWS, from the discovered structure only (report P7):
+
+    * a self-IND (a column contained in its own table's key, found by P3 under any
+      name) is a parent pointer: ``DIRECT_PARENT`` from the row holding it to the
+      row it names, ``ULTIMATE_PARENT`` to the root of that pointer chain;
+    * a junction (P4's minimal unique FK union) relates the rows its FKs name:
+      one ``RELATED`` edge per row and FK pair. A junction has no observable
+      direction, so it never yields a parent edge;
+    * a cyclic hierarchy keeps every pointer as an edge and is listed in
+      ``cycles``, never silently broken.
+
+    No table or column is named here. ``BRANCH_OF`` is not emitted: a branch and a
+    subsidiary have the same shape (a pointer into the same key); telling them
+    apart needs a declared pointer role.
+
+    ponytail: the pointer and junction tables are read in full (paged by
+    ``sample_size``), while P3/P4 decide the structure on samples; one reference
+    per FK column (the first P3 kept). Deferred alternative:
+    relationship-based duplicate detection over these edges, trigger: a
+    non-empty hierarchy on the real origins.
+    """
+    # Imported here: plan_scope imports this module at its top.
+    from src.mcp_server.tools.plan_scope import classify_junction_and_weak_tables
+
+    trusted = _CONFIDENCE_RANK["probable"]
+    refs: dict[Node, dict[str, JoinEdge]] = {}
+    for node in graph.nodes:
+        for edge in graph.neighbors(node):
+            if (edge.child_origin, edge.child_table) == node and _CONFIDENCE_RANK.get(
+                edge.confidence, 0
+            ) >= trusted:
+                refs.setdefault(node, {}).setdefault(edge.child_column, edge)
+    roles = await classify_junction_and_weak_tables(graph, schemas, origins, sample_size)
+    junctions = {(str(j["origin"]), j["table"]): j["fk_columns"] for j in roles["junction"]}
+
+    out: dict[str, list[dict[str, Any]]] = {"edges": [], "cycles": []}
+    configs = _index_origins(origins)
+    for origin_id, schema_data in (schemas or {}).items():
+        config = configs.get(str(origin_id))
+        tables = {
+            t["name"]: t
+            for t in (schema_data or {}).get("tables", []) or []
+            if t.get("name") and (origin_id, t["name"]) in refs
+        }
+        if config is None or not tables:
+            continue
+        try:
+            connector = create_connector(config.get("type", ""), config.get("connection", {}))
+        except Exception as exc:
+            logger.warning("Relationship edges skipped for '%s': %s", origin_id, exc)
+            continue
+        try:
+            for name, table in tables.items():
+                fks = refs[(origin_id, name)]
+                pointers = [e for e in fks.values() if e.parent_table == name]
+                pair_cols = junctions.get((str(origin_id), name)) or []
+                if not pointers and not pair_cols:
+                    continue
+                cols = [c["name"] for c in table.get("columns", []) or [] if c.get("name")]
+                rows: list[dict[str, Any]] = []
+                cursor = None
+                try:
+                    while True:  # every row: an edge is a fact about one row, not a sample
+                        page = await connector.extract(
+                            str(table.get("full_name") or name),
+                            cols,
+                            batch_size=sample_size,
+                            cursor=cursor,
+                        )
+                        rows += page.get("rows") or []
+                        cursor = page.get("next_cursor")
+                        if not cursor or not page.get("rows"):
+                            break
+                except Exception as exc:
+                    logger.debug("Relationship read failed for %s: %s", name, exc)
+                    continue
+                for edge in pointers:
+                    up: dict[str, str] = {}
+                    roots: set[str] = set()
+                    shown: dict[str, Any] = {}
+                    for row in rows:
+                        key, ptr = row.get(edge.parent_column), row.get(edge.child_column)
+                        k = normalize_val(key)
+                        if not k:
+                            continue
+                        shown.setdefault(k, key)
+                        p = normalize_val(ptr)
+                        if p:
+                            up[k] = p
+                            shown.setdefault(p, ptr)
+                        else:
+                            roots.add(k)
+                    edges, cycles = _walk_hierarchy(name, up, roots, shown)
+                    out["edges"] += edges
+                    out["cycles"] += cycles
+                for i, col_a in enumerate(pair_cols):
+                    for col_b in pair_cols[i + 1 :]:
+                        ea, eb = fks[col_a], fks[col_b]
+                        for row in rows:
+                            a, b = row.get(col_a), row.get(col_b)
+                            if normalize_val(a) and normalize_val(b):
+                                out["edges"].append(
+                                    {
+                                        "type": "RELATED",
+                                        "table": name,
+                                        "a": [ea.parent_table, a],
+                                        "b": [eb.parent_table, b],
+                                    }
+                                )
+        finally:
+            await connector.close()
+    if out["cycles"]:
+        logger.warning("Cyclic hierarchy reported, not broken: %s", out["cycles"])
+    return out
+
+
 # ── BFS path finder (Phase 4.2) ──────────────────────────────────────────
 #
 # `plan_scope.py`'s `_find_junction` (pre-Phase-4) is a flat scan returning

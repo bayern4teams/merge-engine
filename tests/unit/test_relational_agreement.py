@@ -12,6 +12,9 @@ from src.mcp_server.tools.resolve_entities import (
     build_relationship_index,
 )
 
+# P7: the junction's FK columns are passed in (found by structure, not by name).
+COLS = ("companyid", "relatedcompanyid")
+
 
 class TestSharedNeighborsBeyondCommonParent:
     def test_airbus_blob_negative_fixture_no_boost_from_shared_parent_alone(self) -> None:
@@ -31,7 +34,7 @@ class TestSharedNeighborsBeyondCommonParent:
                 "relationtype": "SUBSIDIARY_OF",
             },
         ]
-        index = build_relationship_index(rows)
+        index = build_relationship_index(rows, COLS)
         rec1 = {"companyID": "airbus-se", "name": "Airbus SE"}
         rec2 = {"companyID": "airbus-helicopters", "name": "Airbus Helicopters"}
         shared = _shared_neighbors_beyond_common_parent(index, rec1, rec2)
@@ -45,7 +48,7 @@ class TestSharedNeighborsBeyondCommonParent:
             {"companyid": "a", "relatedcompanyid": "joint-venture-x"},
             {"companyid": "b", "relatedcompanyid": "joint-venture-x"},
         ]
-        index = build_relationship_index(rows)
+        index = build_relationship_index(rows, COLS)
         rec1 = {"companyID": "a"}
         rec2 = {"companyID": "b"}
         shared = _shared_neighbors_beyond_common_parent(index, rec1, rec2)
@@ -56,7 +59,8 @@ class TestSharedNeighborsBeyondCommonParent:
             [
                 {"companyid": "a", "relatedcompanyid": "x"},
                 {"companyid": "b", "relatedcompanyid": "y"},
-            ]
+            ],
+            COLS,
         )
         assert (
             _shared_neighbors_beyond_common_parent(index, {"companyID": "a"}, {"companyID": "b"})
@@ -64,7 +68,7 @@ class TestSharedNeighborsBeyondCommonParent:
         )
 
     def test_a_record_with_no_known_id_gets_no_boost(self) -> None:
-        index = build_relationship_index([{"companyid": "a", "relatedcompanyid": "b"}])
+        index = build_relationship_index([{"companyid": "a", "relatedcompanyid": "b"}], COLS)
         assert _relational_agreement({"name": "no id here"}, {"companyID": "a"}, index) == 0.0
 
 
@@ -73,7 +77,7 @@ class TestRelationalAgreementIsBoundedAndAdditive:
         rows = [{"companyid": "a", "relatedcompanyid": f"n{i}"} for i in range(10)] + [
             {"companyid": "b", "relatedcompanyid": f"n{i}"} for i in range(10)
         ]
-        index = build_relationship_index(rows)
+        index = build_relationship_index(rows, COLS)
         boost = _relational_agreement({"companyID": "a"}, {"companyID": "b"}, index)
         assert boost == 0.3
 
@@ -83,7 +87,7 @@ class TestRelationalAgreementIsBoundedAndAdditive:
         rows = [{"companyid": "a", "relatedcompanyid": f"n{i}"} for i in range(20)] + [
             {"companyid": "b", "relatedcompanyid": f"n{i}"} for i in range(20)
         ]
-        index = build_relationship_index(rows)
+        index = build_relationship_index(rows, COLS)
         boost = _relational_agreement({"companyID": "a"}, {"companyID": "b"}, index)
         assert boost < _AUTO_MATCH
 
@@ -94,6 +98,6 @@ class TestRelationalAgreementIsBoundedAndAdditive:
             {"companyid": "a", "relatedcompanyid": "n2"},
             {"companyid": "b", "relatedcompanyid": "n2"},
         ]
-        index = build_relationship_index(rows)
+        index = build_relationship_index(rows, COLS)
         boost = _relational_agreement({"companyID": "a"}, {"companyID": "b"}, index)
         assert boost == 0.3  # min(0.15 * 2, 0.3)
