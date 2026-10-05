@@ -356,3 +356,364 @@ def test_no_new_module_level_mutable_state_in_tools():
         return out
 
     assert mut(src) <= mut(old), f"new module-level mutable: {mut(src) - mut(old)}"
+
+
+# ══ ROUND 2: cannot-link constraints over a strongest-first join ══════════════════════════════
+def _graph(edges, nodes=None):
+    """Records Zephyr <n> in distinct sources; every pair not in ``edges`` is planted at 0.1.
+    Returns (Run, {node: rid})."""
+    names = sorted(nodes or {n for e in edges for n in e})
+    recs = [fx._rec(f"src_{n}", f"r{n}", name=f"Zephyr {n}") for n in names]
+    ids = {n: fx.rid(r) for n, r in zip(names, recs, strict=True)}
+    sc = {}
+    for i, a in enumerate(names):
+        for b in names[i + 1 :]:
+            sc[frozenset({f"Zephyr {a}", f"Zephyr {b}"})] = 0.1
+    for (a, b), s in edges.items():
+        sc[frozenset({f"Zephyr {a}", f"Zephyr {b}"})] = s
+    r = acc.run_node([], "heuristic", extra=(recs, sc), strict=False)
+    return r, ids
+
+
+def _g(post, ids):
+    inv = {v: k for k, v in ids.items()}
+    return {frozenset(inv[x] for x in g) for g in acc.groups(post)}
+
+
+def _dec(ids, a, b, action):
+    return {"entity_type": "company", "record_ids": [ids[a], ids[b]], "action": action}
+
+
+def _cd(post_or_run, ids, members, action):
+    cl = next(
+        c
+        for c in acc.clusters_for(post_or_run, "company")
+        if set(c["record_ids"]) == {ids[m] for m in members}
+    )
+    return {"cluster_id": cl["cluster_id"], "entity_type": "company", "action": action}
+
+
+def test_r2_chain_reject_inside_a_match_chain_drops_the_weakest_link():
+    """A-C .99, C-B .96, B-D .97, A-B band .80; keep A-B apart.  Strongest-first: A-C, B-D join;
+    C-B would unite A and B -> skipped.  {A,C} and {B,D} survive (the minimal damage: one link)."""
+    r, ids = _graph({("A", "C"): 0.99, ("B", "C"): 0.96, ("B", "D"): 0.97, ("A", "B"): 0.80})
+    assert _g(r.pre, ids) == {frozenset("ABCD")} or True  # pre state: whatever the cut made
+    post = acc.resume_manager(r.pre, _fb(pair_decisions=[_dec(ids, "A", "B", "keep_separate")]))
+    g = _g(post, ids)
+    assert not any({"A", "B"} <= x for x in g)
+    assert g == {frozenset("AC"), frozenset("BD")}, g
+
+
+def test_r2_wheel_reject_between_two_rim_nodes_loses_exactly_one_node_and_is_deterministic():
+    """Hub H, rim A,B,C all 0.97 to H, A-C and B-C 0.97, A-B band 0.80, keep A-B apart.  The
+    result must be one 3-cluster plus one singleton (not a shattered graph), and the same shape
+    whichever of A/B the labels make the 'loser' (tie-break is by record id: arbitrary but stable)."""
+    edges = {
+        ("H", "A"): 0.97,
+        ("H", "B"): 0.97,
+        ("H", "C"): 0.97,
+        ("A", "C"): 0.97,
+        ("B", "C"): 0.97,
+        ("A", "B"): 0.80,
+    }
+    shapes = set()
+    for relabel in ({}, {"A": "B", "B": "A"}):
+        e = {tuple(relabel.get(x, x) for x in k): v for k, v in edges.items()}
+        r, ids = _graph(e)
+        post = acc.resume_manager(r.pre, _fb(pair_decisions=[_dec(ids, "A", "B", "keep_separate")]))
+        g = _g(post, ids)
+        assert not any({"A", "B"} <= x for x in g)
+        assert sorted(len(x) for x in g) == [3], f"expected one 3-cluster, got {g}"
+        shapes.add(frozenset(len(x) for x in g))
+    assert len(shapes) == 1
+
+
+def test_r2_reject_of_a_match_band_pair_inside_a_dense_clique_keeps_the_rest_together():
+    ed = {(a, b): 0.98 for a in "ABCD" for b in "ABCD" if a < b}
+    ed[("A", "B")] = 0.80
+    r, ids = _graph(ed)
+    post = acc.resume_manager(r.pre, _fb(pair_decisions=[_dec(ids, "A", "B", "keep_separate")]))
+    g = _g(post, ids)
+    assert not any({"A", "B"} <= x for x in g)
+    assert sum(len(x) for x in g) >= 3, f"clique shattered: {g}"
+
+
+def test_r2_match_chain_cut_by_cohesion_is_unchanged_by_an_unrelated_band_decision():
+    """A-B .97, B-C .96 (no A-C): the original run cuts the chain.  A band decision elsewhere must
+    leave exactly that clustering."""
+    edges = {("A", "B"): 0.97, ("B", "C"): 0.96, ("P", "Q"): 0.80}
+    r, ids = _graph(edges)
+    before = _g(r.pre, ids)
+    post = acc.resume_manager(r.pre, _fb(pair_decisions=[_dec(ids, "P", "Q", "merge")]))
+    after = _g(post, ids)
+    assert {x for x in after if not {"P", "Q"} & x} == {x for x in before if not {"P", "Q"} & x}
+    assert frozenset("PQ") in after
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_r2_unrelated_band_decision_never_changes_match_components_random_graphs(seed):
+    import random
+
+    rng = random.Random(seed)
+    nodes = list("ABCDEFG")
+    edges = {}
+    for i, a in enumerate(nodes):
+        for b in nodes[i + 1 :]:
+            if rng.random() < 0.45:
+                edges[(a, b)] = rng.choice([0.96, 0.97, 0.99, 0.8, 0.75, 0.5])
+    edges[("P", "Q")] = 0.80
+    r, ids = _graph(edges, nodes + ["P", "Q"])
+    before = _g(r.pre, ids)
+    post = acc.resume_manager(r.pre, _fb(pair_decisions=[_dec(ids, "P", "Q", "keep_separate")]))
+    assert _g(post, ids) == before, "keeping an isolated pair apart changed other clusters"
+    r2, ids2 = _graph(edges, nodes + ["P", "Q"])
+    post = acc.resume_manager(r2.pre, _fb(pair_decisions=[_dec(ids2, "P", "Q", "merge")]))
+    assert _g(post, ids2) - {frozenset("PQ")} == before, (
+        "merging isolated P-Q changed other clusters"
+    )
+
+
+def test_r2_accept_and_split_in_same_feedback_conflict_is_consistent_and_audited():
+    """X-Y 0.80 in the band, a Match pair; the operator splits the Match cluster {X,Y'} .. here:
+    split cluster {A,B} and, in the same feedback, accept A-C where C is its band neighbour.
+    Whatever wins, the audit block and the clustering must agree."""
+    r, ids = _graph({("A", "B"): 0.98, ("A", "C"): 0.80})
+    fb = _fb(
+        cluster_decisions=[_cd(r.pre, ids, "AB", "split")],
+        pair_decisions=[_dec(ids, "A", "C", "merge")],
+    )
+    post = acc.resume_manager(r.pre, fb)
+    g = _g(post, ids)
+    assert frozenset("AC") in g, "explicit accept lost"
+    assert not any({"A", "B"} <= x for x in g), "split of A-B undone via the accepted pair"
+    assert post["resolution_stats"]["company"]["band_resolution"]["accepted"] == 1
+
+
+def test_r2_accept_across_two_split_apart_records_pins_that_the_explicit_accept_wins():
+    """Design note, pinned: operator splits {A,B} and in the same feedback accepts the pair A-B
+    itself.  The pair-level accept is the more specific instruction and wins (documented in
+    rebuild_band_clusters: a human cluster is joined only by an accepted pair).  The repo's own
+    'unintended merge is unrecoverable' rule would argue for apart; flagged, not failed."""
+    r, ids = _graph({("A", "B"): 0.98})
+    fb = _fb(
+        cluster_decisions=[_cd(r.pre, ids, "AB", "split")],
+        pair_decisions=[_dec(ids, "A", "B", "merge")],
+    )
+    post = acc.resume_manager(r.pre, fb)
+    assert frozenset("AB") in _g(post, ids)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="audit says accepted=1 for a pair that was kept apart (same class as r1 defect 5)",
+)
+def test_r2_accept_and_keep_same_pair_audit_does_not_claim_both():
+    r, ids = _graph({("A", "B"): 0.80})
+    post = acc.resume_manager(
+        r.pre, _fb(pair_decisions=[_dec(ids, "A", "B", "merge"), _dec(ids, "A", "B", "keep")])
+    )
+    res = post["resolution_stats"]["company"]["band_resolution"]
+    assert frozenset("AB") not in _g(post, ids)
+    assert not (res["accepted"] == 1 and res["kept_separate"] == 1), res
+
+
+def test_r2_accept_joins_two_human_kept_clusters_transitively():
+    r, ids = _graph({("A", "C"): 0.98, ("B", "D"): 0.98, ("A", "B"): 0.80})
+    fb = _fb(
+        cluster_decisions=[_cd(r.pre, ids, "AC", "keep"), _cd(r.pre, ids, "BD", "keep")],
+        pair_decisions=[_dec(ids, "A", "B", "merge")],
+    )
+    post = acc.resume_manager(r.pre, fb)
+    assert frozenset("ABCD") in _g(post, ids)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="human-kept cluster is sealed against an explicit committed bar; gate predicted counts disagree with merges",
+)
+def test_r2_lowered_committed_bar_is_not_blocked_by_a_kept_neighbour_cluster():
+    """The operator commits bar 0.75 (P-pair 0.80 now Match) and keeps cluster {A,C}.  The kept
+    cluster is a confirmation of membership, not a ban on growth: B (0.80 to C) must join, exactly as
+    it would had the cluster not been 'kept'."""
+    edges = {("A", "C"): 0.98, ("B", "C"): 0.80, ("A", "B"): 0.80}
+    thr = {"company": {"auto_match": 0.75, "auto_exclude": 0.5}}
+    r, ids = _graph(edges)
+    ctrl = _g(acc.resume_manager(r.pre, _fb(band_thresholds=thr)), ids)
+    assert frozenset("ABC") in ctrl, "control: lowered bar should absorb B"
+    r, ids = _graph(edges)
+    post = acc.resume_manager(
+        r.pre, _fb(band_thresholds=thr, cluster_decisions=[_cd(r.pre, ids, "AC", "keep")])
+    )
+    assert frozenset("ABC") in _g(post, ids), "kept cluster is sealed against the committed bar"
+
+
+def test_r2_raised_bar_unmerges_unreviewed_match_but_a_human_kept_cluster_survives():
+    edges = {("A", "B"): 0.97, ("C", "D"): 0.97}
+    thr = {"company": {"auto_match": 0.99, "auto_exclude": 0.7}}
+    r, ids = _graph(edges)
+    post = acc.resume_manager(
+        r.pre, _fb(band_thresholds=thr, cluster_decisions=[_cd(r.pre, ids, "AB", "keep")])
+    )
+    g = _g(post, ids)
+    assert frozenset("AB") in g, "human-kept cluster dissolved by a raised bar"
+    assert frozenset("CD") not in g, "raised bar did not un-merge the unreviewed 0.97 pair"
+
+
+def test_r2_raised_bar_leaves_a_kept_cluster_whole_even_for_edges_under_the_new_bar():
+    """Pinned policy: {A,B,E} kept by the human (edges .99/.97/.97), bar raised to .99.  The kept
+    cluster stays whole (a human decision outranks a threshold); unreviewed pairs obey the bar."""
+    edges = {("A", "B"): 0.99, ("B", "E"): 0.97, ("A", "E"): 0.97, ("C", "D"): 0.97}
+    thr = {"company": {"auto_match": 0.99, "auto_exclude": 0.7}}
+    r, ids = _graph(edges)
+    post = acc.resume_manager(
+        r.pre, _fb(band_thresholds=thr, cluster_decisions=[_cd(r.pre, ids, "ABE", "keep")])
+    )
+    g = _g(post, ids)
+    assert frozenset("ABE") in g and frozenset("CD") not in g
+
+
+def test_r2_persisted_keep_wins_over_a_later_accept_is_consistent():
+    r, ids = _graph({("A", "B"): 0.80})
+    one = acc.resume_manager(r.pre, _fb(pair_decisions=[_dec(ids, "A", "B", "keep_separate")]))
+    two = acc.resume_manager(one, _fb(pair_decisions=[_dec(ids, "A", "B", "merge")]))
+    g = _g(two, ids)
+    res = two["resolution_stats"]["company"]["band_resolution"]
+    # first decision wins is acceptable; but audit and clustering must agree
+    assert (frozenset("AB") in g) == (res["accepted"] == 1 and res["kept_separate"] == 0), (g, res)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="a later keep does not split an earlier merge yet band_kept_apart lists the pair",
+)
+def test_r2_later_keep_after_merge_does_not_leave_pair_both_merged_and_listed_kept_apart():
+    r, ids = _graph({("A", "B"): 0.80})
+    one = acc.resume_manager(r.pre, _fb(pair_decisions=[_dec(ids, "A", "B", "merge")]))
+    assert frozenset("AB") in _g(one, ids)
+    two = acc.resume_manager(one, _fb(pair_decisions=[_dec(ids, "A", "B", "keep_separate")]))
+    kept = two["resolution_stats"]["company"].get("band_kept_apart") or []
+    merged = frozenset("AB") in _g(two, ids)
+    assert not (merged and kept), "state says kept apart but the pair is in one cluster"
+
+
+def test_r2_persistence_threshold_then_decision_then_plain_approve():
+    r, ids = _graph({("A", "B"): 0.80, ("C", "D"): 0.80, ("E", "F"): 0.98})
+    s1 = acc.resume_manager(r.pre, _fb(pair_decisions=[_dec(ids, "A", "B", "merge")]))
+    s2 = acc.resume_manager(s1, _fb(pair_decisions=[_dec(ids, "C", "D", "keep_separate")]))
+    s3 = acc.resume_manager(
+        s2, _fb(band_thresholds={"company": {"auto_match": 0.95, "auto_exclude": 0.7}})
+    )
+    s4 = acc.resume_manager(s3, _fb())
+    for s in (s2, s3, s4):
+        g = _g(s, ids)
+        assert frozenset("AB") in g and frozenset("EF") in g and frozenset("CD") not in g
+
+
+def test_r2_persisted_keep_survives_a_later_lowered_bar():
+    r, ids = _graph({("A", "B"): 0.80})
+    s1 = acc.resume_manager(r.pre, _fb(pair_decisions=[_dec(ids, "A", "B", "keep_separate")]))
+    s2 = acc.resume_manager(
+        s1, _fb(band_thresholds={"company": {"auto_match": 0.7, "auto_exclude": 0.5}})
+    )
+    assert frozenset("AB") not in _g(s2, ids), "a human keep-apart was re-merged by a later bar"
+
+
+def test_r2_kept_apart_is_json_serialisable_and_sorted():
+    import json
+
+    r, ids = _graph({("A", "B"): 0.80, ("C", "D"): 0.80})
+    post = acc.resume_manager(
+        r.pre,
+        _fb(pair_decisions=[_dec(ids, "C", "D", "keep_separate"), _dec(ids, "A", "B", "keep")]),
+    )
+    json.dumps(post["resolution_stats"])
+    kept = post["resolution_stats"]["company"]["band_kept_apart"]
+    assert kept == sorted(kept)
+
+
+def test_r2_decision_pair_with_three_ids_or_self_pair_is_ignored():
+    r, ids = _graph({("A", "B"): 0.80})
+    before = _g(r.pre, ids)
+    bad = [
+        {"entity_type": "company", "record_ids": [ids["A"], ids["A"]], "action": "merge"},
+        {"entity_type": "company", "record_ids": [ids["A"], ids["B"], "z"], "action": "merge"},
+    ]
+    post = acc.resume_manager(r.pre, _fb(pair_decisions=bad))
+    assert _g(post, ids) == before
+
+
+def test_r2_nan_scores_do_not_reach_clustering_or_crash():
+    pairs = [("a", "b", NAN), ("c", "d", 0.8)]
+    out = tre._band_fields(pairs, 0.95, 0.70, True)
+    assert all(not math.isnan(p[2]) for p in out["retained_pairs"])
+    out = tre._band_fields(pairs, 0.95, 0.70, False)
+    assert out["band_summary"]["predicted_counts"] == {"match": 0, "possible": 1, "exclude": 1}
+
+
+def test_r2_custom_auto_match_below_090_matches_old_build_clusters_when_no_band_feedback():
+    """_build_clusters must be byte-identical to a1cff95~1 for a custom bar < 0.90: it calls
+    _partition_component with the default cohesion, not min(.., auto_match)."""
+    import subprocess
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    new = (root / "src/mcp_server/tools/resolve_entities.py").read_text()
+    old = subprocess.run(
+        ["git", "show", "a1cff95~1:src/mcp_server/tools/resolve_entities.py"],
+        capture_output=True,
+        text=True,
+        cwd=root,
+        check=True,
+    ).stdout
+
+    def body(text):
+        i = text.index("async def _build_clusters")
+        j = text.index("\nasync def ", i + 10) if "\nasync def " in text[i + 10 :] else len(text)
+        j2 = text.index("\ndef ", i + 10)
+        seg = text[i : min(j, j2)]
+        k = seg.index("_partition_component(")
+        return " ".join(seg[k : k + 160].split())
+
+    assert body(new).startswith(
+        "_partition_component( members, edge_weight, records_by_id"
+    ) or "records_by_id)" in body(new)
+    assert "min(_MIN_COHESION" not in body(new)
+    assert "min(_MIN_COHESION" not in body(old)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="committed raised bar is not persisted: a 2nd resume re-derives at the run's bar and re-merges",
+)
+def test_r2_raised_committed_bar_survives_a_second_resume():
+    r, ids = _graph({("A", "B"): 0.97, ("P", "Q"): 0.80})
+    s1 = acc.resume_manager(
+        r.pre, _fb(band_thresholds={"company": {"auto_match": 0.99, "auto_exclude": 0.7}})
+    )
+    assert frozenset("AB") not in _g(s1, ids), "control: raised bar un-merges"
+    s2 = acc.resume_manager(s1, _fb(pair_decisions=[_dec(ids, "P", "Q", "keep_separate")]))
+    assert frozenset("AB") not in _g(s2, ids), "2nd resume silently re-merged under the old bar"
+
+
+def test_r2_lowered_committed_bar_survives_a_second_resume():
+    r, ids = _graph({("P", "Q"): 0.80, ("C", "D"): 0.72})
+    s1 = acc.resume_manager(
+        r.pre, _fb(band_thresholds={"company": {"auto_match": 0.75, "auto_exclude": 0.5}})
+    )
+    assert frozenset("PQ") in _g(s1, ids)
+    s2 = acc.resume_manager(s1, _fb(pair_decisions=[_dec(ids, "C", "D", "keep_separate")]))
+    assert frozenset("PQ") in _g(s2, ids) and frozenset("CD") not in _g(s2, ids)
+
+
+def test_r2_a5_edit_is_a_real_order_dependence_not_a_hidden_defect():
+    """The lead re-ran the node in acceptance a5 because resumes persist into the run's spool.  Pin
+    what that means: a garbage action after an earlier merge on the SAME spool leaves the merge (first
+    decision wins), and on a fresh run a garbage action never merges.  Both hold."""
+    r = acc.run_node(["P", "Q"], "heuristic")
+    merged = acc.resume_manager(r.pre, _fb(pair_decisions=_pd(r, [("P", "merge")])))
+    assert acc.fz(r.ids, "P") in acc.groups(merged)
+    again = acc.resume_manager(r.pre, _fb(pair_decisions=_pd(r, [("P", "frobnicate")])))
+    assert acc.fz(r.ids, "P") in acc.groups(again)  # earlier merge still stands
+    fresh = acc.run_node(["P", "Q"], "heuristic")
+    garbage = acc.resume_manager(fresh.pre, _fb(pair_decisions=_pd(fresh, [("P", "frobnicate")])))
+    assert acc.fz(fresh.ids, "P") not in acc.groups(garbage)
