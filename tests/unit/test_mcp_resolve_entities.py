@@ -326,7 +326,7 @@ class TestGenerateCandidatePairs:
         """The real bug this guards against: a single exact-match block with
         thousands of records was fully expanded into O(n^2) tuples — on a live
         34,782-row run one entity's blocking pass never finished. The guard
-        is checked on the block sizes before any pair is built."""
+        counts distinct pairs as each block is materialised and raises at once."""
         from src.mcp_server.tools import resolve_entities as mod
 
         records = [
@@ -340,17 +340,18 @@ class TestGenerateCandidatePairs:
         ]
         with (
             patch.object(mod, "_MAX_CANDIDATE_PAIRS", 3),
-            pytest.raises(mod.CandidatePairBudgetExceeded, match="499500"),
+            pytest.raises(mod.CandidatePairBudgetExceeded, match="distinct"),
         ):
             _generate_candidate_pairs(records)
 
-    def test_purging_can_lose_a_pair_whose_only_shared_block_is_purged(self) -> None:
-        """P2 ceiling, pinned: purging checks coverage per RECORD, not per pair.
+    def test_block_cleaning_can_lose_a_pair_whose_only_shared_block_is_large(self) -> None:
+        """P2/P5 ceiling, pinned: block cleaning works per RECORD, not per pair.
 
         40 records share one first token; each also sits in a small decoy
-        block via a ref. The dominant shared block is purged because every
-        member is still covered elsewhere — so a true pair that co-occurs ONLY
-        there is not proposed. The loss is counted, never silent.
+        block via a ref. The shared block is each record's largest, so local
+        block filtering (or purging) drops it while every record stays covered
+        elsewhere — a true pair that co-occurs ONLY there is not proposed. The
+        loss is counted, never silent.
         """
         records = []
         for i in range(40):
@@ -378,8 +379,7 @@ class TestGenerateCandidatePairs:
         stats: dict[str, int] = {}
         pairs = {(a, b) for a, b, _1, _2 in _generate_candidate_pairs(records, stats=stats)}
         assert ("o:t:0", "o:t:20") not in pairs
-        assert stats["blocks_purged"] >= 1
-        assert stats["pairs_pruned_by_purging"] > 0
+        assert stats["blocks_purged"] + stats["block_memberships_filtered"] >= 1
 
     def test_skips_self_comparisons(self) -> None:
         """Test that identical record IDs are skipped."""

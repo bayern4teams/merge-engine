@@ -839,6 +839,10 @@ def _best_name_field(rec: dict[str, Any]) -> str | None:
     return best
 
 
+# Letters and digits of any script ("müller", "株式会社" stay whole tokens).
+_WORD_RE = re.compile(r"[^\W_]+")
+
+
 def _token_keys(rec: dict[str, Any], fields: set[str] | None = None) -> set[str]:
     """Token blocking (P5): every alphanumeric token of every data value.
 
@@ -857,7 +861,7 @@ def _token_keys(rec: dict[str, Any], fields: set[str] | None = None) -> set[str]
     for key, value in rec.items():
         if key.startswith("_") or value is None or (fields and key not in fields):
             continue
-        keys.update(_tokenize(str(value).lower()))
+        keys.update(_WORD_RE.findall(str(value).casefold()))
     return keys
 
 
@@ -931,29 +935,34 @@ def _generate_candidate_pairs(
        no usable key share a fallback block, so missing data never silently
        excludes a record. Blocks with an identical member set (one block
        reached under two keys) are kept once.
-    2. **Block purging** — largest blocks first, a block is purged while it
-       holds more comparisons than every smaller block together *and* each of
-       its members still sits in another surviving block. Nothing to tune.
-       Coverage is per record, not per pair: a true pair whose ONLY shared
-       block is purged is lost (pinned by a test; counted in
-       ``pairs_pruned_by_purging``).
-    3. **Meta-blocking (WNP, ARCS weights)** — each candidate edge weighs
-       ``sum(1 / comparisons(b))`` over the blocks it shares; an edge survives
-       when it reaches the mean weight of at least one endpoint's edges.
+    2. **Block filtering** — each record keeps only the blocks whose token IDF
+       is at least the mean IDF of its own tokens (geometric mean of sizes).
+       **Block purging** — largest blocks first, a block is purged while it
+       holds more comparisons than every smaller block together, or its token
+       is held by most records (IDF < 1 bit), *and* each of its members still
+       sits in another surviving block. Nothing to tune.
+       Both work per record, not per pair: a true pair whose ONLY shared
+       block is dropped is lost (pinned by a test; counted in the stats).
+    3. **Meta-blocking (WNP, ARCS weights, node-centric)** — each candidate
+       edge weighs ``sum(1 / comparisons(b))`` over the blocks it shares; an
+       edge survives when it reaches the mean weight of at least one
+       endpoint's edges. Memory holds one neighbourhood at a time.
 
-    Block filtering (the report's second cleaning step) is deliberately not
-    used: its ratio ``r`` is a constant fitted on benchmark data (plan §2.4),
-    and WNP already prunes per record against a local mean.
+    CEP/CNP (the report's other comparison-cleaning options) are not used:
+    WNP is one of the listed alternatives and already prunes per record
+    against a local mean.
 
     ponytail: meta-blocking is lossy by design — a recall/cost trade, measured
-    here as pruned counts (``pairs_pruned_by_purging`` /
+    here as counts (``block_memberships_filtered``, ``pairs_pruned_by_purging``,
     ``pairs_pruned_by_meta_blocking``); pair completeness needs ground truth
-    and is computed by the eval harness, never guessed here (P19). Deferred
-    alternative: progressive (pay-as-you-go) resolution, if a run is ever
-    time-boxed rather than quality-boxed.
+    and is computed by the eval harness, never guessed here (P19). A name in a
+    script without spaces (CJK) is one token, so a one-character variant does
+    not co-block (upgrade: character n-gram keys). Deferred alternative:
+    progressive (pay-as-you-go) resolution, if a run is ever time-boxed
+    rather than quality-boxed.
 
-    ``_MAX_CANDIDATE_PAIRS`` is an out-of-memory guard only: when the
-    surviving blocks could propose more pairs than that, the call RAISES
+    ``_MAX_CANDIDATE_PAIRS`` is an out-of-memory guard only: when more pairs
+    than that survive meta-blocking, the call RAISES
     ``CandidatePairBudgetExceeded`` instead of truncating.
 
     ``extra_pairs`` (B.1.3): additional ``(record_id, record_id)`` pairs from
@@ -992,7 +1001,36 @@ def _generate_candidate_pairs(
             by_members.setdefault(member_set, key)
     blocks = [(key, sorted(member_set)) for member_set, key in by_members.items()]
 
-    # 2. Block purging.
+    # 2a. Block filtering, local mean: each record keeps only the blocks whose
+    # token IDF log2(N/|b|) is at least the mean IDF of its own tokens, i.e.
+    # blocks no larger than the GEOMETRIC mean of its block sizes. A record's
+    # largest blocks are its least informative tokens ("com", "street"); its
+    # smallest carry the identity. The literature's fixed ratio r is replaced
+    # by each record's own mean (the WNP idea one stage earlier), so nothing
+    # is tuned. The arithmetic mean was measured too lenient: a 10k-record
+    # company corpus still exceeded the out-of-memory guard.
+    sizes_of: dict[str, list[int]] = {}
+    for _key, members in blocks:
+        for rid in members:
+            sizes_of.setdefault(rid, []).append(len(members))
+    # Compared as count * log|b| <= sum(log sizes), never via exp(): a record
+    # whose blocks all tie must keep them all, and exp(log(800)) < 800.
+    log_sum = {rid: (math.fsum(map(math.log, v)), len(v)) for rid, v in sizes_of.items()}
+
+    def _keeps(rid: str, size: int) -> bool:
+        total, count = log_sum[rid]
+        return count * math.log(size) <= total
+
+    by_members = {}
+    filtered_out = 0
+    for key, members in blocks:
+        kept_members = frozenset(r for r in members if _keeps(r, len(members)))
+        filtered_out += len(members) - len(kept_members)
+        if len(kept_members) >= 2:
+            by_members.setdefault(kept_members, key)
+    blocks = [(key, sorted(member_set)) for member_set, key in by_members.items()]
+
+    # 2b. Block purging.
     def _comparisons(members: list[str]) -> int:
         return len(members) * (len(members) - 1) // 2
 
@@ -1004,11 +1042,15 @@ def _generate_candidate_pairs(
     smaller_total = sum(_comparisons(m) for _k, m in blocks)
     purged: set[str] = set()
     purged_comparisons = 0
+    population = len(records_by_id)
     for key, members in blocks:
         size = _comparisons(members)
         smaller_total -= size
-        if size <= smaller_total:
-            break  # no longer dominates the rest of the work
+        # Purge when the block dominates the rest of the work, or when its
+        # token is held by most records (IDF log2(N/df) < 1 bit: it cannot
+        # tell a record from the majority). Blocks arrive largest first.
+        if size <= smaller_total and 2 * len(members) <= population:
+            break
         if all(membership[rid] > 1 for rid in members):
             purged.add(key)
             purged_comparisons += size
@@ -1026,38 +1068,38 @@ def _generate_candidate_pairs(
             purged_comparisons,
         )
 
-    # Out-of-memory guard: the surviving blocks' comparisons bound the edges
-    # about to be materialised.
-    proposed_bound = sum(_comparisons(m) for _k, m in kept) + len(extra_pairs or ())
-    if proposed_bound > _MAX_CANDIDATE_PAIRS:
-        raise CandidatePairBudgetExceeded(
-            f"Blocking would materialise up to {proposed_bound} candidate pairs "
-            f"(guard {_MAX_CANDIDATE_PAIRS}) over {len(records)} records. Refusing "
-            "to truncate silently; tighten the blocking keys or raise the guard."
-        )
+    # 3. Meta-blocking: ARCS edge weights, then WNP against each node's mean,
+    # node-centric (JedAI style): a record's neighbour weights are built from
+    # its own blocks, used and dropped, so memory holds one neighbourhood at a
+    # time and only the RETAINED pairs -- never every candidate edge. Pass 1
+    # learns each node's mean edge weight, pass 2 emits the edges that reach
+    # it at either end. The out-of-memory guard counts retained pairs.
+    inverse = [1.0 / _comparisons(members) for _key, members in kept]
+    blocks_of: dict[str, list[int]] = {}
+    for index, (_key, members) in enumerate(kept):
+        for rid in members:
+            blocks_of.setdefault(rid, []).append(index)
 
-    # 3. Meta-blocking: ARCS edge weights, then WNP against each node's mean.
-    weight: dict[tuple[str, str], float] = {}
-    for _key, members in kept:
-        w = 1.0 / _comparisons(members)
-        n = len(members)
-        for i in range(n):
-            a = members[i]
-            for j in range(i + 1, n):
-                edge = (a, members[j])
-                weight[edge] = weight.get(edge, 0.0) + w
+    def _neighbours(node: str) -> dict[str, float]:
+        # Blocks are visited in one global order, so an edge's weight is the
+        # same float from both ends.
+        weights: dict[str, float] = {}
+        for index in blocks_of[node]:
+            w = inverse[index]
+            for other in kept[index][1]:
+                if other != node:
+                    weights[other] = weights.get(other, 0.0) + w
+        return weights
+
     # Per node, the distinct weights and their counts: equal weights then sum
     # as one product, so a node whose edges all tie keeps all of them (a
     # running float sum would drift by an ulp and could prune every edge).
-    node_weights: dict[str, dict[float, int]] = {}
-    for (a, b), w in weight.items():
-        for node in (a, b):
-            counts = node_weights.setdefault(node, {})
+    node_total: dict[str, tuple[float, int]] = {}
+    for node in blocks_of:
+        counts: dict[float, int] = {}
+        for w in _neighbours(node).values():
             counts[w] = counts.get(w, 0) + 1
-    node_total = {
-        node: (math.fsum(w * c for w, c in counts.items()), sum(counts.values()))
-        for node, counts in node_weights.items()
-    }
+        node_total[node] = (math.fsum(w * c for w, c in counts.items()), sum(counts.values()))
 
     def _passes(node: str, w: float) -> bool:
         total, degree = node_total[node]
@@ -1077,21 +1119,20 @@ def _generate_candidate_pairs(
             seen_pairs.add(edge)
             pairs.append((raw_id1, raw_id2, rec1, rec2))
     meta_pruned = 0
-    # Smallest blocks first, key breaking ties: a deterministic order.
-    for _key, members in kept:
-        n = len(members)
-        for i in range(n):
-            a = members[i]
-            for j in range(i + 1, n):
-                edge = (a, members[j])
-                if edge in seen_pairs:
-                    continue
-                seen_pairs.add(edge)
-                w = weight[edge]
-                if _passes(edge[0], w) or _passes(edge[1], w):
-                    pairs.append((edge[0], edge[1], records_by_id[edge[0]], records_by_id[edge[1]]))
-                else:
-                    meta_pruned += 1
+    for node in sorted(blocks_of):
+        for other, w in sorted(_neighbours(node).items()):
+            if other < node or (node, other) in seen_pairs:
+                continue
+            if _passes(node, w) or _passes(other, w):
+                pairs.append((node, other, records_by_id[node], records_by_id[other]))
+                if len(pairs) > _MAX_CANDIDATE_PAIRS:
+                    raise CandidatePairBudgetExceeded(
+                        f"Blocking retained more than {_MAX_CANDIDATE_PAIRS} distinct "
+                        f"candidate pairs over {len(records)} records. Refusing to "
+                        "truncate silently; tighten the blocking keys or raise the guard."
+                    )
+            else:
+                meta_pruned += 1
 
     stats["uncompared_pairs"] = 0
     stats["candidate_pairs"] = len(pairs)
@@ -1099,6 +1140,8 @@ def _generate_candidate_pairs(
     stats["blocks_purged"] = len(purged)
     # Comparisons inside purged blocks (an upper bound on distinct pairs lost:
     # a purged pair may still come back through another block).
+    # Block memberships dropped by local-mean block filtering.
+    stats["block_memberships_filtered"] = filtered_out
     stats["pairs_pruned_by_purging"] = purged_comparisons
     stats["pairs_pruned_by_meta_blocking"] = meta_pruned
     logger.debug(
