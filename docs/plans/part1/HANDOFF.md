@@ -3,7 +3,7 @@
 Overwrite this file at every commit. A fresh session reads it first, then
 [the plan](../PART1_IMPLEMENTATION_PLAN.md). Git is the memory; a session's context is not.
 
-**Lock:** 2026-10-05T09:30:32Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-05T09:30:32Z
+**Lock:** 2026-10-05T09:47:58Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-05T09:47:58Z
 
 (Lock/heartbeat protocol: plan §7. A session sets `Lock: <ISO time>`, pushes it, and refreshes it at every commit; a lock older than 75 min is stale. `Autonomy` is `off`, `dryrun` (a tick only records what works and exits) or `unattended-through-phase-5` (authorises the supervisor to chain phases). Only the user changes it.)
 
@@ -25,9 +25,9 @@ Overwrite this file at every commit. A fresh session reads it first, then
 | P12 | 1 | unverified-live | (this commit) | ACCEPT: 25/26 acceptance (4c documented skip); attack: generic audit/ETL/DBMS vocabulary (report sanctions name patterns), no corpus literal, overrides run>origin>default, corpus rows unchanged; ceilings: value patterns not implemented, dw_load_id/ingestion_time missed; per-run layer threaded via RunConfig.metadata_overrides (lead) |
 | P13 | 1 | unverified-live | (this commit) | ACCEPT r2: 17/17 acceptance (lead adapted fit() to pass population_pairs) + consistency test (precision@0.5 1.0 / 0 FP vs old 0.97-0.99 / 1-2 FP on 3 seeds); prior rescaled to random-pair population (lead deviation); call site samples 3000 pairs from records sorted by id, seed 0 |
 | P14 | 1 | unverified-live | (this commit) | ACCEPT r2 (lead item): 24/24 acceptance. Attack r1 rejected binary-token cosine (typos -> DISAGREE, person recall@0.7 0.85 -> 0.26). r2 = IDF-weighted symmetric Monge-Elkan over `_seq_ratio` (no new constant); text path only when both values have letters + a space. e2e synthetic: company recall@0.7 0.497 -> 0.611, @0.95 0.250 -> 0.296, precision 1.0; person @0.95 0.577 -> 0.552 and @0.7 0.845 -> 0.552 = knife edge (old truth pairs sat at 0.705, new m(strong) 0.52 vs 0.60 puts them at ~0.67). Debt: initials ("j. smith") weak -> disagree, middle initial strong -> weak; 0.90/0.70 cut-offs carried over from difflib, not recalibrated |
-| P15 | 3 | todo | | |
+| P15 | 3 | in-progress | a1cff95 | lead r1: 53/53 acceptance (derive: 31 fail on parent); attack running. Deviations: resume hook in `orchestrator/workflow_manager.py` (not in the ownership row; the gate body never runs on resume), `arch-lint-baseline.txt` line re-pin of the pre-existing retry_hints import (same violation, moved), cohesion bar = min(_MIN_COHESION, auto_match) |
 | P16 | 4 | todo | | |
-| P17 | 3 | todo | | |
+| P17 | 3 | in-progress | cbd5b38 | worker r1: 34/34 acceptance (derive: 24 fail on parent); attack running. Gate hook (pure `destination_schema_defects(state, read_destination_schemas(conn))`) pending, lead |
 | P18 | 1 | unverified-live | (this commit) | ACCEPT: 54/55 acceptance (3b = rejected option B, strict xfail); attack follow-ups applied (comment reworded: longest is text-only and changes non-text winners — sanctioned by report ③; disagreement needs spread>0 and finite values). ③ = rename + `completeness` alias |
 | P19 | 3 | todo | | |
 | P20 | 3 | todo | | |
