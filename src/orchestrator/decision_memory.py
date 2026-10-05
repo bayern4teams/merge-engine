@@ -68,7 +68,7 @@ class DecisionMemory:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return {}
-        except (OSError, ValueError) as exc:  # ValueError covers bad UTF-8 and bad JSON
+        except (OSError, ValueError, RecursionError) as exc:  # bad UTF-8/JSON, absurd nesting
             logger.warning("decision memory %s unreadable, asking again: %s", self.path, exc)
             return {}
         if not isinstance(raw, dict):

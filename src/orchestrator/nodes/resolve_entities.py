@@ -848,7 +848,7 @@ def apply_band_decisions(
                     requested,
                 )
         accepted: set[frozenset[str]] = set()
-        decided_now: list[frozenset[str]] = []
+        decided_now: list[frozenset[str]] = []  # answered with a recognised action
         # An earlier resume's "keep apart" still holds (a duplicate or late resume).
         rejected: set[frozenset[str]] = {
             frozenset(str(r) for r in p) for p in stats.get("band_kept_apart") or []
@@ -858,12 +858,13 @@ def apply_band_decisions(
             action = str(d.get("action") or "").strip().lower()
             if len(pair) != 2:
                 continue
-            decided_now.append(pair)
             if action in _MERGE_ACTIONS:
                 accepted.add(pair)
+                decided_now.append(pair)
             elif action in _KEEP_ACTIONS:
                 rejected.add(pair)
-            else:
+                decided_now.append(pair)
+            else:  # kept apart for this run, but not an answer to remember
                 logger.warning("Unknown band action %r for %s: kept apart.", action, sorted(pair))
                 rejected.add(pair)
         retained = stats.get("retained_pairs")
@@ -898,7 +899,10 @@ def apply_band_decisions(
                 needs_review=sum(1 for c in rebuilt if c.get("required_human_review")),
                 multi_record=sum(1 for c in rebuilt if len(c.get("record_ids", [])) > 1),
             )
-        if not keep_undecided:  # a human answered at the gate: remember it (P9)
+        abandoned = feedback.get("approved") is False or str(
+            feedback.get("decision") or ""
+        ).strip().lower() in {"abort", "reject"}
+        if not (keep_undecided or abandoned):  # a human answered at the gate: remember it (P9)
             _remember(
                 state,
                 {p for p in accepted if p in decided_now},

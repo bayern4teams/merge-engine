@@ -113,7 +113,7 @@ def run_node(keys, path="heuristic", scores=None, rules=None, extra=None, engine
         return r
 
     state = {
-        "run_id": "p15run",
+        "run_id": f"p15run{os.getpid()}",  # per process: xdist workers share logs/spool
         "target_entities": ["company"],
         "extracted_data": {"company": recs},
         "entity_clusters": {},

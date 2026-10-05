@@ -2426,6 +2426,24 @@ def _identity_value(field: str, value: Any) -> str:
     return (_domain_of(value) or "") if _is_domain_field(field) else _normalize(value)
 
 
+def _id_core(field: str, value: Any) -> str:
+    """The identifier itself: ``_identity_value`` without whitespace and hyphens, so
+    "GB 100000", "GB-100000" and "GB100000" are one value (formatting, not identity)."""
+    norm = _identity_value(field, value)
+    return norm if _is_domain_field(field) else re.sub(r"[\s-]+", "", norm)
+
+
+def _one_edit_apart(a: str, b: str) -> bool:
+    """One insertion, deletion or substitution turns ``a`` into ``b``: a keying slip,
+    not a second identifier."""
+    if abs(len(a) - len(b)) > 1:
+        return False
+    i = 0
+    while i < min(len(a), len(b)) and a[i] == b[i]:
+        i += 1
+    return a[i + (len(a) >= len(b)) :] == b[i + (len(b) >= len(a)) :]
+
+
 def _identity_view(rec: dict[str, Any], record_cache: RecordCache | None) -> dict[str, Any]:
     """The canonical projection plus any raw field the identity hints name that the
     projection dropped as a surrogate key (``tax_id`` contains ``id``): the fields
@@ -2594,11 +2612,11 @@ def _exclusive_fields(
         for f in set(v1) & set(v2):
             if _is_name_field(f):
                 continue
-            n1, n2 = _identity_value(f, v1[f]), _identity_value(f, v2[f])
+            n1, n2 = _id_core(f, v1[f]), _id_core(f, v2[f])
             if n1 and n1 == n2 and not corpus.generic(f, v1[f]):
                 same.add(f)
-            elif n1 and n2 and n1 != n2:
-                differ.add(f)
+            elif n1 and n2 and not _one_edit_apart(n1, n2):
+                differ.add(f)  # a one-edit slip is neither agreement nor a second value
         if (
             not same
             or corpus.names(_record_name(rec1, record_cache), _record_name(rec2, record_cache))
@@ -2630,7 +2648,7 @@ def _conflicting_exclusives(
     differ = {
         f
         for f in corpus.exclusive & common
-        if _identity_value(f, v1[f]) != _identity_value(f, v2[f])
+        if _id_core(f, v1[f]) != _id_core(f, v2[f])
         and not corpus.generic(f, v1[f])
         and not corpus.generic(f, v2[f])
     }
@@ -2641,8 +2659,8 @@ def _conflicting_exclusives(
         f
         for f in common
         if not _is_name_field(f)
-        and _identity_value(f, v1[f])
-        and _identity_value(f, v1[f]) == _identity_value(f, v2[f])
+        and _id_core(f, v1[f])
+        and _id_core(f, v1[f]) == _id_core(f, v2[f])
         and not corpus.generic(f, v1[f])
     }
     observed = (
@@ -2650,7 +2668,16 @@ def _conflicting_exclusives(
         and corpus.names(_record_name(rec1, record_cache), _record_name(rec2, record_cache))
         == "same"
     )
-    return {f for f in differ if corpus.exclusive_against(f, observed and bool(shared - {f}))}
+    return {
+        f
+        for f in differ
+        if corpus.exclusive_against(
+            f,
+            observed
+            and bool(shared - {f})
+            and not _one_edit_apart(_id_core(f, v1[f]), _id_core(f, v2[f])),
+        )
+    }
 
 
 def _text_similarity(s1: str, s2: str, df: dict[str, int] | None, n: int) -> float:

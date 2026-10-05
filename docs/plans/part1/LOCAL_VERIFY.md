@@ -143,3 +143,17 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Independent check: SQL — `SELECT count(*) FROM industry` / `product_category` (expect > 0, one row per distinct text: compare to `SELECT count(DISTINCT <text col>)` on the origin), `SELECT count(*) FROM company WHERE industry_id IS NOT NULL` against the origin's non-null text count; `information_schema.columns` count per destination table unchanged vs before the run.
 - Expected evidence: entities with zero mappings below 8 of 16; `industry` and `product_category` non-empty; no new destination column; junction/weak proposals plausible at the gate (weak may be noisy — ceiling).
 - Result (filled in locally):
+
+### P6 — three-way discrimination (measured generic / exclusive values)
+- Why cloud could not verify: no origin databases; the real share of phone/postcode columns that differ per origin and the real tax-id typo rate decide how many pairs move to review.
+- Command: full merge run vs the parent of the first "WIP P6" commit (055446b); read `resolution_stats.company` (`pending_merge_candidates`, `possibly_related`) and the clusters.
+- Independent check: ground-truth company pairs (restored `gt_score.py`): Match precision/recall and the number of review items, per outcome class; sample 20 `possibly_related` edges and confirm by SQL they share an address/phone but are different companies.
+- Expected evidence: same-email truth pairs merge; same-address/different-tax-ID pairs reach review (not auto-merged, not dropped); review volume not above the parent's; `possibly_related` never inside a cluster.
+- Result (filled in locally):
+
+### P9 — decision memory (file)
+- Why cloud could not verify: no real LangGraph checkpointer pause/resume through the UI; no live run with the file inspected.
+- Command: two identical runs with `MERGE_ENGINE_DECISION_MEMORY=<path>`; answer the matches gate in run 1.
+- Independent check: open the JSON file (one entry per answered pair, `merge`/`keep_separate` only); run 2's matches gate does not pause, `resolution_stats.<e>.decisions_from_memory` equals the answered count; an aborted gate adds nothing.
+- Expected evidence: run 2 asks zero; changing one record attribute re-asks exactly that pair.
+- Result (filled in locally):

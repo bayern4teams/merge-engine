@@ -348,12 +348,6 @@ def test_r2_zero_evident_duplicates_hint_named_tax_id_still_conflicts():
 
 
 # ── N2: sloppy hint-named key.  A typo elsewhere must not switch the key off for every other pair ──
-@pytest.mark.xfail(
-    strict=True,
-    reason="D5: exclusive_against requires disagree <= 0 over ALL other evident dups (zero tolerance): one or more typos in a "
-    "hint-named tax_id anywhere switch the conflict off corpus-wide; the report's 'same address + different tax IDs' pair is "
-    "then auto-MERGED (parent: pending).",
-)
 @pytest.mark.parametrize("n_typo", [1, 2, 3])
 def test_r2_a_few_tax_id_typos_do_not_disable_the_conflict_for_the_corpus(n_typo):
     """20 evident duplicates, n_typo of them carry a tax-id typo; a different pair at one address with two
@@ -371,10 +365,6 @@ def test_r2_typo_dups_themselves_are_not_merged_blind():
     assert all(cls(res, x, y) in ("merged", "pending") for x, y in typo)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="D5: same root cause, all evident dups carry a typo -> hint-named tax_id loses exclusivity, distinct pair MERGED.",
-)
 def test_r2_only_evident_dups_disagree_on_tax_id_still_conflict_on_a_distinct_pair():
     """All 4 evident duplicates carry a typo (agree=0, disagree=4).  A different-tax-id pair at one address is then
     judged by hint, not silently Match (parent: pending)."""
@@ -529,11 +519,6 @@ def test_r2_shared_mailbox_of_unrelated_companies_with_a_common_made_up_token(n_
     assert not [g for g in m if g & holders]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="D5b: 'GB 100000' vs 'GB100000' is not normalised equal, so formatting variants count as disagreement and switch "
-    "the conflict off (parent: hint-named, pending).",
-)
 def test_r2_tax_id_format_variants_among_duplicates_do_not_disable_conflict():
     """Formatting variance ("GB 123" vs "GB123") in 10/10 duplicates must not turn the key off."""
     recs = []
