@@ -31,12 +31,14 @@ import math
 import re
 import time
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
 from functools import lru_cache
 from typing import Any
 
 from src.mcp_server.tools import resolve_cache
+from src.mcp_server.tools.cluster_quality import name_variation_rate
 from src.mcp_server.tools.fellegi_sunter import (
     LEVEL_DISAGREE,
     LEVEL_EXACT,
@@ -1014,11 +1016,14 @@ def rebuild_band_clusters(
             human.add(root)
 
     old = {frozenset(c.get("record_ids", [])): c for c in clusters}
+    # P20: components no human touched are split exactly as _build_clusters does.
+    kept_edges = _wnp_prune({k: w for k, w in edge_weight.items() if w >= auto_match})
+    corpus = _corpus_evidence(list(records_by_id.values()))
     rebuilt: list[dict[str, Any]] = []
     for root in sorted(members_of):
         members = sorted(members_of[root])
         parts = (
-            _partition_component(members, edge_weight, records_by_id, min_cohesion)[0]
+            _split_component(members, kept_edges, records_by_id, corpus)[0]
             if len(members) > 1 and root not in human
             else [members]
         )
@@ -3003,21 +3008,29 @@ async def _build_clusters(
     auto_exclude: float = _AUTO_EXCLUDE,
     stats: dict[str, Any] | None = None,
     pair_evidence: dict[tuple[str, str], dict[str, Any]] | None = None,
+    one_to_one: bool = False,
 ) -> tuple[list[dict[str, Any]], int, int]:
-    """Build entity clusters from scored pairs.
+    """Build entity clusters from scored pairs (report P20).
 
-    Three stages, because connected components alone over-merges badly:
+    Connected components alone over-merges badly, so:
 
-    1. **Union only confident edges.** Previously any pair above the exclude
-       threshold was unioned, so a borderline pair — evidence the system had
-       explicitly flagged as "not sure" — merged with no review anyway.
-       Measured cost on real data: 26 of 400 distinct people destroyed.
-    2. **Conflict repair.** Split any component containing two records whose
-       unique identifiers (email/tax_id/...) disagree. They cannot be the same
-       entity however similar their names.
-    3. **Cohesion cut.** Average-linkage inside each surviving component, cut
-       below ``_MIN_COHESION``, so a weak chain A-B-C breaks instead of
-       merging three entities on two mediocre edges.
+    1. **Only confident edges.** A pair below ``auto_match`` -- evidence the
+       system flagged as "not sure" -- is never joined here (it goes to review).
+       Measured cost when it was: 26 of 400 distinct people destroyed.
+    2. **Weighted node pruning** (meta-blocking's own rule, as in P5): an edge
+       survives when it is at least the mean confident weight at one of its
+       ends. No hand-set confidence cut; a weak bridge goes here.
+    3. **Components**, then per component:
+       a. **conflict repair** -- two records whose exclusive identifiers
+          disagree cannot share a cluster (P6);
+       b. **name coherence** (``_name_coherent_parts``) -- an edge whose names
+          differ is cut, so an identifier collision cannot fuse two names;
+       c. **triangle support** (``_triangle_parts``) -- where a part has
+          corroborated edges (a shared neighbour), an uncorroborated edge is a
+          bridge, however strong; a part with no triangle (a chain) stays whole.
+    4. ``one_to_one`` (opt-in, the caller knows the destination needs it):
+       a part spanning two sources is reduced to its maximum-weight 1:1
+       assignment.
 
     Async (BUG D.3): this loop is pure CPU-bound Python with no natural await
     point, same as the scoring loop above it — a component-dense entity type
@@ -3052,38 +3065,22 @@ async def _build_clusters(
             if a in records_by_id and b in records_by_id
         ],
     )
-    parent: dict[str, str] = {rid: rid for rid in all_record_ids}
-    rank: dict[str, int] = {rid: 0 for rid in all_record_ids}
-
     auto_matched_count = 0
     auto_excluded_count = 0
     borderline_count = 0
 
-    def find(x: str) -> str:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]  # Path compression
-            x = parent[x]
-        return x
-
-    def union(a: str, b: str) -> None:
-        ra, rb = find(a), find(b)
-        if ra == rb:
-            return
-        if rank[ra] < rank[rb]:
-            ra, rb = rb, ra
-        parent[rb] = ra
-        if rank[ra] == rank[rb]:
-            rank[ra] += 1
-
-    # Edge weights, needed by the cohesion cut below.
+    # Edge weights (a pair naming a record not in ``records`` is ignored).
     edge_weight: dict[tuple[str, str], float] = {}
     for id1, id2, conf in scored_pairs:
+        if id1 not in records_by_id or id2 not in records_by_id or id1 == id2:
+            continue
         key = (id1, id2) if id1 < id2 else (id2, id1)
         edge_weight[key] = max(edge_weight.get(key, 0.0), conf)
+    confident = {k: w for k, w in edge_weight.items() if w >= auto_match}
+    kept = _wnp_prune(confident)
 
-    for id1, id2, conf in scored_pairs:
+    for _id1, _id2, conf in scored_pairs:
         if conf >= auto_match:
-            union(id1, id2)
             auto_matched_count += 1
         elif conf < auto_exclude:
             auto_excluded_count += 1
@@ -3094,9 +3091,9 @@ async def _build_clusters(
             # is not.
             borderline_count += 1
 
-    component_map: dict[str, list[str]] = {}
-    for rid in all_record_ids:
-        component_map.setdefault(find(rid), []).append(rid)
+    component_map = {
+        component[0]: component for component in _components(sorted(all_record_ids), kept)
+    }
 
     if borderline_count:
         logger.info(
@@ -3127,11 +3124,13 @@ async def _build_clusters(
                 _LARGE_COMPONENT_THRESHOLD,
             )
         if len(members) > 1:
-            parts, was_repaired, was_cut = _partition_component(
-                members, edge_weight, records_by_id, corpus=corpus
-            )
+            parts, was_repaired = _split_component(members, kept, records_by_id, corpus)
             repaired += was_repaired
-            cut += was_cut
+            if one_to_one:
+                parts = [
+                    one for part in parts for one in _one_to_one_parts(part, kept, records_by_id)
+                ]
+            cut += not was_repaired and len(parts) > 1
         else:
             parts = [members]
 
@@ -3163,7 +3162,7 @@ async def _build_clusters(
     if repaired or cut:
         logger.info(
             "Cluster repair for entity '%s': %d component(s) split on "
-            "conflicting identifiers, %d split by cohesion cut.",
+            "conflicting identifiers, %d split on names or structure.",
             entity_type,
             repaired,
             cut,
@@ -3188,6 +3187,180 @@ async def _build_clusters(
         )
 
     return clusters, auto_matched_count, auto_excluded_count
+
+
+def _split_component(
+    members: list[str],
+    kept: dict[tuple[str, str], float],
+    records_by_id: dict[str, dict[str, Any]],
+    corpus: CorpusEvidence,
+) -> tuple[list[list[str]], bool]:
+    """One component's clusters (``_build_clusters`` steps 3a-c, shared with
+    the matches-gate rebuild so the two cannot drift): conflict repair, then
+    name coherence, then triangle support, over the pruned edges ``kept``.
+    Returns (parts, repaired)."""
+    parts: list[list[str]] = []
+    repaired = False
+    names = {m: _record_name(records_by_id.get(m, {}), None) for m in members}
+    for component in _components(members, kept):
+        split, was_repaired, _ = _partition_component(
+            component, kept, records_by_id, min_cohesion=0, corpus=corpus
+        )
+        repaired = repaired or bool(was_repaired)
+        if not was_repaired:
+            split = [
+                tri
+                for coherent in _name_coherent_parts(component, kept, names, corpus)
+                for tri in _triangle_parts(coherent, kept)
+            ]
+        parts += split
+    return parts, repaired
+
+
+def _wnp_prune(edges: dict[tuple[str, str], float]) -> dict[tuple[str, str], float]:
+    """Weighted node pruning (meta-blocking, node-centric; the rule P5 blocks
+    with): keep an edge that is at least the mean weight of the edges at one
+    of its two ends. The threshold is each node's own neighbourhood, never a
+    hand-set confidence. ponytail: lossy by design -- a true edge under the
+    mean at BOTH ends is dropped (report P20 Ceiling: recall for precision)."""
+    total: dict[str, float] = {}
+    degree: dict[str, int] = {}
+    for pair, w in edges.items():
+        for node in pair:
+            total[node] = total.get(node, 0) + w
+            degree[node] = degree.get(node, 0) + 1
+
+    def at_least_mean(w: float, node: str) -> bool:
+        mean = total[node] / degree[node]
+        return w >= mean or math.isclose(w, mean)
+
+    return {(a, b): w for (a, b), w in edges.items() if at_least_mean(w, a) or at_least_mean(w, b)}
+
+
+def _components(members: list[str], edges: Iterable[tuple[str, str]]) -> list[list[str]]:
+    """Connected components of ``members`` over the edges between them, each
+    sorted, in order of their smallest member."""
+    root = {m: m for m in members}
+
+    def find(x: str) -> str:
+        while root[x] != x:
+            root[x] = root[root[x]]
+            x = root[x]
+        return x
+
+    for a, b in edges:
+        if a in root and b in root:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                root[max(ra, rb)] = min(ra, rb)
+    groups: dict[str, list[str]] = {}
+    for m in sorted(members):
+        groups.setdefault(find(m), []).append(m)
+    return list(groups.values())
+
+
+def _name_coherent_parts(
+    members: list[str],
+    edges: dict[tuple[str, str], float],
+    names: dict[str, str | None],
+    corpus: CorpusEvidence,
+) -> list[list[str]]:
+    """Cut the edges whose two names differ (report P20 coherence split).
+
+    An edge's names differ when scoring's own comparator puts them at
+    ``LEVEL_DISAGREE`` (``_comparison_level``, its existing levels) AND their
+    ``name_variation_rate`` sits above the largest gap in the component's own
+    edge variations (P3's cliff), so names that vary alike on every edge
+    (opaque codes) decide nothing. A lone edge has no distribution to read, so
+    it is cut only when the names also share no rare token (P6's
+    ``CorpusEvidence.names``): an abbreviation keeps its rare word, and the
+    scorer or the LLM already judged that pair strong. A missing name is no
+    evidence either way.
+    """
+    inside = set(members)
+    variation = {
+        (a, b): name_variation_rate([names.get(a), names.get(b)])
+        for a, b in edges
+        if a in inside and b in inside and names.get(a) and names.get(b)
+    }
+    internal = [k for k in edges if k[0] in inside and k[1] in inside]
+    if not variation:
+        return [members]
+    lone = len(internal) == 1
+    if lone:
+        floor = min(variation.values())
+    else:
+        values = sorted(set(variation.values()))
+        if len(values) < 2:
+            return [members]
+        _gap, i = max((values[i + 1] - values[i], i) for i in range(len(values) - 1))
+        floor = values[i + 1]
+    cut = {
+        (a, b)
+        for (a, b), v in variation.items()
+        if v >= floor
+        and _comparison_level(names[a], names[b], _normalize, "name")[0] == LEVEL_DISAGREE
+        and (not lone or corpus.names(names[a], names[b]) == "different")
+    }
+    if not cut:
+        return [members]
+    return _components(members, {k: w for k, w in edges.items() if k not in cut})
+
+
+def _triangle_parts(members: list[str], edges: dict[tuple[str, str], float]) -> list[list[str]]:
+    """Where a part has corroborated edges (their ends share a neighbour), an
+    uncorroborated edge is a bridge between two groups -- dropped however strong
+    it is. A part without any triangle (a chain, a tree) has nothing to compare
+    against and stays whole.
+
+    ponytail: a true member attached to a clique by one edge (a pendant) is
+    split off -- recoverable, and the average-linkage cut it replaces split it
+    too. Upgrade: support counted over 2-hop paths."""
+    inside = set(members)
+    internal = [k for k in edges if k[0] in inside and k[1] in inside]
+    neighbours: dict[str, set[str]] = {m: set() for m in members}
+    for a, b in internal:
+        neighbours[a].add(b)
+        neighbours[b].add(a)
+    supported = {(a, b): 0 for a, b in internal if neighbours[a] & neighbours[b]}
+    if not supported or len(supported) == len(internal):
+        return [members]
+    return _components(members, supported)
+
+
+def _one_to_one_parts(
+    members: list[str],
+    edges: dict[tuple[str, str], float],
+    records_by_id: dict[str, dict[str, Any]],
+) -> list[list[str]]:
+    """Maximum-weight 1:1 assignment inside a part spanning two sources (an LP,
+    solved exactly by ``scipy.optimize.linear_sum_assignment``); unmatched
+    members become singletons. A part with one source per member, or with more
+    than two sources, is returned as is.
+
+    ponytail: more than two sources is not reduced (logged); scipy comes with
+    the optional extras -- without it the part is left unreduced (logged)."""
+    source = {m: str(records_by_id[m].get("_origin_id")) for m in members}
+    sides = sorted(set(source.values()))
+    if len(sides) != 2 or len(sides) == len(members):
+        if len(sides) > 2:
+            logger.warning("1:1 reduction skipped: %d sources in one cluster", len(sides))
+        return [members]
+    try:
+        from scipy.optimize import linear_sum_assignment  # type: ignore[import-untyped]
+    except ImportError:
+        logger.warning("1:1 reduction skipped: scipy is not installed")
+        return [members]
+    left = [m for m in members if source[m] == sides[0]]
+    right = [m for m in members if source[m] == sides[1]]
+    col = {m: j for j, m in enumerate(right)}
+    weight: list[list[float]] = [[0] * len(right) for _ in left]
+    for i, a in enumerate(left):
+        for b in right:
+            weight[i][col[b]] = edges.get((a, b) if a < b else (b, a), 0)
+    rows, cols = linear_sum_assignment(weight, maximize=True)
+    pairs = {(left[i], right[j]): 1 for i, j in zip(rows, cols, strict=True) if weight[i][j] > 0}
+    return _components(members, pairs)
 
 
 def _min_internal_confidence(

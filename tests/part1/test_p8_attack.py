@@ -182,12 +182,12 @@ def test_control_call_json_returning_a_json_string_damages_only_that_pair(instal
 def test_control_reason_any_type_never_breaks_the_pair(installed, reason):
     sink: dict = {}
     res = _judge(
-        acc.make_pairs(2), Raw(lambda p: {"probability": 0.9, "reason": reason}), installed, sink
+        acc.make_pairs(2), Raw(lambda p: {"probability": 0.99, "reason": reason}), installed, sink
     )
     assert len(res) == 2 and all(
         e["method"] == "llm" and isinstance(e["reason"], str) for e in sink.values()
     )
-    assert all(s == pytest.approx(0.9) for *_x, s in res)
+    assert all(s == pytest.approx(0.99) for *_x, s in res)
 
 
 def test_control_reason_missing_is_empty_string(installed):
@@ -206,9 +206,12 @@ def test_reason_null_is_not_the_string_none(installed):
 def test_control_boundary_probabilities_follow_the_committed_band(installed, p):
     (res,) = _judge(acc.make_pairs(1), Raw(lambda _p: {"probability": p}), installed)
     s = res[2]
-    assert s == pytest.approx(float(p))
+    # P8 r2 (lead): only a decisive answer (max(p, 1 - p) >= auto_match) replaces the score;
+    # an unsure one keeps the heuristic, so the pair stays in review (verdict D1).
+    decisive = max(float(p), 1 - float(p)) >= acc.AUTO_MATCH
+    assert s == pytest.approx(float(p) if decisive else HEUR)
     verdict = "merge" if s >= acc.AUTO_MATCH else ("apart" if s < acc.AUTO_EXCLUDE else "review")
-    want = "merge" if p >= 0.95 else ("apart" if p < 0.7 else "review")
+    want = ("merge" if p >= 0.95 else "apart") if decisive else "review"
     assert verdict == want
 
 
@@ -224,7 +227,8 @@ def test_control_evidence_probability_in_unit_interval_and_matches_score(install
     )
     scores = {(a, b): s for a, b, s in res}
     for (a, b), ev in sink.items():
-        assert 0 <= ev["confidence"] <= 1 and ev["llm_probability"] == ev["confidence"]
+        assert 0 <= ev["llm_probability"] <= 1 and 0 <= ev["confidence"] <= 1
+        # the evidence records the score the pair was given (p when decisive, else heuristic)
         assert any(abs(s - ev["confidence"]) < 1e-12 for s in scores.values())
 
 

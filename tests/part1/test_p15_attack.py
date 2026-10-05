@@ -670,14 +670,12 @@ def test_r2_custom_auto_match_below_090_matches_old_build_clusters_when_no_band_
         i = text.index("async def _build_clusters")
         j = text.index("\nasync def ", i + 10) if "\nasync def " in text[i + 10 :] else len(text)
         j2 = text.index("\ndef ", i + 10)
-        seg = text[i : min(j, j2)]
-        k = seg.index("_partition_component(")
-        return " ".join(seg[k : k + 160].split())
+        return " ".join(text[i : min(j, j2)].split())
 
-    assert body(new).startswith(
-        "_partition_component( members, edge_weight, records_by_id"
-    ) or "records_by_id)" in body(new)
-    assert "min(_MIN_COHESION" not in body(new)
+    # P20 (lead): _build_clusters no longer has a cohesion cut at all (WNP + names + triangle
+    # support, shared with the gate rebuild via _split_component), so the original text-shape
+    # check is gone; the intent -- no bar-dependent cohesion in _build_clusters -- is kept.
+    assert "_MIN_COHESION" not in body(new)
     assert "min(_MIN_COHESION" not in body(old)
 
 
