@@ -8,6 +8,7 @@ clusters of matching records.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from concurrent.futures import ProcessPoolExecutor
@@ -22,6 +23,7 @@ from src.mcp_server.tools.resolve_entities import (
     rebuild_band_clusters,
     resolve_entities_impl,
 )
+from src.orchestrator.decision_memory import DecisionMemory
 from src.orchestrator.spool import (
     RunSpool,
     clusters_for,
@@ -469,7 +471,7 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
     # not cleared. extracted_data is kept explicit since
     # _inject_subject_destination_rows above may have added subject rows to
     # it for a scoped merge.
-    return {
+    update = {
         "entity_clusters": entity_clusters,
         "resolution_stats": resolution_stats,
         "errors": errors,
@@ -477,6 +479,11 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
         "interrupt_data": None,
         **quality_update,
     }
+    # P9: remembered band decisions are applied HERE, before the matches gate --
+    # the gate's own body never runs on resume (plan 2.6) -- so a band the
+    # memory fully answers never pauses the run.
+    update.update(apply_remembered_decisions({**state, **update}))
+    return update
 
 
 _DEST_ORIGIN = "__destination__"
@@ -676,7 +683,90 @@ def resolves_band(feedback: dict[str, Any]) -> bool:
     return bool(feedback.get("pair_decisions") or feedback.get("band_thresholds"))
 
 
-def apply_band_decisions(state: dict[str, Any], feedback: dict[str, Any]) -> dict[str, Any]:
+def _memory(state: dict[str, Any]) -> DecisionMemory | None:
+    """The run's decision memory (P9), or None when none is configured: the
+    ``decision_memory_path`` state key, else ``MERGE_ENGINE_DECISION_MEMORY``.
+    Off by default, so a run never silently replays another run's decisions."""
+    path = state.get("decision_memory_path") or os.environ.get("MERGE_ENGINE_DECISION_MEMORY")
+    return DecisionMemory(path) if path else None
+
+
+def _band_question(state: dict[str, Any], entity_type: str, pair: frozenset[str]) -> dict[str, Any]:
+    """The matches-gate question for one band pair, as P9 keys it: the pair and
+    both records' content. A changed attribute is a new question, asked again
+    (report section 3.7: a resolution is revisited when new attributes arrive)."""
+    a, b = sorted(pair)
+    recs = entity_records_by_id(state, entity_type, [a, b])
+
+    def content(rec: dict[str, Any] | None) -> dict[str, Any]:
+        return {k: v for k, v in (rec or {}).items() if not str(k).startswith("_")}
+
+    question = {
+        "gate": "human_review_matches",
+        "entity_type": entity_type,
+        "record_ids": [a, b],
+        "records": [content(recs.get(a)), content(recs.get(b))],
+    }
+    # JSON-safe and stable whatever the column types (dates, decimals).
+    loaded: dict[str, Any] = json.loads(json.dumps(question, default=str))
+    return loaded
+
+
+def apply_remembered_decisions(state: dict[str, Any]) -> dict[str, Any]:
+    """Resolve band pairs a previous run's human already decided (P9).
+
+    Each pending pair is looked up by its question; hits are applied exactly
+    as a live decision (``apply_band_decisions``), misses stay pending for the
+    gate. The count lands in ``resolution_stats[e]["decisions_from_memory"]``.
+    Returns {} when no memory is configured or nothing matched.
+    """
+    memory = _memory(state)
+    if memory is None:
+        return {}
+    hits: list[dict[str, Any]] = []
+    counts: dict[str, int] = {}
+    for entity_type, stats in (state.get("resolution_stats") or {}).items():
+        for p in stats.get("pending_merge_candidates") or []:
+            pair = frozenset(str(r) for r in p.get("record_ids") or [])
+            if len(pair) != 2:
+                continue
+            action = memory.lookup(_band_question(state, entity_type, pair))
+            if action in ("merge", "keep_separate"):
+                hits.append(
+                    {"entity_type": entity_type, "record_ids": sorted(pair), "action": action}
+                )
+                counts[entity_type] = counts.get(entity_type, 0) + 1
+    if not hits:
+        return {}
+    update = apply_band_decisions(state, {"pair_decisions": hits}, keep_undecided=True)
+    for entity_type, n in counts.items():
+        update["resolution_stats"][entity_type]["decisions_from_memory"] = n
+    logger.info("Decision memory: %d band decision(s) applied without asking.", len(hits))
+    return update
+
+
+def _remember(
+    state: dict[str, Any],
+    accepted: set[frozenset[str]],
+    rejected: set[frozenset[str]],
+    entity_type: str,
+) -> None:
+    """Persist this gate's per-pair answers (P9). A failing write never fails the run."""
+    memory = _memory(state)
+    if memory is None:
+        return
+    try:
+        for pair in accepted:
+            memory.record(_band_question(state, entity_type, pair), "merge")
+        for pair in rejected:
+            memory.record(_band_question(state, entity_type, pair), "keep_separate")
+    except (OSError, TypeError, ValueError) as exc:
+        logger.warning("Decision memory: could not record the gate's decisions: %s", exc)
+
+
+def apply_band_decisions(
+    state: dict[str, Any], feedback: dict[str, Any], keep_undecided: bool = False
+) -> dict[str, Any]:
     """Resolve the review band within the run (report P15): the state update
     the matches gate's decision produces.
 
@@ -733,6 +823,7 @@ def apply_band_decisions(state: dict[str, Any], feedback: dict[str, Any]) -> dic
                     requested,
                 )
         accepted: set[frozenset[str]] = set()
+        decided_now: list[frozenset[str]] = []
         # An earlier resume's "keep apart" still holds (a duplicate or late resume).
         rejected: set[frozenset[str]] = {
             frozenset(str(r) for r in p) for p in stats.get("band_kept_apart") or []
@@ -742,6 +833,7 @@ def apply_band_decisions(state: dict[str, Any], feedback: dict[str, Any]) -> dic
             action = str(d.get("action") or "").strip().lower()
             if len(pair) != 2:
                 continue
+            decided_now.append(pair)
             if action in _MERGE_ACTIONS:
                 accepted.add(pair)
             elif action in _KEEP_ACTIONS:
@@ -781,6 +873,13 @@ def apply_band_decisions(state: dict[str, Any], feedback: dict[str, Any]) -> dic
                 needs_review=sum(1 for c in rebuilt if c.get("required_human_review")),
                 multi_record=sum(1 for c in rebuilt if len(c.get("record_ids", [])) > 1),
             )
+        if not keep_undecided:  # a human answered at the gate: remember it (P9)
+            _remember(
+                state,
+                {p for p in accepted if p in decided_now},
+                {p for p in rejected if p in decided_now},
+                entity_type,
+            )
         new_stats[entity_type] = {
             **stats,
             **(
@@ -791,7 +890,14 @@ def apply_band_decisions(state: dict[str, Any], feedback: dict[str, Any]) -> dic
                 if applied
                 else {}
             ),
-            "pending_merge_candidates": [],
+            # Approving the gate keeps every undecided pair apart; memory (P9)
+            # resolves only what it remembers and leaves the rest for the gate.
+            "pending_merge_candidates": [
+                p
+                for p in stats.get("pending_merge_candidates") or []
+                if keep_undecided
+                and frozenset(str(r) for r in p.get("record_ids") or []) not in set(decided_now)
+            ],
             "band_resolution": {
                 # a pre-P15 checkpoint has no retained pairs: nothing was merged
                 "accepted": len(accepted) if applied else 0,
