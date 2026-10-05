@@ -3,7 +3,7 @@
 Overwrite this file at every commit. A fresh session reads it first, then
 [the plan](../PART1_IMPLEMENTATION_PLAN.md). Git is the memory; a session's context is not.
 
-**Lock:** 2026-10-05T09:25:35Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-05T09:25:35Z
+**Lock:** 2026-10-05T09:30:32Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-05T09:30:32Z
 
 (Lock/heartbeat protocol: plan §7. A session sets `Lock: <ISO time>`, pushes it, and refreshes it at every commit; a lock older than 75 min is stale. `Autonomy` is `off`, `dryrun` (a tick only records what works and exits) or `unattended-through-phase-5` (authorises the supervisor to chain phases). Only the user changes it.)
 
@@ -19,7 +19,7 @@ Overwrite this file at every commit. A fresh session reads it first, then
 | P6 | 3 | todo | | |
 | P7 | 3 | todo | | |
 | P8 | 3 | todo | | |
-| P9 | 3 | todo | | |
+| P9 | 3 | in-progress | (this commit) | MODULE ACCEPTED on lead line review (60-line stdlib module; attack step replaced by review + verifier's 8 scratch mutants all caught — deviation, small diff): 48/48 acceptance (stable key across PYTHONHASHSEED, atomic os.replace, 13 corrupt shapes degrade to ask-again). Gate hook pending (lead, after P15; checklist in `.handoff/P9.acceptance.md`; `record()` raises OSError — the hook must catch it) |
 | P10 | 4 | todo | | |
 | P11 | 1 | unverified-live | (this commit) | ACCEPT on lead review (10-line Semaphore(_LLM_CONCURRENCY) around the existing gather; attack step replaced by line review — deviation, trivial diff): 25/25 acceptance incl. bound 1/2/4 peak tests; report's "serial" was stale, the defect was the missing bound |
 | P12 | 1 | unverified-live | (this commit) | ACCEPT: 25/26 acceptance (4c documented skip); attack: generic audit/ETL/DBMS vocabulary (report sanctions name patterns), no corpus literal, overrides run>origin>default, corpus rows unchanged; ceilings: value patterns not implemented, dw_load_id/ingestion_time missed; per-run layer threaded via RunConfig.metadata_overrides (lead) |
