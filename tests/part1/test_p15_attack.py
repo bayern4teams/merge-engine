@@ -64,11 +64,6 @@ def test_band_fields_all_identical_and_extreme_scores(log_odds):
 
 
 @pytest.mark.parametrize("log_odds", [False, True])
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT: a NaN score crashes the non-log-odds histogram (int(nan) ValueError) and "
-    "is counted in no band (predicted counts do not sum to the pair count)",
-)
 def test_band_fields_nan_score_does_not_crash_or_vanish(log_odds):
     pairs = [("a", "b", 0.8), ("c", "d", NAN), ("e", "f", 0.99)]
     s = tre._band_fields(pairs, 0.95, 0.70, log_odds)["band_summary"]
@@ -202,12 +197,6 @@ def test_resume_twice_is_idempotent():
     assert acc.pending_pairs(twice) == set()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT (minor, needs a duplicate/late resume to reach): accepted band pairs are not "
-    "persisted in state (retained_pairs keeps the 0.80 score), so a second resume carrying only "
-    "thresholds re-derives clusters and silently undoes the first resume's merge",
-)
 def test_second_resume_with_different_feedback_does_not_undo_the_first():
     r = acc.run_node(["P", "M"], "heuristic")
     once = acc.resume_manager(r.pre, _fb(pair_decisions=_pd(r, [("P", "merge")])))
@@ -224,11 +213,6 @@ def test_plain_approve_with_pending_pair_keeps_it_apart_and_does_not_rebuild():
     assert acc.fz(r.ids, "M") in acc.groups(post)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT (minor): with no retained_pairs (pre-P15 checkpoint) a merge decision is not "
-    "applied but band_resolution still reports accepted=1 and pending is cleared",
-)
 def test_old_checkpoint_without_retained_pairs_does_not_claim_a_merge_it_did_not_do():
     """Pre-P15 checkpoint (no retained_pairs / band_summary): a merge decision cannot be applied.
     The audit block must not say it was."""
@@ -258,12 +242,6 @@ def _triangle(ab=0.80, ac=0.97, bc=0.97):
     return [a, b, c], sc, [fx.rid(a), fx.rid(b), fx.rid(c)]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT: rejecting band pair A-B in a triangle whose A-C and B-C edges are Match (0.97) "
-    "dissolves the whole cluster (cohesion cut counts the removed edge as 0): both Match pairs are "
-    "silently un-merged, so a band decision changes Match behaviour",
-)
 def test_reject_of_a_band_pair_does_not_destroy_the_match_pairs_around_it():
     recs, sc, ids = _triangle()
     r = acc.run_node([], "heuristic", extra=(recs, sc), strict=False)
@@ -277,11 +255,6 @@ def test_reject_of_a_band_pair_does_not_destroy_the_match_pairs_around_it():
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT: apply_band_decisions re-derives clusters from retained_pairs, so a "
-    "cluster_decisions split submitted in the SAME feedback is silently undone",
-)
 def test_human_split_in_same_feedback_is_not_undone_by_the_band_rebuild():
     r = acc.run_node(["P", "M"], "heuristic")
     m_cluster = next(

@@ -15,6 +15,7 @@ from typing import Any
 
 from src.mcp_server.tools.metadata_classification import metadata_columns_by_table
 from src.mcp_server.tools.resolve_entities import (
+    _MIN_COHESION,
     _PROCESS_POOL_MIN_RECORDS,
     CandidatePairBudgetExceeded,
     build_relationship_index,
@@ -732,7 +733,10 @@ def apply_band_decisions(state: dict[str, Any], feedback: dict[str, Any]) -> dic
                     requested,
                 )
         accepted: set[frozenset[str]] = set()
-        rejected: set[frozenset[str]] = set()
+        # An earlier resume's "keep apart" still holds (a duplicate or late resume).
+        rejected: set[frozenset[str]] = {
+            frozenset(str(r) for r in p) for p in stats.get("band_kept_apart") or []
+        }
         for d in mine:
             pair = frozenset(str(r) for r in d.get("record_ids") or [])
             action = str(d.get("action") or "").strip().lower()
@@ -746,7 +750,15 @@ def apply_band_decisions(state: dict[str, Any], feedback: dict[str, Any]) -> dic
                 logger.warning("Unknown band action %r for %s: kept apart.", action, sorted(pair))
                 rejected.add(pair)
         retained = stats.get("retained_pairs")
+        applied = retained is not None and auto_match is not None
         if retained is not None and auto_match is not None:
+            # A pair a human decided outranks its score; persisted below so a
+            # later resume cannot re-derive it away.
+            retained = [p for p in retained if frozenset(map(str, p[:2])) not in accepted]
+            retained += [[*sorted(p), 1] for p in accepted]
+            bar_moved = auto_match != (
+                ((stats.get("band_summary") or {}).get("thresholds") or {}).get("auto_match")
+            )
             clusters = clusters_for(state, entity_type)
             needed = sorted(
                 {str(r) for p in retained for r in p[:2]} | {r for p in accepted for r in p}
@@ -759,6 +771,8 @@ def apply_band_decisions(state: dict[str, Any], feedback: dict[str, Any]) -> dic
                 rejected,
                 float(auto_match),
                 entity_records_by_id(state, entity_type, needed),
+                # a committed bar under the cohesion bar must not be cut again by it
+                min(_MIN_COHESION, float(auto_match)) if bar_moved else _MIN_COHESION,
             )
             new_clusters[entity_type] = store_clusters(
                 run_id,
@@ -769,9 +783,18 @@ def apply_band_decisions(state: dict[str, Any], feedback: dict[str, Any]) -> dic
             )
         new_stats[entity_type] = {
             **stats,
+            **(
+                {
+                    "retained_pairs": retained,
+                    "band_kept_apart": sorted(sorted(p) for p in rejected if len(p) == 2),
+                }
+                if applied
+                else {}
+            ),
             "pending_merge_candidates": [],
             "band_resolution": {
-                "accepted": len(accepted),
+                # a pre-P15 checkpoint has no retained pairs: nothing was merged
+                "accepted": len(accepted) if applied else 0,
                 "kept_separate": len(rejected),
                 "thresholds": shown,
             },

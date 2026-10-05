@@ -850,7 +850,8 @@ def _band_fields(
     Deferred: Possible Match as a persisted, revocable state with its own
     queue (report section 3.7), trigger Part 3.
     """
-    scores = [conf for _a, _b, conf in scored_pairs]
+    # A NaN score carries no evidence: Exclude, never a crash or a lost pair.
+    scores = [0 if math.isnan(conf) else conf for _a, _b, conf in scored_pairs]
     values = scores
     if log_odds:
         finite = [math.log2(p / (1 - p)) for p in scores if 0 < p < 1]
@@ -892,15 +893,21 @@ def rebuild_band_clusters(
     rejected: set[frozenset[str]],
     auto_match: float,
     records_by_id: dict[str, dict[str, Any]],
+    min_cohesion: float = _MIN_COHESION,
 ) -> list[dict[str, Any]]:
     """Re-derive one entity's clusters after the matches gate (P15).
 
     Edges are the retained scored pairs; a human-accepted band pair counts as
-    certain, a rejected one is removed. Components over the (possibly
-    committed) ``auto_match`` bar go through the same conflict repair and
-    cohesion cut as ``_build_clusters``. A cluster whose membership is
-    unchanged is returned as it was; a changed one was formed by the
-    operator's decision, so it is not flagged for review again.
+    certain. Edges at or over the (possibly committed) ``auto_match`` bar are
+    joined strongest first, and a join is skipped when it would put a
+    rejected pair in one cluster, or would join a cluster a human already
+    decided (``reviewed_by_human``: kept, split, or formed by an earlier band
+    decision) by anything but an accepted pair -- so a "keep apart" removes
+    one link, never the Match links around it, and a split in the same
+    feedback stays split. Components no human touched go through the same
+    conflict repair and cohesion cut as ``_build_clusters``. A cluster whose
+    membership is unchanged is returned as it was; a changed one was formed
+    by the operator's decision, so it is not flagged for review again.
 
     ponytail: a changed cluster's id is derived from its new membership, not
     from a previous run's id (``known_cluster_ids`` are not in gate state).
@@ -918,6 +925,8 @@ def rebuild_band_clusters(
 
     all_ids = sorted({rid for c in clusters for rid in c.get("record_ids", [])})
     parent = {rid: rid for rid in all_ids}
+    members_of = {rid: {rid} for rid in all_ids}
+    human: set[str] = set()  # roots of components a human decided
 
     def find(x: str) -> str:
         while parent[x] != x:
@@ -925,21 +934,49 @@ def rebuild_band_clusters(
             x = parent[x]
         return x
 
-    for (a, b), weight in edge_weight.items():
-        if weight >= auto_match and a in parent and b in parent:
-            parent[find(b)] = find(a)
-    components: dict[str, list[str]] = {}
-    for rid in all_ids:
-        components.setdefault(find(rid), []).append(rid)
+    def union(a: str, b: str) -> str:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+            members_of[ra] |= members_of.pop(rb)
+            if rb in human:
+                human.discard(rb)
+                human.add(ra)
+        return ra
+
+    for c in clusters:
+        ids = [r for r in c.get("record_ids", []) if r in parent]
+        if c.get("reviewed_by_human") and ids:
+            for r in ids[1:]:
+                union(ids[0], r)
+            human.add(find(ids[0]))
+    kept_apart = [tuple(p) for p in rejected if len(p) == 2]
+    for (a, b), weight in sorted(edge_weight.items(), key=lambda e: (-e[1], e[0])):
+        if weight < auto_match or a not in parent or b not in parent:
+            continue
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            continue
+        is_accepted = frozenset((a, b)) in accepted
+        if (ra in human or rb in human) and not is_accepted:
+            continue
+        if any(
+            (x in members_of[ra] and y in members_of[rb])
+            or (y in members_of[ra] and x in members_of[rb])
+            for x, y in kept_apart
+        ):
+            continue
+        root = union(a, b)
+        if is_accepted:
+            human.add(root)
 
     old = {frozenset(c.get("record_ids", [])): c for c in clusters}
     rebuilt: list[dict[str, Any]] = []
-    for members in components.values():
+    for root in sorted(members_of):
+        members = sorted(members_of[root])
         parts = (
-            _partition_component(
-                members, edge_weight, records_by_id, min(_MIN_COHESION, auto_match)
-            )[0]
-            if len(members) > 1
+            _partition_component(members, edge_weight, records_by_id, min_cohesion)[0]
+            if len(members) > 1 and root not in human
             else [members]
         )
         for part in parts:
@@ -2605,9 +2642,7 @@ async def _build_clusters(
                 _LARGE_COMPONENT_THRESHOLD,
             )
         if len(members) > 1:
-            parts, was_repaired, was_cut = _partition_component(
-                members, edge_weight, records_by_id, min(_MIN_COHESION, auto_match)
-            )
+            parts, was_repaired, was_cut = _partition_component(members, edge_weight, records_by_id)
             repaired += was_repaired
             cut += was_cut
         else:

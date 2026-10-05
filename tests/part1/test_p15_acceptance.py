@@ -499,6 +499,9 @@ def test_a5_undecided_and_unrecognised_decisions_never_merge(path):
             ok = True
             assert fz(r.ids, "Q") not in groups(post), f"{name}: undecided Q merged"
     assert ok, "no shape merged P, cannot test the undecided case (see test_a2)"
+    # Lead (P15 r2): resumes above persist their merge in the run's spool, so the
+    # garbage case starts from a fresh run of the node, not the reused pre-state.
+    r = run_node(["P", "Q"], path)
     garbage = decisions("company", [(r.ids["P"], "merge")])
     for fb in garbage.values():
         for key in ("pair_decisions", "cluster_decisions", "pending_decisions"):
