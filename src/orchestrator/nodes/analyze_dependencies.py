@@ -141,9 +141,13 @@ async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
     # _build_deps_interrupt), never acted on here: the tree below is unchanged.
     # ponytail: not recomputed when the whole tree is reused from a pinned
     # profile above (that path returns before any graph exists).
-    table_roles = await classify_junction_and_weak_tables(
-        graph, schemas, origins, sample_size, _VERIFIED_CONFIDENCES
-    )
+    try:
+        table_roles = await classify_junction_and_weak_tables(
+            graph, schemas, origins, sample_size, _VERIFIED_CONFIDENCES
+        )
+    except Exception as exc:  # a proposal must never fail the dependency analysis
+        logger.warning("Table-role proposal failed (%s); none shown at the gate.", exc)
+        table_roles = {}
 
     tree_from_graph, fully_covered, confirmed_edges = _join_graph_to_dependency_tree(
         graph, target_entities, entity_tables

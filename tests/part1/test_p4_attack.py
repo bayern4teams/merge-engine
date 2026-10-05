@@ -124,10 +124,6 @@ def test_c3_sample_smaller_than_table_sets_complete_false_and_duplicates_inside_
     assert "jx" not in names(r, "junction")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="F1 classifier TypeError when extract() returns total_count=None; call is unwrapped in analyze_dependencies",
-)
 def test_c3b_connector_without_total_count_does_not_crash_or_claim_complete():
     rows = _parents()
     p = _pairs()
@@ -322,10 +318,6 @@ def _u(**fields):
     }
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="F3 case/camel variant of a primary column name is hijacked onto the family table",
-)
 def test_a1_case_variant_of_a_primary_column_name_stays_on_primary():
     """Primary company HAS a text column `industry`; family table `industry` exists.  A source
     field `Industry` (case variant) must still map onto the primary column (Phase 2 gives 1.0)."""
@@ -338,7 +330,6 @@ def test_a1_case_variant_of_a_primary_column_name_stays_on_primary():
     assert m and m["dest_table"] == "company" and m["dest_column"] == "industry", m
 
 
-@pytest.mark.xfail(strict=True, reason="F3 camelCase variant hijacked")
 def test_a1b_camel_case_variant_of_primary_column_stays_on_primary():
     res = _map(
         _u(productCategory=["a", "b"]),
@@ -387,10 +378,6 @@ def test_a3b_dimension_label_skips_a_numeric_first_column():
     assert m and m["dest_column"] == "name", m
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="F5 child family table (FK back to entity): text routed onto the FK-back column",
-)
 def test_a4_child_family_table_is_not_a_dimension_target():
     """`finance` has a FK BACK to the entity (child table).  A field named `finance` must not be
     routed onto `finance.company_id` (the FK back to the parent)."""
@@ -403,7 +390,6 @@ def test_a4_child_family_table_is_not_a_dimension_target():
     assert m is None or m["dest_column"] != "company_id", m
 
 
-@pytest.mark.xfail(strict=True, reason="F8 numeric ids routed as dimension labels (observation)")
 def test_a5_numeric_ids_in_a_field_named_like_the_table_are_not_made_labels():
     """A field `segment` holding integers (ids/codes) is not repeated TEXT; routing it as a
     dimension label manufactures dimension rows named '1','2'.  Report: 'repeated TEXT value'."""
@@ -424,9 +410,6 @@ def test_a6_single_table_mapping_unchanged():
     assert res["schema_changes"] == []
 
 
-@pytest.mark.xfail(
-    strict=True, reason="F9 two source fields mapped onto the same dimension label column"
-)
 def test_a7_two_fields_one_dimension_label_collide():
     """Two source fields both named like the same family table (e.g. `segment`, `Segment`) must
     not both be mapped onto the one label column."""
@@ -597,9 +580,6 @@ def test_b8_preexisting_dimension_row_with_same_text_is_found_not_duplicated():
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="F11 existing link value mapped by another field is overwritten"
-)
 def test_b9_existing_link_value_from_another_mapping_not_clobbered():
     extra = {"ind_ref": {"dest_column": "industry_id", "dest_table": "company", "confidence": 0.9}}
     d = FakeDest(**SHAPE)

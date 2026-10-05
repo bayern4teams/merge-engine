@@ -609,7 +609,8 @@ async def classify_junction_and_weak_tables(
                 rows = page.get("rows") or []
                 if not rows:
                     continue
-                complete = page.get("total_count", len(rows)) <= len(rows)
+                total = page.get("total_count")  # unknown (None/missing) is not complete
+                complete = isinstance(total, int) and total <= len(rows)
                 found = _minimal_unique_subset(rows, fks)
                 if found is not None:
                     kind, key, local = "junction", found, []

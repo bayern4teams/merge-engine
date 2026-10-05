@@ -228,33 +228,33 @@ async def map_fields_impl(
             exact_matches += 1
     logger.debug("Phase 1 complete: %d exact matches", exact_matches)
 
-    # ── Phase 1b (P4): a field named like a family table is that table's text ──
+    # ── Phase 1b (P4): a field named like a dimension table is that table's text ──
     # Repeated text on a row is a dimension row plus a link, not a value for the
     # column that links to it: the loader materialises one row per distinct text
     # (load_data._materialise_dimensions) and sets the link itself, so the field
     # must land on the dimension table, never on the primary table's own
     # reference column. Name evidence only (a field vs a TABLE name, same tiers as
-    # `_heuristic_match`); no column is created.
-    # ponytail: the label column is the dimension's first non-provenance column
-    # the samples fit; a field whose name differs from the table's, or a
-    # dimension whose label is not first, still reaches the tiers below and the
-    # mapping gate (report P4 Ceiling).
-    family_tables = list(dict.fromkeys(k[0] for k in dest_candidates if k[0] != primary_table))
+    # `_heuristic_match`); no column is created. A field any PRIMARY column would
+    # take (the tiers below) is never touched.
+    # ponytail: a field whose name differs from the table's, or a dimension whose
+    # label is not its first usable column, still reaches the tiers below and the
+    # mapping gate; without FK information (direct callers) the reference is read
+    # off column names (report P4 Ceiling).
     for field in source_fields:
-        if field in field_mapping:
+        if field in field_mapping or any(
+            _heuristic_match(field, k[1]) >= _HEURISTIC_ACCEPT
+            for k in dest_candidates
+            if k[0] == primary_table
+        ):
             continue
-        table = next(
-            (t for t in family_tables if _heuristic_match(field, t) >= _HEURISTIC_ACCEPT), None
-        )
-        label = next(
-            (
-                k
-                for k in dest_candidates
-                if k[0] == table
-                and not k[1].startswith("_")
-                and not _incompatible_with_column(field, dest_candidates[k], unified_schema)[0]
-            ),
-            None,
+        label = _dimension_label(
+            field,
+            dest_candidates,
+            primary_table,
+            destination_schema,
+            family_schemas,
+            field_mapping,
+            unified_schema,
         )
         if label is not None:
             field_mapping[field] = {
@@ -423,6 +423,67 @@ async def map_fields_impl(
         "schema_changes": schema_changes,
         "ambiguous_splits": ambiguous,
     }
+
+
+def _dimension_label(
+    field: str,
+    dest_candidates: dict[tuple[str, str], Any],
+    primary_table: str,
+    destination_schema: dict[str, Any],
+    family_schemas: list[dict[str, Any]] | None,
+    field_mapping: dict[str, dict[str, Any]],
+    unified_schema: dict[str, Any],
+) -> tuple[str, str] | None:
+    """The (dimension table, label column) a text field belongs on, or None.
+
+    A dimension is a family table the primary REFERENCES and that does not
+    reference the primary back (FK information: ``foreign_keys`` on the schemas,
+    ``{column: referenced_table}``; without it, a column named after the other table). The label is a
+    non-provenance, non-key, non-FK column not already taken, that the samples
+    fit; only text samples qualify (numbers are ids/codes, not repeated text).
+    """
+    info = unified_schema.get(field, {})
+    samples = info.get("sample_values") or [info.get("sample_value")]
+    if not samples or not all(isinstance(v, str) for v in samples):
+        return None
+    primary_fks = destination_schema.get("foreign_keys")
+    taken = {(m["dest_table"], m["dest_column"]) for m in field_mapping.values()}
+
+    def _named_like(columns: list[dict[str, Any]], table_name: str) -> bool:
+        return any(_heuristic_match(str(c.get("name", "")), table_name) > 0 for c in columns)
+
+    for fam in family_schemas or []:
+        table = fam.get("table")
+        fam_fks = fam.get("foreign_keys")
+        if (
+            not table
+            or table == primary_table
+            or _heuristic_match(field, table) < _HEURISTIC_ACCEPT
+        ):
+            continue
+        # primary REFERENCES it / it does not reference the primary back: from FK info when
+        # given, else (ponytail) from a column named after the other table.
+        if primary_fks is not None:
+            if table not in primary_fks.values():
+                continue
+        elif not _named_like(destination_schema.get("columns", []), table):
+            continue
+        if fam_fks is not None:
+            if primary_table in fam_fks.values():
+                continue
+        elif _named_like(fam.get("columns", []), primary_table):
+            continue
+        for key in dest_candidates:
+            if (
+                key[0] == table
+                and not key[1].startswith("_")
+                and key[1] not in (fam_fks or {})
+                and key[1] != fam.get("primary_key")
+                and key not in taken
+                and not _incompatible_with_column(field, dest_candidates[key], unified_schema)[0]
+            ):
+                return key
+    return None
 
 
 async def _run_valentine_phase0(

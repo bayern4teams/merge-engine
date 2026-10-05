@@ -530,6 +530,8 @@ def _materialise_dimensions(
 
         dim_rows: dict[str, dict[str, Any]] = {}
         for src_rec, parent_rec in zip(source_records, transformed_parent_records, strict=True):
+            if parent_rec.get(link) is not None:
+                continue  # a mapped field already set this link: not overwritten
             row = _transform_records([src_rec], field_mapping, dim_table)[0]
             text = {c: row.get(c) for c in dest_cols}
             if all(v is None or (isinstance(v, str) and not v.strip()) for v in text.values()):

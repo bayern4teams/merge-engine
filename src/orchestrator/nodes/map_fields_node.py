@@ -196,6 +196,23 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
         dest_schema_cache[table] = cols
         return cols
 
+    def _key_info(table: str) -> dict[str, Any]:
+        """FK columns ({column: referenced table}) and primary key of a destination table, so the
+        mapper can tell a dimension (primary references it) from a child and a label from a key.
+        Empty when the connector cannot say (the mapper then does not check)."""
+        info: dict[str, Any] = {}
+        if dest_connector is None:
+            return info
+        try:
+            if hasattr(dest_connector, "get_foreign_keys"):
+                info["foreign_keys"] = dict(dest_connector.get_foreign_keys(table))
+            pk = dest_connector.get_table_schema(table).get("primary_key")
+            if isinstance(pk, str) and pk:
+                info["primary_key"] = pk
+        except Exception as exc:
+            logger.debug("Could not read keys for '%s': %s", table, exc)
+        return info
+
     llm_tasks: list[tuple[str, dict[str, Any], dict[str, Any], list[dict[str, Any]]]] = []
     for entity_type in target_entities:
         records = unified_for(state, entity_type)
@@ -223,13 +240,14 @@ async def map_fields(state: dict[str, Any]) -> dict[str, Any]:
         dest_schema_info = {
             "table": dest_table,
             "columns": dest_columns,
+            **_key_info(dest_table),
         }
 
         # Phase 6.2: sibling tables this entity's own table has a real FK
         # relationship with, so map_fields_impl can widen its candidate
         # search past a single table when nothing on the primary table fits.
         family_schemas: list[dict[str, Any]] = [
-            {"table": fam_table, "columns": cols}
+            {"table": fam_table, "columns": cols, **_key_info(fam_table)}
             for fam_table in sorted(family_map.get(dest_table, set()))
             if (cols := _schema_for_table(fam_table))
         ]

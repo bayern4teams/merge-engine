@@ -136,3 +136,10 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Independent check: ground-truth pair completeness for `staff`/person and company (PC and RR computed from the truth set, not from the engine), plus wall time and peak memory of resolve_entities.
 - Expected evidence: `staff` candidates far below ~962 000 at higher precision than ≈ 0.0002 (before); no giant component; PC not below the parent commit's.
 - Result (filled in locally):
+
+### P4 — junction/weak roles at the deps gate, dimension rows with zero new columns
+- Why cloud could not verify: no origin or destination databases (26-table schema, real Postgres FK ordering, `ensure_table`), no UI rendering of `table_roles`.
+- Command: full merge run vs the parent of the "P4:" commit; read the deps-gate payload `data.table_roles`, the field mappings (`mapped_by: dimension`) and the load result per table.
+- Independent check: SQL — `SELECT count(*) FROM industry` / `product_category` (expect > 0, one row per distinct text: compare to `SELECT count(DISTINCT <text col>)` on the origin), `SELECT count(*) FROM company WHERE industry_id IS NOT NULL` against the origin's non-null text count; `information_schema.columns` count per destination table unchanged vs before the run.
+- Expected evidence: entities with zero mappings below 8 of 16; `industry` and `product_category` non-empty; no new destination column; junction/weak proposals plausible at the gate (weak may be noisy — ceiling).
+- Result (filled in locally):
