@@ -521,11 +521,11 @@ class TestJudgePairsOnePerCall:
             call_count["n"] += 1
             if call_count["n"] == 1:
                 raise RuntimeError("LLM down")
-            return {"probability": 0.1, "reason": "different"}
+            return {"probability": 0.01, "reason": "different"}
 
         fake_client = MagicMock()
         fake_client.call_json = AsyncMock(side_effect=flaky_call_json)
         with patch("src.llm.LLMClient", return_value=fake_client):
             results = await mod._judge_pairs_with_llm("company", borderline, {"provider": "openai"})
 
-        assert sorted(score for _i1, _i2, score in results) == [0.1, 0.1, 0.1, 0.75]
+        assert sorted(score for _i1, _i2, score in results) == [0.01, 0.01, 0.01, 0.75]

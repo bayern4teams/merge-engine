@@ -164,3 +164,10 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Independent check: SQL on the origin — `SELECT count(*) FROM company_relation` (report: 21 rows recovered before; true count higher) against the RELATED edges for that junction; for any self-referencing column `SELECT count(*) FROM <t> WHERE <ptr> IS NOT NULL` against the DIRECT_PARENT count for that `column`.
 - Expected evidence: RELATED edges = junction rows with both ends non-null; DIRECT_PARENT = non-null pointers to existing keys; cycles listed, not dropped; the relationship index non-empty only from junctions between company keys.
 - Result (filled in locally):
+
+### P8 — one pair per LLM call, budget on the most uncertain pairs
+- Why cloud could not verify: no LLM endpoint; latency, rate limits and the model's real probability distribution are unknown.
+- Command: full merge run with the LLM enabled; `python -m tests.prompts.harness --stage entity_resolution --live`.
+- Independent check: count the entity_resolution calls in the LLM log/Langfuse (= pairs sent, one pair each, ≤ 200 per entity); ground-truth precision/recall of LLM-decided pairs (restored `gt_score.py`); share of answers between `1 - auto_match` and `auto_match` (these stay in review).
+- Expected evidence: golden harness accuracy not below the batched prompt's; no review pair dropped by an unsure answer; wall time acceptable (≈ 200 calls / 4 concurrent).
+- Result (filled in locally):

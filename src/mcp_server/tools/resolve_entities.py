@@ -760,7 +760,7 @@ async def resolve_entities_impl(
             entity_type,
         )
         llm_results = await _judge_pairs_with_llm(
-            entity_type, borderline, llm_config, evidence_sink=pair_evidence
+            entity_type, borderline, llm_config, evidence_sink=pair_evidence, auto_match=auto_match
         )
         llm_scored = len(llm_results)
         scored_pairs.extend(llm_results)
@@ -2871,12 +2871,15 @@ async def _judge_pairs_with_llm(
     borderline: list[tuple[str, str, dict, dict, float]],
     llm_config: dict[str, Any],
     evidence_sink: dict[tuple[str, str], dict[str, Any]] | None = None,
+    auto_match: float = _AUTO_MATCH,
 ) -> list[tuple[str, str, float]]:
     """Judge review-band pairs with the LLM, ONE pair per call (report P8).
 
-    Each call returns ``{"probability": p, "reason": ...}``; ``p`` becomes the
-    pair's score, so the band the run committed decides what it does (merge,
-    review, apart). A pair per call means one malformed reply, a timeout or an
+    Each call returns ``{"probability": p, "reason": ...}``. A decisive answer --
+    ``p`` or ``1 - p`` at least the run's ``auto_match`` -- becomes the pair's
+    score, so the band decides (merge or apart); an unsure one leaves the
+    heuristic score, so the pair stays in human review rather than being
+    dropped because an honest "about 0.5" sits under the exclude bar. A pair per call means one malformed reply, a timeout or an
     out-of-range number damages that pair only: it keeps its heuristic score.
     Calls run concurrently, at most ``_LLM_CONCURRENCY`` in flight. Returns one
     ``(id1, id2, score)`` per input pair, in input order.
@@ -2933,21 +2936,22 @@ async def _judge_pairs_with_llm(
                 id2,
             )
             return id1, id2, heuristic, False
-        reason = str(result.get("reason", ""))
-        logger.debug("LLM judgment %s vs %s: p=%s (%s)", id1, id2, p, reason)
+        reason = str(result.get("reason") or "")
+        score = p if max(p, 1 - p) >= auto_match else heuristic
+        logger.debug("LLM judgment %s vs %s: p=%s -> %s (%s)", id1, id2, p, score, reason)
         if evidence_sink is not None:
             key = (id1, id2) if id1 < id2 else (id2, id1)
             evidence_sink[key] = {
                 "a": id1,
                 "b": id2,
-                "confidence": p,
+                "confidence": score,
                 "method": "llm",
                 "matched_fields": [],
                 "mismatched_fields": [],
                 "reason": reason,
                 "llm_probability": p,
             }
-        return id1, id2, p, True
+        return id1, id2, score, True
 
     outputs = await asyncio.gather(*(judge(pair) for pair in borderline))
     results = [(i1, i2, score) for i1, i2, score, _ok in outputs]
