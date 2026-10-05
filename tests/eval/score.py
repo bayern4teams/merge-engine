@@ -426,5 +426,64 @@ def measure_blocking_recall(records: list[dict[str, Any]]) -> str:
     )
 
 
+def blocking_report(
+    records: list[dict[str, Any]],
+    candidates: Any,
+    truth: Any = None,
+) -> dict[str, float]:
+    """Judge blocking on quantities that need no labels (P19); PC/PQ only with ``truth``.
+
+    Tuning blocking against match quality is circular (the blocks decide which
+    pairs can ever be scored), so every key but two comes from the block
+    collection itself: the raw token blocks (size >= 2, one per distinct
+    member set) over the distinct record ids. ``candidates`` items start with
+    ``(id1, id2)`` (engine 4-tuples are fine). ``pair_completeness`` and
+    ``pairs_quality`` exist only when ``truth`` is given and the ratio is
+    defined; they are absent otherwise, never 0 or a guess.
+
+    ponytail: without labels, blocking recall is unmeasured -- this reports
+    cost (reduction ratio, K, k) and, where ground truth exists, PC/PQ.
+    Deferred: PC/PQ against a labelled sample accumulated from HITL decisions
+    (inverse-cluster-size weights if that sample is not random); trigger: the
+    first run that has such decisions.
+    """
+    from src.mcp_server.tools.resolve_entities import _record_id, _token_keys
+
+    raw: dict[str, set[str]] = {}
+    ids: set[str] = set()
+    for rec in records:
+        rid = _record_id(rec)
+        ids.add(rid)
+        for key in _token_keys(rec):
+            raw.setdefault(key, set()).add(rid)
+    blocks = {frozenset(m) for m in raw.values() if len(m) >= 2}
+
+    def pairs(items: Any) -> set[tuple[str, str]]:
+        return {tuple(sorted(p[:2])) for p in items if p[0] != p[1]}  # type: ignore[misc]
+
+    n = len(ids)
+    total = n * (n - 1) // 2
+    assigned = sum(len(b) for b in blocks)
+    cand = pairs(candidates)
+    report: dict[str, float] = {
+        "records": n,
+        "total_comparisons": total,
+        "candidate_pairs": len(cand),
+        "block_assignments": assigned,
+        "cep_K": assigned / 2,
+        "cnp_k": assigned / n if n else 0,
+    }
+    if total:
+        report["reduction_ratio"] = 1 - len(cand) / total
+    if truth is not None:
+        true = pairs(truth)
+        hit = len(true & cand)
+        if true:
+            report["pair_completeness"] = hit / len(true)
+        if cand:
+            report["pairs_quality"] = hit / len(cand)
+    return report
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
