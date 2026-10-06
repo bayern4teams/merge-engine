@@ -3,7 +3,7 @@
 Overwrite this file at every commit. A fresh session reads it first, then
 [the plan](../PART1_IMPLEMENTATION_PLAN.md). Git is the memory; a session's context is not.
 
-**Lock:** 2026-10-06T12:53:38Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-06T12:53:38Z
+**Lock:** 2026-10-06T12:57:51Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-06T12:57:51Z
 
 (Lock/heartbeat protocol: plan §7. A session sets `Lock: <ISO time>`, pushes it, and refreshes it at every commit; a lock older than 75 min is stale. `Autonomy` is `off`, `dryrun` (a tick only records what works and exits) or `unattended-through-phase-5` (authorises the supervisor to chain phases). Only the user changes it.)
 
@@ -103,7 +103,7 @@ lists files an item must **edit**. Paths are under `src/` unless stated. Abbrevi
 | 4 | P10 (after P16, P17, P18) | P16 (quality module + `N/load_data.py` report) |
 
 ## Next action
-**Phase 4 (2026-10-06):** P16 r2 in progress (worker, lead corrections sent after attack r1 REJECT: B-cubed compared a run with itself — history keyed by run_id, empty run never saved; flag false-positives 14-68 % on healthy names — token/containment groups + run-derived threshold between group representatives; quadratic cost — near-linear, 5000-name cluster < 5 s). Then attack r2, lead decision, then **P10** (lead; pre-load gate: mapping coverage, NULL identity share, largest-cluster share, P16 signals incl. `flagged_count` as an invariant; thresholds proposed by the run and confirmed at the gate; read docs/architecture/orchestration_and_ui.md first). Then Phase 4 gate, Phase 5.
+**Phase 4 (2026-10-06):** P16 accepted (8edd0df). P10 r2 (ca9e2e7) fixed attack r1 findings 1-3, 6 (10 xfails flipped); F4 waived by the lead (2x/majority cap = sanctioned editable policy; uniform badness = ceiling, strict xfail kept). Next: P10 attack r2 (verifier), lead decision, then Phase 4 gate (check.py all, CI, /ponytail-review), then Phase 5.
 **Phase 3, step 1:** lead serial chain in `T/resolve_entities.py`: P15 -> P6 -> P7 -> P8 -> P20 (derive acceptance
 with `part1-verifier` before each); side lanes beside it (cap 2): P9 (new decision-memory module only), P17
 (`N/load_data.py` only), P19 (`tests/eval/score.py` + tests). Gate hooks for P9/P17 in `human_nodes.py`/`graph.py`

@@ -106,7 +106,8 @@ def test_control_one_null_among_equal_sized_entities_passes():
 
 @pytest.mark.xfail(
     strict=True,
-    reason="F4: ceilings are 2x the median capped at 1/2: entities ALL ~45% NULL (or all ~45% one cluster) pass",
+    reason="F4 ceiling (lead waiver r2): run-relative proposals cannot see uniform badness; entities ALL ~45% NULL "
+    "(or all ~45% one cluster) pass the default; the operator sees the measured values at the gate and can tighten",
 )
 @pytest.mark.parametrize("what", ["null", "cluster"])
 def test_every_entity_equally_bad_below_the_cap_is_refused(what):

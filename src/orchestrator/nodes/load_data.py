@@ -429,7 +429,9 @@ def pre_load_gate(state: dict[str, Any], confirmed: Any = None) -> dict[str, Any
     ponytail: refusing is all it can do -- it cannot roll back a partial write
     (report P10 Ceiling); the proposals are rules of thumb relative to the run's
     own entities, so a run whose entities are ALL bad alike is caught only by the
-    floors above or by the operator. Deferred: thresholds learnt from past runs
+    floors above or by the operator. The 1/2 cap ("never a majority") and the 2x
+    multipliers are sanctioned standing policy, shown and editable at the gate like
+    the P15 band (plan 2.4), not counts of the corpus. Deferred: thresholds learnt from past runs
     (report P10 Deferred; trigger: enough confirmed runs in P16's history)."""
     per = {
         e: _entity_measures(state, e)
