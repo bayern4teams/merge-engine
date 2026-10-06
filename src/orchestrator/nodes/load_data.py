@@ -10,7 +10,9 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import math
 import os
+import statistics
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,7 +20,7 @@ from typing import Any
 
 from src.mcp_server.tools.cluster_quality import quality_signals
 from src.mcp_server.tools.load_data import _get_destination_connector, load_data_impl
-from src.mcp_server.tools.resolve_entities import _best_name_field, _record_id
+from src.mcp_server.tools.resolve_entities import _NAME_FIELD_HINTS, _best_name_field, _record_id
 from src.orchestrator.spool import (
     clusters_for,
     collection_count,
@@ -361,6 +363,161 @@ def preview_destination_defects(state: dict[str, Any]) -> list[dict[str, Any]]:
     return [{k: v for k, v in d.items() if k != "held_links"} for d in defects]
 
 
+# P10: the pre-load gate's invariants, by role. Coverage is a floor, the rest are ceilings.
+_COVERAGE = "mapping_coverage"
+_NULL_IDENTITY = "null_identity_share"
+_LARGEST_CLUSTER = "largest_cluster_share"
+_FLAGGED = "flagged_clusters"
+
+
+def _entity_measures(state: dict[str, Any], entity: str) -> dict[str, float]:
+    """One entity's raw numbers for the pre-load invariants (absent = not measurable)."""
+    out: dict[str, float] = {}
+    mapped = len((state.get("field_mappings") or {}).get(entity) or {})
+    unmapped = len((state.get("unmapped_fields") or {}).get(entity) or [])
+    if mapped + unmapped:
+        out[_COVERAGE] = mapped / (mapped + unmapped)
+    records = collection_records(state.get("extracted_data") or {}, entity)
+    identity = {
+        k
+        for r in records
+        for k in r
+        if not k.startswith("_") and any(h in k.lower() for h in _NAME_FIELD_HINTS)
+    }
+    if records and identity:
+        out[_NULL_IDENTITY] = sum(
+            not any(_has_value(r.get(k)) for k in identity) for r in records
+        ) / len(records)
+        out["records"] = len(records)
+    clusters = clusters_for(state, entity)
+    n = sum(len(c.get("record_ids", [])) for c in clusters)
+    if n:
+        # merges absorbed by the largest cluster, of all merges possible: a lone record is 0
+        largest = max(len(c.get("record_ids", [])) for c in clusters)
+        out[_LARGEST_CLUSTER] = (largest - 1) / (n - 1) if n > 1 else 0.0
+        names = {_record_id(r): r.get(_best_name_field(r) or "") for r in records}
+        out[_FLAGGED] = quality_signals(clusters, names)["flagged_count"]
+    return out
+
+
+def pre_load_gate(state: dict[str, Any], confirmed: Any = None) -> dict[str, Any]:
+    """The pre-load invariants (report P10): measured over the run, each with a
+    threshold the run proposes from its own entities, and -- when the operator
+    confirmed or edited thresholds at the final gate (``confirmed``: {name: number})
+    -- judged against those instead. Read-only; the same call builds the gate
+    payload and decides the load.
+
+    Proposals (one per invariant per run; m = the median across entities):
+    coverage floor = m / 2, never below half of one mapped field of the widest
+    entity (a run where nothing maps still fails); NULL-identity and largest-
+    cluster ceilings = 2 m, at least one record's worth of the median entity,
+    never a majority; flagged ceiling = 2 m of the per-entity flagged counts.
+
+    ponytail: refusing is all it can do -- it cannot roll back a partial write
+    (report P10 Ceiling); the proposals are rules of thumb relative to the run's
+    own entities, so a run whose entities are ALL bad alike is caught only by the
+    floors above or by the operator. Deferred: thresholds learnt from past runs
+    (report P10 Deferred; trigger: enough confirmed runs in P16's history)."""
+    per = {
+        e: _entity_measures(state, e)
+        for e in sorted(
+            set(state.get("extracted_data") or {})
+            | set(state.get("entity_clusters") or {})
+            | set(state.get("unified_entities") or {})
+            | set(state.get("field_mappings") or {})
+        )
+    }
+
+    def values(key: str) -> list[float]:
+        return [m[key] for m in per.values() if key in m]
+
+    sizes = values("records")
+    one_record = 1 / statistics.median(sizes) if sizes else 0.0
+    widest = max(
+        (
+            len((state.get("field_mappings") or {}).get(e) or {})
+            + len((state.get("unmapped_fields") or {}).get(e) or [])
+            for e in per
+        ),
+        default=0,
+    )
+
+    def ceiling(xs: list[float]) -> float:
+        return min(max(2 * statistics.median(xs), one_record), 1 / 2) if xs else 1.0
+
+    cov, nul, big, flg = (
+        values(k) for k in (_COVERAGE, _NULL_IDENTITY, _LARGEST_CLUSTER, _FLAGGED)
+    )
+    proposed = {
+        _COVERAGE: max(statistics.median(cov) / 2, 1 / (2 * widest)) if cov else 0.0,
+        _NULL_IDENTITY: ceiling(nul),
+        _LARGEST_CLUSTER: ceiling(big),
+        _FLAGGED: 2 * statistics.median(flg) if flg else 0.0,
+    }
+    measured = {
+        _COVERAGE: min(cov, default=1.0),
+        _NULL_IDENTITY: max(nul, default=0.0),
+        _LARGEST_CLUSTER: max(big, default=0.0),
+        _FLAGGED: max(flg, default=0.0),
+    }
+    edits = confirmed if isinstance(confirmed, dict) else {}
+    invariants: dict[str, Any] = {}
+    unusable: list[str] = []
+    for name, threshold in proposed.items():
+        used = edits.get(name, threshold)
+        if isinstance(used, bool) or not isinstance(used, (int, float)) or not math.isfinite(used):
+            unusable.append(name)  # garbage never disables an invariant: fail closed
+            used = threshold
+        invariants[name] = {
+            "measured": measured[name],
+            "threshold": threshold,
+            "violated": measured[name] < used if name == _COVERAGE else measured[name] > used,
+        }
+        if name in edits and name not in unusable:
+            invariants[name]["confirmed"] = used
+    worst = {
+        name: sorted(e for e, m in per.items() if name in m and m[name] == measured[name])
+        for name in proposed
+    }
+    return {
+        "invariants": invariants,
+        "entities_at_worst": worst,
+        "unusable_edits": unusable,
+        "would_fail": any(v["violated"] for v in invariants.values()) or bool(unusable),
+    }
+
+
+def _confirmed_thresholds(state: dict[str, Any]) -> Any:
+    """The thresholds the operator confirmed at the final gate (``thresholds`` on the
+    approve feedback), or None. Read here, not in the gate body: with interrupt_before
+    the gate body never runs on resume (plan 2.6)."""
+    feedback = state.get("human_feedback") or {}
+    if feedback.get("node") not in (None, "human_final_approval"):
+        return None
+    return feedback.get("thresholds")
+
+
+def _pre_load_failure(gate: dict[str, Any]) -> dict[str, Any] | None:
+    """A ``fail`` disposition (no error-gate "skip" that would walk on as if loaded)
+    naming every violated invariant, or None when the load may proceed."""
+    if not gate["would_fail"]:
+        return None
+    bad = [
+        f"{name} = {v['measured']:.3g} (threshold {v.get('confirmed', v['threshold']):.3g}; "
+        f"worst: {', '.join(gate['entities_at_worst'][name]) or '-'})"
+        for name, v in gate["invariants"].items()
+        if v["violated"]
+    ]
+    bad += [f"{name}: confirmed threshold is not a number" for name in gate["unusable_edits"]]
+    return {
+        "node": "load_data",
+        "error": "Pre-load invariants violated, nothing was written: " + "; ".join(bad),
+        "error_class": "DataQualityError",
+        "disposition": "fail",
+        "context": {"pre_load_gate": gate},
+    }
+
+
 def _has_value(v: Any) -> bool:
     return v is not None and bool(str(v).strip())
 
@@ -514,6 +671,11 @@ async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
     # connector is opened — there is nothing to roll back here, just N
     # duplicate rows that should not ship.
     guardrail_failure = _scoped_merge_guardrail_failure(state)
+    # P10: the run's own invariants, at the thresholds the operator confirmed.
+    invariant_failure = None
+    if not guardrail_failure:
+        invariant_failure = _pre_load_failure(pre_load_gate(state, _confirmed_thresholds(state)))
+        guardrail_failure = invariant_failure
     if guardrail_failure:
         logger.error(
             "Pre-load guardrail fired — refusing to load: %s",
@@ -521,15 +683,17 @@ async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
         )
         report = build_reconciliation_report(state, {}, list(state.get("errors", [])))
         report["guardrail_fired"] = True
+        refusal: dict[str, Any] = {"reconciliation_report": report, "failure": guardrail_failure}
+        # P17's defect report survives a P10 refusal: the reviewer fixing the run needs both.
+        defects = preview_destination_defects(state) if invariant_failure else []
+        if defects:
+            report["destination_defects"] = refusal["destination_defects"] = defects
         _write_run_report(report)
         logger.debug("EXIT load_data_node (guardrail)")
         # The guardrail's own detail already lands in `failure` and the
         # report - no separate new error to add here (see the rejected-load
         # branch above for why the old passthrough was a bug).
-        return {
-            "reconciliation_report": report,
-            "failure": guardrail_failure,
-        }
+        return refusal
 
     unified_entities: dict[str, list[dict]] = state.get("unified_entities", {})
     field_mappings: dict[str, dict] = state.get("field_mappings", {})

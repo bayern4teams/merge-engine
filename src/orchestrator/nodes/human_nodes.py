@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from src.orchestrator.nodes.load_data import preview_destination_defects
+from src.orchestrator.nodes.load_data import pre_load_gate, preview_destination_defects
 from src.orchestrator.nodes.resolve_entities import apply_band_decisions, resolves_band
 from src.orchestrator.spool import (
     clusters_for,
@@ -614,6 +614,9 @@ async def human_final_approval(state: dict[str, Any]) -> dict[str, Any]:
             "pending_schema_changes": pending_schema_changes,
             # P17 (same key as WorkflowManager's payload): tables left empty, no DDL.
             "destination_defects": preview_destination_defects(state),
+            # P10 (same key as WorkflowManager's payload): the invariants the load is
+            # refused on, with the thresholds this run proposes for the operator to confirm.
+            "pre_load_gate": pre_load_gate(state),
         },
     }
 

@@ -739,6 +739,7 @@ class WorkflowManager:
             # are zero here — the load hasn't run yet.
             from src.orchestrator.nodes.load_data import (
                 build_reconciliation_report,
+                pre_load_gate,
                 preview_destination_defects,
             )
 
@@ -774,6 +775,9 @@ class WorkflowManager:
                     # P17: destination tables that cannot hold their links; they are left
                     # empty and no DDL is issued -- the reviewer sees it before approving.
                     "destination_defects": preview_destination_defects(values),
+                    # P10: invariants + proposed thresholds; confirmed thresholds ride on
+                    # the approve feedback as ``thresholds`` and are enforced by load_data.
+                    "pre_load_gate": pre_load_gate(values),
                 },
             }
         return {"node": node, "title": node, "data": {}}
