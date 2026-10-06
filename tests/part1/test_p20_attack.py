@@ -695,13 +695,6 @@ def _r4_rid(i):
     return f"s0:t:{i:03d}"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT r4 (medium-high; same as parent, but it voids P20 wherever identifiers exist): _split_component runs the P6 "
-    "conflict repair on the whole WNP component BEFORE the triangle split, and a conflict makes EVERY member a singleton. Two true "
-    "5-cliques joined by one strong bridge come out exact without identifiers and as 10 singletons with a distinct tax_id per entity "
-    "(40 dense worlds: no ids FP130/FN3 exact 32; tax_id on FP0/FN2312 exact 0; split-first-then-P6 gives FP0/FN111 exact 32).",
-)
 def test_r4_p6_conflict_in_a_bridged_component_does_not_dissolve_both_entities():
     recs = [_r4_rec(i, tax_id="111" if i < 5 else "222") for i in range(10)]
     edges = [(a, b, 0.96) for a, b in clique(5)] + [(a + 5, b + 5, 0.96) for a, b in clique(5)]
@@ -833,3 +826,14 @@ def test_control_r4_noop_gate_equals_build_on_dense_wrong_edge_worlds():
         assert sorted(sorted(c["record_ids"]) for c in cl) == sorted(
             sorted(c["record_ids"]) for c in reb
         ), seed
+
+
+def test_control_r4_weak_bridges_between_paths_and_trees_are_cut_by_wnp_alone():
+    """What the narrowed acceptance dropped for mixed shapes must still hold where structure CAN decide: a bridge weaker than
+    every internal edge (paths/trees have no triangles, so only the WNP mean cuts it) -> exact (40/40 worlds measured)."""
+    for seed in range(15):
+        rng = random.Random(seed)
+        w = acc.world(seed, [rng.randrange(3, 8) for _ in range(6)], [rng.choice(["path", "tree"]) for _ in range(6)], 6,
+                      internal=(0.975, 0.985), bridge=(0.951, 0.955))  # fmt: skip
+        pred, _c, _s = acc.run(w)
+        acc.assert_exact(w, pred, f"seed {seed}")

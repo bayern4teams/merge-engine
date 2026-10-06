@@ -3197,10 +3197,11 @@ def _split_component(
     corpus: CorpusEvidence,
 ) -> tuple[list[list[str]], bool]:
     """One component's clusters (shared with the matches-gate rebuild so the
-    two cannot drift): conflict repair (P6), then triangle support over the
-    ``kept`` edges, a triangle being looked for among the ``support`` edges
-    (all confident edges) -- pruning a true clique's weaker edges must not
-    make its members look like bridges. Returns (parts, repaired).
+    two cannot drift): triangle support over the ``kept`` edges, a triangle
+    being looked for among the ``support`` edges (all confident edges) --
+    pruning a true clique's weaker edges must not make its members look like
+    bridges -- then conflict repair (P6) inside each part, so one conflict
+    between two bridged entities does not dissolve both. Returns (parts, repaired).
 
     ponytail: two strong wrong edges into one node make a real triangle, and
     names are not consulted (P20 narrowed by user decision c: name coherence
@@ -3209,11 +3210,12 @@ def _split_component(
     parts: list[list[str]] = []
     repaired = False
     for component in _components(members, kept):
-        split, was_repaired, _ = _partition_component(
-            component, kept, records_by_id, min_cohesion=0, corpus=corpus
-        )
-        repaired = repaired or bool(was_repaired)
-        parts += split if was_repaired else _triangle_parts(component, kept, support)
+        for part in _triangle_parts(component, kept, support):
+            split, was_repaired, _ = _partition_component(
+                part, kept, records_by_id, min_cohesion=0, corpus=corpus
+            )
+            repaired = repaired or bool(was_repaired)
+            parts += split if was_repaired else [part]
     return parts, repaired
 
 
