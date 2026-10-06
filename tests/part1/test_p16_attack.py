@@ -183,3 +183,67 @@ def test_control_small_cluster_is_fast():
 def test_cost_of_one_giant_cluster_is_not_quadratic():
     small, big = _giant_seconds(300), _giant_seconds(1200)  # 4x the names
     assert big < 8 * small + 0.5, (small, big)  # linear ~4x, quadratic ~16x
+
+
+# ══ r2 (commit 4438fe3) ══════════════════════════════════════════════════════════════════════
+def _ctx_plus(cluster):
+    """40 coherent clusters (so the run has a threshold) plus the one under test; True if it is flagged."""
+    groups = [[b, f"{b} Limited"] for b in BASES[:40]] + [cluster]
+    out = _run(groups)
+    return f"c{len(groups) - 1}" in out["flagged_clusters"]
+
+
+def test_r2_control_fused_names_without_junk_are_flagged():
+    assert _ctx_plus(["Vodafone", "Tesco", "Shell"])
+    assert _ctx_plus(["Acme Widgets", "Zyxwv Holdings"])
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="containment via joined-string find: a 1-char record name ('e', 's', 'a') is 'contained' in every name holding that letter and bridges the groups",
+)
+def test_r2_one_junk_one_letter_name_does_not_mask_a_fused_cluster():
+    assert _ctx_plus(["Vodafone", "Tesco", "Shell", "e"])
+    assert _ctx_plus(["Acme Widgets", "Zyxwv Holdings", "s"])
+
+
+def test_r2_control_same_order_person_names_are_not_flagged():
+    groups = [[f"{f} {last}", f"{f} Q. {last}", f"{f} {last}".upper()] for f, last in PEOPLE]
+    assert _run(groups)["flagged_count"] == 0
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="a pure two-token reorder ('Patricia Williams' / 'Williams, Patricia') is flagged: each token is 8 of 17 chars, just under 'half' because of the separator",
+)
+def test_r2_pure_two_name_reorder_is_not_flagged():
+    first = ("Patricia", "Elizabeth", "Jennifer", "Christopher", "Katherine", "Alexander")
+    last = ("Williams", "Anderson", "Martinez", "Robinson", "Thompson", "Gonzalez")
+    groups = [[f"{f} {s}", f"{s}, {f}"] for f in first for s in last]
+    out = _run(groups)
+    assert out["flagged_count"] == 0, (out["flagged_count"], len(groups))
+
+
+def _giant_distinct_seconds(n):
+    import random
+
+    rng = random.Random(0)
+    syl = ["ka", "ri", "to", "men", "sol", "vex", "dar", "lin", "mor", "pel", "qui", "zan"]
+    names = {f"r{i}": "".join(rng.choice(syl) for _ in range(4)) + f" {i}" for i in range(n)}
+    clusters = [
+        {"cluster_id": "g", "record_ids": list(names)},
+        {"cluster_id": "s", "record_ids": ["x"]},
+    ]
+    names["x"] = "Zed"
+    t = time.perf_counter()
+    quality_signals(clusters, names)
+    return time.perf_counter() - t
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="names are joined into one string and each name is str.find-ed from offset 0: quadratic in total text (5k 0.5s, 20k 4s, 40k 14s)",
+)
+def test_r2_giant_cluster_cost_is_near_linear_past_ten_thousand_names():
+    small, big = _giant_distinct_seconds(5000), _giant_distinct_seconds(40000)  # 8x the names
+    assert big < 16 * small + 0.5, (small, big)  # linear ~8x, quadratic ~64x
