@@ -171,3 +171,10 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Independent check: count the entity_resolution calls in the LLM log/Langfuse (= pairs sent, one pair each, ≤ 200 per entity); ground-truth precision/recall of LLM-decided pairs (restored `gt_score.py`); share of answers between `1 - auto_match` and `auto_match` (these stay in review).
 - Expected evidence: golden harness accuracy not below the batched prompt's; no review pair dropped by an unsure answer; wall time acceptable (≈ 200 calls / 4 concurrent).
 - Result (filled in locally):
+
+### P20 — clustering: WNP prune, components, triangle support, optional 1:1 (narrowed, user decision c)
+- Why cloud could not verify: no restored corpus; real weight distributions (jitter, ties) and how many true clusters are chains decide WNP's recall loss; whether real wrong merges are triangle-free (bridged chains) and so survive clustering.
+- Command: full merge run vs the parent of the first "WIP P20" commit (7ba4f15); read `resolution_stats.<e>` (`largest_component_size`, cluster sizes) and the clusters.
+- Independent check: ground-truth company/person pairs (restored `gt_score.py`): pairwise FP/FN per entity vs the parent; list the 20 largest clusters and their distinct names by SQL.
+- Expected evidence: FN well below the parent's (Phase 0: bridge-strongest FN 20 -> 0, chain FN 10 -> 0); FP not above the parent's. Names are not a cut: clusters joining different names are expected to appear in P16's name-variation flag, not to be split. If flagged clusters are real wrong merges, that is the trigger for correlation clustering (report P20 Deferred).
+- Result (filled in locally):
