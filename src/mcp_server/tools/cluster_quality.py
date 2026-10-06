@@ -158,7 +158,7 @@ def _name_threshold(reps: list[str]) -> float:
     one name per cluster), read off this run: two names in one cluster that are
     as unrelated as that are not variants of one entity. Names are sampled at a
     stride of isqrt(clusters), so the cost stays linear in the clusters."""
-    sample: list[str | None] = sorted(reps)[:: max(math.isqrt(len(reps)), 1)]
+    sample: list[str | None] = [*sorted(reps)[:: max(math.isqrt(len(reps)), 1)]]
     return name_variation_rate(sample) / 2
 
 

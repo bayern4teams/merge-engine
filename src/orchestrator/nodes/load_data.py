@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -170,10 +171,15 @@ def build_reconciliation_report(
         ]
 
         # P16: label-free quality signals (a flag, never a cut); B-cubed needs the
-        # previous run's clustering, kept in the file named by ``quality_history_path``.
+        # previous run's clustering, kept in the file named by the
+        # ``quality_history_path`` state key, else ``MERGE_ENGINE_QUALITY_HISTORY``
+        # (same convention as P9's decision memory).
         records = collection_records(state.get("extracted_data"), entity)
         record_names = {_record_id(r): r.get(_best_name_field(r) or "") for r in records}
-        quality = quality_signals(clusters, record_names, state.get("quality_history_path"), entity)
+        history = state.get("quality_history_path") or os.environ.get(
+            "MERGE_ENGINE_QUALITY_HISTORY"
+        )
+        quality = quality_signals(clusters, record_names, history, entity)
 
         entity_report: dict[str, Any] = {
             "quality": quality,
