@@ -112,6 +112,7 @@ def build_reconciliation_report(
     subject_entity = merge_scope.get("scope_type") if merge_scope.get("active") else None
     dropped_inferred_entities = list(state.get("dropped_inferred_entities") or [])
 
+    run_id = state.get("run_id", "")
     entities: dict[str, Any] = {}
     entity_names = set(extracted_data) | set(entity_clusters) | set(unified_entities)
     families_loaded = 0
@@ -179,7 +180,7 @@ def build_reconciliation_report(
         history = state.get("quality_history_path") or os.environ.get(
             "MERGE_ENGINE_QUALITY_HISTORY"
         )
-        quality = quality_signals(clusters, record_names, history, entity)
+        quality = quality_signals(clusters, record_names, history, entity, str(run_id or ""))
 
         entity_report: dict[str, Any] = {
             "quality": quality,
@@ -293,7 +294,7 @@ def build_reconciliation_report(
         grade = "A"
 
     return {
-        "run_id": state.get("run_id", ""),
+        "run_id": run_id,
         "generated_at": datetime.now(UTC).isoformat(),
         "entities": entities,
         "new_columns": [

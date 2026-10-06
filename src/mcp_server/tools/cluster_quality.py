@@ -19,6 +19,7 @@ import os
 import re
 import tempfile
 import unicodedata
+from bisect import bisect_right
 from collections import Counter
 from collections.abc import Mapping
 from difflib import SequenceMatcher
@@ -67,12 +68,18 @@ def name_variation_rate(names: list[str | None]) -> float:
 #
 # ponytail: signals, not measurements (report P16 Ceiling): a rise says merging
 # behaviour changed, not that it is wrong; the flag marks clusters worth a look
-# and never splits one. The previous clustering is a JSON file, with no
-# concurrency control, so two live runs on one path are last-writer-wins.
+# and never splits one. A cluster is flagged only when its names fall into two or
+# more groups that share no token and no substring AND the groups' representatives
+# differ by more than the run-derived threshold. Accepted ceilings: siblings that
+# share a family token (Tata Steel / Tata Motors), or fused companies that share a
+# legal-form word, stay unflagged; a lone fused cluster with no other named cluster
+# has no reference and is not flagged; one anchor group is compared with the others
+# (linear), not every pair. The previous clustering is a JSON file keyed by run,
+# with no concurrency control (two live runs on one path: last writer wins).
 # Deferred alternative: the persisted time series with drift alerting (report
-# 3.13; trigger: Part 3). A pairwise name rule is the cheap flag; correlation
-# clustering (report P20 Deferred) replaces it only if the user's local run
-# shows flagged clusters are real wrong merges.
+# 3.13; trigger: Part 3). A cheap name rule is the flag; correlation clustering
+# (report P20 Deferred) replaces it only if the user's local run shows flagged
+# clusters are real wrong merges.
 
 
 def hill_numbers(sizes: list[int]) -> dict[int, float]:
@@ -117,23 +124,49 @@ def homonymy_rate(clusters: list[dict[str, Any]], names: Mapping[str, str | None
     return sum(1 for k in seen.values() if k > 1) / len(seen) if seen else 0.0
 
 
-def _load_previous(path: Path, entity: str) -> tuple[dict[str, Any], list[list[str]] | None]:
-    """(the whole history file, this entity's previous clustering or None). A
-    missing, corrupt or foreign file is "no previous run", never an error."""
+def _clustering(value: Any) -> list[list[str]] | None:
+    """``value`` if it is a list of lists of strings (a persisted clustering)."""
+    ok = isinstance(value, list) and all(
+        isinstance(c, list) and all(isinstance(r, str) for r in c) for c in value
+    )
+    return value if ok else None
+
+
+def _load_history(path: Path) -> dict[str, Any]:
+    """The whole history file; missing, corrupt or foreign reads as empty."""
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return {}, None
+        return {}
     except (OSError, ValueError, RecursionError) as exc:
         logger.warning("quality history %s unreadable, B-cubed unavailable: %s", path, exc)
-        return {}, None
-    if not isinstance(raw, dict):
-        return {}, None
-    prev = raw.get(entity)
-    ok = isinstance(prev, list) and all(
-        isinstance(c, list) and all(isinstance(r, str) for r in c) for c in prev
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _baseline(
+    stored: Any, run_id: str, current: list[list[str]]
+) -> tuple[list[list[str]] | None, dict[str, Any] | None]:
+    """(the clustering to compare against, the entry to persist or None).
+
+    ``stored`` is ``{"run_id", "clusters", "previous": {"run_id", "clusters"} | None}``.
+    The same run asked again (the gate preview, then the load report) compares
+    against the stored ``previous`` and only refreshes ``clusters``; a new run
+    compares against the stored ``clusters`` and shifts them into ``previous``. An
+    empty clustering is never saved (an empty run must not wipe the baseline), and
+    an empty ``run_id`` is no identity: every call is a new run.
+    """
+    entry = stored if isinstance(stored, dict) else {}
+    clusters = _clustering(entry.get("clusters"))
+    prev = entry.get("previous")
+    keep = any(current)
+    if clusters is not None and run_id and entry.get("run_id") == run_id:
+        before = _clustering(prev.get("clusters")) if isinstance(prev, dict) else None
+        return before, ({**entry, "clusters": current} if keep else None)
+    shifted = None if clusters is None else {"run_id": entry.get("run_id"), "clusters": clusters}
+    return clusters, (
+        {"run_id": run_id, "clusters": current, "previous": shifted} if keep else None
     )
-    return raw, prev if ok else None
 
 
 def _save(path: Path, history: dict[str, Any]) -> None:
@@ -153,19 +186,64 @@ def _save(path: Path, history: dict[str, Any]) -> None:
         logger.warning("quality history %s not written, next run has no B-cubed: %s", path, exc)
 
 
+def _sample(names: list[str | None]) -> list[str | None]:
+    """The names in a fixed order, thinned at a stride that keeps all-pairs work
+    linear in their number (stride 1, i.e. all of them, while there are few)."""
+    ordered = sorted(names, key=comparable_name)
+    return ordered[:: max(math.isqrt(len(ordered)) // 2, 1)]
+
+
 def _name_threshold(reps: list[str]) -> float:
     """Half the variation between different clusters (the mean dissimilarity of
-    one name per cluster), read off this run: two names in one cluster that are
-    as unrelated as that are not variants of one entity. Names are sampled at a
-    stride of isqrt(clusters), so the cost stays linear in the clusters."""
-    sample: list[str | None] = [*sorted(reps)[:: max(math.isqrt(len(reps)), 1)]]
-    return name_variation_rate(sample) / 2
+    one name per cluster), read off this run: two groups of names in one cluster
+    that are as unrelated as that are not variants of one entity."""
+    return name_variation_rate(_sample([*reps])) / 2
+
+
+def _name_groups(usable: list[str]) -> list[list[str]]:
+    """Group sorted distinct comparable names that share a significant token or
+    where one is contained in another (covers unspaced scripts and tickers); union-find, near-linear."""
+    parent = list(range(len(usable)))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    holders: dict[str, list[int]] = {}
+    for i, name in enumerate(usable):
+        for token in name.split():
+            holders.setdefault(token, []).append(i)
+    for token, idx in holders.items():
+        # a token links only when it is at least half of one of the names holding it
+        # (so a shared "ltd" or "group" does not tie two otherwise unrelated names)
+        if any(2 * len(token) >= len(usable[i]) for i in idx):
+            for i in idx:
+                parent[find(i)] = find(idx[0])
+    joined = "\n".join(usable)
+    starts = [0]
+    for name in usable:
+        starts.append(starts[-1] + len(name) + 1)
+    for i, name in enumerate(usable):  # names hold no newline: no match spans two names
+        pos = joined.find(name)
+        while pos >= 0:
+            parent[find(i)] = find(bisect_right(starts, pos) - 1)
+            pos = joined.find(name, pos + 1)
+    out: dict[int, list[str]] = {}
+    for i, name in enumerate(usable):
+        out.setdefault(find(i), []).append(name)
+    return list(out.values())
 
 
 def _incoherent(names: list[str | None], threshold: float) -> bool:
-    """Do two of the cluster's distinct names differ by more than ``threshold``?"""
-    usable = sorted({comparable_name(n) for n in names} - {""})
-    return any(name_variation_rate(list(pair)) > threshold for pair in combinations(usable, 2))
+    """Do the cluster's names fall into two or more unrelated groups, one of
+    which differs from the largest by more than ``threshold``? (Stops at the first.)"""
+    groups = _name_groups(sorted({comparable_name(n) for n in names} - {""}))
+    if len(groups) < 2:
+        return False
+    anchor = min(groups, key=lambda g: (-len(g), g[0]))[0]
+    return any(name_variation_rate([anchor, g[0]]) > threshold for g in groups if g[0] != anchor)
 
 
 def quality_signals(
@@ -173,19 +251,20 @@ def quality_signals(
     names: Mapping[str, str | None],
     history_path: str | Path | None = None,
     entity: str = "",
+    run_id: str = "",
 ) -> dict[str, Any]:
     """The label-free quality block of one entity's clustering (report P16).
 
     ``clusters``: dicts with ``cluster_id`` and ``record_ids`` (singletons
     included); ``names``: record id -> display name. With ``history_path`` the
     previous run's clustering for ``entity`` is read for B-cubed and this run's
-    is written for the next; without one (or on run one) B-cubed is None with
-    a "not available" note, never a number.
+    is written for the next (``_baseline`` says how ``run_id`` keys it); without
+    one (or on run one) B-cubed is None with a "not available" note, never a number.
 
-    Name coherence is a flag: a multi-record cluster is flagged when its
-    names include two further apart than ``name_variation_threshold``, derived
-    from this run's own names (``_name_threshold``). Fewer than two named clusters give
-    nothing to compare against, so nothing is flagged.
+    Name coherence is a flag: a multi-record cluster is flagged when its names
+    split into unrelated groups (``_incoherent``) further apart than
+    ``name_variation_threshold``, derived from this run's own names. Fewer than
+    two named clusters give nothing to compare against, so nothing is flagged.
     """
     groups = [(c.get("cluster_id"), [str(r) for r in c["record_ids"]]) for c in clusters]
     named = {str(k): v for k, v in names.items()}
@@ -193,7 +272,7 @@ def quality_signals(
     multi = [
         (cid, ns) for (cid, ids), ns in zip(groups, cluster_names, strict=True) if len(ids) > 1
     ]
-    rates = [name_variation_rate(ns) for _, ns in multi]
+    rates = [name_variation_rate(_sample(ns)) for _, ns in multi]
     reps = [
         min(u)
         for u in ([comparable_name(n) for n in ns if comparable_name(n)] for ns in cluster_names)
@@ -204,18 +283,19 @@ def quality_signals(
 
     previous: list[list[str]] | None = None
     note: str | None = "B-cubed not available: no history file configured"
-    history: dict[str, Any] = {}
     current = [ids for _, ids in groups]
     if history_path is not None:
-        history, previous = _load_previous(Path(history_path), entity)
+        path = Path(history_path)
+        history = _load_history(path)
+        previous, entry = _baseline(history.get(entity), run_id, current)
+        if entry is not None:
+            _save(path, {**history, entity: entry})
         note = "B-cubed not available: no previous run for this entity"
     score = bcubed(previous, current) if previous is not None else None
     if score is not None:
         note = None
     elif previous is not None:
         note = "B-cubed not available: no records in common with the previous run"
-    if history_path is not None:
-        _save(Path(history_path), {**history, entity: current})
     return {
         "homonymy_rate": homonymy_rate([{"record_ids": ids} for _, ids in groups], named),
         "name_variation_rate": sum(rates) / len(rates) if rates else 0.0,

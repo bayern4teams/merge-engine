@@ -101,10 +101,6 @@ def test_control_case_and_typo_variants_are_not_flagged():
     assert _run(groups)["flagged_count"] == 0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="'Unilever' vs 'The Unilever Limited' reads as unrelated: ~half of coherent clusters flagged",
-)
 def test_legal_suffix_variants_of_one_company_are_not_flagged():
     groups = [[b, f"{b} Limited", f"THE {b} PLC"] for b in BASES]
     out = _run(groups)
@@ -117,10 +113,6 @@ def test_control_identical_person_names_are_not_flagged():
     assert _run([[f"{f} {last}", f"{f} {last}"] for f, last in PEOPLE])["flagged_count"] == 0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="'John Smith' / 'Smith, John' / 'J. Smith' flagged: token order and initials defeat the character ratio",
-)
 def test_reordered_and_initialled_person_names_are_not_flagged():
     groups = [[f"{f} {last}", f"{last}, {f}", f"{f[0]}. {last}"] for f, last in PEOPLE]
     out = _run(groups)
@@ -157,10 +149,6 @@ def test_control_run_two_differs_from_run_one(tmp_path):
     assert _bcubed(_state(_cl([1], [2], [3], [4, 5, 6]), p, "run2")) < 1.0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="build_reconciliation_report persists on every call: gate preview then load node report B-cubed 1.0 against the SAME run",
-)
 def test_rebuilding_the_report_within_one_run_does_not_compare_the_run_to_itself(tmp_path):
     p = tmp_path / "h.json"
     _bcubed(_state(_cl([1, 2, 3], [4, 5, 6]), p, "run1"))
@@ -192,10 +180,6 @@ def test_control_small_cluster_is_fast():
     assert _giant_seconds(50) < 2.0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="all-pairs name_variation_rate over every cluster member: 1600 names 23s, 5000 names minutes + GB of pair tuples",
-)
 def test_cost_of_one_giant_cluster_is_not_quadratic():
     small, big = _giant_seconds(300), _giant_seconds(1200)  # 4x the names
     assert big < 8 * small + 0.5, (small, big)  # linear ~4x, quadratic ~16x

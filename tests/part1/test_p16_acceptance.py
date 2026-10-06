@@ -696,8 +696,14 @@ def test_i_report_carries_the_signals_flag_count_and_run_one_unavailable(tmp_pat
     assert q[K_COUNT] == 1 and set(q[K_FLAGGED]) == bad
     assert q[K_B3] is None and "not available" in q[K_B3_NOTE].lower()
     json.dumps(_report(state), allow_nan=False)  # the whole report stays serialisable (run 2 below)
-    q2 = _report(state)["entities"]["company"][QUALITY_KEY]
+    # the same run asked again (gate preview, then the load report) is NOT a second run
+    again = _report(state)["entities"]["company"][QUALITY_KEY]
+    assert again[K_B3] is None and "not available" in again[K_B3_NOTE].lower()
+    q2 = _report({**state, "run_id": "p16-run2"})["entities"]["company"][QUALITY_KEY]
     assert q2[K_B3] == pytest.approx(1.0)
+    assert _report({**state, "run_id": "p16-run2"})["entities"]["company"][QUALITY_KEY][
+        K_B3
+    ] == pytest.approx(1.0)
     for key in (K_HOM, K_VAR, K_HILL, K_THR):
         assert key in q2
 
@@ -739,7 +745,7 @@ def test_i_each_entity_has_its_own_history(tmp_path):
     state["entity_clusters"]["person"] = clusters
     ents = _report(state)["entities"]
     assert all(ents[e][QUALITY_KEY][K_B3] is None for e in ("company", "person"))
-    ents = _report(state)["entities"]
+    ents = _report({**state, "run_id": "p16-run2"})["entities"]
     assert all(ents[e][QUALITY_KEY][K_B3] == pytest.approx(1.0) for e in ("company", "person"))
 
 
