@@ -15,7 +15,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from src.mcp_server.tools.cluster_quality import quality_signals
 from src.mcp_server.tools.load_data import _get_destination_connector, load_data_impl
+from src.mcp_server.tools.resolve_entities import _best_name_field, _record_id
 from src.orchestrator.spool import (
     clusters_for,
     collection_count,
@@ -167,7 +169,14 @@ def build_reconciliation_report(
             if isinstance(u, dict) and u.get("field") not in mapping_for_entity
         ]
 
+        # P16: label-free quality signals (a flag, never a cut); B-cubed needs the
+        # previous run's clustering, kept in the file named by ``quality_history_path``.
+        records = collection_records(state.get("extracted_data"), entity)
+        record_names = {_record_id(r): r.get(_best_name_field(r) or "") for r in records}
+        quality = quality_signals(clusters, record_names, state.get("quality_history_path"), entity)
+
         entity_report: dict[str, Any] = {
+            "quality": quality,
             "extracted_per_origin": per_origin,
             "extracted_total": extracted_total,
             "clusters_formed": len(clusters),
