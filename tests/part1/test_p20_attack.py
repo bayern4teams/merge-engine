@@ -678,3 +678,158 @@ def test_control_gate_noop_with_band_records_only_equals_build():
             sorted(c["record_ids"]) for c in reb
         )
     assert differs == 0
+
+
+# ══ R4 (narrowed, fb167b9): attacks on WNP + components + triangle support + P6 repair + gate rebuild ══
+def _r4_rec(i, **extra):
+    return {
+        "_origin_id": "s0",
+        "_origin_table": "t",
+        "_origin_id_row": f"{i:03d}",
+        "name": "Acme",
+        **extra,
+    }
+
+
+def _r4_rid(i):
+    return f"s0:t:{i:03d}"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="DEFECT r4 (medium-high; same as parent, but it voids P20 wherever identifiers exist): _split_component runs the P6 "
+    "conflict repair on the whole WNP component BEFORE the triangle split, and a conflict makes EVERY member a singleton. Two true "
+    "5-cliques joined by one strong bridge come out exact without identifiers and as 10 singletons with a distinct tax_id per entity "
+    "(40 dense worlds: no ids FP130/FN3 exact 32; tax_id on FP0/FN2312 exact 0; split-first-then-P6 gives FP0/FN111 exact 32).",
+)
+def test_r4_p6_conflict_in_a_bridged_component_does_not_dissolve_both_entities():
+    recs = [_r4_rec(i, tax_id="111" if i < 5 else "222") for i in range(10)]
+    edges = [(a, b, 0.96) for a, b in clique(5)] + [(a + 5, b + 5, 0.96) for a, b in clique(5)]
+    pairs = [(_r4_rid(a), _r4_rid(b), w) for a, b, w in [*edges, (0, 5, 0.99)]]
+    cl, _m, _x = asyncio.run(tre._build_clusters(recs, pairs, "company", stats={}))
+    got = sorted(sorted(c["record_ids"]) for c in cl)
+    assert got == [[_r4_rid(i) for i in range(5)], [_r4_rid(i) for i in range(5, 10)]]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="DEFECT r4 (medium; pre-existing in P15's loop, 49/2000 random worlds with a reject decision, 2/2000 without; parent 76): "
+    "rebuild_band_clusters unions strongest-first with accepted pairs weighted 1; an accepted pair whose ends were already joined by "
+    "earlier weight-1.0 ties hits `ra == rb: continue` and is never marked human, so the component is then split by the P20 triangle "
+    "step and the human-accepted pair ends up in two clusters. Fix: mark human when is_accepted even if ra == rb.",
+)
+def test_r4_gate_accepted_pair_already_joined_by_perfect_scores_stays_together():
+    recs = [_r4_rec(i) for i in range(1, 8)]
+    # a 4-cycle 1-2-4-3 (edge 3-4 is the band pair), a triangle 5-6-7, and a link 4-5
+    edges = [
+        (1, 2, 1.0),
+        (1, 3, 1.0),
+        (2, 4, 1.0),
+        (4, 5, 1.0),
+        (5, 6, 1.0),
+        (5, 7, 1.0),
+        (6, 7, 1.0),
+    ]
+    pairs = [(_r4_rid(a), _r4_rid(b), w) for a, b, w in [*edges, (3, 4, 0.8)]]
+    cl, _m, _x = asyncio.run(tre._build_clusters(recs, pairs, "company", stats={}))
+    accepted = {frozenset((_r4_rid(3), _r4_rid(4)))}
+    retained = [[a, b, w] for a, b, w in pairs if frozenset((a, b)) not in accepted]
+    retained.append([_r4_rid(3), _r4_rid(4), 1])
+    reb = tre.rebuild_band_clusters(
+        "company",
+        cl,
+        retained,
+        accepted,
+        set(),
+        0.95,
+        {_r4_rid(i): recs[i - 1] for i in range(1, 8)},
+    )
+    where = {r: i for i, c in enumerate(reb) for r in c["record_ids"]}
+    assert where[_r4_rid(3)] == where[_r4_rid(4)], "a human-accepted pair was split"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="DEFECT r4 (medium, regression vs parent, known since r1/r3 as 'n=4 jitter' but never fenced): a COMPLETE confident 4-clique "
+    "(all six pairs >= auto_match) splits into two pairs in 3.1% of random draws at any jitter amplitude (rank-order effect: WNP keeps only "
+    "a perfect matching). Parent: 0%. Triangle support over the confident edges could re-admit the pruned edges.",
+)
+def test_r4_complete_confident_four_clique_with_jitter_is_not_split_into_two_pairs():
+    w = {
+        (0, 1): 0.9602,
+        (0, 2): 0.9622,
+        (0, 3): 0.9679,
+        (1, 2): 0.9737,
+        (1, 3): 0.9628,
+        (2, 3): 0.9622,
+    }
+    assert named(["Acme"] * 4, [(i, j, c) for (i, j), c in w.items()]) == [[0, 1, 2, 3]]
+
+
+def test_control_r4_splink_wrapper_passes_everything_through(monkeypatch):
+    """_capture_and_cluster is now a pure capture: the build and the band's retained pairs agree, stats flow through."""
+    import src.mcp_server.tools.splink_matcher as sm
+
+    seen: dict = {}
+    recs = [_rec(i, f"n{i}") for i in range(10)]
+    pairs = (
+        [(_rid(a), _rid(b), 0.96) for a, b in clique(5)]
+        + [(_rid(a + 5), _rid(b + 5), 0.96) for a, b in clique(5)]
+        + [(_rid(0), _rid(5), 0.99), (_rid(1), _rid(6), 0.8), (_rid(2), _rid(7), 0.3)]
+    )
+
+    async def fake(
+        entity_type,
+        records,
+        matching_rules=None,
+        known_cluster_ids=None,
+        build_clusters_fn=None,
+        **kw,
+    ):
+        st: dict = {}
+        cl, a, x = await build_clusters_fn(
+            records, pairs, entity_type=entity_type, known_cluster_ids=known_cluster_ids,
+            auto_match=0.95, auto_exclude=0.7, stats=st, pair_evidence=None,
+        )  # fmt: skip
+        seen["stats"] = st
+        return {"clusters": cl, "entity_type": entity_type, "auto_matched": a, "auto_excluded": x}
+
+    monkeypatch.setattr(sm, "resolve_with_splink", fake)
+    res = asyncio.run(
+        tre.resolve_entities_impl("company", recs, matching_rules={"engine": "splink"})
+    )
+    got = sorted(sorted(c["record_ids"]) for c in res["clusters"])
+    assert got == [
+        [_rid(i) for i in sorted(range(5), key=_rid)],
+        [_rid(i) for i in sorted(range(5, 10), key=_rid)],
+    ]
+    assert len(res["retained_pairs"]) == len(pairs) - 1  # the 0.3 pair is under auto_exclude
+    assert seen["stats"]["component_count"] >= 1
+    by = {x: recs[int(x.rsplit(":", 1)[1])] for p in res["retained_pairs"] for x in p[:2]}
+    reb = tre.rebuild_band_clusters(
+        "company", res["clusters"], res["retained_pairs"], set(), set(), 0.95, by
+    )
+    assert sorted(sorted(c["record_ids"]) for c in reb) == got
+
+
+def test_control_r4_noop_gate_equals_build_on_dense_wrong_edge_worlds():
+    """Random strong wrong edges that may share nodes, band pairs, jitter; no decision -> the rebuild is the build."""
+    for seed in range(40):
+        rng = random.Random(seed)
+        w = acc.world(seed, [rng.randrange(3, 7) for _ in range(6)], ["clique"] * 6, 0)
+        ids = [i for t in w["truth"] for i in t]
+        w["pairs"] = [(a, b, x + rng.uniform(-0.01, 0.01)) for a, b, x in w["pairs"]]
+        for _ in range(rng.choice([2, 6, 12])):
+            a, b = rng.sample(ids, 2)
+            w["pairs"].append((a, b, rng.uniform(0.97, 0.999)))
+        for _ in range(8):
+            a, b = rng.sample(ids, 2)
+            w["pairs"].append((a, b, rng.uniform(0.7, 0.94)))
+        cl, _m, _x = asyncio.run(tre._build_clusters(w["records"], w["pairs"], "company", stats={}))
+        ret = [list(p) for p in w["pairs"]]
+        need = {x for p in ret for x in p[:2]}
+        by = {fx.rid(r): r for r in w["records"] if fx.rid(r) in need}
+        reb = tre.rebuild_band_clusters("company", cl, ret, set(), set(), 0.95, by)
+        assert sorted(sorted(c["record_ids"]) for c in cl) == sorted(
+            sorted(c["record_ids"]) for c in reb
+        ), seed
