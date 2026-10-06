@@ -1,4 +1,4 @@
-"""P10 attack r1 (verifier; commit aec9272).  Beyond tests/part1/test_p10_acceptance.py.
+"""P10 attack r1 (verifier; commit aec9272) + r2 (commit 568bc8c, section "r2" at the end).  Beyond tests/part1/test_p10_acceptance.py.
 
 Strict xfails = REAL defects only (each flips to XPASS, and the strict flag then fails the suite, when fixed: delete the mark).
 Controls (plain tests) pin what was probed and found sound, so a regression shows.
@@ -11,7 +11,10 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import os
+import tempfile
 import uuid
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -300,3 +303,466 @@ def test_control_gate_is_read_only_and_json_clean():
     g = pre_load_gate(st)
     json.dumps(g, allow_nan=False)
     assert st == w.state
+
+
+# =====================================================================================================
+# r2 (HEAD 568bc8c): (a) r1 findings 1/2/3/6/5 end to end through api.Feedback -> real WorkflowManager -> real graph,
+#                    (b) the NEW mechanisms (identity column, coverage width, small-entity slack, persistence).
+# =====================================================================================================
+from types import SimpleNamespace  # noqa: E402
+
+from tests.part1.test_p10_acceptance import PROV, FakeDest, G, WorkflowManager, tld  # noqa: E402
+
+_ALL_KEYS = (
+    "extracted_data",
+    "entity_clusters",
+    "unified_entities",
+    "field_mappings",
+    "unmapped_fields",
+)
+
+
+def _tables(state):
+    cols = {
+        c
+        for recs in state["extracted_data"].values()
+        for r in recs
+        for c in r
+        if not c.startswith("_")
+    }
+    return {e: sorted(cols | {"id", "name", "val"}) + list(PROV) for e in state["extracted_data"]}
+
+
+def _world(name, state):
+    st = copy.deepcopy(state)
+    st["run_id"] = "p10a-" + name
+    return World(name, st, _tables(st), {})
+
+
+def _drive(world, post, *, then=None):
+    """Real graph paused at the final gate; ``post(client, tid)`` answers it through the HTTP API with the REAL manager."""
+    from fastapi.testclient import TestClient
+
+    from src.api import main as api
+
+    dest, calls = FakeDest(world.tables), []
+    with (
+        patch.object(nld, "_get_destination_connector", lambda cfg: dest),
+        patch.object(tld, "_get_destination_connector", lambda cfg: dest),
+        patch.object(
+            nld, "_RUN_REPORTS_DIR", Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR") or None))
+        ),
+        patch.object(nld, "load_data_impl", _spy_calls(nld.load_data_impl, calls)),
+        patch.object(tld, "load_data_impl", _spy_calls(tld.load_data_impl, calls)),
+    ):
+        g = G.build_graph()
+        tid = uuid.uuid4().hex
+        cfg = {"configurable": {"thread_id": tid}}
+        g.update_state(cfg, copy.deepcopy(world.state), as_node="unify_entities")
+        values = dict(g.get_state(cfg).values)
+        live = WorkflowManager._build_interrupt_data_inner("human_final_approval", values)
+        with patch("src.orchestrator.workflow_manager.build_graph", return_value=g):
+            mgr = WorkflowManager()
+        mgr._continue_workflow = lambda *a, **k: None
+        mgr._active_workflows[tid] = {
+            "config": cfg,
+            "current_interrupt_node": "human_final_approval",
+            "status": "interrupted",
+            "interrupt_data": None,
+        }
+        seen = []
+        real_resume = mgr.resume_workflow
+        mgr.resume_workflow = lambda t, fb: (seen.append(dict(fb)), real_resume(t, fb))[1]
+        with patch.object(api, "get_manager", lambda: mgr):
+            client = TestClient(api.create_api())
+            resp = post(client, tid, live)
+            asyncio.run(g.ainvoke(None, cfg))
+            snap = g.get_state(cfg)
+            extra = then(client, tid, mgr, g, cfg, dest, snap) if then else None
+        mgr._finalize_stream_status(tid)
+        final = dict(g.get_state(cfg).values)
+        return SimpleNamespace(
+            resp=resp,
+            seen=seen,
+            live=live,
+            final=final,
+            failure=final.get("failure") or {},
+            dest=dest,
+            impl_calls=calls,
+            status=mgr._active_workflows[tid]["status"],
+            next=tuple(snap.next),
+            extra=extra,
+        )
+
+
+def _spy_calls(real, calls):
+    async def wrapper(*a, **k):
+        calls.append(1)
+        return await real(*a, **k)
+
+    return wrapper
+
+
+def _approve(body):
+    return lambda c, tid, live: c.post(f"/api/workflow/{tid}/feedback", json=body)
+
+
+def test_e2e_api_without_thresholds_refuses_the_replay_and_writes_nothing():
+    out = _drive(
+        replay_world := _world("e2e-default", replay("s8x40").state),
+        _approve({"decision": "approve"}),
+    )
+    assert out.resp.status_code == 200 and "thresholds" not in out.seen[0]
+    assert out.status == "failed" and out.failure.get("disposition") == "fail"
+    assert out.dest.writes == [] and out.impl_calls == [] and replay_world
+
+
+def test_e2e_api_thresholds_taken_verbatim_from_the_payload_are_what_the_ui_sends_and_change_nothing():
+    """Gates.tsx sends EVERY displayed proposal back as `thresholds`: the run must behave exactly as with none."""
+
+    def post(c, tid, live):
+        inv = live["data"]["pre_load_gate"]["invariants"]
+        return c.post(
+            f"/api/workflow/{tid}/feedback",
+            json={"decision": "approve", "thresholds": {k: v["threshold"] for k, v in inv.items()}},
+        )
+
+    out = _drive(_world("e2e-verbatim", replay("s8x40").state), post)
+    assert out.seen[0]["thresholds"] and out.status == "failed" and out.dest.writes == []
+
+
+def test_e2e_api_permissive_thresholds_load_the_replay():
+    nm = {
+        "mapping_coverage": 0.0,
+        "null_identity_share": 1.0,
+        "largest_cluster_share": 1.0,
+        "flagged_clusters": 10**6,
+    }
+    out = _drive(
+        _world("e2e-edit", replay("s8x40").state),
+        _approve({"decision": "approve", "thresholds": nm}),
+    )
+    assert out.seen[0]["thresholds"] == nm
+    assert out.status == "completed" and out.dest.writes and not out.failure
+
+
+def test_e2e_api_a_partial_edit_does_not_disable_the_other_invariants():
+    out = _drive(
+        _world("e2e-partial", replay("s8x40").state),
+        _approve({"decision": "approve", "thresholds": {"mapping_coverage": 0.0}}),
+    )
+    assert out.status == "failed" and out.dest.writes == []
+
+
+def test_e2e_api_non_dict_thresholds_is_a_422_and_the_gate_stays_open():
+    out = _drive(
+        _world("e2e-422", replay("s8x40").state),
+        _approve({"decision": "approve", "thresholds": [1, 2]}),
+    )
+    assert out.resp.status_code == 422 and out.seen == [] and out.dest.writes == []
+
+
+def test_e2e_f1_half_the_entities_unmapped_and_unlisted_is_refused_through_the_graph():
+    w = make_world("f1e", n_ent=8, per=40)
+    st = _drop_unmapped(w.state, ["ent_a", "ent_b", "ent_c", "ent_d"])
+    out = _drive(_world("e2e-f1", st), _approve({"decision": "approve"}))
+    assert (
+        out.status == "failed"
+        and out.dest.writes == []
+        and "mapping_coverage" in out.failure["error"]
+    )
+
+
+def test_e2e_f2_78_percent_null_names_beside_a_populated_company_id_is_refused_through_the_graph():
+    w = make_world("f2e", n_ent=8, per=100, null_ent=True, null_k=78)
+    st = copy.deepcopy(w.state)
+    for r in st["extracted_data"]["ent_a"]:
+        r["company_id"] = f"c{r['id']}"
+    out = _drive(_world("e2e-f2", st), _approve({"decision": "approve"}))
+    assert (
+        out.status == "failed"
+        and out.dest.writes == []
+        and "null_identity_share" in out.failure["error"]
+    )
+
+
+def test_e2e_f3_a_small_healthy_lookup_beside_large_entities_loads_through_the_graph():
+    st = _with_lookup(50, 0)
+    out = _drive(_world("e2e-f3", st), _approve({"decision": "approve"}))
+    assert out.status == "completed" and not out.failure and out.dest.rows.get("lookup")
+
+
+def test_e2e_f6_api_error_gate_retry_keeps_the_confirmed_thresholds():
+    w = _world("e2e-f6", only_coverage().state)
+    box = {}
+
+    def post(c, tid, live):
+        return c.post(
+            f"/api/workflow/{tid}/feedback",
+            json={"decision": "approve", "thresholds": {"mapping_coverage": 0.0}},
+        )
+
+    # break the first load by wrapping FakeDest.load_batch (class-level patch for this test only)
+    real = FakeDest.load_batch
+    state = {"on": True}
+
+    def flaky(self, *a, **k):
+        if state["on"]:
+            raise RuntimeError("transient destination failure")
+        return real(self, *a, **k)
+
+    def then(client, tid, mgr, g, cfg, dest, snap):
+        box["next"] = tuple(snap.next)
+        state["on"] = False
+        mgr._active_workflows[tid].update(
+            current_interrupt_node="handle_error", status="interrupted"
+        )
+        r = client.post(f"/api/workflow/{tid}/feedback", json={"decision": "retry"})
+        box["retry_status"] = r.status_code
+        asyncio.run(g.ainvoke(None, cfg))
+        return dict(g.get_state(cfg).values)
+
+    with patch.object(FakeDest, "load_batch", flaky):
+        out = _drive(w, post, then=then)
+    assert box["next"] == ("handle_error",), box
+    assert box["retry_status"] == 200
+    assert not (out.extra.get("failure") or {}), out.extra.get("failure", {}).get("error", "")[:200]
+    assert out.extra.get("pre_load_thresholds") == {"mapping_coverage": 0.0}
+
+
+def test_control_a_fresh_run_never_inherits_an_earlier_runs_confirmation():
+    nm = {
+        "mapping_coverage": 0.0,
+        "null_identity_share": 1.0,
+        "largest_cluster_share": 1.0,
+        "flagged_clusters": 10**6,
+    }
+    a = _drive(
+        _world("fresh-a", replay("s8x40").state),
+        _approve({"decision": "approve", "thresholds": nm}),
+    )
+    assert a.status == "completed" and a.final.get("pre_load_thresholds") == nm
+    b = _drive(_world("fresh-b", replay("s8x40").state), _approve({"decision": "approve"}))
+    assert b.status == "failed" and "pre_load_thresholds" not in b.final and b.dest.writes == []
+
+
+def test_control_confirmed_thresholds_precedence_new_feedback_beats_stored_stored_beats_error_gate_feedback():
+    st = {"pre_load_thresholds": {"a": 1}}
+    assert nld._confirmed_thresholds(st) == {"a": 1}
+    st["human_feedback"] = {"node": "handle_error", "decision": "retry", "thresholds": {"a": 99}}
+    assert nld._confirmed_thresholds(st) == {
+        "a": 1
+    }  # an error-gate feedback can never loosen/replace
+    st["human_feedback"] = {"node": "human_final_approval", "thresholds": {"a": 2}}
+    assert nld._confirmed_thresholds(st) == {"a": 2}  # a re-approval's new numbers win
+    st["human_feedback"] = {"node": "human_final_approval"}
+    assert nld._confirmed_thresholds(st) == {
+        "a": 1
+    }  # no numbers on the re-approval: the stored ones (not in-flow reachable)
+    assert nld._confirmed_thresholds({}) is None
+
+
+# -- r2 mechanism 1: ONE identity column per entity ---------------------------------------------------
+def _rename(state, ent, fn):
+    st = copy.deepcopy(state)
+    for i, r in enumerate(st["extracted_data"][ent]):
+        fn(i, r)
+    st["field_mappings"][ent] = {
+        c: {"dest_column": c, "requires_schema_change": False}
+        for c in {c for r in st["extracted_data"][ent] for c in r if not c.startswith("_")}
+    }
+    st["unmapped_fields"][ent] = []  # every carried field mapped: coverage cannot be what trips
+    return st
+
+
+def _null_inv(state):
+    return gate(state)["invariants"]["null_identity_share"]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="r2 identity column: ONE column is picked over the union of keys, so records of a second origin that name the same "
+    "concept differently (company_name / org_title; the repo's own _best_name_field comment) count as NULL: a fully "
+    "populated mixed-origin entity measures 0.21 NULL at 20% second origin, 0.50 at 50/50; refused as the run's worst",
+)
+def test_a_healthy_mixed_origin_entity_is_not_a_null_identity_failure():
+    base = make_world("mo", n_ent=8, per=100, null_each=0)
+
+    def fn(i, r):
+        r["org_title" if i % 5 == 0 else "company_name"] = r.pop("name")
+
+    st = _rename(base.state, "ent_a", fn)
+    inv = _null_inv(st)
+    assert not inv["violated"], (inv["measured"], inv["threshold"], "every name is populated")
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="r2 identity column: rank is by hint position and `nickname` (8) shortens below first_name/last_name/full_name, so a "
+    "healthy person table whose optional nickname is 90% NULL is measured 0.90 NULL identity and refused",
+)
+def test_a_sparse_optional_nickname_does_not_make_a_person_table_a_null_identity_failure():
+    base = make_world("nick", n_ent=8, per=100, null_each=0)
+
+    def fn(i, r):
+        n = r.pop("name")
+        r["first_name"], r["last_name"], r["nickname"] = n, n.title(), (n if i % 10 == 0 else None)
+
+    inv = _null_inv(_rename(base.state, "ent_a", fn))
+    assert not inv["violated"], (
+        inv["measured"],
+        inv["threshold"],
+        "first_name/last_name are always populated",
+    )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="r2 identity column: `id-like last` is only the SECOND sort key, after hint rank, so a populated `company_id` (rank 4) "
+    "beats a 78%-NULL `label` (rank 7): measured NULL share 0.00, the incident's failure again hidden by a sibling id column",
+)
+def test_an_id_column_does_not_hide_a_null_label():
+    base = make_world("idl", n_ent=8, per=100, null_each=0)
+
+    def fn(i, r):
+        r.pop("name")
+        r["company_id"], r["label"] = f"c{i}", (None if i < 78 else f"L{i}")
+
+    inv = _null_inv(_rename(base.state, "ent_a", fn))
+    assert inv["violated"], (inv["measured"], inv["threshold"], "78 of 100 labels are NULL")
+
+
+def test_control_literal_name_column_always_wins_and_id_columns_are_last_among_equal_rank():
+    base = make_world("ctl", n_ent=8, per=100, null_each=0)
+
+    def fn(i, r):
+        r["name"] = None if i < 78 else r["name"]
+        r["name_id"], r["company_id"], r["org_id"], r["email"], r["label"], r["username"] = (
+            i,
+            i,
+            i,
+            f"e{i}",
+            f"l{i}",
+            f"u{i}",
+        )
+
+    assert _null_inv(_rename(base.state, "ent_a", fn))["measured"] == 0.78
+
+    # same rank, id-like column loses: company_name (12) before company_id (10)
+    def fn2(i, r):
+        r.pop("name")
+        r["company_name"] = None if i < 78 else f"c{i}"
+        r["company_id"] = i
+
+    assert _null_inv(_rename(base.state, "ent_a", fn2))["measured"] == 0.78
+
+
+# -- r2 mechanism 2: coverage width = max(listed, carried fields) -------------------------------------
+_AUDIT = (
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "etl_batch_id",
+    "row_hash",
+    "source_system",
+    "ingested_at",
+    "modified_by",
+)
+
+
+def _all_mapped_world(n_audit):
+    base = make_world("cov", n_ent=8, per=100, null_each=0, mapped=("id", "name", "val", "extra"))
+    st = copy.deepcopy(base.state)
+    for e in st["unmapped_fields"]:
+        st["unmapped_fields"][e] = []
+    for r in st["extracted_data"]["ent_a"]:
+        for c in _AUDIT[:n_audit]:
+            r[c] = (
+                "x"  # P12 metadata: the mapper's schema build skips it (metadata_only), neither mapped nor listed
+            )
+    return st
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="r2 coverage width: columns the mapper LEGITIMATELY ignores (P12 metadata_only, stays in the records, in neither "
+    "field_mappings nor unmapped_fields) widen the denominator: 4 of 4 business fields mapped + 8 audit columns measures "
+    "coverage 0.333 against 1.0 for its peers (floor 0.5) and refuses a fully mapped entity; 5 audit columns already fall below 0.5",
+)
+def test_a_fully_mapped_entity_with_audit_columns_is_not_a_coverage_failure():
+    g = gate(_all_mapped_world(8))["invariants"]["mapping_coverage"]
+    assert not g["violated"], (g["measured"], g["threshold"], "4 of 4 business fields are mapped")
+
+
+def test_control_coverage_blind_spot_closed_and_a_few_audit_columns_are_tolerated():
+    for n in (0, 2, 4):
+        assert not gate(_all_mapped_world(n))["invariants"]["mapping_coverage"]["violated"], n
+    # a field that is carried, not mapped, not listed IS a gap now (that is the r1 finding 2 fix)
+    base = make_world("cov2", n_ent=8, per=40, mapped=("id", "name", "val", "extra"))
+    st = copy.deepcopy(base.state)
+    for e in st["unmapped_fields"]:
+        st["unmapped_fields"][e] = []
+    st["field_mappings"]["ent_a"] = {}
+    assert gate(st)["invariants"]["mapping_coverage"]["measured"] == 0.0
+
+
+# -- r2 mechanism 3: small-entity slack ---------------------------------------------------------------
+def _lookup_state(n_lookup, *, big_null=0, giant=0):
+    st = _with_lookup(n_lookup, 0)
+    if big_null:
+        w = make_world("nn", n_ent=1, per=500, null_ent=True, null_k=big_null)
+        for k in ("extracted_data", "entity_clusters", "unified_entities"):
+            st[k]["ent_a"] = w.state[k]["ent_a"]
+    if giant:
+        w = make_world("gg", n_ent=2, per=500, giant_k=giant, null_each=0)
+        for k in ("extracted_data", "entity_clusters", "unified_entities"):
+            st[k]["ent_b"] = w.state[k]["ent_b"]
+    return st
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="r2 small-entity slack is GLOBAL (one ceiling for the run, lifted by the SMALLEST entity): with a 5-row lookup in the "
+    "run, ONE 500-row entity that is 45% a single cluster (225 fused records vs largest cluster ~3 elsewhere) passes at "
+    "the 0.5 cap (threshold 0.50 instead of 0.01 with a 500-row sibling); 20 rows lift it to 0.26, 50 to 0.10",
+)
+def test_a_tiny_lookup_does_not_hide_a_giant_cluster_in_another_entity():
+    inv = gate(_lookup_state(5, giant=225))["invariants"]["largest_cluster_share"]
+    assert inv["violated"], (inv["measured"], inv["threshold"])
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="r2 small-entity slack is GLOBAL: a 2-row lookup lifts the NULL-identity ceiling to the 0.5 cap for every entity, so a "
+    "500-row entity with 45% NULL names passes (threshold 0.50 vs 0.002 with a 500-row sibling); 3 rows lift it to 1/3, 5 to 0.2",
+)
+def test_a_tiny_lookup_does_not_hide_a_null_burst_in_another_entity():
+    inv = gate(_lookup_state(2, big_null=225))["invariants"]["null_identity_share"]
+    assert inv["violated"], (inv["measured"], inv["threshold"])
+
+
+def test_control_without_the_tiny_lookup_both_bursts_are_caught_and_big_enough_lookups_do_not_lift_them():
+    assert gate(_lookup_state(500, giant=225))["invariants"]["largest_cluster_share"]["violated"]
+    assert gate(_lookup_state(500, big_null=225))["invariants"]["null_identity_share"]["violated"]
+    assert gate(_lookup_state(200, giant=225))["invariants"]["largest_cluster_share"]["violated"]
+    assert gate(_lookup_state(50, big_null=225))["invariants"]["null_identity_share"]["violated"]
+
+
+def test_control_slack_never_exceeds_the_cap_so_the_replay_still_fails_beside_a_one_row_lookup():
+    st = _lookup_state(1, big_null=390, giant=300)
+    g = gate(st)["invariants"]
+    assert g["null_identity_share"]["violated"] and g["largest_cluster_share"]["violated"]
+    assert all(
+        v["threshold"] <= 0.5
+        for k, v in g.items()
+        if k in ("null_identity_share", "largest_cluster_share")
+    )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="r2 slack cap (LOW): the docstring promises one NULL record of slack, but the 1/2 cap makes it 0.5: a 1-row entity whose "
+    "single name is NULL measures 1.0 and refuses the whole run (2- and 3-row entities with one NULL pass)",
+)
+def test_a_one_row_entity_with_a_null_name_is_one_null_record_of_slack():
+    assert not gate(_with_lookup(1, 1))["invariants"]["null_identity_share"]["violated"]
