@@ -609,3 +609,185 @@ def test_dead_min_cohesion_report():
     j = body.index("\ndef ", i + 10)
     assert "min_cohesion" not in body[i:j].split('"""')[2]  # parameter unused in the function body
     assert math.isfinite(tre._MIN_COHESION)
+
+
+# ══ R2 (commit 4171c64): attacks on the new rules ═════════════════════════════════════════════
+_FILLER = [
+    f"{w} Corp" for w in ["Qux", "Wib", "Zed", "Fon", "Gra", "Hul", "Ipa", "Jor", "Kel", "Lum"]
+]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="DEFECT r2 (high, regression vs r1): the component-word exception ('every named member holds the token, "
+    "none outside it') extends the lone-edge leniency to multi-edge components, so two sibling entities that share "
+    "one family token (Tata Steel / Tata Motors shape) bridged by one strong wrong edge are merged. r1 split them.",
+)
+def test_r2_sibling_entities_sharing_a_family_token_are_not_merged_by_a_bridge():
+    names = ["Qorvan Steel", "Qorvan Steel Ltd", "Qorvan Foods", "Qorvan Foods Ltd", *_FILLER]
+    got = named(names, [(0, 1, 0.96), (2, 3, 0.96), (1, 2, 0.99)])
+    assert got[:2] == [[0, 1], [2, 3]], got[:3]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="DEFECT r2 (medium, regression vs r1 and parent): support counted over CONFIDENT (pre-WNP) edges "
+    "re-admits a strong double bridge: two strong wrong edges into one node of the other clique make the "
+    "WNP-pruned true edge a 'triangle' that corroborates both bridges (names uninformative).",
+)
+def test_r2_double_bridge_between_two_cliques_is_not_corroborated_by_a_pruned_edge():
+    names = ["Acme"] * 10
+    edges = [
+        (i, j, 0.96) for g in (range(0, 5), range(5, 10)) for i, j in itertools.combinations(g, 2)
+    ]
+    got = named(names, edges + [(0, 5, 0.99), (1, 5, 0.99)])
+    assert got == [[0, 1, 2, 3, 4], [5, 6, 7, 8, 9]]
+
+
+def test_control_r2_single_bridge_between_two_cliques_still_cut():
+    names = ["Acme"] * 10
+    edges = [
+        (i, j, 0.96) for g in (range(0, 5), range(5, 10)) for i, j in itertools.combinations(g, 2)
+    ]
+    assert named(names, edges + [(0, 5, 0.99)]) == [[0, 1, 2, 3, 4], [5, 6, 7, 8, 9]]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="DEFECT r2 (medium, also in r1): `_tokenize` is ASCII-only, so a non-Latin name has no tokens and can "
+    "never share a rare token: legitimate variants whose length ratio is under the scorer's 0.70 are split, while "
+    "the Latin equivalents (Sberbank / PJSC Sberbank of Russia) are kept.",
+)
+@pytest.mark.parametrize(
+    "a,b",
+    [
+        ("Сбербанк", "ПАО Сбербанк России"),
+        ("Яндекс", "ООО Яндекс Технологии"),  # noqa: RUF001
+        ("トヨタ", "トヨタ自動車株式会社"),
+        ("삼성", "삼성전자 주식회사"),
+    ],
+)
+def test_r2_non_latin_lone_edge_variants_are_not_split(a, b):
+    assert named([a, b], [(0, 1)]) == [[0, 1]]
+
+
+def test_control_r2_latin_equivalents_are_kept():
+    for a, b in [
+        ("Sberbank", "PJSC Sberbank of Russia"),
+        ("Samsung", "Samsung Electronics Co Ltd"),
+    ]:
+        assert named([a, b], [(0, 1)]) == [[0, 1]]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="DEFECT r2 (medium, also in r1): WNP runs BEFORE the name cut, so a wrong edge that names later cut still "
+    "raises its endpoints' mean and prunes the true edge between two such endpoints: true pair a-b (0.96) with a "
+    "wrong 0.98 edge at each end is lost.",
+)
+def test_r2_true_edge_is_not_pruned_by_means_polluted_with_name_cut_edges():
+    names = ["Zeluko Bamira", "Zeluko Bamira Ltd", "Quorvan Delisa", "Pimaku Tosera"]
+    assert named(names, [(0, 1, 0.96), (0, 2, 0.98), (1, 3, 0.98)]) == [[0, 1], [2], [3]]
+
+
+def test_control_r2_builtin_path_withholds_name_cuts_from_retained_pairs():
+    recs = [
+        {"_origin_id": "pg", "_origin_table": "t", "_origin_id_row": "1", "name": "Alpha Corp", "tax_id": "GB111", "website": "alpha.com"},
+        {"_origin_id": "ch", "_origin_table": "t", "_origin_id_row": "1", "name": "Zenith Steel", "tax_id": "GB111", "website": "alpha.com"},
+    ]  # fmt: skip
+    res = asyncio.run(
+        tre.resolve_entities_impl("company", recs, matching_rules={"unique_id_fields": ["tax_id"]})
+    )
+    assert all(len(c["record_ids"]) == 1 for c in res["clusters"])
+    assert res["retained_pairs"] == []
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="DEFECT r2 (medium): the engine='splink' path returns `_band_fields(splink_pairs, ...)` unfiltered: "
+    "`name_cut_pairs` is dropped only on the builtin path, so a gate rebuild re-joins a Splink pair the build "
+    "split on names (and stamps it reviewed_by_human).",
+)
+def test_r2_splink_path_withholds_name_cuts_too(monkeypatch):
+    import src.mcp_server.tools.splink_matcher as sm
+
+    async def fake(
+        entity_type,
+        records,
+        matching_rules=None,
+        known_cluster_ids=None,
+        build_clusters_fn=None,
+        **kw,
+    ):
+        pairs = [("ch:t:1", "pg:t:1", 0.97)]
+        cl, a, x = await build_clusters_fn(
+            records, pairs, entity_type=entity_type, known_cluster_ids=known_cluster_ids,
+            auto_match=0.95, auto_exclude=0.7, stats={}, pair_evidence=None,
+        )  # fmt: skip
+        return {"clusters": cl, "entity_type": entity_type, "auto_matched": a, "auto_excluded": x}
+
+    monkeypatch.setattr(sm, "resolve_with_splink", fake)
+
+    def r(src, i, name):
+        return {"_origin_id": src, "_origin_table": "t", "_origin_id_row": str(i), "name": name}
+
+    recs = [r("pg", 1, "Alpha Corp"), r("ch", 1, "Zenith Steel")]
+    res = asyncio.run(
+        tre.resolve_entities_impl("company", recs, matching_rules={"engine": "splink"})
+    )
+    assert all(
+        len(c["record_ids"]) == 1 for c in res["clusters"]
+    )  # build did split on names (control half)
+    assert res["retained_pairs"] == []
+
+
+def test_control_r2_noop_gate_never_rejoins_a_name_cut_pair_on_planted_worlds():
+    rejoined = total = 0
+    for seed in range(60):
+        rng = random.Random(seed)
+        w = acc.world(seed, [4, 4, 3, 3, 2, 2, 2], None, 0)
+        ids = [i for t in w["truth"] for i in t]
+        grp = {i: g for g, t in enumerate(w["truth"]) for i in t}
+        for _ in range(6):
+            x, y = rng.sample(ids, 2)
+            if grp[x] != grp[y]:
+                w["pairs"].append((x, y, rng.choice([0.96, 0.97, 0.98])))
+        st: dict = {}
+        cl, _m, _x = asyncio.run(tre._build_clusters(w["records"], w["pairs"], "company", stats=st))
+        cut = {tuple(p) for p in st["name_cut_pairs"]}
+        ret = [list(p) for p in w["pairs"] if (min(p[:2]), max(p[:2])) not in cut]
+        need = {x for p in ret for x in p[:2]}
+        by = {fx.rid(r): r for r in w["records"] if fx.rid(r) in need}
+        reb = tre.rebuild_band_clusters("company", cl, ret, set(), set(), 0.95, by)
+        where = {r: i for i, c in enumerate(reb) for r in c["record_ids"]}
+        for a, b in cut:
+            total += 1
+            rejoined += where[a] == where[b]
+    assert total > 100 and rejoined == 0
+
+
+def test_control_r2_determinism_with_names_and_three_sources():
+    words = ["acme", "zenith", "omega", "alpha", "bank", "steel", "holdings", "qorvan", "tata"]
+    for seed in range(40):
+        rng = random.Random(seed)
+        n = rng.randrange(6, 24)
+        names = [
+            " ".join(rng.sample(words, rng.randrange(1, 3))).title() + rng.choice(["", " Ltd"])
+            for _ in range(n)
+        ]
+        edges = [(a, b, rng.uniform(0.95, 0.99)) for a, b in clique(n) if rng.random() < 0.15]
+
+        def go(s, n=n, names=names, edges=edges):
+            r = random.Random(s)
+            order = list(range(n))
+            r.shuffle(order)
+            recs = [_rec(i, names[i]) for i in order]
+            ps = [
+                (_rid(a), _rid(b), w) if r.random() < 0.5 else (_rid(b), _rid(a), w)
+                for a, b, w in edges
+            ]
+            r.shuffle(ps)
+            cl, _m, _x = asyncio.run(tre._build_clusters(recs, ps, "company", stats={}))
+            return sorted(sorted(c["record_ids"]) for c in cl)
+
+        assert go(1) == go(2) == go(3)
