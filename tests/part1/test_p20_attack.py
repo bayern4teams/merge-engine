@@ -98,7 +98,7 @@ def test_jittered_5cliques_exact_recovery():
 
 @pytest.mark.xfail(
     strict=True,
-    reason="DEFECT (high): the report's own chain shape (ii) with a 0.4% weight wobble: an interior edge below "
+    reason="CEILING (lead r2: the report's accepted WNP recall trade). DEFECT (high): the report's own chain shape (ii) with a 0.4% weight wobble: an interior edge below "
     "the mean at BOTH ends is pruned, the chain splits (acceptance passes only because its chain is tied).",
 )
 def test_sparse_chain_with_natural_jitter_stays_whole():
@@ -202,7 +202,7 @@ def test_lone_edge_accent_variants_are_not_split(a, b):
 
 @pytest.mark.xfail(
     strict=True,
-    reason="DEFECT (medium, ceiling-adjacent): an incoherent cluster whose names differ in ONE of two tokens "
+    reason="CEILING (lead r2). DEFECT (medium, ceiling-adjacent): an incoherent cluster whose names differ in ONE of two tokens "
     "(shared suffix word) reads WEAK (>=0.70) at the scorer's levels, never DISAGREE, so it is kept merged. "
     "The acceptance's incoherent clique uses wholly different names.",
 )
@@ -617,12 +617,6 @@ _FILLER = [
 ]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT r2 (high, regression vs r1): the component-word exception ('every named member holds the token, "
-    "none outside it') extends the lone-edge leniency to multi-edge components, so two sibling entities that share "
-    "one family token (Tata Steel / Tata Motors shape) bridged by one strong wrong edge are merged. r1 split them.",
-)
 def test_r2_sibling_entities_sharing_a_family_token_are_not_merged_by_a_bridge():
     names = ["Qorvan Steel", "Qorvan Steel Ltd", "Qorvan Foods", "Qorvan Foods Ltd", *_FILLER]
     got = named(names, [(0, 1, 0.96), (2, 3, 0.96), (1, 2, 0.99)])
@@ -631,7 +625,7 @@ def test_r2_sibling_entities_sharing_a_family_token_are_not_merged_by_a_bridge()
 
 @pytest.mark.xfail(
     strict=True,
-    reason="DEFECT r2 (medium, regression vs r1 and parent): support counted over CONFIDENT (pre-WNP) edges "
+    reason="CEILING (lead r3: two wrong edges into one node form a real triangle; names, not structure, separate it -- see _split_component). DEFECT r2 (medium, regression vs r1 and parent): support counted over CONFIDENT (pre-WNP) edges "
     "re-admits a strong double bridge: two strong wrong edges into one node of the other clique make the "
     "WNP-pruned true edge a 'triangle' that corroborates both bridges (names uninformative).",
 )
@@ -652,12 +646,6 @@ def test_control_r2_single_bridge_between_two_cliques_still_cut():
     assert named(names, edges + [(0, 5, 0.99)]) == [[0, 1, 2, 3, 4], [5, 6, 7, 8, 9]]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT r2 (medium, also in r1): `_tokenize` is ASCII-only, so a non-Latin name has no tokens and can "
-    "never share a rare token: legitimate variants whose length ratio is under the scorer's 0.70 are split, while "
-    "the Latin equivalents (Sberbank / PJSC Sberbank of Russia) are kept.",
-)
 @pytest.mark.parametrize(
     "a,b",
     [
@@ -679,12 +667,6 @@ def test_control_r2_latin_equivalents_are_kept():
         assert named([a, b], [(0, 1)]) == [[0, 1]]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT r2 (medium, also in r1): WNP runs BEFORE the name cut, so a wrong edge that names later cut still "
-    "raises its endpoints' mean and prunes the true edge between two such endpoints: true pair a-b (0.96) with a "
-    "wrong 0.98 edge at each end is lost.",
-)
 def test_r2_true_edge_is_not_pruned_by_means_polluted_with_name_cut_edges():
     names = ["Zeluko Bamira", "Zeluko Bamira Ltd", "Quorvan Delisa", "Pimaku Tosera"]
     assert named(names, [(0, 1, 0.96), (0, 2, 0.98), (1, 3, 0.98)]) == [[0, 1], [2], [3]]
@@ -702,12 +684,6 @@ def test_control_r2_builtin_path_withholds_name_cuts_from_retained_pairs():
     assert res["retained_pairs"] == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT r2 (medium): the engine='splink' path returns `_band_fields(splink_pairs, ...)` unfiltered: "
-    "`name_cut_pairs` is dropped only on the builtin path, so a gate rebuild re-joins a Splink pair the build "
-    "split on names (and stamps it reviewed_by_human).",
-)
 def test_r2_splink_path_withholds_name_cuts_too(monkeypatch):
     import src.mcp_server.tools.splink_matcher as sm
 

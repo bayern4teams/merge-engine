@@ -557,12 +557,17 @@ async def resolve_entities_impl(
         # P15: the band fields need Splink's scored pairs, which only reach
         # this side through the clustering call -- captured there.
         splink_pairs: list[tuple[str, str, float]] = []
+        splink_stats: dict[str, Any] = {}
 
         async def _capture_and_cluster(
             recs: list[dict[str, Any]], pairs: list[tuple[str, str, float]], **kwargs: Any
         ) -> tuple[list[dict[str, Any]], int, int]:
             splink_pairs.extend(pairs)
-            return await _build_clusters(recs, pairs, **kwargs)
+            if kwargs.get("stats") is None:
+                kwargs["stats"] = {}
+            result = await _build_clusters(recs, pairs, **kwargs)
+            splink_stats.update(kwargs["stats"])  # its name cuts, for the band fields
+            return result
 
         splink_res = await resolve_with_splink(
             entity_type,
@@ -573,7 +578,9 @@ async def resolve_entities_impl(
         )
         if splink_res is not None:
             # Splink scores are posterior probabilities: log-odds scale.
-            return {**splink_res, **_band_fields(splink_pairs, *_thresholds_for(rules), True)}
+            band = _band_fields(splink_pairs, *_thresholds_for(rules), True)
+            band["retained_pairs"] = _without_name_cuts(band["retained_pairs"], splink_stats)
+            return {**splink_res, **band}
     blocking_keys = blocking_keys or rules.get("blocking_keys") or None
     # auto_match/unique_ids here are for the log line below and the cache
     # key only — _resolve_core (Part 1.5 B.3) re-derives its own copies
@@ -841,10 +848,7 @@ async def resolve_entities_impl(
     }
     # P20: a pair the build split on names is not re-joined by the gate
     # rebuild unless a human accepts it (it re-enters as an accepted pair).
-    name_cut = {tuple(p) for p in clustering_stats.get("name_cut_pairs", [])}
-    result["retained_pairs"] = [
-        p for p in result["retained_pairs"] if (min(p[:2]), max(p[:2])) not in name_cut
-    ]
+    result["retained_pairs"] = _without_name_cuts(result["retained_pairs"], clustering_stats)
     # Part 1.5 D.7: cached cluster_id values are meaningless (they were
     # derived from THIS run's known_cluster_ids) — apply_known_cluster_ids
     # re-derives them from scratch on every read, so caching them verbatim
@@ -876,6 +880,14 @@ def _pending_merge_candidates(
     ]
     undecided.sort(key=lambda p: -p["confidence"])
     return undecided[:_MAX_PENDING_CANDIDATES]
+
+
+def _without_name_cuts(retained: list[list[Any]], stats: dict[str, Any]) -> list[list[Any]]:
+    """The retained pairs minus those ``_build_clusters`` cut on names
+    (``stats["name_cut_pairs"]``): the gate rebuild sees only the band's
+    records and must not re-join them unless a human accepts the pair."""
+    cut = {tuple(p) for p in stats.get("name_cut_pairs", [])}
+    return [p for p in retained if (min(p[:2]), max(p[:2])) not in cut]
 
 
 def _band_fields(
@@ -1024,13 +1036,14 @@ def rebuild_band_clusters(
     old = {frozenset(c.get("record_ids", [])): c for c in clusters}
     # P20: components no human touched are split exactly as _build_clusters does.
     confident = {k: w for k, w in edge_weight.items() if w >= auto_match}
-    kept_edges = _wnp_prune(confident)
+    kept_edges, name_cuts = _cluster_edges(confident, records_by_id)
+    support = {k: w for k, w in confident.items() if k not in name_cuts}
     corpus = _corpus_evidence(list(records_by_id.values()))
     rebuilt: list[dict[str, Any]] = []
     for root in sorted(members_of):
         members = sorted(members_of[root])
         parts = (
-            _split_component(members, kept_edges, confident, records_by_id, corpus)[0]
+            _split_component(members, kept_edges, support, records_by_id, corpus)[0]
             if len(members) > 1 and root not in human
             else [members]
         )
@@ -3024,15 +3037,16 @@ async def _build_clusters(
     1. **Only confident edges.** A pair below ``auto_match`` -- evidence the
        system flagged as "not sure" -- is never joined here (it goes to review).
        Measured cost when it was: 26 of 400 distinct people destroyed.
-    2. **Weighted node pruning** (meta-blocking's own rule, as in P5): an edge
-       survives when it is at least the mean confident weight at one of its
-       ends. No hand-set confidence cut; a weak bridge goes here.
-    3. **Components**, then per component:
+    2. **Name coherence** (``_name_cuts``) -- a confident edge whose names
+       differ is cut, so an identifier collision cannot fuse two names; done
+       before pruning so a condemned edge cannot pull a node's mean.
+    3. **Weighted node pruning** (meta-blocking's own rule, as in P5): an edge
+       survives when it is at least the mean weight at one of its ends. No
+       hand-set confidence cut; a weak bridge goes here. Then **components**,
+       and per component:
        a. **conflict repair** -- two records whose exclusive identifiers
           disagree cannot share a cluster (P6);
-       b. **name coherence** (``_name_coherent_parts``) -- an edge whose names
-          differ is cut, so an identifier collision cannot fuse two names;
-       c. **triangle support** (``_triangle_parts``) -- where a part has
+       b. **triangle support** (``_triangle_parts``) -- where a part has
           corroborated edges (a shared neighbour), an uncorroborated edge is a
           bridge, however strong; a part with no triangle (a chain) stays whole.
     4. ``one_to_one`` (opt-in, the caller knows the destination needs it):
@@ -3084,7 +3098,8 @@ async def _build_clusters(
         key = (id1, id2) if id1 < id2 else (id2, id1)
         edge_weight[key] = max(edge_weight.get(key, 0.0), conf)
     confident = {k: w for k, w in edge_weight.items() if w >= auto_match}
-    kept = _wnp_prune(confident)
+    kept, name_cuts = _cluster_edges(confident, records_by_id)
+    support = {k: w for k, w in confident.items() if k not in name_cuts}
 
     for _id1, _id2, conf in scored_pairs:
         if conf >= auto_match:
@@ -3113,7 +3128,6 @@ async def _build_clusters(
     clusters: list[dict[str, Any]] = []
     repaired = 0
     cut = 0
-    name_cuts: set[tuple[str, str]] = set()
     large_components = 0
     largest_component_size = 0
     clustering_started = time.monotonic()
@@ -3132,16 +3146,11 @@ async def _build_clusters(
                 _LARGE_COMPONENT_THRESHOLD,
             )
         if len(members) > 1:
-            parts, was_repaired, cuts = _split_component(
-                members, kept, confident, records_by_id, corpus
-            )
+            parts, was_repaired = _split_component(members, kept, support, records_by_id, corpus)
             repaired += was_repaired
-            name_cuts |= cuts
             if one_to_one:
                 parts = [
-                    one
-                    for part in parts
-                    for one in _one_to_one_parts(part, confident, records_by_id)
+                    one for part in parts for one in _one_to_one_parts(part, support, records_by_id)
                 ]
             cut += not was_repaired and len(parts) > 1
         else:
@@ -3205,42 +3214,49 @@ async def _build_clusters(
     return clusters, auto_matched_count, auto_excluded_count
 
 
+def _cluster_edges(
+    confident: dict[tuple[str, str], float],
+    records_by_id: dict[str, dict[str, Any]],
+) -> tuple[dict[tuple[str, str], float], set[tuple[str, str]]]:
+    """Report P20 steps 1 and 3's edge half, shared with the matches-gate
+    rebuild: cut the confident edges whose names differ
+    (``_name_cuts``, per connected component), then weighted node pruning
+    over the rest -- an edge the names condemn must not pull a node's mean
+    and prune a true edge. Returns (kept edges, edges cut on names)."""
+    ids = sorted({r for pair in confident for r in pair})
+    names = {m: comparable_name(_record_name(records_by_id.get(m, {}), None)) for m in ids}
+    name_cuts: set[tuple[str, str]] = set()
+    for component in _components(ids, confident):
+        name_cuts |= _name_cuts(component, confident, names)
+    kept = _wnp_prune({k: w for k, w in confident.items() if k not in name_cuts})
+    return kept, name_cuts
+
+
 def _split_component(
     members: list[str],
     kept: dict[tuple[str, str], float],
-    confident: dict[tuple[str, str], float],
+    support: dict[tuple[str, str], float],
     records_by_id: dict[str, dict[str, Any]],
     corpus: CorpusEvidence,
-) -> tuple[list[list[str]], bool, set[tuple[str, str]]]:
-    """One component's clusters (``_build_clusters`` steps 3a-c, shared with
-    the matches-gate rebuild so the two cannot drift): conflict repair, then
-    name coherence, then triangle support, over the pruned edges ``kept``;
-    a triangle is looked for among all ``confident`` edges not cut on names,
-    since pruning a true clique's weaker edges must not make its members look
-    like bridges.
-    Returns (parts, repaired, edges cut on names)."""
+) -> tuple[list[list[str]], bool]:
+    """One component's clusters (shared with the matches-gate rebuild so the
+    two cannot drift): conflict repair (P6), then triangle support over the
+    ``kept`` edges, a triangle being looked for among the ``support`` edges
+    (confident, not cut on names) -- pruning a true clique's weaker edges must
+    not make its members look like bridges. Returns (parts, repaired).
+
+    ponytail: two strong wrong edges into one node make a real triangle;
+    structure cannot tell it from a true one, so only names (``_name_cuts``)
+    separate it. Upgrade: correlation clustering (report P20 Deferred)."""
     parts: list[list[str]] = []
     repaired = False
-    name_cuts: set[tuple[str, str]] = set()
-    names = {m: _record_name(records_by_id.get(m, {}), None) for m in members}
     for component in _components(members, kept):
         split, was_repaired, _ = _partition_component(
             component, kept, records_by_id, min_cohesion=0, corpus=corpus
         )
         repaired = repaired or bool(was_repaired)
-        if not was_repaired:
-            coherent_parts, cuts = _name_coherent_parts(component, kept, names, corpus)
-            name_cuts |= cuts
-            # an edge cut on names corroborates nothing
-            support = {k: w for k, w in confident.items() if k not in cuts}
-            uncut = {k: w for k, w in kept.items() if k not in cuts}
-            split = [
-                tri
-                for coherent in coherent_parts
-                for tri in _triangle_parts(coherent, uncut, support)
-            ]
-        parts += split
-    return parts, repaired, name_cuts
+        parts += split if was_repaired else _triangle_parts(component, kept, support)
+    return parts, repaired
 
 
 def _wnp_prune(edges: dict[tuple[str, str], float]) -> dict[tuple[str, str], float]:
@@ -3285,64 +3301,69 @@ def _components(members: list[str], edges: Iterable[tuple[str, str]]) -> list[li
     return list(groups.values())
 
 
-def _name_coherent_parts(
+def _abbreviates(t: str, s: str) -> bool:
+    """One token stands for the other: equal, a prefix (``corp``/``corporation``,
+    ``j``/``john``), or the shorter's letters in order from the same first
+    letter (``ltd``/``limited``)."""
+    short, long_ = sorted((t, s), key=len)
+    if not short or short[0] != long_[0]:
+        return False
+    rest = iter(long_)
+    return all(ch in rest for ch in short)
+
+
+def _names_compatible(a: str, b: str) -> bool:
+    """Every token of one name stands for a token of the other (``Microsoft`` /
+    ``Microsoft Corp``, ``J. A. Smith`` / ``John Smith``, ``トヨタ`` /
+    ``トヨタ自動車``); siblings (``Tata Steel`` / ``Tata Motors``) each keep a
+    token the other lacks."""
+    ta, tb = a.split(), b.split()
+    return all(any(_abbreviates(t, s) for s in tb) for t in ta) or all(
+        any(_abbreviates(t, s) for s in ta) for t in tb
+    )
+
+
+def _name_cuts(
     members: list[str],
     edges: dict[tuple[str, str], float],
-    names: dict[str, str | None],
-    corpus: CorpusEvidence,
-) -> tuple[list[list[str]], set[tuple[str, str]]]:
-    """Cut the edges whose two names differ (report P20 coherence split).
+    names: dict[str, str],
+) -> set[tuple[str, str]]:
+    """The edges whose two names differ (report P20 coherence split).
 
-    An edge's names differ when ALL of these hold: scoring's own comparator
-    puts them at ``LEVEL_DISAGREE`` (``_comparison_level``, its existing
-    levels); they share no rare token (held by no more names than P6's
-    ``CorpusEvidence.cut``, or by every name in the component and none
-    outside it), so a legal suffix,
-    an initial or an abbreviation that keeps its rare word is never a cut; and, when the component has edges to compare against, their
-    ``name_variation_rate`` sits at or above the largest gap in the
-    component's own edge variations (P3's cliff), so names that vary alike on
-    every edge (opaque codes) decide nothing. Names are compared accent- and
-    punctuation-folded. A missing name is no evidence either way.
-    Returns (parts, cut edges).
+    ``names`` are ``comparable_name`` forms. An edge's names differ when ALL
+    hold: scoring's own comparator puts them at ``LEVEL_DISAGREE``
+    (``_comparison_level``, its existing levels); neither name's tokens all
+    stand for tokens of the other (``_names_compatible``); and, when the
+    component has several edges, their ``name_variation_rate`` sits at or
+    above the largest gap in the component's own edge variations (P3's cliff),
+    so names that vary alike on every edge (opaque codes) decide nothing. A
+    missing name is no evidence either way.
+
+    ponytail: an alias with no shared letters (an acronym and its expansion)
+    reads as a different name (report P20 Ceiling).
     """
     inside = set(members)
-    folded = {m: comparable_name(n) for m, n in names.items()}
     variation = {
-        (a, b): name_variation_rate([names.get(a), names.get(b)])
+        (a, b): name_variation_rate([names[a], names[b]])
         for a, b in edges
-        if a in inside and b in inside and folded.get(a) and folded.get(b)
+        if a in inside and b in inside and names.get(a) and names.get(b)
     }
     if not variation:
-        return [members], set()
+        return set()
     values = sorted(set(variation.values()))
     floor = values[0]  # a lone edge has no distribution: the other tests decide
     if len(variation) > 1:
         if len(values) < 2:
-            return [members], set()
+            return set()
         _gap, i = max((values[i + 1] - values[i], i) for i in range(len(values) - 1))
         floor = values[i + 1]
-    tokens = {m: set(_tokenize(folded[m])) for m in members if folded.get(m)}
-    inside_holders = Counter(t for toks in tokens.values() for t in toks)
-
-    def share_rare_token(a: str, b: str) -> bool:
-        # rare = held by no more names than one entity has (P6's cut), or the
-        # component's own word: every name in it holds it, none outside does
-        return any(
-            corpus.name_token_df.get(t, 0) <= corpus.cut
-            or corpus.name_token_df.get(t, 0) <= inside_holders[t] == len(tokens)
-            for t in tokens[a] & tokens[b]
-        )
-
-    cut = {
+    return {
         (a, b)
         for (a, b), v in variation.items()
         if v >= floor
-        and _comparison_level(folded[a], folded[b], _normalize, "name")[0] == LEVEL_DISAGREE
-        and not share_rare_token(a, b)
+        and _comparison_level(names[a], names[b], _normalize, "name")[0] == LEVEL_DISAGREE
+        and not _names_compatible(names[a], names[b])
     }
-    if not cut:
-        return [members], cut
-    return _components(members, {k: w for k, w in edges.items() if k not in cut}), cut
 
 
 def _triangle_parts(
