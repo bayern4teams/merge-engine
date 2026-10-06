@@ -8,6 +8,11 @@ Phase 0 (PHASE0_REPORT) found the report's own shape (weak bridge) already passe
 real failures are (i) the bridge is the strongest edge -> both clusters shatter (FN 20) and (ii) a true cluster seen only
 as a chain -> 5 singletons (FN 10).
 
+NARROWED 2026-10-06 (user decision c, lead edit): step (3) is no longer a cut -- name coherence is a P16 flag and
+a P10 gate invariant.  Shapes only names can decide (an incoherent clique, a lone incoherent pair, a chain through
+another entity, bridged paths/trees) left the exact-recovery tests; the planted worlds keep exactness where
+structure decides (entities of >= 3 members as cliques) and keep order-invariance everywhere.
+
 Run:  TMPDIR=$PWD/.tmp .venv/bin/python -m pytest tests/part1/test_p20_acceptance.py -q -p no:cacheprovider
 
 MINIMAL CONTRACT (everything the tests call; each is an adaptation point below)
@@ -333,7 +338,10 @@ def test_a_phase0_shapes_exact(name):
 
 
 # ══ B. named shapes ═══════════════════════════════════════════════════════════════════════════
-@pytest.mark.parametrize("name", sorted(NAMED))
+NAME_ONLY = {"chain_through_other_entity", "incoherent_clique", "lone_incoherent_pair"}
+
+
+@pytest.mark.parametrize("name", sorted(set(NAMED) - NAME_ONLY))
 def test_b_named_shapes_exact(name):
     """Negatives today: bridge_strongest, sparse_chain, chain_through_other_entity, incoherent_clique,
     lone_incoherent_pair.  Controls: bridge_weak, coherent_clique, lone_coherent_pair."""
@@ -411,7 +419,7 @@ def test_d_giant_component_is_taken_apart(seed):
     """60 planted entities (3..6 members) joined into one giant component by 120 wrong edges, most stronger than any
     internal edge.  Exact recovery, and within a time bound (the split must not be cubic in the component)."""
     rng = random.Random(seed)
-    w = world(seed, [rng.randrange(3, 7) for _ in range(60)], n_bridges=120, k=4)
+    w = world(seed, [rng.randrange(3, 7) for _ in range(60)], ["clique"] * 60, n_bridges=120, k=4)
     t0 = time.monotonic()
     pred, clusters, stats = run(w)
     elapsed = time.monotonic() - t0
@@ -425,12 +433,17 @@ def test_d_random_worlds_exact_and_order_invariant(seed):
     """Random planted worlds (cliques, paths, trees; wrong bridges incl. strongest).  Exact recovery, and the same
     partition however the records and pairs are ordered/oriented (union-find style order dependence)."""
     rng = random.Random(seed)
-    w = world(1000 + seed, [rng.randrange(1, 8) for _ in range(8)], n_bridges=6)
+    w = world(1000 + seed, [rng.randrange(3, 8) for _ in range(8)], ["clique"] * 8, n_bridges=6)
     for k in range(3):
         case = w if k == 0 else shuffled(w, 50 * seed + k)
         pred, clusters, _ = run(case)
         assert_partition(case, clusters)
         assert_exact(w, pred, f"seed={seed} shuffle={k}")
+    # mixed shapes (paths, trees, pairs): names would have to decide, so only order-invariance is required
+    w = world(1000 + seed, [rng.randrange(1, 8) for _ in range(8)], n_bridges=6)
+    base = run(w)[0]
+    for k in (1, 2):
+        assert run(shuffled(w, 50 * seed + k))[0] == base, f"seed={seed} shuffle={k}"
 
 
 # ══ E. contract controls (all pass today; P20 must not break them) ═════════════════════════════
@@ -608,7 +621,7 @@ def test_f_default_does_not_impose_one_to_one():
 
 
 # ══ G. the name-variation function (HANDOFF flag 5) ════════════════════════════════════════════
-def test_g_function_lives_outside_resolve_entities_and_is_reused():
+def test_g_function_lives_outside_resolve_entities():
     mod = _quality_module()
     assert hasattr(mod, NAME_VARIATION_FN), f"{mod.__name__}.{NAME_VARIATION_FN} missing"
     tree = ast.parse((ROOT / RE_REL).read_text())
@@ -617,14 +630,6 @@ def test_g_function_lives_outside_resolve_entities_and_is_reused():
     ]
     assert not [d for d in defs if "variation" in d.lower()], (
         "variation function defined in resolve_entities.py"
-    )
-    imports = [
-        n
-        for n in ast.walk(tree)
-        if isinstance(n, ast.ImportFrom) and (n.module or "").endswith(mod.__name__.split(".")[-1])
-    ]
-    assert any(NAME_VARIATION_FN in {a.name for a in n.names} for n in imports), (
-        "resolve_entities.py must import the SAME function (P16 reuses it)"
     )
     mtree = ast.parse(Path(mod.__file__).read_text())
     assert not [

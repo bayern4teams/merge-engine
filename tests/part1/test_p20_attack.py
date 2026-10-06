@@ -127,7 +127,13 @@ def test_control_determinism_on_jittered_worlds():
             assert acc.run(acc.shuffled(w, s))[0] == base, f"seed {seed} shuffle {s}"
 
 
-def test_control_double_bridged_true_edges_precision():
+@pytest.mark.xfail(
+    strict=True,
+    reason="CEILING (P20 narrowed, user decision c): every member has a stronger wrong edge, so WNP prunes every "
+    "true edge (below the mean at both ends) and keeps the five bridges as pairs. Before the narrowing a name cut "
+    "removed the bridges first; names are no longer a cut (P16 flags such clusters).",
+)
+def test_double_bridged_true_edges_precision():
     """Every member of clique 0 has a stronger wrong edge into clique 1: no merge may survive."""
     w = acc.world(7, [5, 5], ["clique", "clique"], 0)
     a, b = w["truth"]
@@ -170,14 +176,6 @@ def test_control_clique_of_variants_stays_whole(names):
 
 
 @pytest.mark.parametrize(
-    "a,b",
-    [("Alpha Corp", "Zenith Steel"), ("John Smith", "Mary Jones"), ("Gazprom", "Lukoil")],
-)
-def test_control_lone_incoherent_pair_is_split(a, b):
-    assert named([a, b], [(0, 1)]) == [[0], [1]]
-
-
-@pytest.mark.parametrize(
     "names",
     [
         ["Microsoft", "Microsoft Corporation", "Microsoft Corp"],
@@ -198,27 +196,6 @@ def test_chain_of_person_initial_variants_stays_whole():
 )
 def test_lone_edge_accent_variants_are_not_split(a, b):
     assert named([a, b], [(0, 1)]) == [[0, 1]]
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="CEILING (lead r2). DEFECT (medium, ceiling-adjacent): an incoherent cluster whose names differ in ONE of two tokens "
-    "(shared suffix word) reads WEAK (>=0.70) at the scorer's levels, never DISAGREE, so it is kept merged. "
-    "The acceptance's incoherent clique uses wholly different names.",
-)
-def test_incoherent_two_by_two_clique_with_a_shared_word_is_split():
-    names = ["Alpha Holdings", "Alpha Holdings Ltd", "Omega Holdings", "Omega Holdings Ltd"]
-    assert named(names, clique(4)) == [[0, 1], [2, 3]]
-
-
-def test_control_cliff_is_data_derived_not_a_literal():
-    """Same topology, every variation scaled: the decision must not hinge on one absolute number.
-    (Passes: the largest-gap rule is scale-free; the only absolute numbers are the scorer's existing 0.70/0.90.)"""
-    short = named(
-        ["ab", "ab", "zq", "zq"], clique(4)
-    )  # 2-char names: scorer says DISAGREE (len < 3)
-    long = named(["abcdefgh", "abcdefgh", "zqwxyuio", "zqwxyuio"], clique(4))
-    assert short == long == [[0, 1], [2, 3]]
 
 
 # ══ 3. name_variation_rate contract (P16 reuses it) ═══════════════════════════════════════════
@@ -446,52 +423,6 @@ def test_control_gate_no_decision_rebuild_equals_build_on_full_corpus():
         )
 
 
-def test_gate_with_no_decision_does_not_remerge_what_the_build_split():
-    names = ["Bank Omega", "Steel Bank Inc"] + [
-        f"{w} Bank"
-        for w in [
-            "Qux",
-            "Wib",
-            "Zed",
-            "Fon",
-            "Gra",
-            "Hul",
-            "Ipa",
-            "Jor",
-            "Kel",
-            "Lum",
-            "Mor",
-            "Nip",
-            "Orb",
-            "Pax",
-            "Qor",
-            "Rud",
-            "Sim",
-            "Tov",
-            "Uly",
-            "Vex",
-        ]
-    ]
-    recs = [_rec(i, n) for i, n in enumerate(names)]
-    pairs = [(_rid(0), _rid(1), 0.97)]
-    stats: dict = {}
-    cl, _m, _x = asyncio.run(tre._build_clusters(recs, pairs, "company", stats=stats))
-    assert all(len(c["record_ids"]) == 1 for c in cl)  # build: split on names (control half)
-    # P20 r2 contract: resolve_entities_impl's retained_pairs leave out the build's name cuts
-    cut = {tuple(p) for p in stats["name_cut_pairs"]}
-    retained = [list(p) for p in pairs if (min(p[:2]), max(p[:2])) not in cut]
-    reb = tre.rebuild_band_clusters(
-        "company",
-        cl,
-        retained,
-        set(),
-        set(),
-        0.95,
-        {_rid(0): recs[0], _rid(1): recs[1]},
-    )
-    assert all(len(c["record_ids"]) == 1 for c in reb), [c for c in reb if len(c["record_ids"]) > 1]
-
-
 # ══ 6. P6 repair, caller bars, degenerate input, runtime ══════════════════════════════════════
 def test_control_p6_identity_conflict_still_separates_every_member():
     recs = [_rec(i, "Acme Ltd", tax_id=("111" if i < 2 else "222")) for i in range(4)]
@@ -617,15 +548,9 @@ _FILLER = [
 ]
 
 
-def test_r2_sibling_entities_sharing_a_family_token_are_not_merged_by_a_bridge():
-    names = ["Qorvan Steel", "Qorvan Steel Ltd", "Qorvan Foods", "Qorvan Foods Ltd", *_FILLER]
-    got = named(names, [(0, 1, 0.96), (2, 3, 0.96), (1, 2, 0.99)])
-    assert got[:2] == [[0, 1], [2, 3]], got[:3]
-
-
 @pytest.mark.xfail(
     strict=True,
-    reason="CEILING (lead r3: two wrong edges into one node form a real triangle; names, not structure, separate it -- see _split_component). DEFECT r2 (medium, regression vs r1 and parent): support counted over CONFIDENT (pre-WNP) edges "
+    reason="CEILING (two wrong edges into one node form a real triangle; names are not a cut since P20 was narrowed -- see _split_component). DEFECT r2 (medium, regression vs r1 and parent): support counted over CONFIDENT (pre-WNP) edges "
     "re-admits a strong double bridge: two strong wrong edges into one node of the other clique make the "
     "WNP-pruned true edge a 'triangle' that corroborates both bridges (names uninformative).",
 )
@@ -667,81 +592,6 @@ def test_control_r2_latin_equivalents_are_kept():
         assert named([a, b], [(0, 1)]) == [[0, 1]]
 
 
-def test_r2_true_edge_is_not_pruned_by_means_polluted_with_name_cut_edges():
-    names = ["Zeluko Bamira", "Zeluko Bamira Ltd", "Quorvan Delisa", "Pimaku Tosera"]
-    assert named(names, [(0, 1, 0.96), (0, 2, 0.98), (1, 3, 0.98)]) == [[0, 1], [2], [3]]
-
-
-def test_control_r2_builtin_path_withholds_name_cuts_from_retained_pairs():
-    recs = [
-        {"_origin_id": "pg", "_origin_table": "t", "_origin_id_row": "1", "name": "Alpha Corp", "tax_id": "GB111", "website": "alpha.com"},
-        {"_origin_id": "ch", "_origin_table": "t", "_origin_id_row": "1", "name": "Zenith Steel", "tax_id": "GB111", "website": "alpha.com"},
-    ]  # fmt: skip
-    res = asyncio.run(
-        tre.resolve_entities_impl("company", recs, matching_rules={"unique_id_fields": ["tax_id"]})
-    )
-    assert all(len(c["record_ids"]) == 1 for c in res["clusters"])
-    assert res["retained_pairs"] == []
-
-
-def test_r2_splink_path_withholds_name_cuts_too(monkeypatch):
-    import src.mcp_server.tools.splink_matcher as sm
-
-    async def fake(
-        entity_type,
-        records,
-        matching_rules=None,
-        known_cluster_ids=None,
-        build_clusters_fn=None,
-        **kw,
-    ):
-        pairs = [("ch:t:1", "pg:t:1", 0.97)]
-        cl, a, x = await build_clusters_fn(
-            records, pairs, entity_type=entity_type, known_cluster_ids=known_cluster_ids,
-            auto_match=0.95, auto_exclude=0.7, stats={}, pair_evidence=None,
-        )  # fmt: skip
-        return {"clusters": cl, "entity_type": entity_type, "auto_matched": a, "auto_excluded": x}
-
-    monkeypatch.setattr(sm, "resolve_with_splink", fake)
-
-    def r(src, i, name):
-        return {"_origin_id": src, "_origin_table": "t", "_origin_id_row": str(i), "name": name}
-
-    recs = [r("pg", 1, "Alpha Corp"), r("ch", 1, "Zenith Steel")]
-    res = asyncio.run(
-        tre.resolve_entities_impl("company", recs, matching_rules={"engine": "splink"})
-    )
-    assert all(
-        len(c["record_ids"]) == 1 for c in res["clusters"]
-    )  # build did split on names (control half)
-    assert res["retained_pairs"] == []
-
-
-def test_control_r2_noop_gate_never_rejoins_a_name_cut_pair_on_planted_worlds():
-    rejoined = total = 0
-    for seed in range(60):
-        rng = random.Random(seed)
-        w = acc.world(seed, [4, 4, 3, 3, 2, 2, 2], None, 0)
-        ids = [i for t in w["truth"] for i in t]
-        grp = {i: g for g, t in enumerate(w["truth"]) for i in t}
-        for _ in range(6):
-            x, y = rng.sample(ids, 2)
-            if grp[x] != grp[y]:
-                w["pairs"].append((x, y, rng.choice([0.96, 0.97, 0.98])))
-        st: dict = {}
-        cl, _m, _x = asyncio.run(tre._build_clusters(w["records"], w["pairs"], "company", stats=st))
-        cut = {tuple(p) for p in st["name_cut_pairs"]}
-        ret = [list(p) for p in w["pairs"] if (min(p[:2]), max(p[:2])) not in cut]
-        need = {x for p in ret for x in p[:2]}
-        by = {fx.rid(r): r for r in w["records"] if fx.rid(r) in need}
-        reb = tre.rebuild_band_clusters("company", cl, ret, set(), set(), 0.95, by)
-        where = {r: i for i, c in enumerate(reb) for r in c["record_ids"]}
-        for a, b in cut:
-            total += 1
-            rejoined += where[a] == where[b]
-    assert total > 100 and rejoined == 0
-
-
 def test_control_r2_determinism_with_names_and_three_sources():
     words = ["acme", "zenith", "omega", "alpha", "bank", "steel", "holdings", "qorvan", "tata"]
     for seed in range(40):
@@ -775,128 +625,6 @@ def _apart(got, i, j):
     return where[i] != where[j]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT r3 (medium, regression vs r2 for 'A'/'Ab'): the name test is per EDGE, and `_abbreviates` "
-    "accepts any token as an abbreviation of every longer token with the same first letter (no minimum length), "
-    "so a one-letter or two-letter name is compatible with everything starting with it and fuses two unrelated "
-    "entities through a hub: Apple Inc - A - Amazon Com Inc.",
-)
-@pytest.mark.parametrize(
-    "names",
-    [
-        ["Apple Inc", "A", "Amazon Com Inc"],
-        ["Abbott Laboratories", "Ab", "Abbvie Inc"],
-    ],
-)
-def test_r3_short_token_hub_does_not_fuse_unrelated_entities(names):
-    assert _apart(named(names, path(3)), 0, 2)
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT r3 (medium, also r2): a one-token generic name scored against two distinct entities fuses them: "
-    "only scored EDGES are name-tested, never the pair of members that no edge joins (Delta Faucet / Delta / "
-    "Delta Air Lines; Colgate Palmolive / Co / Coca Cola Company). The parent's cohesion cut separated these chains.",
-)
-@pytest.mark.parametrize(
-    "names",
-    [
-        ["Delta Faucet Company", "Delta", "Delta Air Lines"],
-        ["Colgate Palmolive", "Co", "Coca Cola Company"],
-        ["Tata Steel", "Tata", "Tata Motors"],
-    ],
-)
-def test_r3_generic_hub_name_does_not_fuse_two_distinct_entities(names):
-    assert _apart(named(names, path(3)), 0, 2)
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT r3 (high-ish, also r2): the cliff is 'the largest gap of the component's own variations', so with "
-    "natural spread it isolates only the WORST edge. Four distinct real names, completely linked at 0.97 (an "
-    "identifier collision): ~3.5 of 6 pairs stay merged (100/100 random draws of 4 from 30 names are not separated).",
-)
-def test_r3_four_distinct_names_completely_linked_are_separated():
-    names = ["Blue Ridge Partners", "Tata Consultancy", "Alpha Capital", "Red Rock Mining"]
-    assert named(names, clique(4)) == [[0], [1], [2], [3]]
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT r3 (high-ish, also r2): same cliff, chain form: four distinct names in a path keep three of them "
-    "together (variations .91 / .64 / .60: floor .91 cuts one edge only).",
-)
-def test_r3_chain_of_four_distinct_names_is_separated():
-    assert named(["Alpha Corp", "Zenith Steel", "John Smith", "Mary Jones"], path(4)) == [
-        [0],
-        [1],
-        [2],
-        [3],
-    ]
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT r3 (medium): cliff dilution. The sibling pair is cut when alone, but one more, more different, "
-    "wrong edge in the SAME confident component raises the floor above it and the siblings stay merged.",
-)
-def test_r3_a_more_incoherent_edge_nearby_does_not_shield_a_less_incoherent_one():
-    names = ["Qorvan Steel", "Qorvan Foods", "Zzyx Plumbing"]
-    assert named(names[:2], [(0, 1)]) == [[0], [1]]  # control half: alone, cut
-    assert _apart(named(names, [(0, 1), (0, 2)]), 0, 1)
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT r3 (medium, non-Latin): `_abbreviates` is prefix/subsequence on whitespace tokens; unspaced scripts "
-    "carry a legal-form or city PREFIX (株式会社トヨタ, 北京百度网讯科技有限公司) which is not a prefix of the bare "
-    "name, so these split while 'Beijing Baidu Netcom' / 'Baidu Netcom' do not.",
-)
-@pytest.mark.parametrize(
-    "a,b", [("株式会社トヨタ", "トヨタ"), ("北京百度网讯科技有限公司", "百度网讯")]
-)
-def test_r3_unspaced_script_with_a_legal_form_prefix_is_not_split(a, b):
-    assert named([a, b], [(0, 1)]) == [[0, 1]]
-
-
-def test_control_r3_fixes_of_r2_still_hold():
-    # siblings bridged: cut (r2 merged), double bridge WITH names: cut, non-Latin variants, accent lone edge
-    sib = ["Qorvan Steel", "Qorvan Steel Ltd", "Qorvan Foods", "Qorvan Foods Ltd", *_FILLER]
-    assert named(sib, [(0, 1, 0.96), (2, 3, 0.96), (1, 2, 0.99)])[:2] == [[0, 1], [2, 3]]
-    edges = [
-        (i, j, 0.96) for g in (range(0, 5), range(5, 10)) for i, j in itertools.combinations(g, 2)
-    ]
-    got = named(
-        ["Zeluko Bamira"] * 5 + ["Quorvan Delisa"] * 5, edges + [(0, 5, 0.99), (1, 5, 0.99)]
-    )
-    assert got == [[0, 1, 2, 3, 4], [5, 6, 7, 8, 9]]
-    for a, b in [
-        ("Сбербанк", "ПАО Сбербанк России"),
-        ("Société Générale", "Societe Generale SA"),
-        ("IBM Corp", "I.B.M. Corporation"),
-        ("P&G", "Procter & Gamble"),
-    ]:
-        assert named([a, b], [(0, 1)]) == [[0, 1]]
-    # a wrong name-cut edge no longer pulls the means: the true pair survives
-    names = ["Zeluko Bamira", "Zeluko Bamira Ltd", "Quorvan Delisa", "Pimaku Tosera"]
-    assert named(names, [(0, 1, 0.96), (0, 2, 0.98), (1, 3, 0.98)]) == [[0, 1], [2], [3]]
-
-
-def test_control_r3_incoherent_complete_graphs_with_planted_names():
-    """Wholly different (synthetic) names, every pair scored high: exact for these shapes (r2: 17-50 of 60 not exact)."""
-    for sizes in ([3, 3], [5, 3], [6, 6], [2, 2, 2, 2]):
-        for seed in range(25):
-            w = acc.world(seed, sizes, ["clique"] * len(sizes), 0)
-            rng = random.Random(seed)
-            ids = [i for t in w["truth"] for i in t]
-            w["pairs"] = [
-                (a, b, 0.97 + rng.uniform(-0.01, 0.01)) for a, b in itertools.combinations(ids, 2)
-            ]
-            pred, _c, _s = acc.run(w)
-            acc.assert_exact(w, pred, f"{sizes} seed {seed}")
-
-
 def test_control_r3_legit_variants_of_real_names_are_rarely_split():
     """Operators: legal suffix/abbreviation/initials/dropped word/reordering on 20 real-style names, all variant
     pairs as lone edges (267 pairs): at most 3 splits (measured 2: 'Lim' vs 'ltd', both abbreviations)."""
@@ -922,8 +650,9 @@ def test_control_r3_legit_variants_of_real_names_are_rarely_split():
     assert total > 30 and splits <= 1, (splits, total)
 
 
-def test_control_r3_gate_noop_equals_build_and_name_cuts_never_rejoined():
-    differs = rejoined = cuts = 0
+def test_control_gate_noop_with_band_records_only_equals_build():
+    """The gate rebuild sees only the records its pairs name; with no name cut there is nothing it could re-join."""
+    differs = 0
     for seed in range(40):
         rng = random.Random(seed)
         w = acc.world(seed, [4, 4, 3, 3, 2, 2, 2], None, 0)
@@ -933,10 +662,8 @@ def test_control_r3_gate_noop_equals_build_and_name_cuts_never_rejoined():
             x, y = rng.sample(ids, 2)
             if grp[x] != grp[y]:
                 w["pairs"].append((x, y, rng.choice([0.96, 0.97, 0.98])))
-        st: dict = {}
-        cl, _m, _x = asyncio.run(tre._build_clusters(w["records"], w["pairs"], "company", stats=st))
-        cut = {tuple(p) for p in st["name_cut_pairs"]}
-        ret = [list(p) for p in w["pairs"] if (min(p[:2]), max(p[:2])) not in cut]
+        cl, _m, _x = asyncio.run(tre._build_clusters(w["records"], w["pairs"], "company", stats={}))
+        ret = [list(p) for p in w["pairs"]]
         need = {x for p in ret for x in p[:2]}
         reb = tre.rebuild_band_clusters(
             "company",
@@ -950,8 +677,4 @@ def test_control_r3_gate_noop_equals_build_and_name_cuts_never_rejoined():
         differs += sorted(sorted(c["record_ids"]) for c in cl) != sorted(
             sorted(c["record_ids"]) for c in reb
         )
-        where = {r: i for i, c in enumerate(reb) for r in c["record_ids"]}
-        for a, b in cut:
-            cuts += 1
-            rejoined += where[a] == where[b]
-    assert cuts > 50 and differs == 0 and rejoined == 0
+    assert differs == 0
