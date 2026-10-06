@@ -15,13 +15,18 @@ from itertools import combinations
 _NOT_WORD = re.compile(r"[^\w\s]+")
 
 
-def _comparable(name: str | None) -> str:
+def comparable_name(name: str | None) -> str:
     """Casefolded, accent-folded, punctuation-free, single-spaced. ``\\w`` keeps
-    every script's letters, so a non-Latin name never normalises to ''."""
+    every script's letters, so a non-Latin name never normalises to ''. Only a
+    mark on an ASCII letter is an accent; on kana (``ガ``) it is the letter."""
     if not name:
         return ""
-    folded = unicodedata.normalize("NFKD", str(name))
-    folded = "".join(ch for ch in folded if not unicodedata.combining(ch)).casefold()
+    out: list[str] = []
+    for ch in unicodedata.normalize("NFKD", str(name)):
+        if unicodedata.combining(ch) and out and out[-1].isascii():
+            continue
+        out.append(ch)
+    folded = unicodedata.normalize("NFC", "".join(out)).casefold()
     return " ".join(_NOT_WORD.sub(" ", folded).split())
 
 
@@ -34,7 +39,7 @@ def name_variation_rate(names: list[str | None]) -> float:
     ponytail: character-level similarity; an alias with no lexical overlap
     (an acronym and its expansion) reads as unrelated (report P20 Ceiling).
     """
-    usable = [n for n in (_comparable(x) for x in names or []) if n]
+    usable = [n for n in (comparable_name(x) for x in names or []) if n]
     if len(usable) < 2:
         return 0.0
     pairs = list(combinations(usable, 2))

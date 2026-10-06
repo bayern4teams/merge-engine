@@ -38,7 +38,7 @@ from functools import lru_cache
 from typing import Any
 
 from src.mcp_server.tools import resolve_cache
-from src.mcp_server.tools.cluster_quality import name_variation_rate
+from src.mcp_server.tools.cluster_quality import comparable_name, name_variation_rate
 from src.mcp_server.tools.fellegi_sunter import (
     LEVEL_DISAGREE,
     LEVEL_EXACT,
@@ -791,7 +791,7 @@ async def resolve_entities_impl(
                 "clusters": len(clusters),
                 "auto_matched": auto_matched,
                 "auto_excluded": auto_excluded,
-                **clustering_stats,
+                **{k: v for k, v in clustering_stats.items() if k != "name_cut_pairs"},
             }
         )
     logger.debug(
@@ -839,6 +839,12 @@ async def resolve_entities_impl(
         # P6: Possibly Related -- typed edges, no human, never a merge.
         "possibly_related": _related_edges(core.get("possibly_related", []), clusters),
     }
+    # P20: a pair the build split on names is not re-joined by the gate
+    # rebuild unless a human accepts it (it re-enters as an accepted pair).
+    name_cut = {tuple(p) for p in clustering_stats.get("name_cut_pairs", [])}
+    result["retained_pairs"] = [
+        p for p in result["retained_pairs"] if (min(p[:2]), max(p[:2])) not in name_cut
+    ]
     # Part 1.5 D.7: cached cluster_id values are meaningless (they were
     # derived from THIS run's known_cluster_ids) — apply_known_cluster_ids
     # re-derives them from scratch on every read, so caching them verbatim
@@ -1017,13 +1023,14 @@ def rebuild_band_clusters(
 
     old = {frozenset(c.get("record_ids", [])): c for c in clusters}
     # P20: components no human touched are split exactly as _build_clusters does.
-    kept_edges = _wnp_prune({k: w for k, w in edge_weight.items() if w >= auto_match})
+    confident = {k: w for k, w in edge_weight.items() if w >= auto_match}
+    kept_edges = _wnp_prune(confident)
     corpus = _corpus_evidence(list(records_by_id.values()))
     rebuilt: list[dict[str, Any]] = []
     for root in sorted(members_of):
         members = sorted(members_of[root])
         parts = (
-            _split_component(members, kept_edges, records_by_id, corpus)[0]
+            _split_component(members, kept_edges, confident, records_by_id, corpus)[0]
             if len(members) > 1 and root not in human
             else [members]
         )
@@ -3106,6 +3113,7 @@ async def _build_clusters(
     clusters: list[dict[str, Any]] = []
     repaired = 0
     cut = 0
+    name_cuts: set[tuple[str, str]] = set()
     large_components = 0
     largest_component_size = 0
     clustering_started = time.monotonic()
@@ -3124,11 +3132,16 @@ async def _build_clusters(
                 _LARGE_COMPONENT_THRESHOLD,
             )
         if len(members) > 1:
-            parts, was_repaired = _split_component(members, kept, records_by_id, corpus)
+            parts, was_repaired, cuts = _split_component(
+                members, kept, confident, records_by_id, corpus
+            )
             repaired += was_repaired
+            name_cuts |= cuts
             if one_to_one:
                 parts = [
-                    one for part in parts for one in _one_to_one_parts(part, kept, records_by_id)
+                    one
+                    for part in parts
+                    for one in _one_to_one_parts(part, confident, records_by_id)
                 ]
             cut += not was_repaired and len(parts) > 1
         else:
@@ -3173,6 +3186,9 @@ async def _build_clusters(
     stats["largest_component_size"] = largest_component_size
     stats["large_components"] = large_components
     stats["component_count"] = len(component_map)
+    # The gate rebuild sees only the band's records, too few to tell a rare
+    # name token from a common one: it must not re-join what names split here.
+    stats["name_cut_pairs"] = sorted(name_cuts)
     if large_components:
         logger.info(
             "Clustering profile for entity '%s': %d component(s), largest=%d "
@@ -3192,15 +3208,20 @@ async def _build_clusters(
 def _split_component(
     members: list[str],
     kept: dict[tuple[str, str], float],
+    confident: dict[tuple[str, str], float],
     records_by_id: dict[str, dict[str, Any]],
     corpus: CorpusEvidence,
-) -> tuple[list[list[str]], bool]:
+) -> tuple[list[list[str]], bool, set[tuple[str, str]]]:
     """One component's clusters (``_build_clusters`` steps 3a-c, shared with
     the matches-gate rebuild so the two cannot drift): conflict repair, then
-    name coherence, then triangle support, over the pruned edges ``kept``.
-    Returns (parts, repaired)."""
+    name coherence, then triangle support, over the pruned edges ``kept``;
+    a triangle is looked for among all ``confident`` edges not cut on names,
+    since pruning a true clique's weaker edges must not make its members look
+    like bridges.
+    Returns (parts, repaired, edges cut on names)."""
     parts: list[list[str]] = []
     repaired = False
+    name_cuts: set[tuple[str, str]] = set()
     names = {m: _record_name(records_by_id.get(m, {}), None) for m in members}
     for component in _components(members, kept):
         split, was_repaired, _ = _partition_component(
@@ -3208,13 +3229,18 @@ def _split_component(
         )
         repaired = repaired or bool(was_repaired)
         if not was_repaired:
+            coherent_parts, cuts = _name_coherent_parts(component, kept, names, corpus)
+            name_cuts |= cuts
+            # an edge cut on names corroborates nothing
+            support = {k: w for k, w in confident.items() if k not in cuts}
+            uncut = {k: w for k, w in kept.items() if k not in cuts}
             split = [
                 tri
-                for coherent in _name_coherent_parts(component, kept, names, corpus)
-                for tri in _triangle_parts(coherent, kept)
+                for coherent in coherent_parts
+                for tri in _triangle_parts(coherent, uncut, support)
             ]
         parts += split
-    return parts, repaired
+    return parts, repaired, name_cuts
 
 
 def _wnp_prune(edges: dict[tuple[str, str], float]) -> dict[tuple[str, str], float]:
@@ -3264,64 +3290,81 @@ def _name_coherent_parts(
     edges: dict[tuple[str, str], float],
     names: dict[str, str | None],
     corpus: CorpusEvidence,
-) -> list[list[str]]:
+) -> tuple[list[list[str]], set[tuple[str, str]]]:
     """Cut the edges whose two names differ (report P20 coherence split).
 
-    An edge's names differ when scoring's own comparator puts them at
-    ``LEVEL_DISAGREE`` (``_comparison_level``, its existing levels) AND their
-    ``name_variation_rate`` sits above the largest gap in the component's own
-    edge variations (P3's cliff), so names that vary alike on every edge
-    (opaque codes) decide nothing. A lone edge has no distribution to read, so
-    it is cut only when the names also share no rare token (P6's
-    ``CorpusEvidence.names``): an abbreviation keeps its rare word, and the
-    scorer or the LLM already judged that pair strong. A missing name is no
-    evidence either way.
+    An edge's names differ when ALL of these hold: scoring's own comparator
+    puts them at ``LEVEL_DISAGREE`` (``_comparison_level``, its existing
+    levels); they share no rare token (held by no more names than P6's
+    ``CorpusEvidence.cut``, or by every name in the component and none
+    outside it), so a legal suffix,
+    an initial or an abbreviation that keeps its rare word is never a cut; and, when the component has edges to compare against, their
+    ``name_variation_rate`` sits at or above the largest gap in the
+    component's own edge variations (P3's cliff), so names that vary alike on
+    every edge (opaque codes) decide nothing. Names are compared accent- and
+    punctuation-folded. A missing name is no evidence either way.
+    Returns (parts, cut edges).
     """
     inside = set(members)
+    folded = {m: comparable_name(n) for m, n in names.items()}
     variation = {
         (a, b): name_variation_rate([names.get(a), names.get(b)])
         for a, b in edges
-        if a in inside and b in inside and names.get(a) and names.get(b)
+        if a in inside and b in inside and folded.get(a) and folded.get(b)
     }
-    internal = [k for k in edges if k[0] in inside and k[1] in inside]
     if not variation:
-        return [members]
-    lone = len(internal) == 1
-    if lone:
-        floor = min(variation.values())
-    else:
-        values = sorted(set(variation.values()))
+        return [members], set()
+    values = sorted(set(variation.values()))
+    floor = values[0]  # a lone edge has no distribution: the other tests decide
+    if len(variation) > 1:
         if len(values) < 2:
-            return [members]
+            return [members], set()
         _gap, i = max((values[i + 1] - values[i], i) for i in range(len(values) - 1))
         floor = values[i + 1]
+    tokens = {m: set(_tokenize(folded[m])) for m in members if folded.get(m)}
+    inside_holders = Counter(t for toks in tokens.values() for t in toks)
+
+    def share_rare_token(a: str, b: str) -> bool:
+        # rare = held by no more names than one entity has (P6's cut), or the
+        # component's own word: every name in it holds it, none outside does
+        return any(
+            corpus.name_token_df.get(t, 0) <= corpus.cut
+            or corpus.name_token_df.get(t, 0) <= inside_holders[t] == len(tokens)
+            for t in tokens[a] & tokens[b]
+        )
+
     cut = {
         (a, b)
         for (a, b), v in variation.items()
         if v >= floor
-        and _comparison_level(names[a], names[b], _normalize, "name")[0] == LEVEL_DISAGREE
-        and (not lone or corpus.names(names[a], names[b]) == "different")
+        and _comparison_level(folded[a], folded[b], _normalize, "name")[0] == LEVEL_DISAGREE
+        and not share_rare_token(a, b)
     }
     if not cut:
-        return [members]
-    return _components(members, {k: w for k, w in edges.items() if k not in cut})
+        return [members], cut
+    return _components(members, {k: w for k, w in edges.items() if k not in cut}), cut
 
 
-def _triangle_parts(members: list[str], edges: dict[tuple[str, str], float]) -> list[list[str]]:
-    """Where a part has corroborated edges (their ends share a neighbour), an
-    uncorroborated edge is a bridge between two groups -- dropped however strong
-    it is. A part without any triangle (a chain, a tree) has nothing to compare
-    against and stays whole.
+def _triangle_parts(
+    members: list[str],
+    edges: dict[tuple[str, str], float],
+    support: dict[tuple[str, str], float],
+) -> list[list[str]]:
+    """Where a part has corroborated edges (their ends share a neighbour among
+    the ``support`` edges inside the part), an uncorroborated edge is a bridge
+    between two groups -- dropped however strong it is. A part without any
+    triangle (a chain, a tree) has nothing to compare against and stays whole.
 
-    ponytail: a true member attached to a clique by one edge (a pendant) is
-    split off -- recoverable, and the average-linkage cut it replaces split it
-    too. Upgrade: support counted over 2-hop paths."""
+    ponytail: a true member attached to a clique by one scored edge (a
+    pendant) is split off -- recoverable, and the average-linkage cut it
+    replaces split it too. Upgrade: support counted over 2-hop paths."""
     inside = set(members)
     internal = [k for k in edges if k[0] in inside and k[1] in inside]
     neighbours: dict[str, set[str]] = {m: set() for m in members}
-    for a, b in internal:
-        neighbours[a].add(b)
-        neighbours[b].add(a)
+    for a, b in support:
+        if a in inside and b in inside:
+            neighbours[a].add(b)
+            neighbours[b].add(a)
     supported = {(a, b): 0 for a, b in internal if neighbours[a] & neighbours[b]}
     if not supported or len(supported) == len(internal):
         return [members]
@@ -3451,7 +3494,7 @@ def _partition_component(
         return [[m] for m in members], 1, 0
 
     # ── Cohesion cut: break weak chains ──────────────────────────────
-    if _average_linkage(members, edge_weight) >= min_cohesion:
+    if min_cohesion <= 0 or _average_linkage(members, edge_weight) >= min_cohesion:
         return [members], 0, 0
 
     return _split_weakest_link(members, edge_weight, min_cohesion), 0, 1

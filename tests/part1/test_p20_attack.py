@@ -76,11 +76,6 @@ def test_control_tied_weight_worlds_still_exact():
         acc.assert_exact(w, pred, f"seed {seed}")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT (high): triangle support drops a true member of a fully-scored 4-clique whose pair "
-    "confidences differ by 0.6% (parent: exact). WNP leaves the member on one edge, the triangle step splits it off.",
-)
 def test_four_clique_with_natural_jitter_keeps_every_member():
     ids = ["a", "b", "c", "d"]
     names = ["Zeluko Bamira"] * 4
@@ -92,10 +87,6 @@ def test_four_clique_with_natural_jitter_keeps_every_member():
     assert got == [[0, 1, 2, 3]], f"{ids}: {got}"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT (high): 20 planted 5-cliques, confidences 0.97+-0.01: pair recall loss ~1/3 (parent: 0).",
-)
 def test_jittered_5cliques_exact_recovery():
     fn = 0
     for seed in range(20):
@@ -186,12 +177,6 @@ def test_control_lone_incoherent_pair_is_split(a, b):
     assert named([a, b], [(0, 1)]) == [[0], [1]]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT (high): a SPARSE chain of legal-suffix-only variants is cut. The cliff is the largest gap of "
-    "the component's own edge variations, so ANY spread yields a 'cliff'; len-ratio makes 'Microsoft' vs "
-    "'Microsoft Corporation' DISAGREE at the scorer's 0.70 cut (a clique of the same names survives, a path does not).",
-)
 @pytest.mark.parametrize(
     "names",
     [
@@ -203,22 +188,11 @@ def test_chain_of_legal_suffix_variants_stays_whole(names):
     assert named(names, path(3)) == [[0, 1, 2]]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT (medium): same cause, persons: a chain 'John A Smith / J. A. Smith / John Smith / "
-    "Smith, John A.' loses its last member.",
-)
 def test_chain_of_person_initial_variants_stays_whole():
     names = ["John A Smith", "J. A. Smith", "John Smith", "Smith, John A."]
     assert named(names, path(4)) == [[0, 1, 2, 3]]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT (medium): lone edge, identical names up to accents/legal suffix, is split: the rare-token "
-    "test (`CorpusEvidence.names`) lower-cases but does not accent-fold ('societe' != 'société'), while "
-    "name_variation_rate does fold.",
-)
 @pytest.mark.parametrize(
     "a,b", [("Société Générale", "Societe Generale SA"), ("Nestle SA", "Nestlé")]
 )
@@ -264,11 +238,6 @@ def test_control_variation_contract():
     assert name_variation_rate(["株式会社トヨタ", "株式会社ホンダ"]) > 0.0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT (medium, non-Latin): NFKD + 'strip combining marks' deletes the Japanese dakuten, so "
-    "'ガス' and 'カス' (and バ/ハ, ダ/タ ...) are IDENTICAL to name_variation_rate.",
-)
 def test_japanese_voiced_kana_are_not_folded_away():
     assert name_variation_rate(["ガス", "カス"]) > 0.0
 
@@ -349,12 +318,6 @@ def test_control_one_to_one_end_to_end_optimum_when_edges_survive_pruning():
     assert got == [[0, 3], [1, 2]]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT (medium): the LP runs on the WNP-pruned edges, not on the confident ones, so the maximum-weight "
-    "1:1 assignment is optimal only for the survivors; a complete bipartite block with jittered weights "
-    "regularly returns a sub-optimal assignment (compared with the brute-force optimum of the INPUT).",
-)
 def test_one_to_one_end_to_end_reaches_the_inputs_optimum_on_random_blocks():
     rng = random.Random(11)
     worse = 0
@@ -483,12 +446,6 @@ def test_control_gate_no_decision_rebuild_equals_build_on_full_corpus():
         )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT (medium): the gate rebuild sees only the band's records (entity_records_by_id(needed)), so its "
-    "CorpusEvidence differs from the build's; a pair the build split on names is RE-MERGED by a gate with no "
-    "decisions and stamped reviewed_by_human=True. (P15 invariant: no decision -> no change.)",
-)
 def test_gate_with_no_decision_does_not_remerge_what_the_build_split():
     names = ["Bank Omega", "Steel Bank Inc"] + [
         f"{w} Bank"
@@ -517,12 +474,16 @@ def test_gate_with_no_decision_does_not_remerge_what_the_build_split():
     ]
     recs = [_rec(i, n) for i, n in enumerate(names)]
     pairs = [(_rid(0), _rid(1), 0.97)]
-    cl, _m, _x = asyncio.run(tre._build_clusters(recs, pairs, "company", stats={}))
+    stats: dict = {}
+    cl, _m, _x = asyncio.run(tre._build_clusters(recs, pairs, "company", stats=stats))
     assert all(len(c["record_ids"]) == 1 for c in cl)  # build: split on names (control half)
+    # P20 r2 contract: resolve_entities_impl's retained_pairs leave out the build's name cuts
+    cut = {tuple(p) for p in stats["name_cut_pairs"]}
+    retained = [list(p) for p in pairs if (min(p[:2]), max(p[:2])) not in cut]
     reb = tre.rebuild_band_clusters(
         "company",
         cl,
-        [list(p) for p in pairs],
+        retained,
         set(),
         set(),
         0.95,
