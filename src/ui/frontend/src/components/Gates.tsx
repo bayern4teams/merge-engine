@@ -9,7 +9,8 @@ interface GateProps {
   onApprove: (
     mappingEdits?: MappingRow[],
     columnDependencies?: ColumnDependency[],
-    scopePlan?: Record<string, any>
+    scopePlan?: Record<string, any>,
+    thresholds?: Record<string, number>
   ) => void;
   onReject: () => void;
 }
@@ -44,7 +45,10 @@ export default function Gate(props: GateProps) {
         />
       )}
       {node === "human_final_approval" && (
-        <SummaryBody data={interrupt.data} skippedGates={props.skippedGates} />
+        <>
+          <SummaryBody data={interrupt.data} skippedGates={props.skippedGates} />
+          <PreLoadGate data={interrupt.data} {...props} />
+        </>
       )}
 
       {/* human_review_mappings, human_review_deps and human_review_scope
@@ -54,7 +58,8 @@ export default function Gate(props: GateProps) {
           own component state holds. */}
       {node !== "human_review_mappings" &&
         node !== "human_review_deps" &&
-        node !== "human_review_scope" && <GateButtons {...props} />}
+        node !== "human_review_scope" &&
+        node !== "human_final_approval" && <GateButtons {...props} />}
     </div>
   );
 }
@@ -976,6 +981,84 @@ function MappingBody({
 }
 
 // ── Final approval gate ─────────────────────────────────────────────────────
+
+// P10: the invariants the load is refused on. The thresholds are the run's own
+// proposals; the operator confirms or edits them, and load_data enforces what was
+// confirmed (sent as `thresholds` on the approve feedback).
+function PreLoadGate({
+  data,
+  busy,
+  onApprove,
+  onReject,
+}: { data: Record<string, any> } & Pick<GateProps, "busy" | "onApprove" | "onReject">) {
+  const gate = data.pre_load_gate || {};
+  const invariants: Record<string, any> = gate.invariants || {};
+  const [edits, setEdits] = useState<Record<string, string>>({});
+  const thresholds: Record<string, number> = {};
+  for (const [name, inv] of Object.entries(invariants)) {
+    const raw = edits[name];
+    thresholds[name] = raw === undefined || raw.trim() === "" ? inv.threshold : Number(raw);
+  }
+  const fails = Object.entries(invariants).filter(([name, inv]) =>
+    name === "mapping_coverage"
+      ? inv.measured < thresholds[name]
+      : inv.measured > thresholds[name]
+  );
+  return (
+    <div style={{ marginTop: 18 }}>
+      <h4>Pre-load invariants</h4>
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Invariant</th>
+            <th>Measured (worst entity)</th>
+            <th>Threshold (proposed by this run; edit to confirm another)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {Object.entries(invariants).map(([name, inv]) => (
+            <tr key={name}>
+              <td>
+                {name}
+                {name === "mapping_coverage" ? " (minimum)" : " (maximum)"}
+              </td>
+              <td>
+                {Number(inv.measured).toFixed(3)}{" "}
+                {(gate.entities_at_worst?.[name] || []).join(", ")}
+              </td>
+              <td>
+                <input
+                  type="number"
+                  step="any"
+                  value={edits[name] ?? String(inv.threshold)}
+                  onChange={(e) => setEdits({ ...edits, [name]: e.target.value })}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {fails.length > 0 && (
+        <p className="text-danger">
+          At these thresholds the load will be refused and nothing written:{" "}
+          {fails.map(([name]) => name).join(", ")}.
+        </p>
+      )}
+      <div className="btn-row" style={{ marginTop: 18 }}>
+        <button
+          className="btn btn-success"
+          disabled={busy}
+          onClick={() => onApprove(undefined, undefined, undefined, thresholds)}
+        >
+          ✓ Approve
+        </button>
+        <button className="btn btn-danger" disabled={busy} onClick={onReject}>
+          ✕ Reject
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function SummaryBody({
   data,

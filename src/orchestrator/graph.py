@@ -602,6 +602,9 @@ class MergeState(TypedDict):
     # P7: typed row edges derived from the join graph ({edges: [...], cycles:
     # [...]}); cycles are shown at the dependency gate, nothing acts on them.
     relationship_edges: dict[str, Any]
+    # P10: pre-load thresholds the operator confirmed at the final gate; kept so
+    # a load retried through the error gate is judged against them, not reverted.
+    pre_load_thresholds: dict[str, Any]
 
     # Phase O — decisions a saved profile pins so a re-run is a re-run.
     # {entity: {blocking_keys, unique_id_fields, deterministic_id_fields,

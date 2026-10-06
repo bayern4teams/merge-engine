@@ -286,6 +286,10 @@ class Feedback(BaseModel):
     # human_review_scope's own node body replaces state["scope_plan"]
     # wholesale with this on resume; no separate merge step needed here.
     scope_plan: dict[str, Any] | None = None
+    # P10: the pre-load thresholds the operator confirmed at the final gate,
+    # {invariant name: number}. Untyped values on purpose: load_data fails
+    # closed on anything that is not a finite number.
+    thresholds: dict[str, Any] | None = None
 
 
 _DECISIONS = {"approve", "edit", "retry", "reject", "abort", "skip"}
@@ -790,6 +794,8 @@ def create_api(config_path: str = "config/config.yaml") -> FastAPI:
             feedback["column_dependencies"] = body.column_dependencies
         if body.scope_plan is not None:
             feedback["scope_plan"] = body.scope_plan
+        if body.thresholds is not None:
+            feedback["thresholds"] = body.thresholds
 
         manager.resume_workflow(thread_id, feedback)
         # Return the status right after resuming so the client can react

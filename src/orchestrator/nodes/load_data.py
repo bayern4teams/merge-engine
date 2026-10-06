@@ -373,27 +373,39 @@ _FLAGGED = "flagged_clusters"
 def _entity_measures(state: dict[str, Any], entity: str) -> dict[str, float]:
     """One entity's raw numbers for the pre-load invariants (absent = not measurable)."""
     out: dict[str, float] = {}
+    records = collection_records(state.get("extracted_data") or {}, entity)
+    fields = {k for r in records for k in r if not k.startswith("_")}
     mapped = len((state.get("field_mappings") or {}).get(entity) or {})
     unmapped = len((state.get("unmapped_fields") or {}).get(entity) or [])
-    if mapped + unmapped:
-        out[_COVERAGE] = mapped / (mapped + unmapped)
-    records = collection_records(state.get("extracted_data") or {}, entity)
-    identity = {
-        k
-        for r in records
-        for k in r
-        if not k.startswith("_") and any(h in k.lower() for h in _NAME_FIELD_HINTS)
-    }
-    if records and identity:
-        out[_NULL_IDENTITY] = sum(
-            not any(_has_value(r.get(k)) for k in identity) for r in records
-        ) / len(records)
+    # source fields = those the mapper listed, or those the records carry if it listed fewer
+    # (an entity the mapper skipped entirely still has fields, and maps none of them)
+    width = max(mapped + unmapped, len(fields))
+    if width:
+        out["fields"] = width
+        out[_COVERAGE] = mapped / width
+    # ONE identity field per entity: the best-ranked name hint, an id-like column last
+    # (``company_id``/``org_type`` populated must not hide a NULL ``name``)
+    identity = min(
+        (k for k in fields if any(h in k.lower() for h in _NAME_FIELD_HINTS)),
+        key=lambda k: (
+            min(i for i, h in enumerate(_NAME_FIELD_HINTS) if h in k.lower()),
+            k.lower().endswith("id"),
+            len(k),
+            k,
+        ),
+        default=None,
+    )
+    if records:
         out["records"] = len(records)
+    if records and identity:
+        out[_NULL_IDENTITY] = sum(not _has_value(r.get(identity)) for r in records) / len(records)
     clusters = clusters_for(state, entity)
     n = sum(len(c.get("record_ids", [])) for c in clusters)
     if n:
         # merges absorbed by the largest cluster, of all merges possible: a lone record is 0
         largest = max(len(c.get("record_ids", [])) for c in clusters)
+        out["largest"] = largest
+        out["clustered"] = n
         out[_LARGEST_CLUSTER] = (largest - 1) / (n - 1) if n > 1 else 0.0
         names = {_record_id(r): r.get(_best_name_field(r) or "") for r in records}
         out[_FLAGGED] = quality_signals(clusters, names)["flagged_count"]
@@ -410,8 +422,9 @@ def pre_load_gate(state: dict[str, Any], confirmed: Any = None) -> dict[str, Any
     Proposals (one per invariant per run; m = the median across entities):
     coverage floor = m / 2, never below half of one mapped field of the widest
     entity (a run where nothing maps still fails); NULL-identity and largest-
-    cluster ceilings = 2 m, at least one record's worth of the median entity,
-    never a majority; flagged ceiling = 2 m of the per-entity flagged counts.
+    cluster ceilings = 2 m, never below the slack of the smallest entity (one
+    NULL record; a cluster twice the median entity's largest), never a majority;
+    flagged ceiling = 2 m of the per-entity flagged counts.
 
     ponytail: refusing is all it can do -- it cannot roll back a partial write
     (report P10 Ceiling); the proposals are rules of thumb relative to the run's
@@ -431,27 +444,27 @@ def pre_load_gate(state: dict[str, Any], confirmed: Any = None) -> dict[str, Any
     def values(key: str) -> list[float]:
         return [m[key] for m in per.values() if key in m]
 
+    # slack: one record of the SMALLEST entity (NULLs), and a cluster twice the median
+    # entity's largest in the smallest entity (merges) -- a small healthy lookup beside
+    # large tables must not be refused for being small
     sizes = values("records")
-    one_record = 1 / statistics.median(sizes) if sizes else 0.0
-    widest = max(
-        (
-            len((state.get("field_mappings") or {}).get(e) or {})
-            + len((state.get("unmapped_fields") or {}).get(e) or [])
-            for e in per
-        ),
-        default=0,
-    )
+    one_record = 1 / min(sizes) if sizes else 0.0
+    clustered = values("clustered")
+    typical = 2 * statistics.median(values("largest")) - 1 if clustered else 0.0
+    small = min(clustered, default=0.0)
+    one_cluster = min(typical / (small - 1), 1.0) if small > 1 else 0.0
+    widest = max(values("fields"), default=0.0)
 
-    def ceiling(xs: list[float]) -> float:
-        return min(max(2 * statistics.median(xs), one_record), 1 / 2) if xs else 1.0
+    def ceiling(xs: list[float], slack: float) -> float:
+        return min(max(2 * statistics.median(xs), slack), 1 / 2) if xs else 1.0
 
     cov, nul, big, flg = (
         values(k) for k in (_COVERAGE, _NULL_IDENTITY, _LARGEST_CLUSTER, _FLAGGED)
     )
     proposed = {
         _COVERAGE: max(statistics.median(cov) / 2, 1 / (2 * widest)) if cov else 0.0,
-        _NULL_IDENTITY: ceiling(nul),
-        _LARGEST_CLUSTER: ceiling(big),
+        _NULL_IDENTITY: ceiling(nul, one_record),
+        _LARGEST_CLUSTER: ceiling(big, one_cluster),
         _FLAGGED: 2 * statistics.median(flg) if flg else 0.0,
     }
     measured = {
@@ -492,9 +505,10 @@ def _confirmed_thresholds(state: dict[str, Any]) -> Any:
     approve feedback), or None. Read here, not in the gate body: with interrupt_before
     the gate body never runs on resume (plan 2.6)."""
     feedback = state.get("human_feedback") or {}
-    if feedback.get("node") not in (None, "human_final_approval"):
-        return None
-    return feedback.get("thresholds")
+    if feedback.get("node") in (None, "human_final_approval") and "thresholds" in feedback:
+        return feedback["thresholds"]
+    # kept in state by load_data, so a retry through the error gate keeps the confirmation
+    return state.get("pre_load_thresholds")
 
 
 def _pre_load_failure(gate: dict[str, Any]) -> dict[str, Any] | None:
@@ -673,8 +687,10 @@ async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
     guardrail_failure = _scoped_merge_guardrail_failure(state)
     # P10: the run's own invariants, at the thresholds the operator confirmed.
     invariant_failure = None
+    confirmed: Any = None
     if not guardrail_failure:
-        invariant_failure = _pre_load_failure(pre_load_gate(state, _confirmed_thresholds(state)))
+        confirmed = _confirmed_thresholds(state)
+        invariant_failure = _pre_load_failure(pre_load_gate(state, confirmed))
         guardrail_failure = invariant_failure
     if guardrail_failure:
         logger.error(
@@ -684,6 +700,8 @@ async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
         report = build_reconciliation_report(state, {}, list(state.get("errors", [])))
         report["guardrail_fired"] = True
         refusal: dict[str, Any] = {"reconciliation_report": report, "failure": guardrail_failure}
+        if invariant_failure and confirmed is not None:
+            refusal["pre_load_thresholds"] = confirmed
         # P17's defect report survives a P10 refusal: the reviewer fixing the run needs both.
         defects = preview_destination_defects(state) if invariant_failure else []
         if defects:
@@ -909,6 +927,8 @@ async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
     logger.debug("EXIT load_data_node")
 
     update: dict[str, Any] = {"errors": errors, "reconciliation_report": report, "failure": failure}
+    if confirmed is not None:
+        update["pre_load_thresholds"] = confirmed
     if defects:
         update["destination_defects"] = defects
     return update

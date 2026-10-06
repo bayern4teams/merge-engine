@@ -196,7 +196,8 @@ export default function PipelineScreen({ origins, destination }: Props) {
   async function onApprove(
     mappingEdits?: MappingRow[],
     columnDependencies?: ColumnDependency[],
-    scopePlan?: Record<string, any>
+    scopePlan?: Record<string, any>,
+    thresholds?: Record<string, number>
   ) {
     if (!threadId) return;
     setBusy(true);
@@ -208,6 +209,7 @@ export default function PipelineScreen({ origins, destination }: Props) {
         node === "human_review_mappings" ? mappingEdits : undefined,
         node === "human_review_deps" ? columnDependencies : undefined,
         node === "human_review_scope" ? scopePlan : undefined,
+        node === "human_final_approval" ? thresholds : undefined,
       );
       addLog("success", "Approved.");
       setStatus(s);

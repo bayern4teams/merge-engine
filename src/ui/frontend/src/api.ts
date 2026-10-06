@@ -388,13 +388,15 @@ export function sendFeedback(
   decision: "approve" | "reject",
   mappingEdits?: MappingRow[],
   columnDependencies?: ColumnDependency[],
-  scopePlan?: Record<string, any>
+  scopePlan?: Record<string, any>,
+  thresholds?: Record<string, number>
 ): Promise<WorkflowStatus> {
   return post(`/api/workflow/${threadId}/feedback`, {
     decision,
     mapping_edits: mappingEdits ?? null,
     column_dependencies: columnDependencies ?? null,
     scope_plan: scopePlan ?? null,
+    thresholds: thresholds ?? null,
   });
 }
 

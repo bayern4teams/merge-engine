@@ -40,20 +40,12 @@ def _drop_unmapped(state, entities):
     return st
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="F1: entities with records but NO mapping and NO unmapped list are not measured",
-)
 def test_half_the_entities_never_mapped_and_not_listed_unmapped_is_refused():
     """The report's own evidence ('zero field mappings for 8 of 16 entities') where map_fields recorded NOTHING for them."""
     w = make_world("f1", n_ent=8, per=40)
     assert gate(_drop_unmapped(w.state, ["ent_a", "ent_b", "ent_c", "ent_d"]))["would_fail"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="F1: a run in which NOTHING mapped (and nothing is listed unmapped) passes the gate",
-)
 def test_run_with_no_mapping_at_all_is_refused():
     w = make_world("f1b", n_ent=8, per=40)
     st = copy.deepcopy(w.state)
@@ -66,11 +58,6 @@ def test_control_unmapped_listed_entities_are_measured():
     assert gate(w.state)["invariants"]["mapping_coverage"]["violated"]
 
 
-# -- 2. NULL identity hidden by any other hint-named populated column ---------------------------
-@pytest.mark.xfail(
-    strict=True,
-    reason="F2: a record is 'not NULL' if ANY name-hint column (company_id, organization_type, ...) has a value",
-)
 @pytest.mark.parametrize("extra", ["company_id", "organization_type", "label", "email_verified"])
 def test_null_names_are_counted_even_when_a_sibling_hint_column_is_populated(extra):
     w = make_world("f2", n_ent=8, per=100, null_ent=True, null_k=78)
@@ -98,10 +85,6 @@ def _with_lookup(n_lookup, n_null):
     return st
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="F3: share-of-entity measures + a floor of one record of the MEDIAN entity: a small healthy entity is refused",
-)
 def test_small_healthy_entity_beside_large_ones_is_not_refused():
     """50-row lookup, clusters of <= 3 records (as in the large entities), no NULL names: healthy."""
     g = gate(_with_lookup(50, 0))
@@ -110,9 +93,6 @@ def test_small_healthy_entity_beside_large_ones_is_not_refused():
     }
 
 
-@pytest.mark.xfail(
-    strict=True, reason="F3: one NULL name in a 50-row lookup (2%) refuses the whole run"
-)
 def test_one_null_name_in_a_small_entity_is_not_a_run_failure():
     assert not gate(_with_lookup(50, 1))["invariants"]["null_identity_share"]["violated"]
 
@@ -201,10 +181,6 @@ def test_control_partial_unknown_bool_text_negative_huge():
     assert gate(w.state, [1, 2])["would_fail"] and gate(w.state, "x")["would_fail"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="F5: api.Feedback has no `thresholds` field (pydantic drops it); the UI never renders pre_load_gate or sends it",
-)
 def test_the_feedback_endpoint_can_carry_confirmed_thresholds():
     from fastapi.testclient import TestClient
 
@@ -230,10 +206,6 @@ def test_the_feedback_endpoint_can_carry_confirmed_thresholds():
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="F5b: the final-approval view (Gates.tsx SummaryBody) never mentions pre_load_gate: a refusal is a surprise",
-)
 def test_the_ui_shows_the_gate_before_approval():
     from pathlib import Path
 
@@ -248,11 +220,6 @@ def test_control_human_feedback_edit_survives_the_graph_and_decision_edit_works(
     assert out.status == "completed" and out.dest.writes
 
 
-# -- 6. resume trap, end to end: the edit must outlive the gate (error-gate retry of load_data) ---
-@pytest.mark.xfail(
-    strict=True,
-    reason="F7: thresholds live only in human_feedback; an error-gate retry of load_data replaces it and the confirmed edit is lost",
-)
 def test_confirmed_thresholds_survive_a_load_retry_through_the_error_gate():
     import os
     import tempfile
