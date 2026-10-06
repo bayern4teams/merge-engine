@@ -767,3 +767,191 @@ def test_control_r2_determinism_with_names_and_three_sources():
             return sorted(sorted(c["record_ids"]) for c in cl)
 
         assert go(1) == go(2) == go(3)
+
+
+# ══ R3 (commit 1d14d28): attacks on the token-coverage name rule ══════════════════════════════
+def _apart(got, i, j):
+    where = {m: k for k, c in enumerate(got) for m in c}
+    return where[i] != where[j]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="DEFECT r3 (medium, regression vs r2 for 'A'/'Ab'): the name test is per EDGE, and `_abbreviates` "
+    "accepts any token as an abbreviation of every longer token with the same first letter (no minimum length), "
+    "so a one-letter or two-letter name is compatible with everything starting with it and fuses two unrelated "
+    "entities through a hub: Apple Inc - A - Amazon Com Inc.",
+)
+@pytest.mark.parametrize(
+    "names",
+    [
+        ["Apple Inc", "A", "Amazon Com Inc"],
+        ["Abbott Laboratories", "Ab", "Abbvie Inc"],
+    ],
+)
+def test_r3_short_token_hub_does_not_fuse_unrelated_entities(names):
+    assert _apart(named(names, path(3)), 0, 2)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="DEFECT r3 (medium, also r2): a one-token generic name scored against two distinct entities fuses them: "
+    "only scored EDGES are name-tested, never the pair of members that no edge joins (Delta Faucet / Delta / "
+    "Delta Air Lines; Colgate Palmolive / Co / Coca Cola Company). The parent's cohesion cut separated these chains.",
+)
+@pytest.mark.parametrize(
+    "names",
+    [
+        ["Delta Faucet Company", "Delta", "Delta Air Lines"],
+        ["Colgate Palmolive", "Co", "Coca Cola Company"],
+        ["Tata Steel", "Tata", "Tata Motors"],
+    ],
+)
+def test_r3_generic_hub_name_does_not_fuse_two_distinct_entities(names):
+    assert _apart(named(names, path(3)), 0, 2)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="DEFECT r3 (high-ish, also r2): the cliff is 'the largest gap of the component's own variations', so with "
+    "natural spread it isolates only the WORST edge. Four distinct real names, completely linked at 0.97 (an "
+    "identifier collision): ~3.5 of 6 pairs stay merged (100/100 random draws of 4 from 30 names are not separated).",
+)
+def test_r3_four_distinct_names_completely_linked_are_separated():
+    names = ["Blue Ridge Partners", "Tata Consultancy", "Alpha Capital", "Red Rock Mining"]
+    assert named(names, clique(4)) == [[0], [1], [2], [3]]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="DEFECT r3 (high-ish, also r2): same cliff, chain form: four distinct names in a path keep three of them "
+    "together (variations .91 / .64 / .60: floor .91 cuts one edge only).",
+)
+def test_r3_chain_of_four_distinct_names_is_separated():
+    assert named(["Alpha Corp", "Zenith Steel", "John Smith", "Mary Jones"], path(4)) == [
+        [0],
+        [1],
+        [2],
+        [3],
+    ]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="DEFECT r3 (medium): cliff dilution. The sibling pair is cut when alone, but one more, more different, "
+    "wrong edge in the SAME confident component raises the floor above it and the siblings stay merged.",
+)
+def test_r3_a_more_incoherent_edge_nearby_does_not_shield_a_less_incoherent_one():
+    names = ["Qorvan Steel", "Qorvan Foods", "Zzyx Plumbing"]
+    assert named(names[:2], [(0, 1)]) == [[0], [1]]  # control half: alone, cut
+    assert _apart(named(names, [(0, 1), (0, 2)]), 0, 1)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="DEFECT r3 (medium, non-Latin): `_abbreviates` is prefix/subsequence on whitespace tokens; unspaced scripts "
+    "carry a legal-form or city PREFIX (株式会社トヨタ, 北京百度网讯科技有限公司) which is not a prefix of the bare "
+    "name, so these split while 'Beijing Baidu Netcom' / 'Baidu Netcom' do not.",
+)
+@pytest.mark.parametrize(
+    "a,b", [("株式会社トヨタ", "トヨタ"), ("北京百度网讯科技有限公司", "百度网讯")]
+)
+def test_r3_unspaced_script_with_a_legal_form_prefix_is_not_split(a, b):
+    assert named([a, b], [(0, 1)]) == [[0, 1]]
+
+
+def test_control_r3_fixes_of_r2_still_hold():
+    # siblings bridged: cut (r2 merged), double bridge WITH names: cut, non-Latin variants, accent lone edge
+    sib = ["Qorvan Steel", "Qorvan Steel Ltd", "Qorvan Foods", "Qorvan Foods Ltd", *_FILLER]
+    assert named(sib, [(0, 1, 0.96), (2, 3, 0.96), (1, 2, 0.99)])[:2] == [[0, 1], [2, 3]]
+    edges = [
+        (i, j, 0.96) for g in (range(0, 5), range(5, 10)) for i, j in itertools.combinations(g, 2)
+    ]
+    got = named(
+        ["Zeluko Bamira"] * 5 + ["Quorvan Delisa"] * 5, edges + [(0, 5, 0.99), (1, 5, 0.99)]
+    )
+    assert got == [[0, 1, 2, 3, 4], [5, 6, 7, 8, 9]]
+    for a, b in [
+        ("Сбербанк", "ПАО Сбербанк России"),
+        ("Société Générale", "Societe Generale SA"),
+        ("IBM Corp", "I.B.M. Corporation"),
+        ("P&G", "Procter & Gamble"),
+    ]:
+        assert named([a, b], [(0, 1)]) == [[0, 1]]
+    # a wrong name-cut edge no longer pulls the means: the true pair survives
+    names = ["Zeluko Bamira", "Zeluko Bamira Ltd", "Quorvan Delisa", "Pimaku Tosera"]
+    assert named(names, [(0, 1, 0.96), (0, 2, 0.98), (1, 3, 0.98)]) == [[0, 1], [2], [3]]
+
+
+def test_control_r3_incoherent_complete_graphs_with_planted_names():
+    """Wholly different (synthetic) names, every pair scored high: exact for these shapes (r2: 17-50 of 60 not exact)."""
+    for sizes in ([3, 3], [5, 3], [6, 6], [2, 2, 2, 2]):
+        for seed in range(25):
+            w = acc.world(seed, sizes, ["clique"] * len(sizes), 0)
+            rng = random.Random(seed)
+            ids = [i for t in w["truth"] for i in t]
+            w["pairs"] = [
+                (a, b, 0.97 + rng.uniform(-0.01, 0.01)) for a, b in itertools.combinations(ids, 2)
+            ]
+            pred, _c, _s = acc.run(w)
+            acc.assert_exact(w, pred, f"{sizes} seed {seed}")
+
+
+def test_control_r3_legit_variants_of_real_names_are_rarely_split():
+    """Operators: legal suffix/abbreviation/initials/dropped word/reordering on 20 real-style names, all variant
+    pairs as lone edges (267 pairs): at most 3 splits (measured 2: 'Lim' vs 'ltd', both abbreviations)."""
+    ents = ["Bank of America Corporation", "General Electric Company", "International Business Machines Corp",
+            "Procter and Gamble Company", "Deutsche Telekom AG", "John Michael Smith", "Maria Elena Rodriguez Garcia",
+            "Siemens Healthineers AG", "Tata Consultancy Services Limited", "Banco Santander Central Hispano"]  # fmt: skip
+    suf = {
+        "corporation": "corp",
+        "company": "co",
+        "limited": "ltd",
+        "international": "intl",
+        "and": "&",
+        "services": "svcs",
+    }
+    splits = total = 0
+    for e in ents:
+        t = e.split()
+        vs = {e, " ".join(suf.get(x.lower(), x) for x in t), " ".join(t[:-1]) if len(t) > 2 else e,
+              " ".join(x[0] + "." if 0 < i < len(t) - 1 else x for i, x in enumerate(t)), ", ".join([t[-1], " ".join(t[:-1])])}  # fmt: skip
+        for a, b in itertools.combinations(sorted(vs), 2):
+            total += 1
+            splits += len(named([a, b], [(0, 1)])) == 2
+    assert total > 30 and splits <= 1, (splits, total)
+
+
+def test_control_r3_gate_noop_equals_build_and_name_cuts_never_rejoined():
+    differs = rejoined = cuts = 0
+    for seed in range(40):
+        rng = random.Random(seed)
+        w = acc.world(seed, [4, 4, 3, 3, 2, 2, 2], None, 0)
+        ids = [i for t in w["truth"] for i in t]
+        grp = {i: g for g, t in enumerate(w["truth"]) for i in t}
+        for _ in range(5):
+            x, y = rng.sample(ids, 2)
+            if grp[x] != grp[y]:
+                w["pairs"].append((x, y, rng.choice([0.96, 0.97, 0.98])))
+        st: dict = {}
+        cl, _m, _x = asyncio.run(tre._build_clusters(w["records"], w["pairs"], "company", stats=st))
+        cut = {tuple(p) for p in st["name_cut_pairs"]}
+        ret = [list(p) for p in w["pairs"] if (min(p[:2]), max(p[:2])) not in cut]
+        need = {x for p in ret for x in p[:2]}
+        reb = tre.rebuild_band_clusters(
+            "company",
+            cl,
+            ret,
+            set(),
+            set(),
+            0.95,
+            {fx.rid(r): r for r in w["records"] if fx.rid(r) in need},
+        )
+        differs += sorted(sorted(c["record_ids"]) for c in cl) != sorted(
+            sorted(c["record_ids"]) for c in reb
+        )
+        where = {r: i for i, c in enumerate(reb) for r in c["record_ids"]}
+        for a, b in cut:
+            cuts += 1
+            rejoined += where[a] == where[b]
+    assert cuts > 50 and differs == 0 and rejoined == 0
