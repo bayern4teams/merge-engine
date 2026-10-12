@@ -3,11 +3,11 @@
 Overwrite this file at every commit. A fresh session reads it first, then
 [the plan](../PART1_IMPLEMENTATION_PLAN.md). Git is the memory; a session's context is not.
 
-**Lock:** 2026-10-12T08:41:06Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-12T08:41:06Z
+**Lock:** 2026-10-12T08:49:07Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-12T08:49:07Z
 
 (Lock/heartbeat protocol: plan §7. A session sets `Lock: <ISO time>`, pushes it, and refreshes it at every commit; a lock older than 75 min is stale. `Autonomy` is `off`, `dryrun` (a tick only records what works and exits) or `unattended-through-phase-5` (authorises the supervisor to chain phases). Only the user changes it.)
 
-**Branch:** `feat/part1-fixes` · **Current phase:** 1-3 done, 4 items done, Phase 4 gate next (Phase 0: [PHASE0_REPORT.md](PHASE0_REPORT.md)); cloud re-checks #1 and #2 done (see [CLOUD_RECHECK.md](CLOUD_RECHECK.md), [CLOUD_RECHECK2.md](CLOUD_RECHECK2.md)) · **Last usage reading:** 5-hour window `allowed_warning`, resets 12:00Z, at 2026-10-04 10:28Z via cloud `get_session` (no percentage available in the cloud)
+**Branch:** `feat/part1-fixes` · **Current phase:** 1-4 done, Phase 5 next (Phase 0: [PHASE0_REPORT.md](PHASE0_REPORT.md)); cloud re-checks #1 and #2 done (see [CLOUD_RECHECK.md](CLOUD_RECHECK.md), [CLOUD_RECHECK2.md](CLOUD_RECHECK2.md)) · **Last usage reading:** 5-hour window `allowed_warning`, resets 12:00Z, at 2026-10-04 10:28Z via cloud `get_session` (no percentage available in the cloud)
 
 | item | phase | state | commit | lead verdict |
 |---|---|---|---|---|
@@ -103,7 +103,7 @@ lists files an item must **edit**. Paths are under `src/` unless stated. Abbrevi
 | 4 | P10 (after P16, P17, P18) | P16 (quality module + `N/load_data.py` report) |
 
 ## Next action
-**Phase 4 gate** (P16, P10 accepted): `check.py all` green, CI green on the pushed head, `/ponytail-review` of the Phase 4 diff (base = the [PHASE 3 DONE] head ee6b00f..), then `[PHASE 4 DONE]` and Phase 5 (plan §8). Lead deviation: `src/mcp_server/tools/sql_lineage.py` one-line CI fix (518dcf9, sqlglot 30.22 stubs; module has no caller -> Phase 5 audit).
+**Phase 5** (plan §8): `/ponytail-review` over the whole branch diff (main..HEAD), `/ponytail-audit` paired with the graph tiers, `/ponytail-debt`, `/ponytail-gain`; verify every row has a lead verdict; finalise LOCAL_VERIFY.md; update `docs/` for changed behaviour (`check.py docs` green); fold `.handoff/` verdicts into `part1/PHASE5_REPORT.md` and purge `.handoff/`; then the final report, Next action "Part 1 complete - waiting for the user", clear Lock, commit `[PART 1 COMPLETE]`. Never merge. Phase 5 audit carry-overs: `entities_at_worst` duplicates `entities_violating` (point Gates.tsx at the latter, drop it); `sql_lineage.py` has no caller; Phase 3 review items (`_split_weakest_link`, cohesion branch, `min_cohesion`).
 **Phase 3, step 1:** lead serial chain in `T/resolve_entities.py`: P15 -> P6 -> P7 -> P8 -> P20 (derive acceptance
 with `part1-verifier` before each); side lanes beside it (cap 2): P9 (new decision-memory module only), P17
 (`N/load_data.py` only), P19 (`tests/eval/score.py` + tests). Gate hooks for P9/P17 in `human_nodes.py`/`graph.py`
@@ -133,6 +133,7 @@ attack agent. P13: prior rescaled to the random-pair population (lead decision, 
 - P15 minor findings (strict xfail in `tests/part1/test_p15_attack.py`): F1 accept+keep of one pair in one feedback -> apart but audit counts both; F2 a human-kept cluster is sealed against a lowered committed bar (`reviewed_by_human` cannot tell keep from split; errs to fewer merges); F3 a later keep after a merge leaves it merged while `band_kept_apart` lists it; F4 a committed RAISED bar is not persisted, so a duplicate second resume re-merges pairs it un-merged. Phase 5 decision.
 
 ## Notifications
+- [PHASE 4 DONE] 2026-10-12: P16 (r2) and P10 (r3, lead accept after the last round, residual ceilings in its row) accepted, both `unverified-live`. `check.py all` green locally (11/11) on 20e469f; CI green on 1ee9c89 (run 161); `pytest tests/part1 tests/unit tests/integration` 3297 pass / 28 xfail. `/ponytail-review` of the Phase 4 diff: net -6 lines possible, -2 applied (1ee9c89), `entities_at_worst` removal deferred to Phase 5 (touches the UI). Lead deviation: `sql_lineage.py` one-line CI fix (518dcf9).
 - [RESOLVED] 2026-10-12: P10 block cleared by the user: third round, see Next action.
 - [PHASE 3 DONE] 2026-10-06: P15, P6, P7, P8, P20 (narrowed, decision c), P9, P17, P19 accepted (P19 `accepted-cloud`, rest `unverified-live`). `check.py all` green locally (11/11) on ee6b00f; CI green on ee6b00f (run 141); `pytest tests/part1 tests/unit tests/integration` 3124 pass / 20 xfail at a683584. `/ponytail-review` of the phase diff: net ~-60 lines possible, deferred to the Phase 5 audit (`_split_weakest_link` + cohesion branch + `min_cohesion` params unreachable from build/rebuild, only unit tests call them; `one_to_one` has no caller but decision c keeps it).
 - [INFO] 2026-10-06: P20 accepted narrowed (decision c). Cost to know: without a name cut, bridged chain/tree entities over-merge (planted FP 826-9896 vs parent 31-79); P16's name flag + P10's flagged-count invariant are the only guard. See the P20 row and LOCAL_VERIFY P20.
