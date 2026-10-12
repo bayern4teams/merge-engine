@@ -518,8 +518,9 @@ def pre_load_gate(state: dict[str, Any], confirmed: Any = None) -> dict[str, Any
         if isinstance(used, bool) or not isinstance(used, (int, float)) or not math.isfinite(used):
             unusable.append(name)  # garbage never disables an invariant: fail closed
             used = threshold
+        confirmed_here = name in edits and name not in unusable
         # the UI sends every proposal back; one returned unchanged is not an operator's edit
-        edited = name in edits and name not in unusable and used != threshold
+        edited = confirmed_here and used != threshold
         violating[name] = [
             e
             for e, m in per.items()
@@ -536,7 +537,7 @@ def pre_load_gate(state: dict[str, Any], confirmed: Any = None) -> dict[str, Any
             "threshold": threshold,
             "violated": bool(violating[name]),
         }
-        if name in edits and name not in unusable:
+        if confirmed_here:
             invariants[name]["confirmed"] = used
     worst = {
         name: sorted(e for e, m in per.items() if name in m and m[name] == measured[name])
