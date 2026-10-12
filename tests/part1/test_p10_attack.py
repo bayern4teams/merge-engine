@@ -728,3 +728,248 @@ def test_control_slack_never_exceeds_the_cap_so_the_replay_still_fails_beside_a_
 
 def test_a_one_row_entity_with_a_null_name_is_one_null_record_of_slack():
     assert not gate(_with_lookup(1, 1))["invariants"]["null_identity_share"]["violated"]
+
+
+# =====================================================================================================
+# r3 (HEAD d7258a7): the r2 findings end to end, and the NEW mechanisms (per-entity slack, per-shape identity,
+# listed coverage width, id-like-last ranking, "a confirmed number is used as given").
+# =====================================================================================================
+import ast  # noqa: E402
+import inspect  # noqa: E402
+
+
+def _verbatim(st):
+    """What Gates.tsx sends: EVERY displayed proposal, unedited, as `thresholds`."""
+    return {k: v["threshold"] for k, v in gate(st)["invariants"].items()}
+
+
+def _giant_beside_lookup_world(n_lookup):
+    return _world(f"r3-giant-{n_lookup}", _lookup_state(n_lookup, giant=225))
+
+
+def test_r3_e2e_a_giant_cluster_beside_a_tiny_lookup_is_refused_through_the_graph():
+    """r2 finding 1 end to end (was: 5-row lookup lifted the ceiling to the 1/2 cap, the 45% cluster loaded)."""
+    out = _drive(_giant_beside_lookup_world(5), _approve({"decision": "approve"}))
+    assert out.status == "failed" and out.failure.get("disposition") == "fail"
+    assert "largest_cluster_share" in out.failure["error"]
+    assert out.dest.writes == [] and out.impl_calls == []
+
+
+def test_r3_e2e_a_null_burst_beside_a_two_row_lookup_is_refused_through_the_graph():
+    out = _drive(
+        _world("r3-null-2", _lookup_state(2, big_null=225)), _approve({"decision": "approve"})
+    )
+    assert out.status == "failed" and "null_identity_share" in out.failure["error"]
+    assert out.dest.writes == []
+
+
+def test_r3_e2e_a_mixed_origin_entity_with_every_name_populated_loads():
+    """r2 finding 2 end to end."""
+    base = make_world("mo3", n_ent=8, per=100, null_each=0)
+
+    def fn(i, r):
+        r["org_title" if i % 5 == 0 else "company_name"] = r.pop("name")
+
+    out = _drive(
+        _world("r3-mixed", _rename(base.state, "ent_a", fn)), _approve({"decision": "approve"})
+    )
+    assert out.status == "completed" and not out.failure, out.failure
+
+
+def test_r3_per_entity_slack_catches_what_the_run_wide_minimum_hid():
+    """The failure lists name the entity that violates, not just the worst."""
+    g = gate(_lookup_state(5, giant=225))
+    assert g["entities_violating"]["largest_cluster_share"] == ["ent_b"]
+    g = gate(_lookup_state(2, big_null=225))
+    assert g["entities_violating"]["null_identity_share"] == ["ent_a"]
+
+
+def test_r3_control_slack_is_per_entity_and_still_eases_a_healthy_lookup():
+    st = _with_lookup(5, 1)  # 1 NULL name in 5 rows, clusters like the large entities
+    g = gate(st)
+    assert not g["would_fail"], {k: v for k, v in g["invariants"].items() if v["violated"]}
+    # two NULLs in 5 is no longer one record of slack
+    assert gate(_with_lookup(5, 2))["invariants"]["null_identity_share"]["violated"]
+    # a 12-record cluster in a 50-row lookup is more than twice the median entity's largest
+    st = _with_lookup(50, 0)
+    w = make_world("g12", n_ent=2, per=50, giant_k=12, null_each=0)
+    for k in ("extracted_data", "entity_clusters", "unified_entities"):
+        st[k]["lookup"] = w.state[k]["ent_b"]
+    assert gate(st)["invariants"]["largest_cluster_share"]["violated"]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="r3 MEDIUM-HIGH: slack applies only `if name not in edits`, and Gates.tsx ALWAYS sends every invariant "
+    "(proposal or edit) as `thresholds`, so through the UI no entity ever gets its slack: approving the displayed, "
+    "unedited proposals refuses the healthy 50-row lookup that the no-thresholds path (and the payload's would_fail) load",
+)
+def test_r3_approving_the_displayed_proposals_unedited_equals_sending_none():
+    st = _with_lookup(50, 1)
+    assert not gate(st)["would_fail"]
+    g = gate(st, _verbatim(st))
+    assert not g["would_fail"], {
+        k: (v["measured"], v["threshold"]) for k, v in g["invariants"].items() if v["violated"]
+    }
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="r3 MEDIUM-HIGH (same cause, end to end): F3 (healthy lookup beside large entities) loads with no "
+    "thresholds but fails when the UI's verbatim proposals ride on the approval",
+)
+def test_r3_e2e_f3_still_loads_when_the_ui_sends_the_proposals_verbatim():
+    st = _with_lookup(50, 0)
+
+    def post(c, tid, live):
+        inv = live["data"]["pre_load_gate"]["invariants"]
+        return c.post(
+            f"/api/workflow/{tid}/feedback",
+            json={"decision": "approve", "thresholds": {k: v["threshold"] for k, v in inv.items()}},
+        )
+
+    out = _drive(_world("r3-f3-verbatim", st), post)
+    assert out.status == "completed" and out.dest.rows.get("lookup")
+
+
+def test_r3_control_a_confirmed_number_is_used_as_given_and_loosening_it_loads():
+    st = _with_lookup(1, 1)  # a 1-row lookup whose name is NULL: share 1.0
+    assert not gate(st)["would_fail"]  # the proposal's slack eases it
+    assert gate(st, {"null_identity_share": 0.3})["invariants"]["null_identity_share"]["violated"]
+    assert not gate(st, {"null_identity_share": 1.0})["invariants"]["null_identity_share"][
+        "violated"
+    ]
+    # an edit to ONE invariant keeps the slack of the others
+    g = gate(_with_lookup(5, 1), {"mapping_coverage": 0.0})
+    assert not g["invariants"]["null_identity_share"]["violated"]
+
+
+# -- per-shape identity: a source that OMITS an absent key (MongoDBConnector._flatten_doc) --------------
+@pytest.mark.xfail(
+    strict=True,
+    reason="r3 MEDIUM: records are grouped by (table, key set); a Mongo document with no `name` key is its own shape "
+    "whose identity is its next-best column or none at all, and a shape with no name column is not judged (not in the "
+    "denominator). 78 of 100 documents lacking `name` measure 0.0 NULL (r2's union column measured 0.78). The code "
+    "comment concedes it, but MongoDBConnector rows omit absent fields and are spooled as-is (extract_data -> spool.append)",
+)
+@pytest.mark.parametrize("extra", [None, "company_id", "email"])
+def test_r3_documents_that_omit_the_name_key_are_null_identities(extra):
+    base = make_world("mongo", n_ent=8, per=100, null_each=0)
+
+    def fn(i, r):
+        if i < 78:
+            r.pop("name")
+            if extra:
+                r[extra] = f"v{i}"
+
+    inv = _null_inv(_rename(base.state, "ent_a", fn))
+    assert inv["violated"], (inv["measured"], inv["threshold"], "78 of 100 documents have no name")
+
+
+def test_r3_control_carried_none_and_empty_string_names_are_still_counted():
+    base = make_world("sqlnull", n_ent=8, per=100, null_each=0)
+    for val in (None, "", "   "):
+
+        def fn(i, r, val=val):
+            if i < 78:
+                r["name"] = val
+
+        assert _null_inv(_rename(base.state, "ent_a", fn))["measured"] == 0.78, repr(val)
+
+
+# -- listed coverage width ----------------------------------------------------------------------------
+@pytest.mark.xfail(
+    strict=True,
+    reason="r3 LOW-MEDIUM: width = mapped+unmapped when the mapper listed ANY field, so an entity whose mapper listed "
+    "only the mapped field (7 of 8 carried fields never mentioned) measures coverage 1.0. Real producers: the mapper "
+    "samples only records[:_MAX_SAMPLE_RECORDS] (a field first seen later is carried, never listed) and a pinned "
+    "profile mapping (field_mappings reused verbatim, new source columns never listed). r1 finding 2 survives in part",
+)
+def test_r3_an_entity_whose_mapper_listed_one_of_eight_carried_fields_is_a_coverage_failure():
+    st = _all_mapped_world(0)
+    for r in st["extracted_data"]["ent_a"]:
+        for k in "abcd":
+            r["x_" + k] = "v"
+    st["field_mappings"]["ent_a"] = {
+        "name": {"dest_column": "name", "requires_schema_change": False}
+    }
+    st["unmapped_fields"]["ent_a"] = []
+    g = gate(st)["invariants"]["mapping_coverage"]
+    assert g["violated"], (
+        g["measured"],
+        g["threshold"],
+        "1 of 8 fields mapped, 7 silently dropped",
+    )
+
+
+def test_r3_control_listed_width_ignores_audit_columns_and_the_unlisted_replay_is_still_caught():
+    assert not gate(_all_mapped_world(8))["invariants"]["mapping_coverage"]["violated"]
+    w = make_world("lw", n_ent=8, per=40)
+    assert gate(_drop_unmapped(w.state, ["ent_a", "ent_b", "ent_c", "ent_d"]))["would_fail"]
+    # an unlisted entity: carried fields minus P12 metadata-only columns (flagged in the discovered schema)
+    st = copy.deepcopy(w.state)
+    st["field_mappings"]["ent_a"], st["unmapped_fields"]["ent_a"] = {}, []
+    for r in st["extracted_data"]["ent_a"]:
+        r["created_at"] = r["etl_batch_id"] = "x"
+    cols = sorted({c for r in st["extracted_data"]["ent_a"] for c in r if not c.startswith("_")})
+    st["schemas"] = {
+        "o1": {
+            "tables": [
+                {
+                    "name": "ent_a",
+                    "full_name": "ent_a",
+                    "columns": [{"name": c} for c in cols],
+                    "metadata_columns": ["created_at", "etl_batch_id"],
+                }
+            ]
+        }
+    }
+    st["entity_tables"] = {"ent_a": [{"origin_id": "o1", "table": "ent_a"}]}
+    m = nld._entity_measures(st, "ent_a")
+    assert m["fields"] == len(cols) - 2 and m["mapping_coverage"] == 0.0
+
+
+# -- identity ranking ---------------------------------------------------------------------------------
+@pytest.mark.xfail(
+    strict=True,
+    reason="r3 LOW: the buried-hint flag is only the THIRD sort key, after hint rank, so `nickname`/`username`/`filename` "
+    "(contain `name`, rank 0) still beat a populated `email`/`title`/`company`; a users table (email always set, "
+    "optional nickname 90% NULL) measures 0.90 NULL identity and is refused",
+)
+def test_r3_a_sparse_optional_nickname_does_not_hide_a_populated_email():
+    base = make_world("nick2", n_ent=8, per=100, null_each=0)
+
+    def fn(i, r):
+        r["email"] = r.pop("name").lower() + "@x.io"
+        r["nickname"] = f"n{i}" if i % 10 == 0 else None
+
+    inv = _null_inv(_rename(base.state, "ent_a", fn))
+    assert not inv["violated"], (inv["measured"], inv["threshold"], "email is always populated")
+
+
+def test_r3_control_ranking_orders_that_hold():
+    f = nld._identity_column
+    assert f({"id", "company_id", "label"}) == "label"  # id-like last
+    assert f({"first_name", "nickname", "username"}) == "first_name"  # whole word before buried
+    assert f({"company_name", "company_id"}) == "company_name"
+    assert f({"org_id", "name_id"}) == "name_id"  # only id-likes: still one
+    assert f({"id", "val"}) is None and f(set()) is None
+
+
+# -- no fitted constants (plan 2.4) -------------------------------------------------------------------
+def test_r3_control_no_numeric_or_corpus_literal_in_the_gate_code():
+    allowed = {0, 1, 2, -1}
+    corpus = ("78", "465", "9556382", "99", "pagila", "northwind", "company_name", "acme", "staff")
+    for fn in (
+        nld._identity_column,
+        nld._entity_measures,
+        nld.pre_load_gate,
+        nld._pre_load_failure,
+    ):
+        tree = ast.parse(inspect.getsource(fn).lstrip())
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Constant):
+                if isinstance(n.value, (int, float)) and not isinstance(n.value, bool):
+                    assert n.value in allowed, (fn.__name__, n.value)
+                if isinstance(n.value, str):
+                    assert not any(c in n.value.lower() for c in corpus), (fn.__name__, n.value)
