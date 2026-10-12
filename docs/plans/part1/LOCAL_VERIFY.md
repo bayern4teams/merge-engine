@@ -178,3 +178,31 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Independent check: ground-truth company/person pairs (restored `gt_score.py`): pairwise FP/FN per entity vs the parent; list the 20 largest clusters and their distinct names by SQL.
 - Expected evidence: FN well below the parent's (Phase 0: bridge-strongest FN 20 -> 0, chain FN 10 -> 0); FP not above the parent's. Names are not a cut: clusters joining different names are expected to appear in P16's name-variation flag, not to be split. If flagged clusters are real wrong merges, that is the trigger for correlation clustering (report P20 Deferred).
 - Result (filled in locally):
+
+### P15 — the 0.70-0.95 review band reaches the HITL gate
+- Why cloud could not verify: no origin databases; the real `log m/u` distribution decides how many pairs land in the band.
+- Command: full merge run; stop at the matches gate (`human_review_matches`) and read the band histogram and predicted counts in the payload; approve some band pairs and reject others, then resume.
+- Independent check: count pairs with 0.70 ≤ s < 0.95 from `resolution_stats` / the gate payload, and compare with the pairs the gate lists; after resume, SQL on the destination: an approved pair shares one unified id, a rejected pair does not; a second resume does not undo the first.
+- Expected evidence: band pairs are listed at the gate (before: neither merged nor recorded); Match (≥ 0.95) / Exclude (< 0.70) counts unchanged vs the parent of the first P15 commit.
+- Result (filled in locally):
+
+### P17 — destination defect report, never repair
+- Why cloud could not verify: no destination database (`public.company_industry`).
+- Command: full merge run against the restored destination with `company_industry` still one `id` column (do not fix its DDL first); read `destination_defects` at the final gate and in the run report.
+- Independent check: `SELECT count(*) FROM public.company_industry` after the run; the destination's DDL log / `pg_stat_statements` shows no `ALTER`/`CREATE` from the run.
+- Expected evidence: `company_industry` named with its missing linkage columns and the unprojectable row count; 0 rows written (before: 539 key-only rows).
+- Result (filled in locally):
+
+### P16 — label-free quality signals in the run report
+- Why cloud could not verify: no restored corpus; the false-flag rate of the name-variation flag on real names is unknown.
+- Command: two full merge runs with the same `MERGE_ENGINE_QUALITY_HISTORY` path; read `report.entities.<e>.quality` from both run reports.
+- Independent check: list the clusters in `flagged_clusters` and inspect their distinct names by SQL; compare the largest cluster size with `SELECT max(n) FROM (SELECT count(*) n ... GROUP BY unified_id)`.
+- Expected evidence: run one prints B-cubed "not available", run two a number; homonymy rate, name-variation rate and Hill numbers printed per entity (before: no label-free signal); flagged clusters are mostly real fusions (attack measured 0-0.04 % false flags synthetically).
+- Result (filled in locally):
+
+### P10 — pre-load gate refuses a bad run before any write
+- Why cloud could not verify: no restored corpus; the false-refusal rate of the run-relative proposals (2 x median, per-entity slack) on the 16-entity corpus is unknown.
+- Command: replay the incident run (full merge, all 16 entities); at the final gate read `pre_load_gate` (measured, proposed thresholds, `entities_at_worst`); approve without editing.
+- Independent check: SQL row counts on the destination before and after (must be unchanged on a refusal); the run's error names the violated invariants and the entities in `entities_violating`; `SELECT count(*) FILTER (WHERE name IS NULL) FROM company` on the restored sources.
+- Expected evidence: the incident shape (8/16 entities with zero mappings, `company.name` NULL 78/99, a giant cluster) FAILS pre-load with 0 rows written (before: `completed`); after the P1-P20 fixes a healthy run passes unedited. Residual ceilings: entities all equally bad, a nameless document carrying another name column, mapper-unlisted carried fields once any field is listed, `nickname` beating `email`.
+- Result (filled in locally):
