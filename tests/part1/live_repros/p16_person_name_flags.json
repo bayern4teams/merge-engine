@@ -1,0 +1,774 @@
+{
+ "source": "Febrl dataset4a/4b (ANU Open Source License; via recordlinkage repo), local run febrl4_after_r1 on 6d7c4b4",
+ "truth": "every cluster below is ONE true person (rec-N-org + rec-N-dup-0), so the correct flagged_count is 0",
+ "flagged_in_live_run": [
+  "c0",
+  "c1",
+  "c2",
+  "c3",
+  "c4",
+  "c5",
+  "c6",
+  "c7",
+  "c8",
+  "c9",
+  "c10",
+  "c11",
+  "c12",
+  "c13"
+ ],
+ "clusters": [
+  {
+   "cluster_id": "c0",
+   "record_ids": [
+    "fa:public.person:rec-3160-org",
+    "fb:public.person:rec-3160-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c1",
+   "record_ids": [
+    "fa:public.person:rec-2797-org",
+    "fb:public.person:rec-2797-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c2",
+   "record_ids": [
+    "fa:public.person:rec-528-org",
+    "fb:public.person:rec-528-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c3",
+   "record_ids": [
+    "fa:public.person:rec-757-org",
+    "fb:public.person:rec-757-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c4",
+   "record_ids": [
+    "fa:public.person:rec-2691-org",
+    "fb:public.person:rec-2691-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c5",
+   "record_ids": [
+    "fa:public.person:rec-3985-org",
+    "fb:public.person:rec-3985-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c6",
+   "record_ids": [
+    "fa:public.person:rec-1778-org",
+    "fb:public.person:rec-1778-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c7",
+   "record_ids": [
+    "fa:public.person:rec-4254-org",
+    "fb:public.person:rec-4254-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c8",
+   "record_ids": [
+    "fa:public.person:rec-1614-org",
+    "fb:public.person:rec-1614-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c9",
+   "record_ids": [
+    "fa:public.person:rec-4991-org",
+    "fb:public.person:rec-4991-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c10",
+   "record_ids": [
+    "fa:public.person:rec-1400-org",
+    "fb:public.person:rec-1400-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c11",
+   "record_ids": [
+    "fa:public.person:rec-877-org",
+    "fb:public.person:rec-877-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c12",
+   "record_ids": [
+    "fa:public.person:rec-1895-org",
+    "fb:public.person:rec-1895-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c13",
+   "record_ids": [
+    "fa:public.person:rec-873-org",
+    "fb:public.person:rec-873-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c14",
+   "record_ids": [
+    "fa:public.person:rec-4902-org",
+    "fb:public.person:rec-4902-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c15",
+   "record_ids": [
+    "fa:public.person:rec-1524-org",
+    "fb:public.person:rec-1524-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c16",
+   "record_ids": [
+    "fa:public.person:rec-4981-org",
+    "fb:public.person:rec-4981-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c17",
+   "record_ids": [
+    "fa:public.person:rec-4652-org",
+    "fb:public.person:rec-4652-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c18",
+   "record_ids": [
+    "fa:public.person:rec-3164-org",
+    "fb:public.person:rec-3164-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c19",
+   "record_ids": [
+    "fa:public.person:rec-4078-org",
+    "fb:public.person:rec-4078-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c20",
+   "record_ids": [
+    "fa:public.person:rec-1005-org",
+    "fb:public.person:rec-1005-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c21",
+   "record_ids": [
+    "fa:public.person:rec-348-org",
+    "fb:public.person:rec-348-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c22",
+   "record_ids": [
+    "fa:public.person:rec-2520-org",
+    "fb:public.person:rec-2520-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c23",
+   "record_ids": [
+    "fa:public.person:rec-3053-org",
+    "fb:public.person:rec-3053-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c24",
+   "record_ids": [
+    "fa:public.person:rec-2998-org",
+    "fb:public.person:rec-2998-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c25",
+   "record_ids": [
+    "fa:public.person:rec-3671-org",
+    "fb:public.person:rec-3671-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c26",
+   "record_ids": [
+    "fa:public.person:rec-3967-org",
+    "fb:public.person:rec-3967-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c27",
+   "record_ids": [
+    "fa:public.person:rec-3211-org",
+    "fb:public.person:rec-3211-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c28",
+   "record_ids": [
+    "fa:public.person:rec-2001-org",
+    "fb:public.person:rec-2001-dup-0"
+   ]
+  },
+  {
+   "cluster_id": "c29",
+   "record_ids": [
+    "fa:public.person:rec-4186-org",
+    "fb:public.person:rec-4186-dup-0"
+   ]
+  }
+ ],
+ "records": [
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-3160-org",
+   "given_name": "xanthe",
+   "surname": "pringle",
+   "date_of_birth": "19250210",
+   "suburb": "woori yallock"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-3160-dup-0",
+   "given_name": null,
+   "surname": "pringle",
+   "date_of_birth": "19250210",
+   "suburb": "woori yallock"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-2797-org",
+   "given_name": "alice",
+   "surname": "neumann",
+   "date_of_birth": "19731130",
+   "suburb": "karratha"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-2797-dup-0",
+   "given_name": "neumann",
+   "surname": "alice",
+   "date_of_birth": "19731130",
+   "suburb": "karrtaha"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-528-org",
+   "given_name": "troy",
+   "surname": "copp",
+   "date_of_birth": "19921025",
+   "suburb": "dural"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-528-dup-0",
+   "given_name": "copp",
+   "surname": "troy",
+   "date_of_birth": "19921025",
+   "suburb": "dural"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-757-org",
+   "given_name": "charlotte",
+   "surname": "baynes",
+   "date_of_birth": "19221231",
+   "suburb": "malvern east"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-757-dup-0",
+   "given_name": "bayns",
+   "surname": "charlotte",
+   "date_of_birth": "19221231",
+   "suburb": "malvern east"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-2691-org",
+   "given_name": "ellorah",
+   "surname": "verco",
+   "date_of_birth": "19340706",
+   "suburb": "clifton springs"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-2691-dup-0",
+   "given_name": "jacqueline",
+   "surname": "verco",
+   "date_of_birth": "19340706",
+   "suburb": "cliftons prings"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-3985-org",
+   "given_name": "nicole",
+   "surname": "daykin",
+   "date_of_birth": "19120515",
+   "suburb": "gwynneville"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-3985-dup-0",
+   "given_name": "blake",
+   "surname": "daykin",
+   "date_of_birth": "19120515",
+   "suburb": "gwynneville"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-1778-org",
+   "given_name": "rosie",
+   "surname": "dieckmann",
+   "date_of_birth": "19820207",
+   "suburb": "panorama"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-1778-dup-0",
+   "given_name": null,
+   "surname": "dieckmann",
+   "date_of_birth": "19820207",
+   "suburb": "panoarma"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-4254-org",
+   "given_name": "marleigh",
+   "surname": "verner",
+   "date_of_birth": "19500227",
+   "suburb": "murrumbateman"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-4254-dup-0",
+   "given_name": "noah",
+   "surname": "verner",
+   "date_of_birth": "19500227",
+   "suburb": "murrumbqteman"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-1614-org",
+   "given_name": "jack",
+   "surname": "moscatt",
+   "date_of_birth": "19611218",
+   "suburb": "st kilda east"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-1614-dup-0",
+   "given_name": null,
+   "surname": "schmick",
+   "date_of_birth": "19611218",
+   "suburb": "st kilda east"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-4991-org",
+   "given_name": "mikaela",
+   "surname": "horkings",
+   "date_of_birth": "19291011",
+   "suburb": "paddington"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-4991-dup-0",
+   "given_name": null,
+   "surname": "horkings",
+   "date_of_birth": "19291011",
+   "suburb": "paddington"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-1400-org",
+   "given_name": "paige",
+   "surname": "sherriff",
+   "date_of_birth": "19111215",
+   "suburb": "marks point"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-1400-dup-0",
+   "given_name": "grace",
+   "surname": "sherriff",
+   "date_of_birth": "19111215",
+   "suburb": "riverwood"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-877-org",
+   "given_name": "reegan",
+   "surname": "sporn",
+   "date_of_birth": "19650504",
+   "suburb": "port augusta"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-877-dup-0",
+   "given_name": "sporn",
+   "surname": "reeg an",
+   "date_of_birth": "19650504",
+   "suburb": "port augusta"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-1895-org",
+   "given_name": "tabitha",
+   "surname": "prytula",
+   "date_of_birth": "19930102",
+   "suburb": "nabawa"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-1895-dup-0",
+   "given_name": "prytula",
+   "surname": "tabitha",
+   "date_of_birth": "19930102",
+   "suburb": "nabawa"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-873-org",
+   "given_name": "joshua",
+   "surname": "ottens",
+   "date_of_birth": "19410514",
+   "suburb": "gosford east"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-873-dup-0",
+   "given_name": "devan",
+   "surname": "ottens",
+   "date_of_birth": "19410514",
+   "suburb": "gosford east"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-4902-org",
+   "given_name": "jarrod",
+   "surname": "crouch",
+   "date_of_birth": "19180503",
+   "suburb": "st james"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-4902-dup-0",
+   "given_name": "jarre",
+   "surname": "crouch",
+   "date_of_birth": "19180503",
+   "suburb": "st james"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-1524-org",
+   "given_name": "lily",
+   "surname": "krishnan",
+   "date_of_birth": "19681003",
+   "suburb": "keysborough"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-1524-dup-0",
+   "given_name": "lily",
+   "surname": "krishnqn",
+   "date_of_birth": "19681003",
+   "suburb": "keysborough"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-4981-org",
+   "given_name": "matthew",
+   "surname": "gulliver",
+   "date_of_birth": "19790129",
+   "suburb": "sefton"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-4981-dup-0",
+   "given_name": "matthew",
+   "surname": "gulliver",
+   "date_of_birth": "19790129",
+   "suburb": "sefton"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-4652-org",
+   "given_name": "michaela",
+   "surname": "mcandrew",
+   "date_of_birth": "19170418",
+   "suburb": "ryde"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-4652-dup-0",
+   "given_name": "michaela",
+   "surname": "mcandrew",
+   "date_of_birth": "19170418",
+   "suburb": "avondale hdights"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-3164-org",
+   "given_name": "william",
+   "surname": "markellos",
+   "date_of_birth": "19770717",
+   "suburb": "mansfield"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-3164-dup-0",
+   "given_name": "william",
+   "surname": "markellos",
+   "date_of_birth": "19770717",
+   "suburb": "mansfield"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-4078-org",
+   "given_name": "harrison",
+   "surname": "leung",
+   "date_of_birth": "19640118",
+   "suburb": "mountain creek"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-4078-dup-0",
+   "given_name": "harrison",
+   "surname": "leung",
+   "date_of_birth": "19640118",
+   "suburb": "mountakn creek"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-1005-org",
+   "given_name": "micah",
+   "surname": "green",
+   "date_of_birth": "19911228",
+   "suburb": "harbord"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-1005-dup-0",
+   "given_name": "micah",
+   "surname": "greehn",
+   "date_of_birth": "19911228",
+   "suburb": "harbord"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-348-org",
+   "given_name": "leah",
+   "surname": "clarke",
+   "date_of_birth": "19650213",
+   "suburb": "new farm"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-348-dup-0",
+   "given_name": "leah",
+   "surname": "clarke",
+   "date_of_birth": "19650213",
+   "suburb": "new farm"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-2520-org",
+   "given_name": "jessica",
+   "surname": "wintulich",
+   "date_of_birth": "19380330",
+   "suburb": null
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-2520-dup-0",
+   "given_name": "jessica",
+   "surname": "wintulich",
+   "date_of_birth": "19380330",
+   "suburb": null
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-3053-org",
+   "given_name": "sophie",
+   "surname": "mcilvar",
+   "date_of_birth": "19640509",
+   "suburb": "geelong east"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-3053-dup-0",
+   "given_name": "sophie",
+   "surname": "mcilar",
+   "date_of_birth": "19640509",
+   "suburb": "geelong ast"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-2998-org",
+   "given_name": "chevonne",
+   "surname": "purser",
+   "date_of_birth": "19461220",
+   "suburb": "sussex inlet"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-2998-dup-0",
+   "given_name": "chevonne",
+   "surname": "purser",
+   "date_of_birth": "19461220",
+   "suburb": "sussex inlet"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-3671-org",
+   "given_name": "zane",
+   "surname": "snell",
+   "date_of_birth": "19090918",
+   "suburb": "toowoomba"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-3671-dup-0",
+   "given_name": "zane",
+   "surname": "snell",
+   "date_of_birth": "19090918",
+   "suburb": null
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-3967-org",
+   "given_name": "ash",
+   "surname": "nguyen",
+   "date_of_birth": "19230118",
+   "suburb": "mount gravatt"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-3967-dup-0",
+   "given_name": "ash",
+   "surname": "nguhen",
+   "date_of_birth": "19230118",
+   "suburb": "mount gravatt"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-3211-org",
+   "given_name": "isaac",
+   "surname": "lowe",
+   "date_of_birth": "19880722",
+   "suburb": "williamstown"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-3211-dup-0",
+   "given_name": "isaac",
+   "surname": "loew",
+   "date_of_birth": "19880722",
+   "suburb": "williamstown"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-2001-org",
+   "given_name": "antonio",
+   "surname": "hage",
+   "date_of_birth": "19330331",
+   "suburb": "tinamba"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-2001-dup-0",
+   "given_name": "antonio",
+   "surname": "hagwe",
+   "date_of_birth": "19330331",
+   "suburb": "tinamba"
+  },
+  {
+   "_origin_id": "fa",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-4186-org",
+   "given_name": "georgia",
+   "surname": "willing",
+   "date_of_birth": "19701121",
+   "suburb": "rochedale south"
+  },
+  {
+   "_origin_id": "fb",
+   "_origin_table": "public.person",
+   "_origin_id_row": "rec-4186-dup-0",
+   "given_name": "georgia",
+   "surname": "beams",
+   "date_of_birth": "19701121",
+   "suburb": "rochedale south"
+  }
+ ]
+}
