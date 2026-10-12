@@ -3,7 +3,7 @@
 Overwrite this file at every commit. A fresh session reads it first, then
 [the plan](../PART1_IMPLEMENTATION_PLAN.md). Git is the memory; a session's context is not.
 
-**Lock:** 2026-10-12T08:56:40Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-12T08:56:40Z
+**Lock:** 2026-10-12T08:57:37Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-12T08:57:37Z
 
 (Lock/heartbeat protocol: plan §7. A session sets `Lock: <ISO time>`, pushes it, and refreshes it at every commit; a lock older than 75 min is stale. `Autonomy` is `off`, `dryrun` (a tick only records what works and exits) or `unattended-through-phase-5` (authorises the supervisor to chain phases). Only the user changes it.)
 
@@ -103,7 +103,7 @@ lists files an item must **edit**. Paths are under `src/` unless stated. Abbrevi
 | 4 | P10 (after P16, P17, P18) | P16 (quality module + `N/load_data.py` report) |
 
 ## Next action
-**Phase 5** (plan §8): `/ponytail-review` over the whole branch diff (main..HEAD), `/ponytail-audit` paired with the graph tiers, `/ponytail-debt`, `/ponytail-gain`; verify every row has a lead verdict; finalise LOCAL_VERIFY.md; update `docs/` for changed behaviour (`check.py docs` green); fold `.handoff/` verdicts into `part1/PHASE5_REPORT.md` and purge `.handoff/`; then the final report, Next action "Part 1 complete - waiting for the user", clear Lock, commit `[PART 1 COMPLETE]`. Never merge. Phase 5 audit carry-overs: `entities_at_worst` duplicates `entities_violating` (point Gates.tsx at the latter, drop it); `sql_lineage.py` has no caller; Phase 3 review items (`_split_weakest_link`, cohesion branch, `min_cohesion`).
+**Phase 5:** review/audit (lane A), debt+gain (lane B), docs (lane C) done; LOCAL_VERIFY complete for all `unverified-live` items; `.handoff/` folded into [PHASE5_REPORT.md](PHASE5_REPORT.md) and purged. Remaining: final `check.py all` + CI green, then `[PART 1 COMPLETE]`.
 **Phase 3, step 1:** lead serial chain in `T/resolve_entities.py`: P15 -> P6 -> P7 -> P8 -> P20 (derive acceptance
 with `part1-verifier` before each); side lanes beside it (cap 2): P9 (new decision-memory module only), P17
 (`N/load_data.py` only), P19 (`tests/eval/score.py` + tests). Gate hooks for P9/P17 in `human_nodes.py`/`graph.py`
