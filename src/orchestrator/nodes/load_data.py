@@ -405,18 +405,27 @@ def _entity_measures(state: dict[str, Any], entity: str) -> dict[str, float]:
         out[_COVERAGE] = mapped / width
     if records:
         out["records"] = len(records)
-        # one identity field per record shape (source table + columns): sources name the
-        # same concept differently (``name`` in one, ``title`` in another), so the second
-        # source's records are not NULL. ponytail: a source that OMITS a NULL column
-        # (rather than carrying None) forms its own shape and is judged by its next-best
-        # name column; SQL rows always carry every column.
+        # one identity field per record shape (source table + the non-id name columns it
+        # carries): sources name the same concept differently (``name`` in one, ``title``
+        # in another), so the second source's records are not NULL. A shape whose name
+        # columns are all carried by a wider shape of the same table is judged on the wider
+        # one's identity, so a document that OMITS its NULL name key is a NULL.
+        # ponytail: a document that omits its name but carries another name column no named
+        # sibling has (``email``) is indistinguishable from a second naming style and is
+        # judged on that column.
         shapes: dict[Any, list[dict[str, Any]]] = {}
         for r in records:
             table = _record_id(r).rsplit(":", 1)[0]
-            shapes.setdefault((table, frozenset(k for k in r if k[:1] != "_")), []).append(r)
+            names = frozenset(
+                k
+                for k in r
+                if k[:1] != "_" and _identity_column({k}) and not k.lower().endswith("id")
+            )
+            shapes.setdefault((table, names), []).append(r)
         nulls = judged = 0
-        for rows in shapes.values():
-            identity = _identity_column({k for r in rows for k in r if not k.startswith("_")})
+        for (table, cols), rows in shapes.items():
+            wider = set().union(*(c for t, c in shapes if t == table and cols <= c))
+            identity = _identity_column(wider or {k for r in rows for k in r if k[:1] != "_"})
             if identity:
                 judged += len(rows)
                 nulls += sum(not _has_value(r.get(identity)) for r in rows)
@@ -448,7 +457,7 @@ def pre_load_gate(state: dict[str, Any], confirmed: Any = None) -> dict[str, Any
     entity (a run where nothing maps still fails); NULL-identity and largest-
     cluster ceilings = 2 m, never a majority; flagged ceiling = 2 m of the
     per-entity flagged counts. Each entity is judged against the ceiling or its
-    OWN slack, whichever is higher (a confirmed number is used as given) -- one NULL record; a cluster twice the median
+    OWN slack, whichever is higher (a number the operator changed is used as given) -- one NULL record; a cluster twice the median
     entity's largest -- so a small healthy lookup is not refused for being small
     and never lifts the ceiling of another entity.
 
@@ -509,6 +518,8 @@ def pre_load_gate(state: dict[str, Any], confirmed: Any = None) -> dict[str, Any
         if isinstance(used, bool) or not isinstance(used, (int, float)) or not math.isfinite(used):
             unusable.append(name)  # garbage never disables an invariant: fail closed
             used = threshold
+        # the UI sends every proposal back; one returned unchanged is not an operator's edit
+        edited = name in edits and name not in unusable and used != threshold
         violating[name] = [
             e
             for e, m in per.items()
@@ -517,7 +528,7 @@ def pre_load_gate(state: dict[str, Any], confirmed: Any = None) -> dict[str, Any
                 m[name] < used
                 if name == _COVERAGE
                 # the operator's own number is used as given; slack eases the proposal only
-                else m[name] > (used if name in edits else max(used, slack(name, m)))
+                else m[name] > (used if edited else max(used, slack(name, m)))
             )
         ]
         invariants[name] = {

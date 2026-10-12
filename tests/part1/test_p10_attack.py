@@ -798,12 +798,6 @@ def test_r3_control_slack_is_per_entity_and_still_eases_a_healthy_lookup():
     assert gate(st)["invariants"]["largest_cluster_share"]["violated"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="r3 MEDIUM-HIGH: slack applies only `if name not in edits`, and Gates.tsx ALWAYS sends every invariant "
-    "(proposal or edit) as `thresholds`, so through the UI no entity ever gets its slack: approving the displayed, "
-    "unedited proposals refuses the healthy 50-row lookup that the no-thresholds path (and the payload's would_fail) load",
-)
 def test_r3_approving_the_displayed_proposals_unedited_equals_sending_none():
     st = _with_lookup(50, 1)
     assert not gate(st)["would_fail"]
@@ -813,11 +807,6 @@ def test_r3_approving_the_displayed_proposals_unedited_equals_sending_none():
     }
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="r3 MEDIUM-HIGH (same cause, end to end): F3 (healthy lookup beside large entities) loads with no "
-    "thresholds but fails when the UI's verbatim proposals ride on the approval",
-)
 def test_r3_e2e_f3_still_loads_when_the_ui_sends_the_proposals_verbatim():
     st = _with_lookup(50, 0)
 
@@ -845,14 +834,21 @@ def test_r3_control_a_confirmed_number_is_used_as_given_and_loosening_it_loads()
 
 
 # -- per-shape identity: a source that OMITS an absent key (MongoDBConnector._flatten_doc) --------------
-@pytest.mark.xfail(
-    strict=True,
-    reason="r3 MEDIUM: records are grouped by (table, key set); a Mongo document with no `name` key is its own shape "
-    "whose identity is its next-best column or none at all, and a shape with no name column is not judged (not in the "
-    "denominator). 78 of 100 documents lacking `name` measure 0.0 NULL (r2's union column measured 0.78). The code "
-    "comment concedes it, but MongoDBConnector rows omit absent fields and are spooled as-is (extract_data -> spool.append)",
+@pytest.mark.parametrize(
+    "extra",
+    [
+        None,
+        "company_id",
+        pytest.param(
+            "email",
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason="r3 ceiling (lead waiver r3): a nameless document that carries a name column no named sibling has "
+                "(`email`) is structurally a second naming style (company_name / org_title) and is judged on that column",
+            ),
+        ),
+    ],
 )
-@pytest.mark.parametrize("extra", [None, "company_id", "email"])
 def test_r3_documents_that_omit_the_name_key_are_null_identities(extra):
     base = make_world("mongo", n_ent=8, per=100, null_each=0)
 
@@ -880,7 +876,7 @@ def test_r3_control_carried_none_and_empty_string_names_are_still_counted():
 # -- listed coverage width ----------------------------------------------------------------------------
 @pytest.mark.xfail(
     strict=True,
-    reason="r3 LOW-MEDIUM: width = mapped+unmapped when the mapper listed ANY field, so an entity whose mapper listed "
+    reason="r3 LOW-MEDIUM ceiling (lead waiver r3): width = mapped+unmapped when the mapper listed ANY field, so an entity whose mapper listed "
     "only the mapped field (7 of 8 carried fields never mentioned) measures coverage 1.0. Real producers: the mapper "
     "samples only records[:_MAX_SAMPLE_RECORDS] (a field first seen later is carried, never listed) and a pinned "
     "profile mapping (field_mappings reused verbatim, new source columns never listed). r1 finding 2 survives in part",
@@ -932,7 +928,7 @@ def test_r3_control_listed_width_ignores_audit_columns_and_the_unlisted_replay_i
 # -- identity ranking ---------------------------------------------------------------------------------
 @pytest.mark.xfail(
     strict=True,
-    reason="r3 LOW: the buried-hint flag is only the THIRD sort key, after hint rank, so `nickname`/`username`/`filename` "
+    reason="r3 LOW ceiling (lead waiver r3): the buried-hint flag is only the THIRD sort key, after hint rank, so `nickname`/`username`/`filename` "
     "(contain `name`, rank 0) still beat a populated `email`/`title`/`company`; a users table (email always set, "
     "optional nickname 90% NULL) measures 0.90 NULL identity and is refused",
 )
