@@ -28,7 +28,7 @@ def column_lineage(
     a lineage caller needs to know the mapping was wrong, not silently get
     nothing back.
     """
-    root = lineage(target_column, mapping_sql, schema=schema)
+    root = lineage(target_column, mapping_sql, schema=schema or {})
     entries: list[dict[str, Any]] = []
     for node in root.walk():
         if node.downstream:
