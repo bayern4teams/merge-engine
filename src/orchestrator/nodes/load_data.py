@@ -12,6 +12,7 @@ import json
 import logging
 import math
 import os
+import re
 import statistics
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -21,6 +22,7 @@ from typing import Any
 from src.mcp_server.tools.cluster_quality import quality_signals
 from src.mcp_server.tools.load_data import _get_destination_connector, load_data_impl
 from src.mcp_server.tools.resolve_entities import _NAME_FIELD_HINTS, _best_name_field, _record_id
+from src.orchestrator.nodes.map_fields_node import _metadata_only_fields
 from src.orchestrator.spool import (
     clusters_for,
     collection_count,
@@ -368,6 +370,22 @@ _COVERAGE = "mapping_coverage"
 _NULL_IDENTITY = "null_identity_share"
 _LARGEST_CLUSTER = "largest_cluster_share"
 _FLAGGED = "flagged_clusters"
+_WORD_SPLIT = re.compile(r"[^a-z0-9]+")
+
+
+def _identity_column(fields: set[str]) -> str | None:
+    """The identity field among ``fields``: a name hint, never an id-like column while
+    another is left (``company_id`` populated must not hide a NULL ``label``), then by
+    hint rank, a hint that is a whole word (``first_name``) before one buried in a word
+    (``nickname``, ``username``), then the shortest."""
+
+    def rank(k: str) -> tuple[Any, ...]:
+        kl = k.lower()
+        i = min(i for i, h in enumerate(_NAME_FIELD_HINTS) if h in kl)
+        return (kl.endswith("id"), i, _NAME_FIELD_HINTS[i] not in _WORD_SPLIT.split(kl), len(k), k)
+
+    hinted = [k for k in fields if any(h in k.lower() for h in _NAME_FIELD_HINTS)]
+    return min(hinted, key=rank, default=None)
 
 
 def _entity_measures(state: dict[str, Any], entity: str) -> dict[str, float]:
@@ -377,28 +395,35 @@ def _entity_measures(state: dict[str, Any], entity: str) -> dict[str, float]:
     fields = {k for r in records for k in r if not k.startswith("_")}
     mapped = len((state.get("field_mappings") or {}).get(entity) or {})
     unmapped = len((state.get("unmapped_fields") or {}).get(entity) or [])
-    # source fields = those the mapper listed, or those the records carry if it listed fewer
-    # (an entity the mapper skipped entirely still has fields, and maps none of them)
-    width = max(mapped + unmapped, len(fields))
+    # source fields = those the mapper listed; when it listed none (an entity it skipped),
+    # those the records carry minus ETL metadata (P12), which the mapper ignores by design
+    width = mapped + unmapped or len(
+        {f.lower() for f in fields} - _metadata_only_fields(state, entity)
+    )
     if width:
         out["fields"] = width
         out[_COVERAGE] = mapped / width
-    # ONE identity field per entity: the best-ranked name hint, an id-like column last
-    # (``company_id``/``org_type`` populated must not hide a NULL ``name``)
-    identity = min(
-        (k for k in fields if any(h in k.lower() for h in _NAME_FIELD_HINTS)),
-        key=lambda k: (
-            min(i for i, h in enumerate(_NAME_FIELD_HINTS) if h in k.lower()),
-            k.lower().endswith("id"),
-            len(k),
-            k,
-        ),
-        default=None,
-    )
     if records:
         out["records"] = len(records)
-    if records and identity:
-        out[_NULL_IDENTITY] = sum(not _has_value(r.get(identity)) for r in records) / len(records)
+        # one identity field per origin: origins name the same concept differently
+        # (``company_name`` / ``org_title``), so a second origin's records are not NULL
+        origins: dict[Any, list[dict[str, Any]]] = {}
+        for r in records:
+            key = (
+                (r["_origin_id"], r.get("_origin_table"))
+                if "_origin_id" in r
+                else frozenset(k for k in r if not k.startswith("_"))
+            )
+            origins.setdefault(key, []).append(r)
+        nulls = judged = 0
+        for rows in origins.values():
+            identity = _identity_column({k for r in rows for k in r if not k.startswith("_")})
+            if identity:
+                judged += len(rows)
+                nulls += sum(not _has_value(r.get(identity)) for r in rows)
+        if judged:
+            out["identity_records"] = judged
+            out[_NULL_IDENTITY] = nulls / judged
     clusters = clusters_for(state, entity)
     n = sum(len(c.get("record_ids", [])) for c in clusters)
     if n:
@@ -422,9 +447,11 @@ def pre_load_gate(state: dict[str, Any], confirmed: Any = None) -> dict[str, Any
     Proposals (one per invariant per run; m = the median across entities):
     coverage floor = m / 2, never below half of one mapped field of the widest
     entity (a run where nothing maps still fails); NULL-identity and largest-
-    cluster ceilings = 2 m, never below the slack of the smallest entity (one
-    NULL record; a cluster twice the median entity's largest), never a majority;
-    flagged ceiling = 2 m of the per-entity flagged counts.
+    cluster ceilings = 2 m, never a majority; flagged ceiling = 2 m of the
+    per-entity flagged counts. Each entity is judged against the ceiling or its
+    OWN slack, whichever is higher -- one NULL record; a cluster twice the median
+    entity's largest -- so a small healthy lookup is not refused for being small
+    and never lifts the ceiling of another entity.
 
     ponytail: refusing is all it can do -- it cannot roll back a partial write
     (report P10 Ceiling); the proposals are rules of thumb relative to the run's
@@ -446,27 +473,26 @@ def pre_load_gate(state: dict[str, Any], confirmed: Any = None) -> dict[str, Any
     def values(key: str) -> list[float]:
         return [m[key] for m in per.values() if key in m]
 
-    # slack: one record of the SMALLEST entity (NULLs), and a cluster twice the median
-    # entity's largest in the smallest entity (merges) -- a small healthy lookup beside
-    # large tables must not be refused for being small
-    sizes = values("records")
-    one_record = 1 / min(sizes) if sizes else 0.0
-    clustered = values("clustered")
-    typical = 2 * statistics.median(values("largest")) - 1 if clustered else 0.0
-    small = min(clustered, default=0.0)
-    one_cluster = min(typical / (small - 1), 1.0) if small > 1 else 0.0
+    typical = 2 * statistics.median(values("largest")) - 1 if values("clustered") else 0.0
     widest = max(values("fields"), default=0.0)
 
-    def ceiling(xs: list[float], slack: float) -> float:
-        return min(max(2 * statistics.median(xs), slack), 1 / 2) if xs else 1.0
+    def slack(name: str, m: dict[str, float]) -> float:
+        if name == _NULL_IDENTITY:
+            return 1 / m["identity_records"]
+        if name == _LARGEST_CLUSTER and m["clustered"] > 1:
+            return typical / (m["clustered"] - 1)
+        return 0.0
+
+    def ceiling(xs: list[float]) -> float:
+        return min(2 * statistics.median(xs), 1 / 2) if xs else 1.0
 
     cov, nul, big, flg = (
         values(k) for k in (_COVERAGE, _NULL_IDENTITY, _LARGEST_CLUSTER, _FLAGGED)
     )
     proposed = {
         _COVERAGE: max(statistics.median(cov) / 2, 1 / (2 * widest)) if cov else 0.0,
-        _NULL_IDENTITY: ceiling(nul, one_record),
-        _LARGEST_CLUSTER: ceiling(big, one_cluster),
+        _NULL_IDENTITY: ceiling(nul),
+        _LARGEST_CLUSTER: ceiling(big),
         _FLAGGED: 2 * statistics.median(flg) if flg else 0.0,
     }
     measured = {
@@ -478,15 +504,22 @@ def pre_load_gate(state: dict[str, Any], confirmed: Any = None) -> dict[str, Any
     edits = confirmed if isinstance(confirmed, dict) else {}
     invariants: dict[str, Any] = {}
     unusable: list[str] = []
+    violating: dict[str, list[str]] = {}
     for name, threshold in proposed.items():
         used = edits.get(name, threshold)
         if isinstance(used, bool) or not isinstance(used, (int, float)) or not math.isfinite(used):
             unusable.append(name)  # garbage never disables an invariant: fail closed
             used = threshold
+        violating[name] = [
+            e
+            for e, m in per.items()
+            if name in m
+            and (m[name] < used if name == _COVERAGE else m[name] > max(used, slack(name, m)))
+        ]
         invariants[name] = {
             "measured": measured[name],
             "threshold": threshold,
-            "violated": measured[name] < used if name == _COVERAGE else measured[name] > used,
+            "violated": bool(violating[name]),
         }
         if name in edits and name not in unusable:
             invariants[name]["confirmed"] = used
@@ -497,6 +530,7 @@ def pre_load_gate(state: dict[str, Any], confirmed: Any = None) -> dict[str, Any
     return {
         "invariants": invariants,
         "entities_at_worst": worst,
+        "entities_violating": violating,
         "unusable_edits": unusable,
         "would_fail": any(v["violated"] for v in invariants.values()) or bool(unusable),
     }
@@ -520,7 +554,7 @@ def _pre_load_failure(gate: dict[str, Any]) -> dict[str, Any] | None:
         return None
     bad = [
         f"{name} = {v['measured']:.3g} (threshold {v.get('confirmed', v['threshold']):.3g}; "
-        f"worst: {', '.join(gate['entities_at_worst'][name]) or '-'})"
+        f"violating: {', '.join(gate['entities_violating'][name]) or '-'})"
         for name, v in gate["invariants"].items()
         if v["violated"]
     ]
