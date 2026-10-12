@@ -234,12 +234,18 @@ def main() -> int:
     ap.add_argument("--quality-history", help="MERGE_ENGINE_QUALITY_HISTORY file (P16)")
     ap.add_argument("--keep-dst", action="store_true", help="reuse the destination (2nd run)")
     ap.add_argument("--max-minutes", type=float, default=90)
+    ap.add_argument("--score-only", action="store_true", help="re-score a finished run")
     a = ap.parse_args()
 
     meta = json.loads((BM / "truth" / f"{a.scenario}.json").read_text())
     table = meta["table"]
     run = f"{a.scenario}_{a.version}_{a.tag}"
     rundir = ROOT / ".tmp" / "verify_local" / "runs" / run
+    dst = f"bm_dst_{a.scenario}_{a.version}_{a.tag}".lower()
+    if a.score_only:
+        old = json.loads((rundir / "result.json").read_text())
+        old.pop("score", None)
+        return report(rundir, meta, dst, old)
     if rundir.exists():
         shutil.rmtree(rundir)
     (rundir / "config").mkdir(parents=True)
@@ -249,7 +255,6 @@ def main() -> int:
     (rundir / "config" / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
     shutil.copy(ROOT / "config" / "consistency_rules.yaml", rundir / "config")
 
-    dst = f"bm_dst_{a.scenario}_{a.version}_{a.tag}".lower()
     if not a.keep_dst:
         make_destination(dst, table)
     shape_before, counts_before = dest_shape(dst), dest_counts(dst)
@@ -281,16 +286,7 @@ def main() -> int:
         os.killpg(proc.pid, signal.SIGTERM)
         proc.wait(timeout=30)
     (rundir / "final_status.json").write_text(json.dumps(st, indent=1, default=str))
-
-    rows = read_entity_map(dst)
-    # record_id = "<origin_id>:<table>:<row id>" (resolve_entities._record_id)
-    truth, source_of = {}, {}
-    for r in meta["records"]:
-        rid = f"{r['origin']}:{r['table']}:{r['id']}"
-        truth[rid], source_of[rid] = r["cluster"], r["origin"]
-    pred = {rid: cid for _e, rid, cid in rows}
-    entity_types = sorted({e for e, _r, _c in rows})
-    result = {
+    base = {
         "run": run,
         "version": a.version,
         "code_file": code_file,
@@ -301,11 +297,28 @@ def main() -> int:
         "gates": gates,
         "wall_seconds": round(wall, 1),
         **llm_counts(rundir / "logs" / "debug.log"),
+        "dest_shape_before": shape_before,
+        "dest_counts_before": counts_before,
+    }
+    return report(rundir, meta, dst, base)
+
+
+def report(rundir: Path, meta: dict, dst: str, base: dict) -> int:
+    """Score the destination by SQL and write result.json."""
+    shape_before = base["dest_shape_before"]
+    rows = read_entity_map(dst)
+    # record_id = "<origin_id>:<schema>.<table>:<row id>" (seen in the entity map)
+    truth, source_of = {}, {}
+    for r in meta["records"]:
+        rid = f"{r['origin']}:public.{r['table']}:{r['id']}"
+        truth[rid], source_of[rid] = r["cluster"], r["origin"]
+    pred = {rid: cid for _e, rid, cid in rows}
+    entity_types = sorted({e for e, _r, _c in rows})
+    result = {
+        **base,
         "entity_map_rows": len(rows),
         "entity_types": entity_types,
-        "dest_shape_before": shape_before,
         "dest_shape_after": dest_shape(dst),
-        "dest_counts_before": counts_before,
         "dest_counts_after": dest_counts(dst),
         "score": scorer.score(truth, pred, source_of) if rows else None,
     }
