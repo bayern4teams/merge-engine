@@ -177,7 +177,11 @@ def start_app(rundir: Path, version: str, port: int, extra_env: dict[str, str]):
     raise RuntimeError("app did not come up")
 
 
-def drive(base: str, body: dict, gates_path: Path, max_minutes: float) -> tuple[dict, list]:
+def drive(
+    base: str, body: dict, gates_path: Path, max_minutes: float, oracle: dict | None = None
+) -> tuple[dict, list]:
+    """Approve every gate; with ``oracle`` (record id -> true cluster) also answer each pair
+    listed at the matches gate the way a perfect human would (P9/P15)."""
     r = requests.post(f"{base}/api/workflow/start", json=body, timeout=120)
     r.raise_for_status()
     tid = r.json()["thread_id"]
@@ -198,10 +202,24 @@ def drive(base: str, body: dict, gates_path: Path, max_minutes: float) -> tuple[
                 )
                 g.flush()
                 gates.append((node, decision))
+                feedback = {"decision": decision, "reason": "local verify"}
+                data = (st.get("interrupt_data") or {}).get("data") or {}
+                if oracle and node == "human_review_matches":
+                    feedback["pair_decisions"] = [
+                        {
+                            "entity_type": p.get("entity_type") or body["request"].split()[2],
+                            "record_ids": p["record_ids"],
+                            "action": "merge"
+                            if oracle.get(p["record_ids"][0]) == oracle.get(p["record_ids"][1])
+                            else "keep_separate",
+                        }
+                        for p in data.get("pending_merge_candidates") or []
+                    ]
+                    (gates_path.parent / "oracle_decisions.json").write_text(
+                        json.dumps(feedback["pair_decisions"])
+                    )
                 fb = requests.post(
-                    f"{base}/api/workflow/{tid}/feedback",
-                    json={"decision": decision, "reason": "local verify"},
-                    timeout=120,
+                    f"{base}/api/workflow/{tid}/feedback", json=feedback, timeout=120
                 )
                 if fb.status_code != 200 or len(gates) > 15:
                     st["driver_stop"] = f"feedback {fb.status_code} {fb.text[:300]}"
@@ -235,6 +253,7 @@ def main() -> int:
     ap.add_argument("--keep-dst", action="store_true", help="reuse the destination (2nd run)")
     ap.add_argument("--max-minutes", type=float, default=90)
     ap.add_argument("--score-only", action="store_true", help="re-score a finished run")
+    ap.add_argument("--oracle", action="store_true", help="answer gate pairs from the truth")
     a = ap.parse_args()
 
     meta = json.loads((BM / "truth" / f"{a.scenario}.json").read_text())
@@ -280,7 +299,14 @@ def main() -> int:
     proc, code_file = start_app(rundir, a.version, a.port, extra)
     t0 = time.monotonic()
     try:
-        st, gates = drive(f"http://127.0.0.1:{a.port}", body, rundir / "gates.jsonl", a.max_minutes)
+        oracle = (
+            {f"{r['origin']}:public.{r['table']}:{r['id']}": r["cluster"] for r in meta["records"]}
+            if a.oracle
+            else None
+        )
+        st, gates = drive(
+            f"http://127.0.0.1:{a.port}", body, rundir / "gates.jsonl", a.max_minutes, oracle
+        )
     finally:
         wall = time.monotonic() - t0
         os.killpg(proc.pid, signal.SIGTERM)

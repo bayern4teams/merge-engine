@@ -87,6 +87,27 @@ def _febrl(files: dict[str, str], split: int = 0):
     return src, truth
 
 
+def _plant_febrl4(n: int = 20):
+    """Febrl4 + ``n`` bridge records in origin fb (user decision 2026-10-12, pass rule 8).
+
+    Bridge i = name + date of birth of person A_i, address + soc_sec_id of a different
+    person B_i (both taken from fa originals); its truth is its own singleton, so any
+    cluster joining A_i and B_i through it is a planted over-merge.
+    """
+    src, truth = _febrl({"fa": "dataset4a.csv", "fb": "dataset4b.csv"})
+    rng = random.Random(0)
+    people = sorted(src["fa"], key=lambda r: r["id"])
+    picks = rng.sample(people, 2 * n)
+    name = ("given_name", "surname", "date_of_birth")
+    for i in range(n):
+        a, b = picks[2 * i], picks[2 * i + 1]
+        bridge = {k: (a[k] if k in name else b[k]) for k in a if k != "id"}
+        bridge["id"] = f"bridge-{i}-{a['id']}-{b['id']}"
+        src["fb"].append(bridge)
+        truth[f"fb\0{bridge['id']}"] = f"bridge-{i}"
+    return src, truth
+
+
 def _affiliations():
     d = BM / "affiliations"
     rows = [{"id": r["id1"], "name": r["affil1"]} for r in _csv(d / "affiliationstrings_ids.csv")]
@@ -152,6 +173,7 @@ SCENARIOS = {
     "febrl3x2": ("person", lambda: _febrl({"febrl": "dataset3.csv"}, split=2)),
     "febrl4": ("person", lambda: _febrl({"fa": "dataset4a.csv", "fb": "dataset4b.csv"})),
     "affiliations": ("organisation", _affiliations),
+    "plant_febrl4": ("person", _plant_febrl4),
     "abt_buy": (
         "product",
         lambda: _two_source(
