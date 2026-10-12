@@ -404,7 +404,6 @@ def _entity_measures(state: dict[str, Any], entity: str) -> dict[str, float]:
         out["fields"] = width
         out[_COVERAGE] = mapped / width
     if records:
-        out["records"] = len(records)
         # one identity field per record shape (source table + the non-id name columns it
         # carries): sources name the same concept differently (``name`` in one, ``title``
         # in another), so the second source's records are not NULL. A shape whose name
