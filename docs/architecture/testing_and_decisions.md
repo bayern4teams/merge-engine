@@ -43,12 +43,16 @@ to the section with the full reasoning.
 | Deterministic row-hash tiebreak in `ORDER BY` | `>=` alone | Equal-key rows aren't stably ordered across queries; duplicated 3/16,044 rows | §6 |
 | ClickHouse never trusts its declared primary key | Shared fast-path with Postgres | Measured: sparse sort key, not unique (43.28M rows / ~42.97M distinct tuples) | §6 |
 | Fellegi–Sunter + term frequency | Averaged string similarity vs. 2 constants | Can't express "rare value agreement is stronger evidence" | §7 |
+| `u` from randomly sampled pairs, `m` from EM; name tokens IDF-weighted | EM for both; whole-value or binary-token similarity | EM sees only blocked look-alikes so `u` came out far too high; binary tokens turned every typo into DISAGREE | §7 |
 | EM-estimated m/u, unsupervised | Hand-tuned constants / labelled training | No labels available; constants don't adapt per dataset | §7 |
-| Layered blocking (deterministic+phonetic+sorted-neighborhood) | Hard comparison cap (`_MAX_COMPARISONS`) | Cap silently dropped candidate pairs and still reported success | §7 |
-| Repair + cohesion cut clustering | Raw transitive closure (union-find only) | One bad edge chain-merges an entire component | §7 |
+| Token blocking + filtering/purging + WNP meta-blocking, with a raising memory guard | Hard comparison cap (`_MAX_COMPARISONS`); earlier layered keys | Cap silently dropped candidate pairs and still reported success; key-based blocking privileged some fields and lost CJK/typo'd names | §7 |
+| Confident edges + WNP + conflict repair + triangle support | Raw transitive closure; average-linkage cohesion cut; name-coherence split | One bad edge chain-merges a component; the name split destroyed real merges (names are a flag, P16) | §7 |
+| Uncertain band decided at the matches gate, answers optionally remembered | Band silently left separate | The reviewer never learned those pairs existed; decisions were asked again every run | §7 |
+| Pre-load invariants with run-proposed thresholds, refusing the load | Final approval on counts alone | Nothing failed a run on its results; a hollow `completed` was possible | §10 |
 | Deterministic cluster IDs (hash of sorted member IDs) | Random UUID per cluster per run | Re-running identical data duplicated every destination row | §7 |
 | `strictness` only moves the auto-*match* bar | Also moving auto-exclude | User priority: over-merging is the worse error; only the recoverable direction should move by default | §7 |
-| Configurable per-field conflict policy | Hardcoded priority→completeness→recency | User wants customisable survivorship; unconfigured entities keep the old chain exactly | §8 |
+| Configurable per-field conflict policy (`longest`, text only; `completeness` kept as alias) | Hardcoded priority→completeness→recency | User wants customisable survivorship; unconfigured entities keep the old chain exactly | §8 |
+| Value-based inclusion-dependency join graph; roles only proposed at the deps gate | Name-pattern edges | Names proposed edges the data rejects and missed those it did not match | §6b |
 | Pinned field mapping reconciles against live destination schema | Reuse pinned mapping as-is | A fresh destination never got its columns; 1-column table where derivation gave 9 | §9 |
 | PostgreSQL destination: stage + atomic swap | Batch-by-batch upsert | Mid-load failure used to leave the destination half-written | §10 |
 | Cache key includes model/temperature/format/json_mode | Cache key = prompt text only | A cache that can return an answer different from what the model would currently give is worse than no cache | §11 |
@@ -61,4 +65,3 @@ to the section with the full reasoning.
 | Self-hosted Langfuse | Hosted SaaS tracer | Trace data derives from the user's real database rows; keep it off third-party infra by default | §15 |
 
 ---
-

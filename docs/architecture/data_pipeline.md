@@ -141,6 +141,52 @@ data that didn't actually land.
 
 ---
 
+## 6b. Source analysis: catalog tables, ETL columns, inclusion dependencies, roles
+
+Three things happen to the discovered schemas before any row is matched.
+
+**Catalog tables and ETL metadata columns (P12)**
+(`src/mcp_server/tools/metadata_classification.py`). Two categories, not
+conflated. A *catalog/system table* (engine-owned schemas and reserved name
+prefixes such as `pg_`, `sqlite_`, `system.`) is removed from the discovered
+schema, so no later node sees it. An *ETL metadata column* (audit/load/DBMS
+vocabulary, by name) is excluded from matching and field mapping — so never
+projected — but **kept in the corpus as provenance** and listed in the table's
+`metadata_columns`. Override layers, lowest to highest: detected default →
+per-origin → per-run (`RunConfig.metadata_overrides`, state
+`metadata_overrides`) with `treat_as_business` / `treat_as_metadata` /
+`treat_as_catalog` / `treat_as_data`. Every exclusion is recorded in
+`schema["classification"]` with its misclassification risk. Detection is by
+name, so a business field that looks like metadata is misclassified until
+overridden.
+
+**Join graph by inclusion dependency (P3)**
+(`src/mcp_server/tools/join_graph.py`). Declared FKs are authoritative but
+empty for ClickHouse and MongoDB origins. The name-guessing tier is gone:
+edges are found from *values* alone. A (child column, parent column) pair is a
+candidate when the parent column is unique and the two are not both their own
+table's primary key; it is scored by containment `|child ∩ parent| / |child|`
+(pushed into SQL through each connector's `sample_distinct_values`), pre-pruned
+by a binomial bound, tested against coincidence with the parent's density, and
+the ranked list is cut at its largest score gap. No name pattern, no fixed
+threshold. With nothing to sample it proposes nothing. A foreign key into a
+dense surrogate sequence is not inferred (declared FKs cover it).
+
+**Table roles and row relationships (P4, P7).** From the graph's FK columns and
+the rows' own uniqueness, `classify_junction_and_weak_tables` proposes
+*junction* tables (a minimal unique column combination equal to the union of
+two or more FKs) and *weak entities* (minimal key mixes FKs with a local
+discriminator). `derive_relationship_edges` adds typed row edges
+(`DIRECT_PARENT`/`ULTIMATE_PARENT` from self-INDs, `RELATED` from junctions;
+cycles are listed, not broken). The results land in state as `table_roles` and
+`relationship_edges` and are **shown at the dependency gate** (`table_roles`,
+`relationship_cycles` in its payload) for confirmation; nothing downstream acts
+on a role, and a run replaying a pinned profile does not recompute them.
+The mapper uses the destination's FK info to tell a dimension table from a
+child (P4).
+
+---
+
 ## 7. Entity resolution: Fellegi–Sunter scoring, blocking, clustering
 
 `src/mcp_server/tools/resolve_entities.py` orchestrates; `fellegi_sunter.py`
@@ -181,9 +227,9 @@ in the dataset has a very large one. `build_term_frequencies()` computes this
 once per entity type across every record, not once per pair — recomputing it
 per pair would make the whole scoring pass quadratic in the wrong dimension.
 
-**m and u are learned unsupervised, via a small EM loop
-(`estimate_model`), not hand-tuned.** No labelled training pairs are
-required. Starting from conservative priors (`_PRIOR_M`, `_PRIOR_U`), each
+**m is learned unsupervised, via a small EM loop (`estimate_model`), not
+hand-tuned; the field-level `u` comes from randomly sampled pairs (P13).**
+No labelled training pairs are required. Starting from conservative priors (`_PRIOR_M`, `_PRIOR_U`), each
 iteration (1) scores every candidate pair with the current model to get a
 "responsibility" (how much this pair looks like a match), then (2)
 re-estimates each comparison level's m/u weighted by those responsibilities,
@@ -192,6 +238,30 @@ or unlucky batch of candidate pairs can't swing the model to something
 absurd. `_PRIOR_MATCH_RATE = 0.10` is the assumed base rate of true matches
 among candidate pairs before any estimation — a prior, not a measured
 constant, chosen conservatively.
+
+**Why `u` is not taken from the EM (P13).** The EM only sees the *blocked*
+candidate pairs, which are look-alikes by construction, so the `u` it
+estimates ("how often do non-matches agree on this field?") is far too high
+and every agreement is under-weighted. `_fit_match_model` therefore draws
+`SAMPLE_PAIRS` (3,000) pairs uniformly from the *unblocked* cross product
+(`sample_random_pairs`, seeded, records sorted by id so the sample is
+reproducible) and `estimate_model(sampled_vectors=..., population_pairs=...)`
+takes each field's level probabilities from them. `m` is fitted first, on the
+candidates, and `u` swapped in afterwards (pinning `u` inside the EM would
+dilute `m`); `match_prior` is re-expressed for the same random-pair population
+(EM match mass / C(n, 2)), and `sampled_vectors` without `population_pairs`
+is refused. Do not unify this with the exact-value path above: that one uses
+`df/N` from `build_term_frequencies` directly and needs no sampling.
+
+**Names are compared as token sets, IDF-weighted (P14).** Whole-value
+frequency cannot down-weight a *word* shared by most names (a legal-form
+suffix). For multi-word text values `build_token_document_frequencies` gives
+per-field token document frequencies and `idf_soft_similarity` scores two names
+as a symmetric Monge-Elkan over the character-level ratio, weighted by
+`log2(N/df)` — so "Acme X Ltd" vs "Beta X Ltd" no longer looks alike because of
+"X" and "Ltd", while a typo'd token still earns most of its match (plain token
+cosine was measured to turn every typo into DISAGREE). Only values with both a
+letter and a space take this path; atomic fields keep the value-level table.
 
 **Comparison *levels*, not just agree/disagree.** `LEVEL_EXACT`,
 `LEVEL_STRONG` (minor typo/formatting difference), `LEVEL_WEAK` (loosely
@@ -222,50 +292,117 @@ minimal-reproduction unit test.
 
 ### Blocking: why the old hard cap was a correctness bug, not a performance knob
 
-Before Phase L, comparing every candidate pair above `_MAX_COMPARISONS =
-10,000` simply broke out of every loop and logged a warning — the remaining
-records were **never compared**, and the run still reported success. On a
-2,484-record merge generating 28,170 candidate pairs, this silently dropped
-18,170 of them, and — because block iteration order isn't guaranteed
+The original design compared candidate pairs only up to `_MAX_COMPARISONS`
+(10,000, later 250,000) and simply broke out of every loop past it. The
+remaining pairs were **never compared**, and the run still reported success.
+On a 2,484-record merge generating 28,170 candidate pairs, this silently
+dropped 18,170 of them, and — because block iteration order isn't guaranteed
 stable — **two identical runs of the same data produced 2,483 and 2,482
-output rows respectively**, with `llm_scored=0` in both, ruling out LLM
-non-determinism as the cause. That's not a performance limitation described
-in different words — it's data loss with no evidence it happened, which is
-precisely the failure mode this whole project treats as unacceptable.
+output rows**, with `llm_scored=0` in both, ruling out LLM non-determinism.
+Phase L made the loss *counted*; it was still loss (later measured: 711,670
+pairs of one entity discarded unexamined while the run ended `completed`).
+That is data loss with no evidence it happened, which this project treats as
+unacceptable.
 
-The fix is layered blocking, each layer cheap and SQL-expressible against the
-DuckDB spool: multi-rule deterministic blocking (several explicit blocking
-keys unioned, rather than one first-token key), phonetic/normalised keys so
-spelling variants co-block, a sorted-neighborhood sliding-window pass that
-catches near-misses no exact key catches, and block-size purging (a block
-holding 20% of the dataset carries no discriminating information and is
-dropped). Any pair that genuinely cannot be compared under any layer is
-**counted and surfaced in the reconciliation report** — never silently
-dropped. Measured blocking recall on the eval harness: **1.0000** at 2.4% of
-the cost of comparing all pairs.
+**There is no comparison budget any more (P2/P5).** A pair is excluded only
+because a property computed from the block collection says so, never because
+a counter ran out (`_generate_candidate_pairs` in `resolve_entities.py`):
 
-### Clustering: repair + cohesion cut, not raw transitive closure
+1. **Token blocking (P5).** Every Unicode word token of every data value is a
+   block key; attribute names are never read, so no field is privileged and
+   the same code serves any schema. A record with no usable token shares a
+   fallback block, so missing data never silently excludes it. Blocks with an
+   identical member set are kept once.
+2. **Block filtering + purging.** Each record keeps only the blocks whose
+   token IDF is at least the mean IDF of its own tokens (geometric mean of
+   its block sizes; chosen over the arithmetic mean by measurement), and a
+   block links two records when *either* keeps it. Purging then drops the
+   largest blocks while one holds more comparisons than all the others
+   together, or its token is held by most records (IDF < 1 bit), provided
+   every member still sits in another surviving block. Nothing is tuned.
+3. **Meta-blocking (WNP).** Each candidate edge is weighted
+   `sum(1 / comparisons(b))` over the blocks it shares and survives when it
+   reaches the mean weight at one of its endpoints.
+
+Pruning is lossy by design (a true pair whose only shared block is dropped is
+lost), so it is measured, not assumed: the run report carries
+`block_memberships_filtered`, `pairs_pruned_by_purging` and
+`pairs_pruned_by_meta_blocking`, and pair completeness is computed against
+ground truth by `tests/eval/score.py` (`blocking_report`, P19). Without labels
+blocking recall is unmeasured. A name in a script without spaces (CJK) is one
+token, so a one-character variant does not co-block.
+
+`_MAX_CANDIDATE_PAIRS` (5,000,000, ~1.5 GB) is an **out-of-memory guard, not
+a quality knob**: if more pairs than that survive meta-blocking, the call
+raises `CandidatePairBudgetExceeded` and the run fails loudly rather than
+truncating. `uncompared_pairs` stays in the report and is always 0.
+Pair-level fallout is also visible at the matches gate, below.
+
+### Clustering: confident edges, WNP, conflict repair, triangle support
 
 Raw union-find over every edge scoring ≥ the auto-match threshold has one
 structural weakness: one bad edge chain-merges an entire connected
 component (`A` matches `B`, `B` matches `C`, therefore `A`/`B`/`C` are all
-one cluster, even if `A` and `C` share nothing). Two passes were added on top
-of the connected components:
+one cluster, even if `A` and `C` share nothing). `_build_clusters` therefore:
 
-- **Repair**: a component containing a hard conflict on a declared unique
-  identifier (differing email, tax ID, member ID) is split rather than
-  merged — a unique-identifier disagreement is treated as stronger evidence
-  than any amount of accumulated similarity.
-- **Cohesion cut**: average-linkage clustering runs *inside* each surviving
-  component and cuts weak internal links, so a chain like `A–B–C` where
-  `A↔B` is strong but `B↔C` is only just above threshold can break into two
-  clusters instead of one.
+- **Joins only confident edges** (score ≥ auto-match). A pair below it is
+  never unioned; merging on "not sure" evidence measurably destroyed distinct
+  people.
+- **Prunes with WNP** (`_wnp_prune`): an edge survives when it is at least
+  the mean weight at one of its two ends — the same node-centric rule as
+  blocking, no hand-set confidence cut. A weak bridge goes here. Lossy by
+  design (recall for precision).
+- **Repairs conflicts** inside each component: records whose exclusive
+  identifiers disagree (email, tax ID — measured from the run's own corpus,
+  P6) cannot share a cluster; the conflicting members are separated rather
+  than a partition guessed.
+- **Requires triangle support** (`_triangle_parts`): where a part has
+  corroborated edges (their ends share a neighbour), an uncorroborated edge is
+  a bridge between two groups and is dropped however strong. A part with no
+  triangle (a chain) stays whole. Repair runs *inside* each triangle part, so
+  one conflict between two bridged entities does not dissolve both.
+- **Optionally enforces 1:1** (`one_to_one`, off unless the caller knows the
+  destination needs it): a part spanning two sources is reduced to its
+  maximum-weight assignment.
+
+The average-linkage **cohesion cut** that used to run after repair is no
+longer part of the main path (`_split_component` passes `min_cohesion=0`;
+`_average_linkage`/`_split_weakest_link` remain only as that parameter's
+non-zero branch). Name
+coherence is *not* a cut either: names are a quality **flag** (P16, below),
+because a name-based split destroyed real merges.
 
 **Borderline pairs (between the auto-exclude and auto-match thresholds) are
-no longer auto-unioned.** Given the user's explicit priority — "over-merging
-is the worse error, bias every threshold toward splitting" — a borderline
-edge with real evidence behind it but not enough to clear the bar goes to
-human review instead of merging unreviewed.
+never auto-unioned, and they now go to the matches gate to be decided (P15).**
+Given the user's explicit priority — "over-merging is the worse error, bias
+every threshold toward splitting" — a borderline pair is left separate and
+listed as `pending_merge_candidates`. The matches gate
+(`human_review_matches`) also receives, per entity, a `band_summary`: the
+thresholds in force, predicted match / possible / exclude counts, and the
+score distribution (log2 odds for a model posterior, Sturges bins from the
+data's own range). The operator can answer per pair (`pair_decisions`:
+`merge` | `keep_separate`) and/or commit a different bar for an entity
+(`band_thresholds`, valid only if `0 <= exclude < match <= 1`).
+`apply_band_decisions` (shared by `WorkflowManager.resume_workflow` and the
+gate body, because the body never runs on resume) re-derives the clusters
+from the retained scored pairs via `rebuild_band_clusters`: edges at or over
+the bar are joined strongest first, a rejected pair is a cannot-link, and a
+cluster a human already decided is joinable only by an accepted pair, so a
+"keep apart" removes one link, never the Match links around it. An undecided
+pair or unrecognised action never merges. Pairs below the run's own exclude
+bar are not retained, so a committed exclude bar *lower* than the run's needs
+the stage retried.
+
+**Decision memory (P9).** If `MERGE_ENGINE_DECISION_MEMORY` names a file (the code also reads a
+`decision_memory_path` state key, which `MergeState` does not declare, so use
+the env var), each answered band pair is
+persisted keyed by a stable sha256 of the question (gate, entity, the pair
+and both records' content — a changed attribute is a new question), and a later
+run applies matching answers at `resolve_entities` without asking
+(`resolution_stats[e]["decisions_from_memory"]`); only the remainder reaches
+the gate. Off by default; an unreadable file means "ask again". An abandoned
+gate (abort/reject) records nothing. It is a single JSON file with no
+concurrency control — Part 3's decision store replaces it.
 
 **Cluster IDs are deterministic, computed as
 `sha256(f"{entity_type}:{'|'.join(sorted(record_ids))}")[:32]`, not random
@@ -306,9 +443,12 @@ called from `src/orchestrator/nodes/unify_entities.py`.
 **Conflict resolution is a configurable rule chain, not a hardcoded
 if/elif.** Before Phase O.3, surviving-value selection for a field with
 disagreeing candidates was a fixed chain: origin priority, then
-completeness (longest non-empty value), then recency. `conflict_policy` in
+the longest non-empty value, then recency. `conflict_policy` in
 state now lets a per-field (or `"_default"`) list of rules override that:
-`priority | completeness | recency | shortest | first_seen`.
+`priority | longest | recency | shortest | first_seen` (plus the numeric
+rules). `completeness` is kept as a config **alias** of `longest` so saved
+profiles still load (P18): it always meant raw string length, not a
+record-level "fewest NULLs".
 `resolve_policy()` looks up the field's chain (or falls back to
 `"_default"`, or the historical three-rule chain if neither is configured);
 `_apply_rule()` applies one rule to the current candidate set, and
@@ -326,6 +466,19 @@ which is a real, common survivorship preference. If the whole configured
 chain leaves more than one candidate standing, `first_seen` is the final,
 always-available tiebreak, guaranteeing the function always returns exactly
 one value.
+
+**Survivorship repairs (P18).** `longest` is text-only: on any non-text
+candidate it is a no-op and the chain falls through (string length is a
+digit-count accident for numbers). The **higher** `priority` number wins, and
+an origin's optional `field_priorities` `{field: int}` overrides it for one
+field. `first_seen` is a total order — origin, then source table, then source
+row id — independent of extraction order. With no precomputed reliability
+table `measured_reliability` is measured from the cluster's own records instead
+of being a silent no-op. When `numeric_max`/`numeric_min` resolve a field whose
+sources disagreed, the conflict record carries `numeric_disagreement`
+(min/max/spread/relative spread) and the reconciliation report aggregates it
+per field as `numeric_disagreements`. None of this makes survivorship
+non-destructive: the losing values are still gone at the end of the run.
 
 ---
 
@@ -379,6 +532,47 @@ rejection into a write. Before this existed, rejecting the final approval
 gate set `load_approval=False` and the graph proceeded to `load_data`
 anyway, which never read that flag at all — a complete no-op reject that
 looked, from the UI, like it had worked.
+
+**The pre-load gate: invariants measured on this run, refusal writes nothing
+(P10).** `pre_load_gate` (`src/orchestrator/nodes/load_data.py`) measures four
+invariants per entity — mapping coverage (a floor), NULL share of the identity
+field, largest-cluster share of possible merges, and count of P16-flagged
+clusters (ceilings) — and **proposes the thresholds from the run's own
+entities** (medians, with a documented 1/2 cap on the shares and a per-entity
+slack so a small healthy lookup is not refused for being small). The same call
+builds the gate payload (`pre_load_gate` in the `human_final_approval` data) and
+decides the load. The operator confirms or edits the numbers on the approve
+feedback as `thresholds` (`{invariant: number}`; kept in state as
+`pre_load_thresholds` so a retry through the error gate is judged against them);
+a value the UI sends back unchanged is not an edit, and a non-number fails
+closed. A violated invariant makes `load_data` return a `fail` disposition
+(`DataQualityError`, no error-gate "skip" that would walk on as if loaded)
+naming each invariant and entity, **before anything is written**. It can only
+refuse; it cannot roll back a partial write, and a run whose entities are all
+bad alike is caught only by the floors or by the operator.
+
+**Destination defect report (P17).** `destination_schema_defects` is a pure
+check of each mapped entity against the destination's introspected schema: a
+table that lacks a mapped column, or whose declared columns beyond its primary
+key are fed by nothing while the run has values for columns it lacks, or that
+does not exist while the destination has others, is *defective*. The whole
+entity is **withheld** (left empty, no DDL — "no new destination columns"
+stands) and reported with `missing_columns` and `unprojectable_rows`
+(`held_links` stays in the load's own report). The final-approval payload shows
+it as `destination_defects` before the reviewer approves.
+
+**Label-free quality signals in the run report (P16).** The reconciliation
+report carries `entities[e].quality` (`quality_signals` in
+`src/mcp_server/tools/cluster_quality.py`): homonymy rate, name-variation rate,
+Hill numbers of the cluster sizes, B-cubed against the previous run's
+clustering, and `flagged_clusters`/`flagged_count`. B-cubed needs a history file
+(`MERGE_ENGINE_QUALITY_HISTORY`; a `quality_history_path` state key is read
+first but is likewise undeclared; keyed by `run_id` so the preview and the load
+of one run agree); on run one or with no
+file it is `None` plus a "not available" note, never a number. A cluster is
+flagged when its names split into unrelated groups further apart than a
+threshold derived from this run's own names — **a flag, never a cut**; no
+labels are involved.
 
 **PostgreSQL destination loads are staged and swapped atomically; ClickHouse
 loads are not, and the code says so rather than pretending.**

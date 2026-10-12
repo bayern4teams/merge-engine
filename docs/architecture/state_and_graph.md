@@ -35,6 +35,15 @@ Why this matters, concretely:
   cancelled proposals on resume, and `operator.add` can only ever grow a
   list, never shrink it.
 
+- Part 1 added plain replace-semantics keys that gates read from *state*
+  (a gate body does not run at its pause): `table_roles` and
+  `relationship_edges` (proposed at the dependency gate, never acted on),
+  `pre_load_thresholds` (the thresholds confirmed at the final gate, kept so a
+  load retried through the error gate is judged against them, not the
+  proposals) and `metadata_overrides` (the per-run ETL-metadata layer from
+  `run_config`). They must be declared in `MergeState`, or LangGraph drops
+  them.
+
 **Two IDs to keep straight:** `run_id` names the LangGraph thread AND the
 spool file AND the cost-ledger key AND the profile-capture key. It rides
 inside `llm_config["run_id"]` specifically because the LLM client only ever
@@ -212,4 +221,3 @@ redundancy for its own sake: LangGraph's `RetryPolicy` retries the whole node
 `retry_on_transient` retries a much narrower unit of work.
 
 ---
-

@@ -59,18 +59,25 @@ deliberate lengths to strip secrets (twice, §12), while the file sitting next
 to it in the same directory keeps them raw. Anyone with filesystem access, or
 anyone who copies a machine backup, has the database credentials.
 
-### 18.4 🟡 The comparison budget still truncates — but no longer silently
+### 18.4 🟢 The comparison budget is gone — replaced by purging, meta-blocking and a loud guard (P2)
 
-`_MAX_COMPARISONS = 250_000` in `resolve_entities.py:49` is still enforced
-(line 638), and pairs beyond it are still dropped (`pairs[:_MAX_COMPARISONS]`,
-line 650). What changed in Phase L is that the count is now recorded in
-`_LAST_BLOCKING_STATS["uncompared_pairs"]` and surfaced in the reconciliation
-report, instead of being a warning nobody read.
+The `_MAX_COMPARISONS = 250_000` cut (and the `_LAST_BLOCKING_STATS` global it
+reported through) no longer exists. Candidate pairs are now reduced only by
+properties of the block collection — token blocking, block filtering and
+purging, node-centric WNP meta-blocking (`data_pipeline.md` §7) — and
+`_MAX_CANDIDATE_PAIRS` (5M) is an out-of-memory guard that **raises
+`CandidatePairBudgetExceeded`** instead of truncating. Live evidence before the
+change: one entity discarded 711,670 pairs unexamined while the run ended
+`completed`; after, 40/40 planted pairs found (was 31/40) and
+`uncompared_pairs` 0 (was 389,200).
 
-So the honest status is: **this is a bounded, visible, reported limit rather
-than silent data loss.** The budget was also raised 25× (10,000 → 250,000)
-once memoisation made scoring 24× cheaper. But a large enough entity can
-still exceed it, and when it does, the pairs beyond the cut are not compared.
+What remains is a *measured, lossy-by-design* trade: WNP loses a true pair
+whose edge sits under the mean at both ends (4-19 % against uncapped on the
+attack corpus), and a script without word spaces (CJK) is one token, so a
+one-character variant does not co-block. Pair completeness needs labels, so
+it is computed by the eval harness (`blocking_report`, P19), never by the run.
+A pathological corpus can still trip the memory guard — loudly, failing the
+run.
 
 ### 18.5 🟡 ClickHouse destination loads are not atomic
 
@@ -119,9 +126,11 @@ two have fundamentally different cost curves: rows scale linearly, but
 candidate pairs scale with the square of block size. The 43M-row proof covers
 the data path only — extract, spool, reconcile.
 
-The comparison budget (§18.4) means a 43M-row resolution wouldn't fail, it
-would **truncate** — and report that it truncated. That's the designed
-behaviour, but it means the practical answer to "can this deduplicate 43
+Blocking (§18.4) no longer truncates: a 43M-row resolution would prune by
+purging and meta-blocking, and if the surviving pairs still exceeded the
+5M-pair memory guard it would **fail loudly** (`CandidatePairBudgetExceeded`).
+Best measured so far is 20k synthetic records in 39 s. That's the designed behaviour,
+but it means the practical answer to "can this deduplicate 43
 million records?" is currently *unknown*, not *yes*. Measuring it is the
 single most valuable next experiment.
 
@@ -199,23 +208,19 @@ entity count at zero — a hollow success, not a crash. Automatic fallback
 closes the *quota* half of this risk; it does nothing about output-shape
 drift between models, which is still unmeasured.
 
-### 19.10 Entity-cluster partitioning is O(n²) per connected component, unguarded
+### 19.10 Entity-cluster partitioning can still be O(n²) per connected component
 
-`_build_clusters` → `_partition_component` / `_average_linkage` /
-`_split_weakest_link` (`resolve_entities.py`, §7) run three unguarded O(n²)
-passes over every connected component formed by union-find on the scored
-pairs. Unlike blocking/scoring, which is capped at `_MAX_COMPARISONS`, there
-is no size cap here — if auto-matched pairs chain into one large component,
-partitioning cost explodes independent of how good the earlier budget cap
-was. Live evidence (Boeing, 2026-08-01): `technology` (1,503 records, small)
-took ~9-11 minutes to cluster — nearly as long as `person` (~7,000
-records) — meaning a handful of pathologically large/dense components, not
-a general per-record cost. This was the dominant runtime cost of every
-Boeing verification run that night, well above blocking/scoring or the load
-itself. Full detail and four other bottlenecks (serial per-entity LLM
-mapping calls, non-vectorized scoring, chunked-IN-filter round-trips, no
-mid-run resume) in `docs/diagnostics/PERFORMANCE_BOTTLENECKS.md` — documented, not yet
-fixed, pending a dedicated profiling pass.
+Clustering (`_build_clusters`, `data_pipeline.md` §7) no longer runs the
+average-linkage cohesion cut on every component, but the conflict-repair check
+inside `_partition_component` still compares every member pair of a component,
+and triangle support (`_triangle_parts`) walks its edges. Components are now
+made of WNP-pruned *confident* edges only, which shrinks them, but nothing caps
+their size: a component above `_LARGE_COMPONENT_THRESHOLD` (200) is only
+logged, and its size is reported (`largest_component_size`,
+`large_components`, `component_count`). Live evidence from before the pruning
+(Boeing, 2026-08-01): `technology` (1,503 records) took ~9-11 minutes to
+cluster. Not re-measured on the new path; full detail and four other
+bottlenecks in `docs/diagnostics/PERFORMANCE_BOTTLENECKS.md`.
 
 ---
 
@@ -227,7 +232,7 @@ started; this is the honest "what would I do with another month" list.
 ### Directly closes a gap named above
 
 1. **Measure resolution at scale** [M] — run the matcher over 1M, then 10M
-   records and record pair counts, wall clock, memory, and truncation rate.
+   records and record pair counts, wall clock, memory, and pruning rate.
    Turns §19.1 from unknown into a number. *Highest value item on this list.*
 2. **Move run tracking into the checkpoint DB** [M] — kills §19.2 and §19.3
    at the root, and unlocks multi-worker deployment.
@@ -254,7 +259,8 @@ started; this is the honest "what would I do with another month" list.
 10. **Active learning from gate decisions** [L] — every keep/split/merge a
     human makes at the match gate is a free labelled example. They're already
     captured for the eval harness; feeding them back as supervision would let
-    the model improve with use rather than starting cold each run.
+    the model improve with use rather than starting cold each run. (P9's decision memory
+    only *replays* an identical answer; it does not train anything.)
 11. **Explainability in the review UI** [S] — `MatchModel.explain()` already
     returns per-field evidence in bits, sorted by magnitude, and the UI
     doesn't show it. This is nearly free and would make the match gate far

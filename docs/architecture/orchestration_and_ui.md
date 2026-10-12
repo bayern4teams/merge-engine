@@ -52,7 +52,7 @@ it, so the topology below is exact, not aspirational:
 preflight -> discover_schemas -> parse_request -> analyze_dependencies
   -> human_review_deps -> map_fields -> [human_review_mappings if unmapped fields]
   -> plan_scope -> [human_review_scope if merge_scope.active and scope_plan.entities]
-  -> extract_data -> validate_data -> resolve_entities -> [human_review_matches if low-confidence]
+  -> extract_data -> validate_data -> resolve_entities -> [human_review_matches if low-confidence or band pairs]
   -> unify_entities -> human_final_approval -> load_data -> update_extraction_state -> END
 ```
 
@@ -87,6 +87,32 @@ All three changes mean the mapping gate (`human_review_mappings`) now happens
 exists — worth remembering before assuming gate order matches when each
 kind of information first becomes available.
 
+### What the gates carry now (Part 1)
+
+The gate topology is unchanged; their payloads and feedback grew. All of it is
+applied in `WorkflowManager.resume_workflow` (and `_build_*_interrupt`), not in
+the gate bodies, because with `interrupt_before` a gate body never runs on
+resume.
+
+- **`human_review_deps`** also shows `table_roles` (proposed junction / weak
+  tables) and `relationship_cycles` — proposals for confirmation; nothing
+  downstream acts on them (`data_pipeline.md` §6b).
+- **`human_review_matches`** is shown when a merged cluster is low-confidence
+  *or* any pair sits in the uncertain band, and carries a per-entity
+  `band_summary` (thresholds, predicted counts, score distribution). The
+  feedback may include `pair_decisions` (`merge` / `keep_separate` per pair)
+  and `band_thresholds`; both are applied by `apply_band_decisions`, which
+  re-derives that entity's clusters. Undecided pairs stay separate. Answers
+  from a configured decision memory (`MERGE_ENGINE_DECISION_MEMORY`) are
+  applied at `resolve_entities`, so only unanswered pairs reach the gate
+  (`data_pipeline.md` §7).
+- **`human_final_approval`** also shows `destination_defects` (tables the load
+  would leave empty) and `pre_load_gate` (the invariants with run-proposed
+  thresholds). The approve feedback may carry `thresholds`
+  (`{invariant: number}`), enforced by `load_data`, which refuses with a `fail`
+  disposition and writes nothing if an invariant is violated
+  (`data_pipeline.md` §10).
+
 ---
 
 ## 14. The FastAPI + React surface
@@ -100,11 +126,11 @@ Routes, by purpose:
 |---|---|
 | `POST /api/connections/test` | Live-test an origin/destination connection and discover its schema |
 | `GET/POST /api/connections/recent` | Locally persisted connection history (`config/recent_connections.json`) |
-| `POST /api/workflow/start` | Start a run; accepts `profile_name` (replay a saved profile) and/or `save_as_profile` (save this run's config as a new profile before starting) |
+| `POST /api/workflow/start` | Start a run; accepts `profile_name` (replay a saved profile) and/or `save_as_profile` (save this run's config as a new profile before starting); `run_config.metadata_overrides` is the per-run ETL-metadata override layer (`data_pipeline.md` §6b) |
 | `GET /api/workflow/active` | Currently tracked runs |
 | `GET /api/workflow/{id}/status` | Poll status — the UI's 2-second timer target |
 | `GET /api/workflow/{id}/cost` | Token ledger + semantic-cache stats for this run (Phase O.5) |
-| `POST /api/workflow/{id}/feedback` | Submit a HITL decision (`approve`/`edit`/`retry`/`abort`, plus any edits/reason) |
+| `POST /api/workflow/{id}/feedback` | Submit a HITL decision (`approve`/`edit`/`retry`/`abort`, plus any edits/reason; gate-specific fields such as `pair_decisions`, `band_thresholds`, `thresholds`) |
 | `POST /api/workflow/{id}/abort` | Abandon a run |
 | `GET/POST/DELETE /api/profiles[/{name}]` | Saved-profile CRUD |
 
@@ -147,4 +173,3 @@ off any third party's infrastructure by default, which matters more for this
 tool than for a typical SaaS app given what it's built to process.
 
 ---
-

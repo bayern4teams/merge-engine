@@ -29,6 +29,7 @@ This walkthrough is split across `docs/architecture/*.md` by subsystem (Phase
 4. [The error taxonomy and why classification lives in one place](state_and_graph.md#4-the-error-taxonomy-and-why-classification-lives-in-one-place)
 5. [The DuckDB spool — why rows left graph state](data_pipeline.md#5-the-duckdb-spool--why-rows-left-graph-state)
 6. [Connectors and keyset pagination](data_pipeline.md#6-connectors-and-keyset-pagination)
+6b. [Source analysis: catalog tables, ETL columns, inclusion dependencies, roles](data_pipeline.md#6b-source-analysis-catalog-tables-etl-columns-inclusion-dependencies-roles)
 7. [Entity resolution: Fellegi–Sunter scoring, blocking, clustering](data_pipeline.md#7-entity-resolution-fellegi-sunter-scoring-blocking-clustering)
 8. [Unification and conflict resolution](data_pipeline.md#8-unification-and-conflict-resolution)
 9. [Field mapping and the destination schema](data_pipeline.md#9-field-mapping-and-the-destination-schema)
@@ -133,9 +134,13 @@ all — e.g. `resolve_entities_impl()` is called directly by hundreds of tests.
 | Subsystem | Where |
 |---|---|
 | Schema discovery | `src/mcp_server/tools/discover_schema.py` |
+| Catalog / ETL-metadata classification (P12) | `src/mcp_server/tools/metadata_classification.py` |
+| Join graph (inclusion dependencies, row relationships) | `src/mcp_server/tools/join_graph.py` |
 | Extraction (batching, spooling, watermarks) | `src/mcp_server/tools/extract_data.py` |
-| Entity resolution: blocking, scoring, clustering | `src/mcp_server/tools/resolve_entities.py` |
+| Entity resolution: token blocking, scoring, clustering | `src/mcp_server/tools/resolve_entities.py` |
 | Fellegi–Sunter probability model | `src/mcp_server/tools/fellegi_sunter.py` |
+| Label-free cluster quality signals (P16) | `src/mcp_server/tools/cluster_quality.py` |
+| Cross-run memory of band decisions (P9) | `src/orchestrator/decision_memory.py` |
 | Per-cluster merge + conflict survivorship | `src/mcp_server/tools/unify_entity_group.py` |
 | Field mapping | `src/mcp_server/tools/map_fields.py` |
 | Destination write | `src/mcp_server/tools/load_data.py` |
@@ -212,12 +217,16 @@ The four things a human is asked to approve, in order:
    "customer in Postgres and users in Mongo are both the `person` entity."
 2. **Which records the matcher decided are the same real-world entity**
    (`human_review_matches`) — only shown when the matcher produced
-   low-confidence clusters worth a second look.
+   low-confidence clusters or uncertain pairs (the 0.70-0.95 band) worth a
+   second look; the operator can decide those pairs one by one.
 3. **The field mapping to the destination schema**
    (`human_review_mappings`) — only shown when fields couldn't be mapped
    with high confidence.
 4. **Final approval before anything is written** (`human_final_approval`) —
-   always shown, no matter how confident everything upstream was.
+   always shown, no matter how confident everything upstream was. It also
+   shows the destination tables that cannot hold their data and the pre-load
+   invariants; thresholds confirmed here are enforced, and a violation refuses
+   the load (nothing is written).
 
 Everything else in this document is either "how the graph gets from one of
 these gates to the next" or "what happens around the graph to make it usable
