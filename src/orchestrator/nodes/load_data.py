@@ -405,18 +405,17 @@ def _entity_measures(state: dict[str, Any], entity: str) -> dict[str, float]:
         out[_COVERAGE] = mapped / width
     if records:
         out["records"] = len(records)
-        # one identity field per origin: origins name the same concept differently
-        # (``company_name`` / ``org_title``), so a second origin's records are not NULL
-        origins: dict[Any, list[dict[str, Any]]] = {}
+        # one identity field per record shape (source table + columns): sources name the
+        # same concept differently (``name`` in one, ``title`` in another), so the second
+        # source's records are not NULL. ponytail: a source that OMITS a NULL column
+        # (rather than carrying None) forms its own shape and is judged by its next-best
+        # name column; SQL rows always carry every column.
+        shapes: dict[Any, list[dict[str, Any]]] = {}
         for r in records:
-            key = (
-                (r["_origin_id"], r.get("_origin_table"))
-                if "_origin_id" in r
-                else frozenset(k for k in r if not k.startswith("_"))
-            )
-            origins.setdefault(key, []).append(r)
+            table = _record_id(r).rsplit(":", 1)[0]
+            shapes.setdefault((table, frozenset(k for k in r if k[:1] != "_")), []).append(r)
         nulls = judged = 0
-        for rows in origins.values():
+        for rows in shapes.values():
             identity = _identity_column({k for r in rows for k in r if not k.startswith("_")})
             if identity:
                 judged += len(rows)
@@ -449,7 +448,7 @@ def pre_load_gate(state: dict[str, Any], confirmed: Any = None) -> dict[str, Any
     entity (a run where nothing maps still fails); NULL-identity and largest-
     cluster ceilings = 2 m, never a majority; flagged ceiling = 2 m of the
     per-entity flagged counts. Each entity is judged against the ceiling or its
-    OWN slack, whichever is higher -- one NULL record; a cluster twice the median
+    OWN slack, whichever is higher (a confirmed number is used as given) -- one NULL record; a cluster twice the median
     entity's largest -- so a small healthy lookup is not refused for being small
     and never lifts the ceiling of another entity.
 
@@ -514,7 +513,12 @@ def pre_load_gate(state: dict[str, Any], confirmed: Any = None) -> dict[str, Any
             e
             for e, m in per.items()
             if name in m
-            and (m[name] < used if name == _COVERAGE else m[name] > max(used, slack(name, m)))
+            and (
+                m[name] < used
+                if name == _COVERAGE
+                # the operator's own number is used as given; slack eases the proposal only
+                else m[name] > (used if name in edits else max(used, slack(name, m)))
+            )
         ]
         invariants[name] = {
             "measured": measured[name],

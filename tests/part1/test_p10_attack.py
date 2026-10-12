@@ -579,12 +579,6 @@ def _null_inv(state):
     return gate(state)["invariants"]["null_identity_share"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="r2 identity column: ONE column is picked over the union of keys, so records of a second origin that name the same "
-    "concept differently (company_name / org_title; the repo's own _best_name_field comment) count as NULL: a fully "
-    "populated mixed-origin entity measures 0.21 NULL at 20% second origin, 0.50 at 50/50; refused as the run's worst",
-)
 def test_a_healthy_mixed_origin_entity_is_not_a_null_identity_failure():
     base = make_world("mo", n_ent=8, per=100, null_each=0)
 
@@ -596,11 +590,6 @@ def test_a_healthy_mixed_origin_entity_is_not_a_null_identity_failure():
     assert not inv["violated"], (inv["measured"], inv["threshold"], "every name is populated")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="r2 identity column: rank is by hint position and `nickname` (8) shortens below first_name/last_name/full_name, so a "
-    "healthy person table whose optional nickname is 90% NULL is measured 0.90 NULL identity and refused",
-)
 def test_a_sparse_optional_nickname_does_not_make_a_person_table_a_null_identity_failure():
     base = make_world("nick", n_ent=8, per=100, null_each=0)
 
@@ -616,11 +605,6 @@ def test_a_sparse_optional_nickname_does_not_make_a_person_table_a_null_identity
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="r2 identity column: `id-like last` is only the SECOND sort key, after hint rank, so a populated `company_id` (rank 4) "
-    "beats a 78%-NULL `label` (rank 7): measured NULL share 0.00, the incident's failure again hidden by a sibling id column",
-)
 def test_an_id_column_does_not_hide_a_null_label():
     base = make_world("idl", n_ent=8, per=100, null_each=0)
 
@@ -683,12 +667,6 @@ def _all_mapped_world(n_audit):
     return st
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="r2 coverage width: columns the mapper LEGITIMATELY ignores (P12 metadata_only, stays in the records, in neither "
-    "field_mappings nor unmapped_fields) widen the denominator: 4 of 4 business fields mapped + 8 audit columns measures "
-    "coverage 0.333 against 1.0 for its peers (floor 0.5) and refuses a fully mapped entity; 5 audit columns already fall below 0.5",
-)
 def test_a_fully_mapped_entity_with_audit_columns_is_not_a_coverage_failure():
     g = gate(_all_mapped_world(8))["invariants"]["mapping_coverage"]
     assert not g["violated"], (g["measured"], g["threshold"], "4 of 4 business fields are mapped")
@@ -720,22 +698,11 @@ def _lookup_state(n_lookup, *, big_null=0, giant=0):
     return st
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="r2 small-entity slack is GLOBAL (one ceiling for the run, lifted by the SMALLEST entity): with a 5-row lookup in the "
-    "run, ONE 500-row entity that is 45% a single cluster (225 fused records vs largest cluster ~3 elsewhere) passes at "
-    "the 0.5 cap (threshold 0.50 instead of 0.01 with a 500-row sibling); 20 rows lift it to 0.26, 50 to 0.10",
-)
 def test_a_tiny_lookup_does_not_hide_a_giant_cluster_in_another_entity():
     inv = gate(_lookup_state(5, giant=225))["invariants"]["largest_cluster_share"]
     assert inv["violated"], (inv["measured"], inv["threshold"])
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="r2 small-entity slack is GLOBAL: a 2-row lookup lifts the NULL-identity ceiling to the 0.5 cap for every entity, so a "
-    "500-row entity with 45% NULL names passes (threshold 0.50 vs 0.002 with a 500-row sibling); 3 rows lift it to 1/3, 5 to 0.2",
-)
 def test_a_tiny_lookup_does_not_hide_a_null_burst_in_another_entity():
     inv = gate(_lookup_state(2, big_null=225))["invariants"]["null_identity_share"]
     assert inv["violated"], (inv["measured"], inv["threshold"])
@@ -759,10 +726,5 @@ def test_control_slack_never_exceeds_the_cap_so_the_replay_still_fails_beside_a_
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="r2 slack cap (LOW): the docstring promises one NULL record of slack, but the 1/2 cap makes it 0.5: a 1-row entity whose "
-    "single name is NULL measures 1.0 and refuses the whole run (2- and 3-row entities with one NULL pass)",
-)
 def test_a_one_row_entity_with_a_null_name_is_one_null_record_of_slack():
     assert not gate(_with_lookup(1, 1))["invariants"]["null_identity_share"]["violated"]
