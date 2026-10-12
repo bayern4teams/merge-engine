@@ -416,12 +416,12 @@ def _entity_measures(state: dict[str, Any], entity: str) -> dict[str, float]:
         shapes: dict[Any, list[dict[str, Any]]] = {}
         for r in records:
             table = _record_id(r).rsplit(":", 1)[0]
-            names = frozenset(
+            named = frozenset(
                 k
                 for k in r
                 if k[:1] != "_" and _identity_column({k}) and not k.lower().endswith("id")
             )
-            shapes.setdefault((table, names), []).append(r)
+            shapes.setdefault((table, named), []).append(r)
         nulls = judged = 0
         for (table, cols), rows in shapes.items():
             wider = set().union(*(c for t, c in shapes if t == table and cols <= c))
