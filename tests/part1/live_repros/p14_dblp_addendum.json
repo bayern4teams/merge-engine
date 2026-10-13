@@ -1,0 +1,405 @@
+{
+ "source": "Leipzig DBLP-ACM (CC BY 4.0, dbs.uni-leipzig.de); local runs dblp_acm_*_r2 (507f9d4 vs 6d7c4b4). records[1] (CeriFPT94) and records[2] (CeriFPT95, 'Addendum to ...', 1995) are different true entities",
+ "records": [
+  {
+   "id": "185828",
+   "authors": "Stefano Ceri, Piero Fraternali, Stefano Paraboschi, Letizia Tanca",
+   "title": "Automatic generation of production rules for integrity maintenance",
+   "venue": "ACM Transactions on Database Systems (TODS)",
+   "year": "1994",
+   "_origin_id": "acm",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "185828"
+  },
+  {
+   "id": "journals/tods/CeriFPT94",
+   "authors": "Letizia Tanca, Stefano Ceri, Piero Fraternali, Stefano Paraboschi",
+   "title": "Automatic Generation of Production Rules for Integrity Maintenance",
+   "venue": "ACM Trans. Database Syst.",
+   "year": "1994",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "journals/tods/CeriFPT94"
+  },
+  {
+   "id": "journals/tods/CeriFPT95",
+   "authors": "Letizia Tanca, Stefano Paraboschi, Piero Fraternali, Stefano Ceri",
+   "title": "Addendum to Automatic Generation of Production Rules for Integrity Maintenance",
+   "venue": "ACM Trans. Database Syst.",
+   "year": "1995",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "journals/tods/CeriFPT95"
+  },
+  {
+   "id": "conf/vldb/BamfordAP99",
+   "authors": "Angelo Pruscino, Rafiul Ahad, Roger Bamford",
+   "title": "A Scalable and Highly Available Networked Database Architecture",
+   "venue": "VLDB",
+   "year": "1999",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "conf/vldb/BamfordAP99"
+  },
+  {
+   "id": "conf/vldb/HaasB03",
+   "authors": "Peter J. Haas, Paul Brown",
+   "title": "BHUNT: Automatic Discovery of Fuzzy Algebraic Constraints in Relational Data",
+   "venue": "VLDB",
+   "year": "2003",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "conf/vldb/HaasB03"
+  },
+  {
+   "id": "234893",
+   "authors": "Carsten A. Gerlhof, Alfons Kemper, Guido Moerkotte",
+   "title": "On the cost of monitoring and reorganization of object bases for clustering",
+   "venue": "ACM SIGMOD Record",
+   "year": "1996",
+   "_origin_id": "acm",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "234893"
+  },
+  {
+   "id": "776996",
+   "authors": "Mario A. Nascimento",
+   "title": "Peer-to-peer: harnessing the power of disruptive technologies",
+   "venue": "ACM SIGMOD Record",
+   "year": "2003",
+   "_origin_id": "acm",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "776996"
+  },
+  {
+   "id": "journals/sigmod/GatziuKBF98",
+   "authors": "Hans Fritschi, Arne Koschel, G\u00fcnter von B\u00fcltzingsloewen, Stella Gatziu",
+   "title": "Unbundling Active Functionality",
+   "venue": "SIGMOD Record",
+   "year": "1998",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "journals/sigmod/GatziuKBF98"
+  },
+  {
+   "id": "journals/sigmod/Aberer02a",
+   "authors": "Karl Aberer",
+   "title": "Book Review Column",
+   "venue": "SIGMOD Record",
+   "year": "2002",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "journals/sigmod/Aberer02a"
+  },
+  {
+   "id": "conf/vldb/CotterB00",
+   "authors": "Barbara T. Bauldock, Gladys A. Cotter",
+   "title": "Biodiversity Informatics Infrastructure: An Information Commons for the Biodiversity Community",
+   "venue": "VLDB",
+   "year": "2000",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "conf/vldb/CotterB00"
+  },
+  {
+   "id": "conf/sigmod/ChaudhuriMN99",
+   "authors": "Vivek R. Narasayya, Surajit Chaudhuri, Rajeev Motwani",
+   "title": "On Random Sampling over Joins",
+   "venue": "SIGMOD Conference",
+   "year": "1999",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "conf/sigmod/ChaudhuriMN99"
+  },
+  {
+   "id": "conf/vldb/TriantafillouP97",
+   "authors": "Thomas Papadakis, Peter Triantafillou",
+   "title": "On-Demand Data Elevation in Hierarchical Multimedia Storage Servers",
+   "venue": "VLDB",
+   "year": "1997",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "conf/vldb/TriantafillouP97"
+  },
+  {
+   "id": "conf/sigmod/Ramakrishnan00",
+   "authors": "Raghu Ramakrishnan",
+   "title": "From Browsing to Interacting: DBMS Support for Responive Websites (Abstract)",
+   "venue": "SIGMOD Conference",
+   "year": "2000",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "conf/sigmod/Ramakrishnan00"
+  },
+  {
+   "id": "journals/vldb/FernandezFLS00",
+   "authors": "Alon Y. Levy, Dan Suciu, Daniela Florescu, Mary F. Fernandez",
+   "title": "Declarative Specification of Web Sites with Strudel",
+   "venue": "VLDB J.",
+   "year": "2000",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "journals/vldb/FernandezFLS00"
+  },
+  {
+   "id": "673146",
+   "authors": "A. Prasad Sistla, Clement T. Yu, Chengwen Liu, King Liu",
+   "title": "Similarity based Retrieval of Pictures Using Indices on Spatial Relationships",
+   "venue": "Very Large Data Bases",
+   "year": "1995",
+   "_origin_id": "acm",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "673146"
+  },
+  {
+   "id": "journals/sigmod/DongS00",
+   "authors": "Jianwen Su, Guozhu Dong",
+   "title": "Incremental Maintenance of Recursive Views Using Relational Calculus/SQL",
+   "venue": "SIGMOD Record",
+   "year": "2000",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "journals/sigmod/DongS00"
+  },
+  {
+   "id": "565118",
+   "authors": "Avigdor Gal",
+   "title": "Articles",
+   "venue": "ACM SIGMOD Record",
+   "year": "2002",
+   "_origin_id": "acm",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "565118"
+  },
+  {
+   "id": "conf/sigmod/AdaliBSS98",
+   "authors": "V. S. Subrahmanian, Sibel Adali, Maria Luisa Sapino, Piero A. Bonatti",
+   "title": "A Multi-Similarity Algebra",
+   "venue": "SIGMOD Conference",
+   "year": "1998",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "conf/sigmod/AdaliBSS98"
+  },
+  {
+   "id": "565122",
+   "authors": "Nancy Wiegand",
+   "title": "Investigating XQuery for querying across database object types",
+   "venue": "ACM SIGMOD Record",
+   "year": "2002",
+   "_origin_id": "acm",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "565122"
+  },
+  {
+   "id": "335414",
+   "authors": "Antonio Corral, Yannis Manolopoulos, Yannis Theodoridis, Michael Vassilakopoulos",
+   "title": "Closest pair queries in spatial databases",
+   "venue": "International Conference on Management of Data",
+   "year": "2000",
+   "_origin_id": "acm",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "335414"
+  },
+  {
+   "id": "765560",
+   "authors": "M. P. Papazoglou, B. J. Kr&#228;mer",
+   "title": "Erratum-A database model for object dynamics",
+   "venue": "The VLDB Journal &mdash; The International Journal on Very Large Data Bases",
+   "year": "1997",
+   "_origin_id": "acm",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "765560"
+  },
+  {
+   "id": "journals/sigmod/OoiST03",
+   "authors": "Beng Chin Ooi, Yanfeng Shu, Kian-Lee Tan",
+   "title": "Relational data sharing in peer-based data management systems",
+   "venue": "SIGMOD Record",
+   "year": "2003",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "journals/sigmod/OoiST03"
+  },
+  {
+   "id": "603870",
+   "authors": "Peter Fankhauser",
+   "title": "XQuery formal semantics state and challenges",
+   "venue": "ACM SIGMOD Record",
+   "year": "2001",
+   "_origin_id": "acm",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "603870"
+  },
+  {
+   "id": "conf/sigmod/DattaDRTV01",
+   "authors": "Debra E. VanderMeer, Krithi Ramamritham, Helen M. Thomas, Anindya Datta, Kaushik Dutta",
+   "title": "Dynamic Content Acceleration: A Caching Solution to Enable Scalable Dynamic Web Page Generation",
+   "venue": "SIGMOD Conference",
+   "year": "2001",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "conf/sigmod/DattaDRTV01"
+  },
+  {
+   "id": "335463",
+   "authors": "Melliyal Annamalai, Rajiv Chopra, Samuel DeFazio, Susan Mavris",
+   "title": "Indexing images in Oracle8i",
+   "venue": "International Conference on Management of Data",
+   "year": "2000",
+   "_origin_id": "acm",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "335463"
+  },
+  {
+   "id": "288087",
+   "authors": "Curtis E. Dyreson, Richard Thomas Snodgrass",
+   "title": "Supporting valid-time indeterminacy",
+   "venue": "ACM Transactions on Database Systems (TODS)",
+   "year": "1998",
+   "_origin_id": "acm",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "288087"
+  },
+  {
+   "id": "conf/sigmod/HwangLYMMGCSS94",
+   "authors": "K. Mediratta, Ee-Peng Lim, J. Stenoien, S. Musukula, Jaideep Srivastava, H.-R. Yang, D. Clements, M. Ganesh, San-Yih Hwang",
+   "title": "The MYRIAD Federated Database Prototype",
+   "venue": "SIGMOD Conference",
+   "year": "1994",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "conf/sigmod/HwangLYMMGCSS94"
+  },
+  {
+   "id": "conf/vldb/SrinivasaK03",
+   "authors": "Srinath Srinivasa, Sujit Kumar",
+   "title": "A Platform Based on the Multi-dimensional Data Model for Analysis of Bio-Molecular Structures",
+   "venue": "VLDB",
+   "year": "2003",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "conf/vldb/SrinivasaK03"
+  },
+  {
+   "id": "journals/tods/CastanoAFP98",
+   "authors": "Valeria De Antonellis, Barbara Pernici, Maria Grazia Fugini, Silvana Castano",
+   "title": "Conceptual Schema Analysis: Techniques and Applications",
+   "venue": "ACM Trans. Database Syst.",
+   "year": "1998",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "journals/tods/CastanoAFP98"
+  },
+  {
+   "id": "335494",
+   "authors": "Leonidas Fegaras, Chandrasekhar Srinivasan, Arvind Rajendran, David Maier",
+   "title": "lambda-DB: an ODMG-based object-oriented DBMS",
+   "venue": "International Conference on Management of Data",
+   "year": "2000",
+   "_origin_id": "acm",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "335494"
+  },
+  {
+   "id": "conf/sigmod/Ozsu99",
+   "authors": "M. Tamer \u00d6zsu",
+   "title": "Data Management Issues in Electronic Commerce (Panel)",
+   "venue": "SIGMOD Conference",
+   "year": "1999",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "conf/sigmod/Ozsu99"
+  },
+  {
+   "id": "conf/vldb/Korth95",
+   "authors": "Henry F. Korth",
+   "title": "The Double Life of the Transaction Abstraction: Fundamental Principle and Evolving System Concept",
+   "venue": "VLDB",
+   "year": "1995",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "conf/vldb/Korth95"
+  },
+  {
+   "id": "conf/sigmod/FlorescuGKR02",
+   "authors": "Andreas Gr\u00fcnhagen, Steffen Rost, Donald Kossmann, Daniela Florescu",
+   "title": "XL: a platform for web services",
+   "venue": "SIGMOD Conference",
+   "year": "2002",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "conf/sigmod/FlorescuGKR02"
+  },
+  {
+   "id": "672351",
+   "authors": "Phillip B. Gibbons",
+   "title": "Distinct Sampling for Highly-Accurate Answers to Distinct Values Queries and Event Reports",
+   "venue": "Very Large Data Bases",
+   "year": "2001",
+   "_origin_id": "acm",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "672351"
+  },
+  {
+   "id": "journals/sigmod/WeikumSR03",
+   "authors": "Erhard Rahm, Harald Sch\u00f6ning, Gerhard Weikum",
+   "title": "Report on the 10th Conference on Database Systems for Business, Technology, and the Web (BTW 2003)",
+   "venue": "SIGMOD Record",
+   "year": "2003",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "journals/sigmod/WeikumSR03"
+  },
+  {
+   "id": "conf/vldb/Tsur00",
+   "authors": "Shalom Tsur",
+   "title": "Data Mining in the Bioinformatics Domain",
+   "venue": "VLDB",
+   "year": "2000",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "conf/vldb/Tsur00"
+  },
+  {
+   "id": "conf/vldb/LudasaherGM00",
+   "authors": "Bertram Lud\u00e4scher, Amarnath Gupta, Maryann E. Martone",
+   "title": "Model-Based Information Integration in a Neuroscience Mediator System",
+   "venue": "VLDB",
+   "year": "2000",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "conf/vldb/LudasaherGM00"
+  },
+  {
+   "id": "journals/sigmod/KlasS94",
+   "authors": "Amit P. Sheth, Wolfgang Klas",
+   "title": "Metadata for Digital Media: Introduction to the Special Issue",
+   "venue": "SIGMOD Record",
+   "year": "1994",
+   "_origin_id": "dblp",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "journals/sigmod/KlasS94"
+  },
+  {
+   "id": "872759",
+   "authors": "Jeffrey D. Ullman",
+   "title": "Improving the efficiency of database-system teaching",
+   "venue": "International Conference on Management of Data",
+   "year": "2003",
+   "_origin_id": "acm",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "872759"
+  },
+  {
+   "id": "276326",
+   "authors": "G&#237;sli R. Hjaltason, Hanan Samet",
+   "title": "Incremental distance join algorithms for spatial databases",
+   "venue": "International Conference on Management of Data",
+   "year": "1998",
+   "_origin_id": "acm",
+   "_origin_table": "public.publication",
+   "_origin_id_row": "276326"
+  }
+ ]
+}

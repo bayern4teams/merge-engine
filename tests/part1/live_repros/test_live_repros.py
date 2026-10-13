@@ -121,3 +121,20 @@ def test_p14_text_similarity_cost_is_not_quadratic_in_tokens():
 
     idf_soft_similarity(a, b, {}, 1000, sim)
     assert calls <= 20 * (len(a) + len(b)), (calls, len(a), len(b))
+
+
+@pytest.mark.xfail(strict=True, reason="LOCAL_VERIFY_REPORT P14-D2: 'Addendum to X' auto-matches X")
+def test_p14_addendum_is_not_an_auto_match():
+    """DBLP-ACM, 40 records, LLM off. 'Automatic Generation of Production Rules ...' (1994)
+    vs 'Addendum to Automatic Generation of Production Rules ...' (1995): main scores
+    0.917 (review band), the branch 0.968 (auto-merge; 0.988 on 63 records). Live this
+    shape took DBLP-ACM over-merged clusters from 65 to 107.
+    """
+    from src.mcp_server.tools.resolve_entities import _resolve_core
+
+    recs = _load("p14_dblp_addendum.json")["records"]
+    paper, addendum = _record_id(recs[1]), _record_id(recs[2])
+    core = _resolve_core("publication", recs, None, None, None)
+    scores = {frozenset((a, b)): s for a, b, s in core["scored_pairs"]}
+    scores |= {frozenset((a, b)): s for a, b, _r1, _r2, s in core["borderline"]}
+    assert scores[frozenset((paper, addendum))] < core["auto_match"]
