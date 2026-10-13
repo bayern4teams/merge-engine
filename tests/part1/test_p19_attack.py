@@ -13,6 +13,7 @@ import os
 import random
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -142,7 +143,7 @@ def test_deterministic_shuffled_and_dict_order_and_hashseed():
     )
     outs = {
         subprocess.run(
-            [str(ROOT / ".venv/bin/python"), "-c", code],
+            [sys.executable, "-c", code],
             env={**os.environ, "PYTHONHASHSEED": s, "PYTHONPATH": str(ROOT)},
             capture_output=True,
             text=True,
