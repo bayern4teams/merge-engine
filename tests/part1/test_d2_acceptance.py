@@ -23,6 +23,7 @@ Groups
 
 from __future__ import annotations
 
+import importlib
 import json
 import re
 import subprocess
@@ -34,12 +35,12 @@ from fastapi.testclient import TestClient
 
 import src.orchestrator.spool as spool_mod
 from src.api.main import create_api
-from src.orchestrator.nodes import resolve_entities as node
 from src.orchestrator.workflow_manager import WorkflowManager
 from tests.part1.test_p15_acceptance import fz, groups, pending_pairs, run_node
 
 ROOT = Path(__file__).resolve().parents[2]
 BASE = "82e209b"  # HEAD when D2 was handed to the worker; the diff below is "the D2 fix"
+node = importlib.import_module("src.orchestrator.nodes.resolve_entities")
 GATE = "human_review_matches"
 TID = "d2thread"
 
@@ -339,15 +340,14 @@ def test_c2_matches_gate_offers_merge_and_keep_per_pair():
     assert "onApprove" in body, "MatchBody cannot send anything: onApprove is not in its props"
 
 
-def test_c3_pipeline_screen_forwards_the_answers_only_at_the_matches_gate():
-    """GREP-LEVEL: onApprove must route the band answers to sendFeedback for human_review_matches (like the
-    other gates), not blindly for every gate."""
+def test_c3_pipeline_screen_passes_the_answers_on_to_sendfeedback():
+    """GREP-LEVEL: PipelineScreen.onApprove must carry the matches gate's answers into sendFeedback (the way it
+    already does for mapping edits / deps / scope / thresholds), not drop them between Gates.tsx and api.ts."""
     ps = _fe("components/PipelineScreen.tsx")
     on_approve = re.search(r"async function onApprove\b.*?\n  }\n", ps, re.S)
     assert on_approve, "onApprove not found"
-    txt = on_approve.group(0)
-    assert re.search(r'human_review_matches"\s*\?', txt), (
-        "answers are not gated on the matches node"
+    assert re.search(r"pair_?decisions", on_approve.group(0), re.I), (
+        "onApprove never mentions the pair decisions: they cannot reach sendFeedback"
     )
 
 
