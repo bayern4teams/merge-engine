@@ -1,6 +1,6 @@
 # Part 1 — local live verification report
 
-**Status: S3 public benchmarks done (11 scenarios); S4 gate = STOP (6 scenario failures) — S5 not started, waiting for the user's decision.**
+**Status: S3 done (11 public-benchmark scenarios); S4 gate = STOP (6 scenario failures). User decision 2026-10-13: hand off first (Phase 6 fix queue in HANDOFF.md), run S5 on the fixed branch. S5 not started.**
 Resume from this file + `git log`; every number below is regenerable from the commands in "Regenerate".
 
 | | |
@@ -50,7 +50,7 @@ Ground-truth facts that matter for reading the numbers: Geographic Settlements' 
 | plant_febrl4 | febrl4 + 20 planted bridges | **FAIL** (rule 8) | rules 1–7 pass (FN 107 → 8); P16 flags 20/20 planted clusters, **P10 does not refuse** (would_fail False) | `runs/plant_febrl4_*_r1` |
 | abt_buy | 2 origins, products | **FAIL** (rule 2) | better than main on every metric (FP 2,747 → 1,219, F1 0.013 → 0.026) but largest cluster 16 vs true 3 (main 19); both unusable | `runs/abt_buy_*_r1` |
 | dblp_acm | 2 origins, publications | **FAIL** (rules 1, 2, 3) | recall 0.905 → 0.983 but cross-source precision 0.925 → 0.903, B-cubed precision 0.963 → 0.950, over-merged 65 → 107 (allowed 87), largest 18 (main 22); reproduced in a clean r2 | `runs/dblp_acm_*_r2` (r1 identical) |
-| amazon_google | 2 origins, products, long descriptions | **FAIL** (rule 5) | main completed in 21 min; **after never left resolve_entities in 140 min** (driver timeout) — D1 | `runs/amazon_google_*_r1` |
+| amazon_google | 2 origins, products, long descriptions | **FAIL** (rule 5) | main completed in 21 min but is itself near-useless (TP 2 of 1,553 true pairs); **after never left resolve_entities in 140 min** (driver timeout) — D1 | `runs/amazon_google_*_r1` |
 | musicbrainz | 5 origins, recordings, cross-source truth only | **FAIL** (rule 2) | recall 0.433 → 0.661, F1 0.592 → 0.782, over-merged 136 → 124; but largest cluster 14 vs true 5 (main 10 = exactly 2×); cross-source precision 0.994 → 0.984 (inside the 1 pp tolerance) | `runs/musicbrainz_*_r1` |
 | dblp_scholar | 2 origins, 66,879 records | **FAIL** (rule 5) | main completed in 620 s (TP 4,880 / FP 5,203 / FN 8,883, F1 0.409); after still inside resolve_entities after ≈ 70 min (0 destination rows), stopped by decision of the user — D1 (profile: ≈ 2.9 ms per pair in `_token_ratio`) | `runs/dblp_scholar_*_r1` |
 
@@ -146,7 +146,7 @@ All numbers: `python -m scripts.verify_local.compare <scenario> [--tag r2]` (pai
 | abt_buy after | 31 | 1,219 | 1,087 | 0.025 | 0.028 | 0.026 | 0.606 | 301 | 16 (3) | 1,047 | 204 |
 | dblp_acm before (r2) | 2,013 | 667 | 211 | 0.751 | 0.905 | 0.821 | 0.960 | 65 | 22 (2) | 415 | 4 |
 | dblp_acm after (r2) | 2,185 | 684 | 39 | 0.762 | 0.983 | 0.858 | 0.971 | 107 | 18 (2) | 1,716 | 199 |
-| amazon_google before | see `runs/amazon_google_before_r1/result.json` (completed, 1,274 s) | | | | | | | | | 1,274 | 5 |
+| amazon_google before | 2 | 405 | 1,551 | 0.005 | 0.001 | 0.002 | 0.815 | 186 | 9 (6) | 1,274 | 5 |
 | musicbrainz before | 7,033 | 469 | 9,217 | 0.938 | 0.433 | 0.592 | 0.838 | 136 | 10 (5) | 307 | 8 |
 | musicbrainz after | 10,744 | 481 | 5,506 | 0.957 | 0.661 | 0.782 | 0.904 | 124 | 14 (5) | 1,180 | 204 |
 | dblp_scholar before | 4,880 | 5,203 | 8,883 | 0.484 | 0.355 | 0.409 | 0.960 | 1,919 | 29 (37) | 620 | 4 |
@@ -179,7 +179,7 @@ Pre-LLM scores (`score_probe`, recall over ALL true pairs; FP@0.95 before cluste
 
 ## FAILURES AND DEFECTS
 
-Priority: P0 data-corrupting · P1 wrong result · P2 quality. Root causes are **hypotheses** unless marked confirmed. Repro fixtures: `tests/part1/live_repros/` (each test `xfail(strict=True)`; a fix flips it to XPASS, which fails until the marker is removed). Run: `TMPDIR=$PWD/.tmp .venv311/bin/python -m pytest tests/part1/live_repros -q -p no:cacheprovider --runxfail`.
+Priority: P0 data-corrupting · P1 wrong result · P2 quality. Nothing is classed P0: no source data was changed and nothing was written outside the benchmark destinations. The new wrong merges (D5: DBLP-ACM over-merged clusters 65 → 107) do put wrong unified rows into the destination; they are classed P1 because main writes the same kind of error at a similar rate (cross-source precision 0.925 vs 0.903). Re-class them P0 if wrong merges in the destination count as data corruption for this programme. Defect ids are stable labels; the gaps (D7, D8, D10, D11, D14) are ids retired while drafting, not missing entries. Root causes are **hypotheses** unless marked confirmed. Repro fixtures: `tests/part1/live_repros/` (each test `xfail(strict=True)`; a fix flips it to XPASS, which fails until the marker is removed). Run: `TMPDIR=$PWD/.tmp .venv311/bin/python -m pytest tests/part1/live_repros -q -p no:cacheprovider --runxfail`.
 
 ### D1 — P14: soft text similarity is quadratic in token count; Amazon-Google never finishes (P1)
 - Repro: `python -m scripts.verify_local.run_bench amazon_google after` (driver timeout at 140 min, still in `resolve_entities`; main's whole run 1,274 s). Offline: branch `_resolve_core` on 60 of its records 62 s, 120 records 202 s. Fixture `test_p14_text_similarity_cost_is_not_quadratic_in_tokens` (2 Amazon records, 120 + 179 tokens → 42,960 `token_sim` calls = 2·|A|·|B|). Public dataset: **Leipzig Amazon-GoogleProducts**.
@@ -239,6 +239,11 @@ Priority: P0 data-corrupting · P1 wrong result · P2 quality. Root causes are *
 - Observed: Abt-Buy after: `band_summary.predicted_counts.possible` 1,330, `pending_merge_candidates` 50 (`_MAX_PENDING_CANDIDATES = 50`, `resolve_entities.py:203`, slice at `:871`; the cap pre-dates Part 1, main `:198`).
 - Fix shape: page the band at the gate, or say "50 of N shown" in the payload.
 
+### D16 — MusicBrainz: one cluster of 14 records against a largest true cluster of 5 (P2, not root-caused)
+- Repro: `run_bench musicbrainz before|after` → largest 10 → 14 (rule 2 limit 10); over-merged clusters fall 136 → 124, so this is one outlier, not a trend.
+- Root cause: **not investigated** (time went to D1–D5). First step: list that cluster's titles/artists by SQL (`bm_dst_musicbrainz_after_r1`, largest `cluster_id` in `merge_engine_entity_map`) and check whether it is a D5-style chain (same title, different recordings) joined by two confident edges.
+- Verify: largest cluster ≤ 10 on MusicBrainz after.
+
 ### Pre-existing (also on main; not caused by Part 1)
 - **PRE-D1 — a name-only entity never merges (P1).** Affiliations: 0 of 16,795 true pairs on both; max score over 30,593 scored pairs 0.109; identical "INRIA Rocquencourt" 0.058 (branch) / 0.085 (main). Fixture `test_identical_names_in_a_name_only_entity_reach_the_band`. Hypothesis: the heuristic/model needs more than one agreeing field to leave the exclude zone. Dataset: **Leipzig Affiliations**.
 - **PRE-D2 — product variants auto-merge (P1).** Abt-Buy "Omnimount … 20WLBK" vs "… 20WLWH" (records `abt:10101`, `abt:10102`) score 0.957 on the full corpus (0.03 on 40 records, so no small fixture); largest cluster 16 (main 19). Hypothesis: model codes differing in a suffix are not treated as conflicting identifiers. Dataset: **Leipzig Abt-Buy**.
@@ -251,13 +256,13 @@ Priority: P0 data-corrupting · P1 wrong result · P2 quality. Root causes are *
 - P19: accepted-cloud; not re-run, but its counting is consistent with the probes.
 
 ## S4 — gate
-Six scenarios fail the pass rule (plant_febrl4, abt_buy, dblp_acm, amazon_google, musicbrainz, dblp_scholar). Per the brief: **STOP**; S5 waits for the user's decision and for the S5 preconditions (credentials, `ground_truth`, destination per §0.7).
+Six scenarios fail the pass rule (plant_febrl4, abt_buy, dblp_acm, amazon_google, musicbrainz, dblp_scholar). Per the brief: **STOP**. The user decided (2026-10-13): hand off first; S5 runs later on the branch with D1–D5 fixed (with D1, a 16-entity run on the user's data may not finish; with D2, P9/P15 cannot be checked there either). S5 still needs from the user: origin hosts/credentials (env var names), a restored `ground_truth`, a disposable `global_warehouse` per report §0.7.
 
 ## USER DECISIONS (from PHASE5_REPORT.md — not decided here; one deciding fact each)
 1. **CI does not run `tests/part1`.** Deciding fact: the full suite runs in 69 s locally and its only failure is the `.venv` interpreter path (S1); the `P10_BASE_REV`-style git-revision tests are the remaining obstacle for a shallow CI clone.
 2. **Audit cuts that need accepted tests rewritten.** Deciding fact: P20's verdict here is FAIL on DBLP-ACM over-merging (D5); the unreachable cohesion code is the obvious place a fix might want to live, so deleting it now could be premature.
 3. **`sql_lineage.py` has no caller.** Deciding fact: no benchmark run touched it; graph + grep still show only its own unit test.
-4. **`scipy` undeclared for P20's `one_to_one`.** Deciding fact: `one_to_one` was never reached in 20 runs (no caller); `.venv311` happens to have scipy, a clean install would not.
+4. **`scipy` undeclared for P20's `one_to_one`.** Deciding fact: `one_to_one` has no caller, so no run can reach it (confirmed by grep in Phase 5; nothing here contradicts it); `.venv311` happens to have scipy installed, a clean install from `pyproject.toml` would not.
 5. **`decision_memory_path` / `quality_history_path` not in `MergeState`.** Deciding fact: the env vars worked for quality history in every run; decision memory could not be exercised because the API drops the band answers (D2), so the state-key question is moot until D2 is fixed.
 6. **ADR 0014 superseded by P2.** Deciding fact: live data confirms the supersession (main truncates at 250,000 pairs and over-reports `uncompared_pairs` ×2.1 on febrl4; the branch never truncates).
 

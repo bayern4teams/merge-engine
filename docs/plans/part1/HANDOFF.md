@@ -141,3 +141,27 @@ attack agent. P13: prior rescaled to the random-pair population (lead decision, 
 - [RESOLVED] 2026-10-06: P20 block cleared by the user: option (c), see Next action.
 - [PHASE 2 DONE] 2026-10-05: P3, P4, P5 accepted (all `unverified-live`, see LOCAL_VERIFY.md). `check.py all` green locally (11/11, 1m24s); `pytest tests/part1` 354 passed / 7 xfailed; CI green on c4894f6 (run 95). `/ponytail-review` of the phase diff: net -11 lines possible, deferred (`_named_like` no-FK fallback kept for acceptance 4f's direct caller; `_key_info` could reuse the schema cache; `_materialise_dimensions`' dropped/required guard duplicates `_write_child_rows`').
 - [PHASE 1 DONE] 2026-10-04: P1, P2, P11, P12, P13, P14, P18 accepted (all `unverified-live`, see LOCAL_VERIFY.md). `check.py all` green locally; CI green on the phase head; `/ponytail-review` of the phase diff: net -6 lines possible, deferred (discover_schemas `run_kwargs` kept for a dozen one-argument test stubs; `_names` str-or-list and the two metadata lookups too small to churn).
+
+## Phase 6 fix queue
+
+From the local live verification on public benchmarks ([LOCAL_VERIFY_REPORT.md](LOCAL_VERIFY_REPORT.md), verified commit `6d7c4b4`). Each defect has a committed repro under `tests/part1/live_repros/` (strict xfail; a fix flips it to XPASS) or names the public dataset it needs. The cloud has no access to the local runs: verify against the repro, and say which benchmark the user must re-run locally (commands in the report's "Regenerate").
+
+P1 (wrong result / no result), in order:
+1. **D2 — P15/P9: the API drops `pair_decisions` / `band_thresholds`** (`src/api/main.py:260`, route `:778-800`; UI never sends them). Band answers and decision memory are unreachable for a real user. Repro `test_api_feedback_forwards_band_decisions`. Report § D2.
+2. **D1 — P14: soft text similarity is |A|×|B| per pair** (`fellegi_sunter.py:154/185`); Amazon-Google never leaves resolve_entities (main: 21 min), DBLP-Scholar stopped after ≈ 70 min (main: 620 s). Repro `test_p14_text_similarity_cost_is_not_quadratic_in_tokens`. Report § D1.
+3. **D3 — P10: a single-entity run can never be refused** (`load_data.py:447`, slack `:483-490` beats the 1/2 cap; payload shows measured > threshold, violated False). Policy change → user decides the shape. Repro `test_p10_single_entity_giant_cluster_is_refused`. Report § D3.
+4. **D5 — P14/P20: "Addendum to X" auto-matches X**; DBLP-ACM over-merged 65 → 107. Repro `test_p14_addendum_is_not_an_auto_match`. Report § D5.
+5. **PRE-D1 (also on main): a name-only entity never merges** (Affiliations 0 / 16,795). Repro `test_identical_names_in_a_name_only_entity_reach_the_band`. Report § Pre-existing.
+6. **PRE-D2 (also on main): product variants auto-merge** (Abt-Buy `abt:10101`/`abt:10102`, 0.957); full Leipzig Abt-Buy needed, no small fixture. Report § Pre-existing.
+
+P2 (quality / reporting):
+7. **D4 — P16: person name read from one column** (`load_data.py:183`, `:442` via `_best_name_field`); 18–39 % false flags. Repro `test_p16_true_person_pairs_are_not_flagged`. Report § D4.
+8. **D6 — P14: product recall@0.70 0.376 → 0.115** (Abt-Buy, full dataset). Report § D6.
+9. **D12 — P13: FP at the 0.95 bar before clustering up** (febrl4 1 → 44, dblp_acm 636 → 814). Report § D12.
+10. **D9 — P2: block-filtering discards not counted as pairs** (Abt-Buy 1,213,649 vs 161,535 reported). Report § D9.
+11. **D15 — P15: gate lists at most 50 band pairs** (`resolve_entities.py:203/871`). Report § D15.
+12. **D16 — MusicBrainz: one 14-record cluster (true max 5; main 10), not root-caused.** Report § D16.
+13. **D13 — P8 cost: ≈ 200 serial LLM calls per entity** (wall 2–4× main) — user decision. Report § D13.
+14. PRE-D3 `Event loop is closed` on the first JSON-mode call (`src/llm/client.py:302-304`); `tests/part1/test_p19_attack.py:145` uses `.venv/bin/python` instead of `sys.executable`.
+
+S5 (the user's own databases) has not started: the S4 gate stopped on these failures and the user decided (2026-10-13) to hand off first and run S5 on the fixed branch.
