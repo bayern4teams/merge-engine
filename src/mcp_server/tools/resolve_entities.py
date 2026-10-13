@@ -352,7 +352,10 @@ def _resolve_core(
                 unique_ids,
                 declared_only=True,
             )
-            or (bool(declared_keys) and _deterministic_conflict(rec1, rec2, declared_keys)),
+            or (bool(declared_keys) and _deterministic_conflict(rec1, rec2, declared_keys))
+            # PRE-D2: two codes that disagree are no weaker than a declared key;
+            # a shared price must not lift the pair back to Match.
+            or _conflicting_codes(rec1, rec2, record_cache),
         )
         if conf < auto_exclude and _shares_identifying_value(rec1, rec2, corpus, record_cache):
             possibly_related.append([id1, id2] if id1 < id2 else [id2, id1])
@@ -1653,6 +1656,7 @@ def _score_pair(
         or (
             bool(deterministic_fields) and _deterministic_conflict(rec1, rec2, deterministic_fields)
         )
+        or _conflicting_codes(rec1, rec2, record_cache)
     )
 
     if (
@@ -2807,6 +2811,41 @@ def _has_conflicting_identity(
         if _normalize(val1) != _normalize(val2):
             return True
     return False
+
+
+def _code_tokens(value: Any) -> frozenset[str]:
+    """Tokens mixing letters and digits -- the shape of a model or part code."""
+    return frozenset(
+        t
+        for t in _WORD_RE.findall(str(value).lower())
+        if any(c.isdigit() for c in t) and any(c.isalpha() for c in t)
+    )
+
+
+def _conflicting_codes(
+    rec1: dict[str, Any], rec2: dict[str, Any], record_cache: RecordCache | None = None
+) -> bool:
+    """PRE-D2: both names carry a code and neither code appears in the other name.
+
+    "Mount - 20WLBK" vs "Mount - 20WLWH" are two products; the rest of the name
+    and the description agree, so nothing else in the vector can tell them
+    apart. Codes are compared against the other name with separators removed,
+    so "PS-LX350H" still finds "pslx350h". A name with no code conflicts with
+    nothing.
+    ponytail: ceiling -- a variant whose code sits only in another field, or
+    a code written differently on each side, is not caught / is sent to
+    review. Upgrade path: an identifier-token comparison level in the model.
+    """
+    _, _, f1 = _cached_projection(rec1, record_cache)
+    _, _, f2 = _cached_projection(rec2, record_cache)
+    if f1 is None or f2 is None or not rec1.get(f1) or not rec2.get(f2):
+        return False
+    n1, n2 = str(rec1[f1]), str(rec2[f2])
+    c1, c2 = _code_tokens(n1), _code_tokens(n2)
+    if not c1 or not c2:
+        return False
+    q1, q2 = ("".join(_WORD_RE.findall(n.lower())) for n in (n1, n2))
+    return not any(c in q2 for c in c1) and not any(c in q1 for c in c2)
 
 
 def _cross_name_similarity(
