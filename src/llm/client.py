@@ -14,9 +14,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from typing import Any
 
-import httpx
+import openai
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
@@ -52,8 +53,6 @@ _QUOTA_ERROR_MARKERS = (
 def _is_rejection(exc: BaseException) -> bool:
     """The endpoint answered and refused the request as malformed (bad request /
     unprocessable entity) -- not a transport, timeout or quota failure."""
-    import openai
-
     return isinstance(exc, openai.APIStatusError) and exc.status_code in (400, 422)
 
 
@@ -124,6 +123,7 @@ class LLMClient:
         self.run_id = config.get("run_id", "") or session_name
         self._model: Any = None
         self._model_loop: Any = None  # the event loop self._model's HTTP client belongs to
+        self._model_lock = threading.Lock()  # (model, loop) change together across threads
         self._json_mode_unsupported = False
         # Automatic quota fallback (Phase 7): the primary model followed by
         # every model in config's fallback_models, tried in that exact order.
@@ -170,15 +170,19 @@ class LLMClient:
         PRE-D3: rebuilt, with its own async HTTP client, when called from another
         event loop than the one it was built in -- langchain_openai otherwise
         shares one pooled client process-wide, and a connection opened under a
-        closed loop fails the next loop's first call ("Event loop is closed")."""
+        closed loop fails the next loop's first call ("Event loop is closed").
+        Model and loop are swapped together under a lock (workflows run on
+        threads with their own loops)."""
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             loop = None
-        if self._model is not None and (loop is None or loop is self._model_loop):
+        with self._model_lock:
+            if self._model is None or (loop is not None and loop is not self._model_loop):
+                self._model, self._model_loop = self._build_model(loop), loop
             return self._model
-        self._model_loop = loop
 
+    def _build_model(self, loop: Any) -> Any:
         kwargs: dict[str, Any] = {
             "model": self.model_name,
             "api_key": self.api_key,
@@ -192,23 +196,25 @@ class LLMClient:
         logger.debug("Creating %s model: %s", self.provider, self.model_name)
 
         if loop is not None and self.provider in ("openai", "azure"):
-            kwargs["http_async_client"] = httpx.AsyncClient(timeout=self.timeout)
+            # the SDK's own defaults (redirects, pool limits), one client per loop;
+            # openai ships its own httpx build, so a Timeout object is rebuilt in it
+            t = self.timeout
+            if t is not None and not isinstance(t, (int, float)):
+                t = openai.Timeout(connect=t.connect, read=t.read, write=t.write, pool=t.pool)
+            kwargs["http_async_client"] = openai.DefaultAsyncHttpxClient(timeout=t)
 
+        model: Any
         if self.provider == "openai":
-            self._model = ChatOpenAI(**kwargs)
-            logger.debug("ChatOpenAI model created")
+            model = ChatOpenAI(**kwargs)
         elif self.provider == "anthropic":
-            kwargs["api_key"] = self.api_key
-            self._model = ChatAnthropic(**kwargs)
-            logger.debug("ChatAnthropic model created")
+            model = ChatAnthropic(**kwargs)
         elif self.provider == "azure":
             kwargs["azure_endpoint"] = self.base_url
-            self._model = ChatOpenAI(**kwargs)  # Azure uses OpenAI interface
-            logger.debug("Azure ChatOpenAI model created")
+            model = ChatOpenAI(**kwargs)  # Azure uses OpenAI interface
         else:
             raise ValueError(f"Unsupported LLM provider: '{self.provider}'")
-
-        return self._model
+        logger.debug("%s model created", self.provider)
+        return model
 
     async def call(
         self,
