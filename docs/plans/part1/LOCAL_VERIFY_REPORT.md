@@ -59,9 +59,9 @@ Ground-truth facts that matter for reading the numbers: Geographic Settlements' 
 | item | verdict | before → after (counts) | evidence / defect |
 |---|---|---|---|
 | P1 | UNVERIFIED | benchmarks have no concatenated lowercase identifiers; Amazon `title → name` mapped identically on both (0.9) | S5 |
-| P2 | **PARTIAL** | budget gone: febrl4 main C = 250,000 (cap), `uncompared_pairs` 993,586 vs true discard 466,880 (over-count ×2.1, as warned), 79 true pairs lost to the budget → after PC 1.000, `uncompared_pairs` 0. But block filtering discards pairs it never counts as pairs (Abt-Buy G − C = 1,213,649 vs 161,535 reported) | blocking probe; **D9** |
+| P2 | **PARTIAL** | budget gone: febrl4 main C = 250,000 (cap), `uncompared_pairs` 993,586 vs true discard 466,880 (over-count ×2.1, as warned), 79 true pairs lost to the budget → after PC 1.000; musicbrainz main PC 0.536 at the cap → 0.990; dblp_scholar main reports 26.1 M uncompared; `uncompared_pairs` 0. But block filtering discards pairs it never counts as pairs (Abt-Buy G − C = 1,213,649 vs 161,535 reported) | blocking probe; **D9** |
 | P3, P4, P7, P12, P17(fix) | UNVERIFIED | single-table benchmarks: no INDs, junctions, catalog/ETL columns or broken DDL | S5 |
-| P5 | **PARTIAL** | PC ≥ main on 6/7 scored sets (febrl4 0.980 → 1.000, febrl3 0.981 → 0.999, dblp_acm 0.987 → 1.000, affiliations 0.459 → 0.757), PQ higher on all (2–11×); **Abt-Buy PC 0.928 → 0.897** (115 vs 80 true pairs lost in blocking) | blocking probe |
+| P5 | **PARTIAL** | PC ≥ main on 6/7 scored pairs of sets (febrl4 0.980 → 1.000, febrl3 0.981 → 0.999, dblp_acm 0.987 → 1.000, affiliations 0.459 → 0.757, musicbrainz 0.536 → 0.990, geo 0.973 = 0.973), PQ higher on all but geo (0.380 → 0.241); **Abt-Buy PC 0.928 → 0.897** (115 vs 80 true pairs lost in blocking) | blocking probe |
 | P6 | UNVERIFIED | no parent/subsidiary truth in public sets. Observation: Abt-Buy within-source variant FPs 2,716 → 1,207 (still unusable) | — |
 | P8 | **PARTIAL** | one pair per call confirmed (≈ 200 calls/entity vs 4–6 batched on main); precision of LLM-decided merges vs truth: persons 37/37, DBLP-ACM 10/17 (r2) and 11/14 (r1), **Abt-Buy 2/34**; wall time 2–4× main; under a serial endpoint a parallel run's preflight times out | audit probe; **D13** |
 | P9 | **FAIL** | 3 oracle answers sent through the REST API: no memory file written; run 2 with the same memory path paused at the matches gate with 5 pending pairs (asks again) | **D2** |
@@ -162,6 +162,9 @@ Blocking (pair completeness from the truth; `blocking_probe`):
 | dblp_acm | 136,183 / 0.987 / 0.016 | 87,099 / 1.000 / 0.026 |
 | abt_buy | 126,200 / **0.928** / 0.008 | 30,680 / **0.897** / 0.033 |
 | affiliations | 141,310 / 0.459 / 0.055 | 30,593 / 0.757 / 0.416 |
+| geo | 11,241 / 0.973 / 0.380 | 17,701 / 0.973 / 0.241 |
+| musicbrainz | 250,000 (cap) / **0.536** / 0.035 — `uncompared_pairs` 596,814, true discard 593,421 | 331,316 / **0.990** / 0.049 |
+| dblp_scholar | 250,000 (cap) / **0.457** / 0.025 — `uncompared_pairs` 26,107,859 | see the dblp_scholar row |
 
 Pre-LLM scores (`score_probe`, recall over ALL true pairs; FP@0.95 before clustering):
 
