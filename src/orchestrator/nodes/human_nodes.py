@@ -268,8 +268,15 @@ def _build_matches_interrupt(state: dict[str, Any]) -> dict[str, Any]:
     # no cluster, so they would otherwise be invisible — the reviewer would
     # never learn the system had hesitated.
     pending: list[dict[str, Any]] = []
+    # D15: the list is capped per entity; the band's size says how many it leaves out.
+    shown: dict[str, dict[str, int]] = {}
     for entity_type, stats in (state.get("resolution_stats") or {}).items():
         candidates = stats.get("pending_merge_candidates") or []
+        band = ((stats.get("band_summary") or {}).get("predicted_counts") or {}).get("possible")
+        if candidates or band:
+            listed = len(candidates)
+            total = band if isinstance(band, int) and band > listed else listed
+            shown[entity_type] = {"listed": listed, "total": total}
         records_by_id = entity_records_by_id(
             state, entity_type, [rid for c in candidates for rid in c.get("record_ids", [])]
         )
@@ -306,6 +313,8 @@ def _build_matches_interrupt(state: dict[str, Any]) -> dict[str, Any]:
         if stats.get("band_summary")
     }
 
+    listed = sum(v["listed"] for v in shown.values())
+    total = sum(v["total"] for v in shown.values())
     return {
         "node": "human_review_matches",
         "title": "Review Entity Matches",
@@ -314,10 +323,18 @@ def _build_matches_interrupt(state: dict[str, Any]) -> dict[str, Any]:
             "total_clustering_decisions": len(low_conf),
             "auto_match_stats": _auto_match_stats(state),
             "pending_merge_candidates": pending,
+            "pending_merge_shown": {"per_entity": shown, "listed": listed, "total": total},
             "pending_merge_note": (
-                f"{len(pending)} pair(s) looked similar but not similar enough to merge "
-                "automatically. Merge or keep each one apart; any left undecided stay "
-                "separate when you approve."
+                (
+                    f"{listed} of {total} pair(s) in the review band are listed here, "
+                    "strongest first. "
+                    if total > listed
+                    else f"{listed} pair(s) "
+                )
+                + (
+                    "looked similar but not similar enough to merge automatically. Merge "
+                    "or keep each one apart; any left undecided stay separate when you approve."
+                )
             )
             if pending
             else "",
