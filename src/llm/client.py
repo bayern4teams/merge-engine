@@ -11,10 +11,12 @@ no-op when Langfuse isn't configured, so calls work with or without the stack.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
 
+import httpx
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
@@ -45,6 +47,14 @@ _QUOTA_ERROR_MARKERS = (
     "allocationquota",
     "billing",
 )
+
+
+def _is_rejection(exc: BaseException) -> bool:
+    """The endpoint answered and refused the request as malformed (bad request /
+    unprocessable entity) -- not a transport, timeout or quota failure."""
+    import openai
+
+    return isinstance(exc, openai.APIStatusError) and exc.status_code in (400, 422)
 
 
 def _is_quota_error(exc: BaseException) -> bool:
@@ -113,6 +123,7 @@ class LLMClient:
                 PERSISTENT_CACHE.configure(ttl_days=ttl_days, max_rows=max_rows)
         self.run_id = config.get("run_id", "") or session_name
         self._model: Any = None
+        self._model_loop: Any = None  # the event loop self._model's HTTP client belongs to
         self._json_mode_unsupported = False
         # Automatic quota fallback (Phase 7): the primary model followed by
         # every model in config's fallback_models, tried in that exact order.
@@ -154,9 +165,19 @@ class LLMClient:
         return True
 
     def _get_model(self) -> Any:
-        """Lazy-initialize the LangChain chat model."""
-        if self._model is not None:
+        """Lazy-initialize the LangChain chat model.
+
+        PRE-D3: rebuilt, with its own async HTTP client, when called from another
+        event loop than the one it was built in -- langchain_openai otherwise
+        shares one pooled client process-wide, and a connection opened under a
+        closed loop fails the next loop's first call ("Event loop is closed")."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if self._model is not None and (loop is None or loop is self._model_loop):
             return self._model
+        self._model_loop = loop
 
         kwargs: dict[str, Any] = {
             "model": self.model_name,
@@ -169,6 +190,9 @@ class LLMClient:
             kwargs["base_url"] = self.base_url
 
         logger.debug("Creating %s model: %s", self.provider, self.model_name)
+
+        if loop is not None and self.provider in ("openai", "azure"):
+            kwargs["http_async_client"] = httpx.AsyncClient(timeout=self.timeout)
 
         if self.provider == "openai":
             self._model = ChatOpenAI(**kwargs)
@@ -300,11 +324,18 @@ class LLMClient:
                 break
             except Exception as exc:
                 if json_mode and not response_format and not self._json_mode_unsupported:
-                    logger.warning(
-                        "json_object response_format rejected by endpoint, retrying without it: %s",
-                        exc,
-                    )
-                    self._json_mode_unsupported = True
+                    # PRE-D3: only the endpoint refusing the request is a verdict on
+                    # json_object; a transport failure (a timeout, a dropped
+                    # connection) is retried without it but says nothing about it.
+                    if _is_rejection(exc):
+                        logger.warning(
+                            "json_object response_format rejected by endpoint, "
+                            "retrying without it: %s",
+                            exc,
+                        )
+                        self._json_mode_unsupported = True
+                    else:
+                        logger.warning("LLM call failed (%s); retrying once without JSON mode", exc)
                     try:
                         response = await base_model.ainvoke(messages, config=cfg)
                         break
