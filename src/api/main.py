@@ -290,6 +290,11 @@ class Feedback(BaseModel):
     # {invariant name: number}. Untyped values on purpose: load_data fails
     # closed on anything that is not a finite number.
     thresholds: dict[str, Any] | None = None
+    # P15/P9: the matches gate's per-pair answers [{entity_type, record_ids,
+    # action: "merge" | "keep_separate"}] and the band the operator committed
+    # {entity: {auto_match, auto_exclude}}; consumed by apply_band_decisions.
+    pair_decisions: list[dict[str, Any]] | None = None
+    band_thresholds: dict[str, Any] | None = None
 
 
 _DECISIONS = {"approve", "edit", "retry", "reject", "abort", "skip"}
@@ -796,6 +801,10 @@ def create_api(config_path: str = "config/config.yaml") -> FastAPI:
             feedback["scope_plan"] = body.scope_plan
         if body.thresholds is not None:
             feedback["thresholds"] = body.thresholds
+        if body.pair_decisions is not None:
+            feedback["pair_decisions"] = body.pair_decisions
+        if body.band_thresholds is not None:
+            feedback["band_thresholds"] = body.band_thresholds
 
         manager.resume_workflow(thread_id, feedback)
         # Return the status right after resuming so the client can react

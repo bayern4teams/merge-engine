@@ -7,6 +7,7 @@ import {
   OriginConfig,
   DestinationConfig,
   sendFeedback,
+  PairDecision,
   startWorkflow,
   listProfiles,
   ProfileSummary,
@@ -197,7 +198,8 @@ export default function PipelineScreen({ origins, destination }: Props) {
     mappingEdits?: MappingRow[],
     columnDependencies?: ColumnDependency[],
     scopePlan?: Record<string, any>,
-    thresholds?: Record<string, number>
+    thresholds?: Record<string, number>,
+    pairDecisions?: PairDecision[]
   ) {
     if (!threadId) return;
     setBusy(true);
@@ -210,6 +212,7 @@ export default function PipelineScreen({ origins, destination }: Props) {
         node === "human_review_deps" ? columnDependencies : undefined,
         node === "human_review_scope" ? scopePlan : undefined,
         node === "human_final_approval" ? thresholds : undefined,
+        node === "human_review_matches" ? pairDecisions : undefined,
       );
       addLog("success", "Approved.");
       setStatus(s);

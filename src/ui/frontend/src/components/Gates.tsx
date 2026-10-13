@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
-import { ColumnDependency, InterruptData, MappingRow } from "../api";
+import { ColumnDependency, InterruptData, MappingRow, PairDecision } from "../api";
 import Tooltip from "./Tooltip";
 
 interface GateProps {
@@ -10,7 +10,8 @@ interface GateProps {
     mappingEdits?: MappingRow[],
     columnDependencies?: ColumnDependency[],
     scopePlan?: Record<string, any>,
-    thresholds?: Record<string, number>
+    thresholds?: Record<string, number>,
+    pairDecisions?: PairDecision[]
   ) => void;
   onReject: () => void;
 }
@@ -35,7 +36,7 @@ export default function Gate(props: GateProps) {
       {node === "human_review_scope" && (
         <ScopeBody data={interrupt.data} payloadVersion={interrupt.payload_version} {...props} />
       )}
-      {node === "human_review_matches" && <MatchBody data={interrupt.data} />}
+      {node === "human_review_matches" && <MatchBody data={interrupt.data} {...props} />}
       {node === "human_review_mappings" && (
         <MappingBody
           data={interrupt.data}
@@ -59,6 +60,7 @@ export default function Gate(props: GateProps) {
       {node !== "human_review_mappings" &&
         node !== "human_review_deps" &&
         node !== "human_review_scope" &&
+        node !== "human_review_matches" &&
         node !== "human_final_approval" && <GateButtons {...props} />}
     </div>
   );
@@ -767,8 +769,25 @@ function ScopeBody({
 
 // ── Match gate ──────────────────────────────────────────────────────────────
 
-function MatchBody({ data }: { data: Record<string, any> }) {
+function MatchBody({
+  data,
+  busy,
+  onApprove,
+  onReject,
+}: { data: Record<string, any> } & Pick<GateProps, "busy" | "onApprove" | "onReject">) {
   const clusters: any[] = data.low_confidence_clusters || [];
+  const pending: any[] = data.pending_merge_candidates || [];
+  // P15: one answer per pair, keyed by entity + record ids; a pair left
+  // unanswered is not sent and stays apart.
+  const [answers, setAnswers] = useState<Record<string, PairDecision["action"]>>({});
+  const pairKey = (p: any) => JSON.stringify([p.entity_type, p.record_ids]);
+  const decisions: PairDecision[] = pending
+    .filter((p) => answers[pairKey(p)])
+    .map((p) => ({
+      entity_type: p.entity_type,
+      record_ids: p.record_ids,
+      action: answers[pairKey(p)],
+    }));
   const stats = data.auto_match_stats || {};
   return (
     <div>
@@ -808,6 +827,54 @@ function MatchBody({ data }: { data: Record<string, any> }) {
           </div>
         ))
       )}
+      {pending.length > 0 && (
+        <div>
+          <h4>Pairs not similar enough to merge automatically</h4>
+          {data.pending_merge_note && <p className="muted">{data.pending_merge_note}</p>}
+          {pending.map((p) => (
+            <div key={pairKey(p)} className="cluster">
+              <div className="cluster-head">
+                {p.entity_type} — confidence {Number(p.confidence || 0).toFixed(2)}
+              </div>
+              <div className="record-grid">
+                {(p.records || []).map((rec: any, j: number) => (
+                  <div key={j} className="record-card">
+                    {Object.entries(rec.fields || {}).map(([k, val]) => (
+                      <div key={k} className="kv">
+                        <strong>{k}:</strong> {String(val)}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+              <div className="btn-row">
+                {(["merge", "keep_separate"] as const).map((action) => (
+                  <button
+                    key={action}
+                    className={answers[pairKey(p)] === action ? "btn btn-success" : "btn"}
+                    disabled={busy}
+                    onClick={() => setAnswers({ ...answers, [pairKey(p)]: action })}
+                  >
+                    {action === "merge" ? "Merge" : "Keep separate"}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="btn-row">
+        <button
+          className="btn btn-success"
+          disabled={busy}
+          onClick={() => onApprove(undefined, undefined, undefined, undefined, decisions)}
+        >
+          ✓ Approve
+        </button>
+        <button className="btn btn-danger" disabled={busy} onClick={onReject}>
+          ✕ Reject
+        </button>
+      </div>
     </div>
   );
 }

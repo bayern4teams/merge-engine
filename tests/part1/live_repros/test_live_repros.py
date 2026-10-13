@@ -63,7 +63,6 @@ def test_p10_single_entity_giant_cluster_is_refused():
     assert inv["violated"] and g["would_fail"]
 
 
-@pytest.mark.xfail(strict=True, reason="LOCAL_VERIFY_REPORT P15-D1/P9-D1: API drops pair_decisions")
 def test_api_feedback_forwards_band_decisions():
     """POST /api/workflow/{id}/feedback must hand pair_decisions / band_thresholds to
     resume_workflow (P15 applies them, P9 remembers them).

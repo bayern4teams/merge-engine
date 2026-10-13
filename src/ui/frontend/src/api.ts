@@ -383,13 +383,21 @@ export function getStatus(threadId: string): Promise<WorkflowStatus> {
   return get(`/api/workflow/${threadId}/status`);
 }
 
+// One answer at the matches gate (P15); undecided pairs are simply not sent.
+export interface PairDecision {
+  entity_type: string;
+  record_ids: Array<string | number>;
+  action: "merge" | "keep_separate";
+}
+
 export function sendFeedback(
   threadId: string,
   decision: "approve" | "reject",
   mappingEdits?: MappingRow[],
   columnDependencies?: ColumnDependency[],
   scopePlan?: Record<string, any>,
-  thresholds?: Record<string, number>
+  thresholds?: Record<string, number>,
+  pairDecisions?: PairDecision[]
 ): Promise<WorkflowStatus> {
   return post(`/api/workflow/${threadId}/feedback`, {
     decision,
@@ -397,6 +405,7 @@ export function sendFeedback(
     column_dependencies: columnDependencies ?? null,
     scope_plan: scopePlan ?? null,
     thresholds: thresholds ?? null,
+    pair_decisions: pairDecisions ?? null,
   });
 }
 
