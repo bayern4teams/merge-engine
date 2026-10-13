@@ -25,7 +25,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import shutil
 import signal
 import subprocess
@@ -35,6 +34,7 @@ from pathlib import Path
 
 import requests
 import yaml
+from dotenv import dotenv_values
 
 from scripts.verify_local import scorer
 from scripts.verify_local.load_bench import BM, connect, recreate_db
@@ -67,12 +67,7 @@ REQUEST = "merge all {entity} records from every origin into the destination"
 
 def _env_from_dotenv() -> dict[str, str]:
     """.env values go into the child's environment only, never into a file."""
-    env = {}
-    for line in (ROOT / ".env").read_text().splitlines():
-        m = re.match(r"\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)\s*$", line)
-        if m and not line.lstrip().startswith("#"):
-            env[m.group(1)] = m.group(2).strip().strip('"').strip("'")
-    return env
+    return {k: v for k, v in dotenv_values(ROOT / ".env").items() if v is not None}
 
 
 def make_destination(name: str, table: str) -> None:
