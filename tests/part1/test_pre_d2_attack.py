@@ -129,9 +129,6 @@ def test_no_numeric_constants_in_new_functions():
             assert nums == [], (fn.name, nums)
 
 
-@pytest.mark.xfail(
-    strict=True, reason="nit: the _conflicting_codes docstring quotes corpus codes (20WLBK/20WLWH)"
-)
 def test_nit_docstring_quotes_no_corpus_literal():
     out = subprocess.run(
         ["git", "diff", "22685c3", "HEAD", "--", "src/"], cwd=ROOT, capture_output=True, text=True
@@ -232,7 +229,9 @@ def test_flagged_pairs_fall_to_review_and_nothing_else_changes(seed, with_price)
         assert new.get(frozenset((a, b)), 0.0) < core["auto_match"]
     # and the pre-fix defect really was present on this corpus
     if with_price:  # a shared price is what lifted siblings back to Match (_three_way)
-        assert any(old.get(frozenset(p), 0.0) >= core["auto_match"] for p in fam), "old did not fail"
+        assert any(old.get(frozenset(p), 0.0) >= core["auto_match"] for p in fam), (
+            "old did not fail"
+        )
 
 
 def test_codes_in_a_single_pair_corpus_without_a_model():
@@ -290,24 +289,32 @@ def test_organisation_names_with_codes_only_flag_disjoint_codes():
         _rec("b", 1, "org", company_name="A1 Telekom", city="y"),
     ]
     for i in range(2, 80):
-        recs.append(_rec("a", i, "org", company_name=f"{_w(rng, 3)} {_w(rng, 2)} ltd", city=_w(rng)))
+        recs.append(
+            _rec("a", i, "org", company_name=f"{_w(rng, 3)} {_w(rng, 2)} ltd", city=_w(rng))
+        )
     _, new = _score("org", recs, False)
     _, old = _score("org", recs, True)
     assert max(abs(new[p] - old[p]) for p in new) < 1e-9
 
 
 # --------------------------------------------------------------------------- C. documented gaps
-@pytest.mark.xfail(strict=True, reason="gap: a base code that is a prefix of the other's code hides the variant")
+@pytest.mark.xfail(
+    strict=True, reason="gap: a base code that is a prefix of the other's code hides the variant"
+)
 def test_gap_prefix_codes_x100_vs_x1000():
     assert cc("Amp X100 black", "Amp X1000 black") is True
 
 
-@pytest.mark.xfail(strict=True, reason="gap: shared base code + differing colour/size code is not flagged")
+@pytest.mark.xfail(
+    strict=True, reason="gap: shared base code + differing colour/size code is not flagged"
+)
 def test_gap_shared_base_code_with_different_suffix_token():
     assert cc("Case 13in MB13-BLK-SEE-V2", "Case 13in MB13-PNK-SEE-V2") is True
 
 
-@pytest.mark.xfail(strict=True, reason="gap: hyphen splits a code, 'WD-65736' is two digit-only/alpha tokens")
+@pytest.mark.xfail(
+    strict=True, reason="gap: hyphen splits a code, 'WD-65736' is two digit-only/alpha tokens"
+)
 def test_gap_hyphenated_model_numbers():
     assert cc("TV WD-65736 projection", "TV WD-60735 projection") is True
 

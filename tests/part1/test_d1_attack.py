@@ -186,7 +186,7 @@ def _typo_pair(n_tokens: int, n_typos: int, seed: int):
     d = list(t)
     for i in rng.sample(range(n_tokens), n_typos):
         d[i] = _typo(rng, d[i])
-    assert not (set(d) & set(t[i] for i in range(n_tokens)) == set(d))
+    assert set(d) & set(t[i] for i in range(n_tokens)) != set(d)
     return set(t), set(d), df, n
 
 
@@ -215,7 +215,7 @@ def test_c_one_more_typo_must_not_drop_strong_to_disagree(n_tokens):
         t1, t2, df, n = _typo_pair(n_tokens, typos, seed=n_tokens * 100 + typos)
         levels.append(_level(idf_soft_similarity(t1, t2, df, n, token_sim=_sim)))
     # monotone, and no STRONG -> DISAGREE step between neighbouring typo counts
-    assert not any(a == "STRONG" and b == "DISAGREE" for a, b in zip(levels, levels[1:])), levels
+    assert not any(a == "STRONG" and b == "DISAGREE" for a, b in itertools.pairwise(levels)), levels
 
 
 @pytest.mark.xfail(strict=True, reason="D1-ATTACK cliff reaches the real comparator unchanged")

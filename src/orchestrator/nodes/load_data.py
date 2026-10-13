@@ -21,7 +21,12 @@ from typing import Any
 
 from src.mcp_server.tools.cluster_quality import PART_SEP, quality_signals
 from src.mcp_server.tools.load_data import _get_destination_connector, load_data_impl
-from src.mcp_server.tools.resolve_entities import _NAME_FIELD_HINTS, _best_name_field, _record_id
+from src.mcp_server.tools.resolve_entities import (
+    _NAME_FIELD_HINTS,
+    _PARTIAL_NAME_FIELDS,
+    _best_name_field,
+    _record_id,
+)
 from src.orchestrator.nodes.map_fields_node import _metadata_only_fields
 from src.orchestrator.spool import (
     clusters_for,
@@ -374,24 +379,19 @@ _WORD_SPLIT = re.compile(r"[^a-z0-9]+")
 
 
 def _display_names(records: list[dict[str, Any]]) -> dict[str, str | None]:
-    """Record id -> the name P16 judges a cluster by (D4): every non-id column
-    sharing the best name column's hint, joined by ``PART_SEP`` so P16 can link
-    two names by a whole shared part -- a person split over given name and
-    surname is one name, in either order, with either part missing or mistyped.
-    An organisation's single name column reads as before."""
+    """Record id -> the name P16 judges a cluster by (D4): the best name column
+    and every person-name-part column the matcher knows (``_PARTIAL_NAME_FIELDS``),
+    joined by ``PART_SEP`` so P16 can link two names by a whole shared part -- a
+    person split over given name and surname is one name, in either order, with
+    either part missing or mistyped. A record with no name-part column (an
+    organisation, whatever else it holds: a contact, a street) reads as before."""
     out: dict[str, str | None] = {}
     for r in records:
         best = _best_name_field(r)
-        hint = next((h for h in _NAME_FIELD_HINTS if best and h in best.lower()), None)
         parts = [
             str(v)
             for k, v in sorted(r.items(), key=lambda kv: kv[0] != best)
-            if hint
-            and not k.startswith("_")
-            and hint in k.lower()
-            and not k.lower().endswith("id")
-            and isinstance(v, str)
-            and v.strip()
+            if (k == best or k.lower() in _PARTIAL_NAME_FIELDS) and isinstance(v, str) and v.strip()
         ]
         out[_record_id(r)] = PART_SEP.join(parts) if len(parts) > 1 else r.get(best or "")
     return out

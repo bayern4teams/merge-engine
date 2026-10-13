@@ -233,6 +233,12 @@ def _name_groups(usable: list[str], parts: Mapping[str, set[str]] | None = None)
     for i, name in enumerate(usable):
         for part in (parts or {}).get(name, ()):
             by_part.setdefault(part, []).append(i)
+    # a one-column name ("smith john", "smith, john") holding a whole part of a
+    # several-column name is that name keyed differently
+    for i, name in enumerate(usable):
+        if name not in (parts or {}):
+            for token in name.split():
+                by_part.get(token, []).append(i)
     for idx in by_part.values():
         for i in idx:
             parent[find(i)] = find(idx[0])
@@ -264,7 +270,16 @@ def _incoherent(names: list[str | None], threshold: float) -> bool:
     if len(groups) < 2:
         return False
     anchor = min(groups, key=lambda g: (-len(g), g[0]))[0]
-    return any(name_variation_rate([anchor, g[0]]) > threshold for g in groups if g[0] != anchor)
+
+    def apart(a: str, b: str) -> float:
+        # D4: a one-word name beside a several-column one (a part missing) is as
+        # close as the part it is nearest to; two full names compare whole
+        whole, word = (a, b) if a in parts else (b, a)
+        if (a in parts) == (b in parts) or len(word.split()) != 1:
+            return name_variation_rate([a, b])
+        return min(name_variation_rate([word, x]) for x in parts[whole])
+
+    return any(apart(anchor, g[0]) > threshold for g in groups if g[0] != anchor)
 
 
 def quality_signals(
