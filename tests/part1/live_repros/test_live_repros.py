@@ -61,3 +61,63 @@ def test_p10_single_entity_giant_cluster_is_refused():
     inv = g["invariants"]["largest_cluster_share"]
     assert inv["measured"] > inv["threshold"]  # the defect's precondition holds
     assert inv["violated"] and g["would_fail"]
+
+
+@pytest.mark.xfail(strict=True, reason="LOCAL_VERIFY_REPORT P15-D1/P9-D1: API drops pair_decisions")
+def test_api_feedback_forwards_band_decisions():
+    """POST /api/workflow/{id}/feedback must hand pair_decisions / band_thresholds to
+    resume_workflow (P15 applies them, P9 remembers them).
+
+    Live (febrl4 run p9r1, 3 oracle 'merge' answers sent through the REST API): all 3
+    pairs stayed apart in the destination and no decision-memory file was written; the
+    ``Feedback`` model has neither field and pydantic drops them silently.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from fastapi.testclient import TestClient
+
+    from src.api.main import create_api
+
+    mgr = MagicMock()
+    mgr.get_workflow_status.return_value = {
+        "status": "interrupted",
+        "current_interrupt_node": "human_review_matches",
+    }
+    pair = {"entity_type": "person", "record_ids": ["fa:t:1", "fb:t:1"], "action": "merge"}
+    with patch("src.api.main.get_manager", return_value=mgr):
+        r = TestClient(create_api()).post(
+            "/api/workflow/t1/feedback",
+            json={"decision": "approve", "pair_decisions": [pair], "band_thresholds": {}},
+        )
+    assert r.status_code == 200
+    sent = mgr.resume_workflow.call_args.args[1]
+    assert sent.get("pair_decisions") == [pair]
+
+
+@pytest.mark.xfail(
+    strict=True, reason="LOCAL_VERIFY_REPORT P14-D1: soft Monge-Elkan is |A|x|B| on long text"
+)
+def test_p14_text_similarity_cost_is_not_quadratic_in_tokens():
+    """idf_soft_similarity calls token_sim once per token PAIR in each direction.
+
+    Live: Amazon descriptions reach 2,877 tokens; resolve_entities on 4,589 product
+    records did not finish in 140 min (60 records: 62 s). Bound used here: 20 calls per
+    token, i.e. linear; today it is 2 x |A| x |B|.
+    """
+    import re
+
+    from src.mcp_server.tools.fellegi_sunter import idf_soft_similarity
+
+    a, b = (
+        set(re.findall(r"[a-z0-9]+", r["description"].lower()))
+        for r in _load("p14_long_text_pair.json")["records"]
+    )
+    calls = 0
+
+    def sim(x: str, y: str) -> float:
+        nonlocal calls
+        calls += 1
+        return 1.0 if x == y else 0.0
+
+    idf_soft_similarity(a, b, {}, 1000, sim)
+    assert calls <= 20 * (len(a) + len(b)), (calls, len(a), len(b))

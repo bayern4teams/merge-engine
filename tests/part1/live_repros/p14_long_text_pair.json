@@ -1,0 +1,25 @@
+{
+ "source": "Leipzig Amazon-GoogleProducts (CC BY 4.0, dbs.uni-leipzig.de); local run amazon_google_after_r1 on 6d7c4b4 did not finish resolution in 140 min (main: whole run 21 min)",
+ "records": [
+  {
+   "id": "b00002s6sc",
+   "description": "5 in 1 home design is a fully integrated 3-d home design product that includes ultimate deck realmodel 3d home landscaping and furniture design software. punch's 3-d photorealistic technology allows users to fly through their entire design while enjoying great views from any angle.use the 3d home exterior & interior design program to view your home in thousands of subtle paint color choices or design walk-out basements and split-level designs with the slope tool. when you're ready to landscape your home design just add your plantings to your existing file. the software lets you landscape without redrawing your house plan. your results are rendered in high-resolution 3-d complete with shadows just like a photograph.design the perfect deck for your home plan with ultimate deck. multilevel or multistory decks with 3-d photorealistic textures stairs railings object placement and color capabilities give you the ability to design exactly the deck you want. deck wizards walk you through railings baluster options and more. also create objects from scratch or modify furniture from the included library. change colors fabrics patterns textures and more then use your creations to furnish your home plan.",
+   "manufacturer": "punch! software",
+   "price": "39.99",
+   "title": "punch 5 in 1 home design",
+   "_origin_id": "amazon",
+   "_origin_table": "public.product",
+   "_origin_id_row": "b00002s6sc"
+  },
+  {
+   "id": "b00004ochi",
+   "description": "punch professional home design suite does something very few home planning applications achieve: it brings together designing both the interior and the exterior--including the garden--of your home on one cd-rom. while the software is perhaps a bit complex to learn at first the huge range of features offered make this forgivable. you can start with a blank screen work with a pre-drawn plan from the software's library or import scans of the existing floor plans of your home. whichever option you choose simply clicking the onscreen tabs allows you to switch between working on the floor plans electrical plans the plumbing system roofing arrangements heating and air conditioning external decking or landscaping. getting objects such as furniture into position on a plan is mostly a matter of drag and drop while you can also use a computer aided design feature to draw curves arcs and other standard shapes. it is useful to be able to see a flat plan and a 3-d view side by side and to walk through the 3-d view or do a flyover. you can even change the light direction intensity and brightness on the 3-d views to get as close to the real world as possible. with several useful tools above and beyond the designer punch professional home design suite is a rounded application. the 3-d furniture workshop lets you edit the library of furniture objects or design your own from scratch. realmodel lets you turn a home plan into a template for making a scale model--you can even print textures onto paper for pasting to the building materials. homeestimator works out how much it will cost to build your project life-size and how much of each type of material you need. --sandra vogel",
+   "manufacturer": "punch! software",
+   "price": "89.99",
+   "title": "punch! professional home design",
+   "_origin_id": "amazon",
+   "_origin_table": "public.product",
+   "_origin_id_row": "b00004ochi"
+  }
+ ]
+}
