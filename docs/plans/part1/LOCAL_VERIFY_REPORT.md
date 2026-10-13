@@ -278,3 +278,34 @@ python -m scripts.verify_local.audit_probe <scenario> before|after
 TMPDIR=$PWD/.tmp .venv311/bin/python -m pytest tests/part1/live_repros -q -p no:cacheprovider --runxfail
 ```
 (`.venv311/bin/python`, `TMPDIR=$PWD/.tmp`; the main worktree: `git worktree add --detach .tmp/wt_main origin/main`; bench server: `docker run -d --name merge_bench_pg -p 127.0.0.1:5439:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17`.)
+
+## Phase 6 — fix queue (cloud, 2026-10-13)
+
+Per defect: fix commit, repro result, what the user must re-run locally. Every fix: verifier derived the checks first,
+lead implemented, verifier attacked, lead reviewed the diff (`docs/plans/part1/HANDOFF.md` "Phase 6 status" has the
+evidence; `.handoff/<id>.acceptance.md` / `.verdict.md` the detail). The cloud cannot run the benchmarks against the
+app: numbers below marked "in-process" come from `_resolve_core` / `resolve_entities_impl` on the public files
+downloaded in the cloud (sha256 matching the Datasets table), LLM off, no destination.
+
+| defect | outcome | fix commit | repro | re-run locally |
+|---|---|---|---|---|
+| D2 | ACCEPT | 8b16530 | `test_api_feedback_forwards_band_decisions` XPASS -> marker removed | `run_bench febrl4 after --tag p9r1 --oracle --memory <file>`, then `--tag p9r2` (D2 Verify) |
+| D5 | **user decision** | r1 5183478 kept | `test_p14_addendum_is_not_an_auto_match` XPASS; attack REJECT (residuals a-d) | DBLP-ACM before/after |
+| D1 | **user decision** | r1 2f90c83 kept | `test_p14_text_similarity_cost_is_not_quadratic_in_tokens` XPASS | Amazon-Google after (must finish), DBLP-Scholar after (time, F1), Abt-Buy / DBLP-ACM not lower |
+| D3 | ACCEPT | d5ceee8 | `test_p10_single_entity_giant_cluster_is_refused` XPASS | `plant_febrl4 after` refuses (destination row counts unchanged by SQL); `febrl4 after`, `abt_buy after` still load |
+| PRE-D1 | **user decision** (no fix) | — | repro stays strict xfail | Leipzig Affiliations |
+| PRE-D2 | ACCEPT | 893da8f + 722b12c | in-process Abt-Buy: abt:10101/10102 0.9588 -> 0.93 (review); false auto 936 -> 331, 0 true pairs lost | Abt-Buy full pipeline with the LLM judge (largest cluster, P/R); Amazon-Google; DBLP-ACM/Scholar; febrl |
+| D4 | ACCEPT r2 | 5c5f857 | `test_p16_true_person_pairs_are_not_flagged` stays strict xfail (pair c8 shares no name token) | `febrl4 after` flagged count (expect ~2-3 %, was 888/4,989), `plant_febrl4 after` 20/20, febrl3 |
+| D13 | ACCEPT | bf6c8ea | in-flight LLM calls across entities bounded at `_LLM_CONCURRENCY` (was 4 per entity) | wall time on the LAN endpoint; a second app's preflight while the first resolves |
+| D6, D12 | **user decision** (not started) | — | — | score_probe abt_buy / febrl3 / febrl4 / dblp_acm |
+| D9 | **user decision** (not built) | — | — | blocking_probe abt_buy, febrl4 |
+| D15 | ACCEPT | d3cc021 | gate payload `pending_merge_shown` + note "N of M" | Abt-Buy gate shows "50 of 1330" in the browser |
+| D16 | root-caused, no Part 1 fix | — | in-process MusicBrainz: the two 14-record clusters are 14 different source-4 recordings whose non-Latin text the public file has stripped (`001-`, ` (2007)`) | — |
+| PRE-D3 | ACCEPT r2 | ed55698 | real two-loop reproduction against a stub server: "Event loop is closed" gone, JSON mode stays on | LAN endpoint: no "Event loop is closed" in the log |
+| test infra | done | 6c69bc0 | `test_p19_attack.py` uses `sys.executable` | — |
+
+Gate: `python scripts/check.py all` 11/11 on ed55698. `pytest tests/part1 tests/unit tests/integration`: 3792 pass,
+29 fail -- every failure belongs to an item awaiting a user decision (D1's named cost constant trips three earlier
+"no new numeric constant" guards; D5 residuals; PRE-D1's 13 derive checks; PRE-D2's waived "not parked under the bar"
+x6) or is an over-broad guard that diffs ALL of `src/` against its own base (`test_d2_acceptance::test_d1_...`,
+`test_d15_acceptance::test_g3_...`). CI does not run `tests/part1`.

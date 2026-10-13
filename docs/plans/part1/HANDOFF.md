@@ -3,7 +3,7 @@
 Overwrite this file at every commit. A fresh session reads it first, then
 [the plan](../PART1_IMPLEMENTATION_PLAN.md). Git is the memory; a session's context is not.
 
-**Lock:** 2026-10-13T20:25:54Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-13T20:25:54Z
+**Lock:** (none) · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-13T20:29:47Z
 
 (Lock/heartbeat protocol: plan §7. A session sets `Lock: <ISO time>`, pushes it, and refreshes it at every commit; a lock older than 75 min is stale. `Autonomy` is `off`, `dryrun` (a tick only records what works and exits) or `unattended-through-phase-5` (authorises the supervisor to chain phases). Only the user changes it.)
 
@@ -103,6 +103,8 @@ lists files an item must **edit**. Paths are under `src/` unless stated. Abbrevi
 | 4 | P10 (after P16, P17, P18) | P16 (quality module + `N/load_data.py` report) |
 
 ## Next action
+**Part 1 complete - waiting for the user.** Phase 6 queue worked 2026-10-13 (supervisor tick, lead): D2, D3, PRE-D2, D4, D13, D15, PRE-D3 accepted (`unverified-live`); D16 root-caused (data, no Part 1 fix); item-8 test fix done. Six items wait for a user decision, each with its options in "Phase 6 status": **D1** (sanction a named cost constant + let three earlier numeric guards be updated -- the lead's edit to them was denied by the permission classifier -- or keep r1), **D5** (keep r1 or solve in the model / D12), **PRE-D1** (heuristic for one-field entities vs retiring 9 single-field-model tests, or a stated prior), **D6 + D12** (score calibration against labels), **D9** (pay an O(G) count or relabel). Per-defect re-run list: `LOCAL_VERIFY_REPORT.md` "Phase 6". The queue text below is history.
+
 **Phase 6 (user decisions 2026-10-13, edited by the lead, not an agent): fix the queue.** Read `LOCAL_VERIFY_REPORT.md` and "## Phase 6 fix queue" (below). Order and decisions:
 1. **D5 - P0** ("Addendum to X" auto-matches X, DBLP-ACM over-merged 65 -> 107; a wrong merge written to the destination is the destructive direction). Repro `test_p14_addendum_is_not_an_auto_match`.
 2. **D2** - forward `pair_decisions` / `band_thresholds` through `src/api/main.py` (Feedback model + route); repro `test_api_feedback_forwards_band_decisions`; verify end to end through the real API/graph resume.
@@ -142,6 +144,7 @@ attack agent. P13: prior rescaled to the random-pair population (lead decision, 
 - P15 minor findings (strict xfail in `tests/part1/test_p15_attack.py`): F1 accept+keep of one pair in one feedback -> apart but audit counts both; F2 a human-kept cluster is sealed against a lowered committed bar (`reviewed_by_human` cannot tell keep from split; errs to fewer merges); F3 a later keep after a merge leaves it merged while `band_kept_apart` lists it; F4 a committed RAISED bar is not persisted, so a duplicate second resume re-merges pairs it un-merged. Phase 5 decision.
 
 ## Notifications
+- [PART 1 COMPLETE] 2026-10-13: Phase 6 fix queue done; `check.py all` 11/11 locally on ed55698, CI green on ed55698 (run 206); `/ponytail-review` of the Phase 6 diff: net -6 lines possible, deferred (cosmetic: D15 note string concat -4, D1 soft1/soft2 pre-declaration -2). Six user decisions listed in Next action.
 - [DECISION] 2026-10-13: PRE-D1 needs a user decision (see Phase 6 status): one-field model unidentified; the heuristic fix breaks 9 accepted P14/P6 single-field tests. Queue continues with PRE-D2.
 - [DECISION] 2026-10-13: D1 needs a user decision (see Phase 6 status): r1 kept, attack REJECT on a named cost constant (guard edit denied by the permission classifier) and a mid-length cliff. The queue continues with D3 (accepted) and PRE-D1.
 - [DECISION] 2026-10-13: D5 needs a user decision (see Phase 6 status): r1 kept, attack REJECT, residuals (a)-(d). The queue continues with D1 meanwhile; D5 is not counted done.
