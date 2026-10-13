@@ -1656,7 +1656,6 @@ def _score_pair(
         or (
             bool(deterministic_fields) and _deterministic_conflict(rec1, rec2, deterministic_fields)
         )
-        or _conflicting_codes(rec1, rec2, record_cache)
     )
 
     if (
@@ -1665,6 +1664,8 @@ def _score_pair(
         and _deterministic_match(rec1, rec2, deterministic_fields)
     ):
         return 1.0
+    # PRE-D2: a code mismatch is a name-shape rule, weaker than a shared key.
+    conflicting = conflicting or _conflicting_codes(rec1, rec2, record_cache)
 
     heuristic = _compute_heuristic_confidence(
         rec1, rec2, extra_unique_ids, record_cache, relationship_index, corpus, suppressed
@@ -2827,7 +2828,7 @@ def _conflicting_codes(
 ) -> bool:
     """PRE-D2: both names carry a code and neither code appears in the other name.
 
-    "Mount - 20WLBK" vs "Mount - 20WLWH" are two products; the rest of the name
+    "Mount - 20AB" vs "Mount - 20AC" are two products; the rest of the name
     and the description agree, so nothing else in the vector can tell them
     apart. Codes are compared against the other name with separators removed,
     so "PS-LX350H" still finds "pslx350h". A name with no code conflicts with
