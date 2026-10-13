@@ -103,7 +103,16 @@ lists files an item must **edit**. Paths are under `src/` unless stated. Abbrevi
 | 4 | P10 (after P16, P17, P18) | P16 (quality module + `N/load_data.py` report) |
 
 ## Next action
-**Part 1 complete - waiting for the user.** Final report: [PHASE5_REPORT.md](PHASE5_REPORT.md) (its "Decisions waiting for the user" section first). Verify locally from [LOCAL_VERIFY.md](LOCAL_VERIFY.md), then merge. No agent merges this branch.
+**Phase 6 (user decisions 2026-10-13, edited by the lead, not an agent): fix the queue.** Read `LOCAL_VERIFY_REPORT.md` and "## Phase 6 fix queue" (below). Order and decisions:
+1. **D5 - P0** ("Addendum to X" auto-matches X, DBLP-ACM over-merged 65 -> 107; a wrong merge written to the destination is the destructive direction). Repro `test_p14_addendum_is_not_an_auto_match`.
+2. **D2** - forward `pair_decisions` / `band_thresholds` through `src/api/main.py` (Feedback model + route); repro `test_api_feedback_forwards_band_decisions`; verify end to end through the real API/graph resume.
+3. **D1** - P14 soft text similarity must not be |A|x|B| per pair (cap tokens / early exit / prune; same answers on short text); repro `test_p14_text_similarity_cost_is_not_quadratic_in_tokens`.
+4. **D3 - user chose rule 1:** a SINGLE-entity run gets NO small-entity slack (the plain cap applies); slack stays for multi-entity runs, judged against the larger entities. Repro `test_p10_single_entity_giant_cluster_is_refused`.
+5. PRE-D1 name-only entity never merges (repro `test_identical_names_in_a_name_only_entity_reach_the_band`), PRE-D2 product variants auto-merge (no small fixture: derive one from the report's Abt-Buy ids).
+6. D4 (P16 reads a person's name from one column; repro `test_p16_true_person_pairs_are_not_flagged`), D13 **fix now**: bound the P8 pair calls with the same `Semaphore(_LLM_CONCURRENCY)` P11 uses (same answers), D6, D12, D9, D15.
+7. D16 (MusicBrainz 14-record cluster, not root-caused): root-cause first, fix only if the cause is in Part 1 code.
+8. PRE-D3 (`Event loop is closed` on the first JSON-mode call, `src/llm/client.py:302-304`) and `tests/part1/test_p19_attack.py:145` (`.venv/bin/python` -> `sys.executable`).
+Rules: verifier derives each check first and attacks after; two rejections -> lead takes over; a third -> [BLOCKED]. The cloud cannot rerun the benchmarks: for every defect record which benchmark the user must re-run locally. After the queue: Phase 6 gate, Phase 6 section in LOCAL_VERIFY_REPORT.md, then "Part 1 complete" (SUPERVISOR 7b). Never merge.
 **Phase 3, step 1:** lead serial chain in `T/resolve_entities.py`: P15 -> P6 -> P7 -> P8 -> P20 (derive acceptance
 with `part1-verifier` before each); side lanes beside it (cap 2): P9 (new decision-memory module only), P17
 (`N/load_data.py` only), P19 (`tests/eval/score.py` + tests). Gate hooks for P9/P17 in `human_nodes.py`/`graph.py`

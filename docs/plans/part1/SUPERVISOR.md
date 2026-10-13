@@ -69,6 +69,14 @@ never check out, merge, rebase or delete another branch.
    record "[PHASE n DONE]" under Notifications. Continue into the next phase.
 7. After Phase 5: write the final report, set Next action to "Part 1 complete - waiting for the
    user", clear the Lock, commit "[PART 1 COMPLETE]", push, and stop. Never merge.
+7b. Phase 6 (fix queue from the user's local verification): work "## Phase 6 fix queue" in HANDOFF.md in
+   the order the Next action gives, one defect at a time, same protocol as a Part 1 item (verifier
+   derives the check first, implement, verifier attacks, lead reviews the diff). A defect's committed
+   repro in tests/part1/live_repros/ must flip from xfail to pass BY FIXING, never by editing it; run
+   the whole of tests/part1 + tests/unit + tests/integration after each fix and fix every item test
+   the change breaks. When the queue is done: check.py all, CI green, /ponytail-review, write a
+   "Phase 6" section in LOCAL_VERIFY_REPORT.md (per defect: fix commit, repro result, what the user
+   must re-run locally), then do step 7 and stop. Never merge.
 8. If you are blocked (CI red you cannot fix, an item rejected twice by yourself, a missing
    tool), write it under Notifications as "[BLOCKED]", clear the Lock, push, and stop.
    Do not work around a denied permission.
