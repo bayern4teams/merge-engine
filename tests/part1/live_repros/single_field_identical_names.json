@@ -1,0 +1,285 @@
+{
+ "source": "Leipzig Affiliations (CC BY 4.0, dbs.uni-leipzig.de); local runs affiliations_*_r1: 0 merges of 16,795 true pairs on BOTH 507f9d4 and 6d7c4b4. records[0] and records[1] carry the identical name",
+ "records": [
+  {
+   "id": "3407",
+   "name": "INRIA Rocquencourt",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "3407"
+  },
+  {
+   "id": "3770",
+   "name": "INRIA  Rocquencourt",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "3770"
+  },
+  {
+   "id": "7744",
+   "name": "Computer Science and Engineering Department, Arizona State University, Tempe, AZ 85287-5406, USA; e-mail: candan@asu.edu",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "7744"
+  },
+  {
+   "id": "8024",
+   "name": "AT&T Labs--Research, USA",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "8024"
+  },
+  {
+   "id": "1452",
+   "name": "The MITRE Corporation, McLean, Virginia",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "1452"
+  },
+  {
+   "id": "5671",
+   "name": "Bell Laboratories, Alcatel-Lucent, Lisle, IL, USA",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "5671"
+  },
+  {
+   "id": "920",
+   "name": "Department of Electronic Engineering, National Taiwan University of Science and Technology, Taipei, Taiwan and Institute of Information Science, Academia Sinica, Taipei, Taiwan",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "920"
+  },
+  {
+   "id": "8759",
+   "name": "Rutgers University, Newark, USA",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "8759"
+  },
+  {
+   "id": "7892",
+   "name": "Computer Science and Engineering Department, University of California, Riverside, CA",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "7892"
+  },
+  {
+   "id": "6486",
+   "name": "University of California, Berkeley CA",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "6486"
+  },
+  {
+   "id": "8652",
+   "name": "Microsoft Research, Cambridge, UK CB3 0FB",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "8652"
+  },
+  {
+   "id": "7392",
+   "name": "Lucent Technologies, Bell Labs",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "7392"
+  },
+  {
+   "id": "4837",
+   "name": "Haifa University",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "4837"
+  },
+  {
+   "id": "9054",
+   "name": "National Taiwan University, Taipei, Taiwan",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "9054"
+  },
+  {
+   "id": "3117",
+   "name": "AT&T Labs--Research, Florham Park, NJ",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "3117"
+  },
+  {
+   "id": "612",
+   "name": "IBM India Research Lab, SIRC",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "612"
+  },
+  {
+   "id": "3126",
+   "name": "University of Ioannina, Greece",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "3126"
+  },
+  {
+   "id": "2233",
+   "name": "George Mason University, Fairfax, VA",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "2233"
+  },
+  {
+   "id": "5587",
+   "name": "University of Massachusetts Amherst, Amherst, MA, USA",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "5587"
+  },
+  {
+   "id": "9434",
+   "name": "Rutgers University, Newark, USA 07102",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "9434"
+  },
+  {
+   "id": "3266",
+   "name": "University of Freiburg, Georges-K\u00f6hler-Allee, Freiburg, Germany",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "3266"
+  },
+  {
+   "id": "6555",
+   "name": "Praktische Informatik IV, FernUniversit\u00e4it Hagen, D-58084, Hagen, Germany",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "6555"
+  },
+  {
+   "id": "2289",
+   "name": "UW-Madison",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "2289"
+  },
+  {
+   "id": "1921",
+   "name": "Department of Computer Science, University of California, Riverside",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "1921"
+  },
+  {
+   "id": "6839",
+   "name": "Institute for Computer Science, University of Munich, Oettingenstr. 67, D-80538 M\u00fcnchen, Germany",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "6839"
+  },
+  {
+   "id": "8588",
+   "name": "Computer Science Department, Illinois Institute of Technology, Chicago, USA",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "8588"
+  },
+  {
+   "id": "233",
+   "name": "Carnegie Mellon University",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "233"
+  },
+  {
+   "id": "7278",
+   "name": "University of Illinois, Chicago",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "7278"
+  },
+  {
+   "id": "8144",
+   "name": "Department of Computer Science and Automation, Technical University of Ilmenau, Germany",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "8144"
+  },
+  {
+   "id": "663",
+   "name": "U.C. Berkeley, EECS Dept., Berkeley, CA",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "663"
+  },
+  {
+   "id": "4516",
+   "name": "Fudan University, China",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "4516"
+  },
+  {
+   "id": "8661",
+   "name": "Department of EECS, University of Michigan, Ann Arbor, USA",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "8661"
+  },
+  {
+   "id": "8243",
+   "name": "Department of Computer Science, Worcester Polytechnic Institute, USA",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "8243"
+  },
+  {
+   "id": "9316",
+   "name": "Yahoo! Research, Sunnyvale, USA",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "9316"
+  },
+  {
+   "id": "5695",
+   "name": "North Carolina State University, Raleigh, NC, USA",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "5695"
+  },
+  {
+   "id": "1761",
+   "name": "Universidad de Buenos Aires, Departamento de Computaci\u00f3n",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "1761"
+  },
+  {
+   "id": "977",
+   "name": "Division of Computer Science, Korea Advanced Institute of Science and Technology",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "977"
+  },
+  {
+   "id": "1130",
+   "name": "University of Central Florida",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "1130"
+  },
+  {
+   "id": "2222",
+   "name": "INRIA Futurs, France",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "2222"
+  },
+  {
+   "id": "7858",
+   "name": "University of Washington, Department of Computer Science and Engineering, Box 352350 Seattle, WA 98195, USA E-mail: {rap,alon}@cs.washington.edu",
+   "_origin_id": "affil",
+   "_origin_table": "public.organisation",
+   "_origin_id_row": "7858"
+  }
+ ]
+}

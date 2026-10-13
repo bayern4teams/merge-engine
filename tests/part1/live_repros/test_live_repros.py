@@ -138,3 +138,21 @@ def test_p14_addendum_is_not_an_auto_match():
     scores = {frozenset((a, b)): s for a, b, s in core["scored_pairs"]}
     scores |= {frozenset((a, b)): s for a, b, _r1, _r2, s in core["borderline"]}
     assert scores[frozenset((paper, addendum))] < core["auto_match"]
+
+
+@pytest.mark.xfail(
+    strict=True, reason="LOCAL_VERIFY_REPORT PRE-D1 (also on main): name-only entity never merges"
+)
+def test_identical_names_in_a_name_only_entity_reach_the_band():
+    """Affiliations: one data column (``name``). Two records with the identical name
+    score far below the band (live max over 30,593 scored pairs: 0.109; identical
+    'Oracle' 0.012), so the run merges nothing on main and on the branch.
+    """
+    from src.mcp_server.tools.resolve_entities import _resolve_core
+
+    recs = _load("single_field_identical_names.json")["records"]
+    a, b = _record_id(recs[0]), _record_id(recs[1])
+    core = _resolve_core("organisation", recs, None, None, None)
+    scores = {frozenset((x, y)): s for x, y, s in core["scored_pairs"]}
+    scores |= {frozenset((x, y)): s for x, y, _r1, _r2, s in core["borderline"]}
+    assert scores.get(frozenset((a, b)), 0.0) >= core["auto_exclude"]
