@@ -2958,7 +2958,8 @@ async def _judge_pairs_with_llm(
         return [(i1, i2, c) for i1, i2, _r1, _r2, c in borderline]
 
     client = LLMClient(llm_config)
-    semaphore = semaphore or asyncio.Semaphore(_LLM_CONCURRENCY)
+    if semaphore is None:
+        semaphore = asyncio.Semaphore(_LLM_CONCURRENCY)
 
     async def judge(
         pair: tuple[str, str, dict, dict, float],

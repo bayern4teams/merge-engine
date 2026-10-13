@@ -1,7 +1,7 @@
-"""D4 attack (adversarial, written after the fix 883a02c).  Strict xfail = a defect found that the
+"""D4 attack (adversarial; r1 = 883a02c, r2 = 5c5f857).  Strict xfail = a defect found that the
 worker's / derive checks miss (each reason names it, with the measured numbers).  Controls (no xfail)
-pin behaviour that must hold.  BASE (parent) = 893da8f; "base" numbers in reasons were measured in a
-throwaway worktree of it.
+pin behaviour that must hold.  BASE (pre-D4) = 893da8f; "base" numbers in reasons were measured in a
+throwaway worktree of it.  Sections 7-11 are the r2 attack.
 
 Run: TMPDIR=$PWD/.tmp .venv/bin/python -m pytest tests/part1/test_d4_attack.py -q -p no:cacheprovider
 """
@@ -363,3 +363,243 @@ def test_control_quality_signals_without_parts_unchanged_for_plain_names():
           {"cluster_id": "m", "record_ids": ["a", "c"]}]  # fmt: skip
     q = quality_signals(cl, names)
     assert q["flagged_clusters"] == ["m"]
+
+
+# ══ r2 attack ═════════════════════════════════════════════════════════════════════════════
+def _people(seed, n=150):
+    """n true two-record clusters, every name distinct; -> (rng, by, fresh-word fn)."""
+    rng = random.Random(seed)
+    used: set[str] = set()
+
+    def nm():
+        while True:
+            w = _word(rng, 2, 4)
+            if w not in used:
+                used.add(w)
+                return w
+
+    by = {}
+    for i in range(n):
+        g, s = nm(), nm()
+        by[f"c{i}"] = [rec("fa", f"r{i}a", given_name=g, surname=s),
+                       rec("fb", f"r{i}b", given_name=g, surname=s)]  # fmt: skip
+    return rng, by, nm
+
+
+def _plant(by, nm, k, **extra):
+    """k clusters of two different people (different given AND surname); ``extra``: column -> fn(0|1)
+    giving person 0 / person 1's value of an extra column on all their records."""
+    for p in range(k):
+        a, b = (nm(), nm()), (nm(), nm())
+        by[f"p{p}"] = [
+            rec(o, f"p{p}{o}{j}", given_name=g, surname=s, **{c: f(j) for c, f in extra.items()})
+            for j, (g, s) in enumerate((a, b))
+            for o in ("fa", "fb")
+        ]
+    return {f"p{p}" for p in range(k)}
+
+
+# ── 7. a folded column that two different people can share ────────────────────────────────
+@pytest.mark.parametrize("col", ["username", "nickname", "middle_name"])
+def test_control_folded_column_distinct_per_person_planted_flagged(col):
+    for seed in (1, 2, 3):
+        rng, by, nm = _people(seed)
+        for rs in by.values():
+            v = nm()
+            for r in rs:
+                r[col] = v
+        bad = _plant(by, nm, 20, **{col: lambda j: nm()})  # noqa: B023 (called at once)
+        assert flags(*_flat(by)) == bad
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="D4 r2 REGRESSION (placeholder): a folded column (middle_name/username/nickname are in "
+    "_PARTIAL_NAME_FIELDS) holding the SAME placeholder on every record ('n/a', 'unknown', 'none') "
+    "links all of a cluster's names into one group: planted two-person fusions 0/30 flagged "
+    "(3 seeds), base 30/30.  Not the inherent shared-surname shape: nothing about a value held by "
+    "many unrelated records says anything about the person.",
+)
+@pytest.mark.parametrize("col", ["middle_name", "username", "nickname"])
+def test_planted_fusions_with_a_placeholder_in_a_folded_column_still_flagged(col):
+    for seed in (1, 2, 3):
+        _, by, nm = _people(seed)
+        for rs in by.values():
+            for r in rs:
+                r[col] = "n/a"
+        bad = _plant(by, nm, 30, **{col: lambda j: "n/a"})
+        assert bad <= flags(*_flat(by))
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="D4 r2 REGRESSION (low-cardinality handle): username drawn from {guest, admin, user} "
+    "(a shared account name / role handle) hides the plant whenever the two people draw the same "
+    "value: 18-21/30 flagged per seed, base 30/30 (a middle initial 28-29/30, nickname pool of 5 "
+    "26-27/30, six common middle names 24-27/30).  Same family as the placeholder; no-fitted-constant "
+    "fix = do not link on a part held by records of many clusters.",
+)
+def test_planted_fusions_sharing_a_low_cardinality_username_still_flagged():
+    for seed in (1, 2, 3):
+        rng, by, nm = _people(seed)
+        pool = ["guest", "admin", "user"]
+        for rs in by.values():
+            v = rng.choice(pool)
+            for r in rs:
+                r["username"] = v
+        bad = _plant(by, nm, 30, username=lambda j: rng.choice(pool))  # noqa: B023 (called at once)
+        assert bad <= flags(*_flat(by))
+
+
+# ── 8. one-column names that hold a part ───────────────────────────────────────────────────
+@pytest.mark.xfail(
+    strict=True,
+    reason="D4 r2 REGRESSION (token rule too loose): a person (given, surname) beside a one-column "
+    "ORGANISATION name that merely contains the surname ('<surname> <w> hardware') is one group: "
+    "0/20 flagged x 3 seeds, base 20/20.  Keyed-differently only needs a one-column name made of the "
+    "parts (all tokens, or >= 2); one shared token of a longer name is the 'Smith & Wesson' over-merge.",
+)
+def test_person_beside_a_company_named_with_the_surname_still_flagged():
+    for seed in (1, 2, 3):
+        rng, by, nm = _people(seed, 80)
+        bad = set()
+        for p in range(20):
+            g, s = nm(), nm()
+            by[f"p{p}"] = [rec("fa", f"p{p}a", given_name=g, surname=s),
+                           rec("fb", f"p{p}b", company_name=f"{s} {_word(rng, 3, 4)} hardware")]  # fmt: skip
+            bad.add(f"p{p}")
+        assert bad <= flags(*_flat(by))
+
+
+def test_control_one_column_names_of_unrelated_people_beside_two_column_are_the_gap_at_base_too():
+    """A multi-part person with several one-column full names that merely share the GIVEN token:
+    base missed these as well (0/60); r1 caught ~80 %.  Pinned so a change is noticed."""
+    for seed in (1, 2, 3):
+        rng, by, nm = _people(seed, 40)
+        bad = set()
+        for p in range(20):
+            g, s = nm(), nm()
+            by[f"p{p}"] = [rec("fa", f"p{p}a", given_name=g, surname=s)] + [
+                rec("fb", f"p{p}_{j}", full_name=f"{g} {nm()} {nm()}") for j in range(3)
+            ]
+            bad.add(f"p{p}")
+        assert not (bad & flags(*_flat(by)))
+
+
+# ── 9. a missing part compares by the nearest part ─────────────────────────────────────────
+@pytest.mark.parametrize("seed", [1, 2, 3])
+def test_single_word_of_another_person_beside_two_columns_is_flagged_but_missing_part_is_not(seed):
+    """ "anna" alone vs (bob, smith): different people flagged 20/20; the same person with the given
+    name missing (or the surname missing) not flagged -- base flagged ~99 of the latter."""
+    rng, by, nm = _people(seed, 100)
+    for i in range(0, 100, 2):
+        by[f"c{i}"][1]["given_name"] = None  # surname only
+    for i in range(1, 100, 4):
+        by[f"c{i}"][1]["surname"] = None  # given only
+    bad = set()
+    for p in range(20):
+        by[f"p{p}"] = [rec("fa", f"p{p}a", given_name=nm(), surname=nm()),
+                       rec("fb", f"p{p}b", given_name=nm(), surname=None)]  # fmt: skip
+        bad.add(f"p{p}")
+    assert flags(*_flat(by)) == bad
+
+
+def test_control_single_word_compared_to_each_part_not_to_the_joined_name():
+    """Two FULL names still compare whole: ("anna", "smith") vs ("bob", "jones") is flagged even
+    though neither string is close to the other's parts as a set; and a single word equal to a
+    typo'd part is coherent."""
+    names = {"a": f"anna{PART_SEP}smith", "b": f"bob{PART_SEP}jones", "c": f"jon{PART_SEP}smyth",
+             "d": "jhon"}  # fmt: skip
+    q = quality_signals([{"cluster_id": "x", "record_ids": ["a", "b"]},
+                         {"cluster_id": "y", "record_ids": ["c", "d"]}], names)  # fmt: skip
+    assert q["flagged_clusters"] == ["x"]
+
+
+# ── 10. organisations unchanged vs the parent (r1, 722b12c) wherever no part column exists ──
+@pytest.mark.parametrize(
+    "col",
+    ["contact_name", "street_name", "country_name", "parent_name", "filename", "trading_name"],
+)
+def test_org_planted_sharing_any_non_part_name_column_flagged_like_pre_d4(col):
+    for seed in (1, 2, 3):
+        (recs, cl), bad = _org_world(
+            seed, {col: lambda i: f"shared {i // 2 % 3}"}, share_extra=True
+        )
+        assert flags(recs, cl) == bad, (col, seed)
+
+
+def test_person_street_name_is_not_folded_so_a_shared_street_cannot_hide_a_fusion():
+    for seed in (1, 2, 3):
+        _, by, nm = _people(seed)
+        for rs in by.values():
+            for r in rs:
+                r["street_name"] = "high street"
+        bad = _plant(by, nm, 20, street_name=lambda j: "high street")
+        assert flags(*_flat(by)) == bad
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="D4 r2 RESIDUAL (org with a person-name-part column): an organisation table that also "
+    "carries first_name/last_name (a contact), username, nickname or middle_name folds them into the "
+    "name; two different companies with the SAME contact/handle value are one group: planted "
+    "fusions 0/20 x 3 seeds, base 20/20 (same columns with a value per company: 20/20).  Consistent "
+    "with the shared-part rule; whether it bites depends on the live org tables' columns.",
+)
+@pytest.mark.parametrize("cols", [["first_name", "last_name"], ["username"], ["nickname"]])
+def test_org_planted_fusion_sharing_a_person_part_column_flagged(cols):
+    (recs, cl), bad = _org_world(
+        3, {c: lambda i: f"shared {i // 2 % 3}" for c in cols}, share_extra=True
+    )
+    assert bad <= flags(recs, cl)
+
+
+# ── 11. determinism and PART_SEP ───────────────────────────────────────────────────────────
+def test_flags_independent_of_record_cluster_and_member_order():
+    r, c, _ = person_world(1, list(KINDS), n=200, planted=20)
+    base = flags(r, c)
+    for k in range(4):
+        rng = random.Random(k)
+        rr = list(r)
+        rng.shuffle(rr)
+        cc = [{**x, "record_ids": rng.sample(x["record_ids"], len(x["record_ids"]))} for x in c]
+        rng.shuffle(cc)
+        assert flags(rr, cc) == base
+
+
+def test_flags_independent_of_hash_seed():
+    import subprocess
+    import sys
+
+    code = (
+        "from tests.part1.test_d4_acceptance import person_world, KINDS, flags;"
+        "r,c,_=person_world(1,list(KINDS),n=120,planted=12);print(sorted(flags(r,c)))"
+    )
+    outs = {
+        subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            env={**__import__("os").environ, "PYTHONHASHSEED": h},
+            check=True,
+        ).stdout
+        for h in ("0", "1", "4242")
+    }
+    assert len(outs) == 1
+
+
+def test_display_names_fold_only_the_best_column_and_person_parts():
+    r = rec("fa", "1", company_name="Acme Ltd", contact_name="J Smith", street_name="High St",
+            country_name="UK", filename="a.csv", username="acme", first_name="Jo", last_name="Smith",
+            nickname="", middle_name=None, family_name="Smith", email="a@b.example")  # fmt: skip
+    got = L._display_names([r])[_record_id(r)]
+    assert got is not None
+    assert sorted(got.split(PART_SEP)) == ["Acme Ltd", "Jo", "Smith", "Smith", "acme"]
+
+
+def test_part_sep_in_one_column_name_text_is_not_visible_in_flagged_output():
+    r, c, _ = person_world(3, ["same", "fused"], n=30, planted=4)
+    r[0]["full_name"] = f"x{PART_SEP}y"
+    st = state_of(r, c)
+    rep = L.build_reconciliation_report(st, {}, [])
+    assert PART_SEP not in json.dumps(rep, default=str)
