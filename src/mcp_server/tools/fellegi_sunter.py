@@ -151,6 +151,11 @@ def build_token_document_frequencies(
     return {k: dict(c) for k, c in df.items()}, n
 
 
+# D1: token_sim calls allowed per token of the pair before soft matching
+# gives way to exact overlap (a cost bound, not a corpus count).
+_SOFT_CALLS_PER_TOKEN = 8
+
+
 def idf_soft_similarity(
     tokens1: set[str],
     tokens2: set[str],
@@ -189,13 +194,28 @@ def idf_soft_similarity(
     def w(t: str) -> float:
         return math.log2(n / min(max(df.get(t, 1), 1), n))
 
-    def directed(src: set[str], dst: set[str]) -> float | None:
+    # D1: a token found on the other side scores 1.0 with no call, so only
+    # unmatched tokens are compared -- same answers as max over every pair.
+    # Long text is still |A|x|B| that way, so beyond a linear budget the
+    # unmatched tokens score 0: IDF-weighted exact-token overlap, O(|A|+|B|).
+    # ponytail: ceiling -- above the budget a typo in long text earns no
+    # partial credit. Upgrade path: a character n-gram index of candidates.
+    only1, only2 = tokens1 - tokens2, tokens2 - tokens1
+    soft1: dict[str, float] = {}
+    soft2: dict[str, float] = {}
+    if len(only1) * len(tokens2) + len(only2) * len(tokens1) <= _SOFT_CALLS_PER_TOKEN * (
+        len(tokens1) + len(tokens2)
+    ):
+        soft1 = {t: max(token_sim(t, u) for u in tokens2) for t in only1}
+        soft2 = {u: max(token_sim(u, t) for t in tokens1) for u in only2}
+
+    def directed(src: set[str], dst: set[str], soft: dict[str, float]) -> float | None:
         total = math.fsum(w(t) for t in src)
         if total == 0:
             return None
-        return math.fsum(w(t) * max(token_sim(t, u) for u in dst) for t in src) / total
+        return math.fsum(w(t) * (1.0 if t in dst else soft.get(t, 0.0)) for t in src) / total
 
-    d1, d2 = directed(tokens1, tokens2), directed(tokens2, tokens1)
+    d1, d2 = directed(tokens1, tokens2, soft1), directed(tokens2, tokens1, soft2)
     if d1 is None or d2 is None:
         return None
     if tokens1 <= tokens2 or tokens2 <= tokens1:

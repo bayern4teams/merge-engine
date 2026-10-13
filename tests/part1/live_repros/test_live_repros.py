@@ -93,9 +93,6 @@ def test_api_feedback_forwards_band_decisions():
     assert sent.get("pair_decisions") == [pair]
 
 
-@pytest.mark.xfail(
-    strict=True, reason="LOCAL_VERIFY_REPORT P14-D1: soft Monge-Elkan is |A|x|B| on long text"
-)
 def test_p14_text_similarity_cost_is_not_quadratic_in_tokens():
     """idf_soft_similarity calls token_sim once per token PAIR in each direction.
 
