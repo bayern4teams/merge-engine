@@ -112,7 +112,7 @@ lists files an item must **edit**. Paths are under `src/` unless stated. Abbrevi
 6. D4 (P16 reads a person's name from one column; repro `test_p16_true_person_pairs_are_not_flagged`), D13 **fix now**: bound the P8 pair calls with the same `Semaphore(_LLM_CONCURRENCY)` P11 uses (same answers), D6, D12, D9, D15.
 7. D16 (MusicBrainz 14-record cluster, not root-caused): root-cause first, fix only if the cause is in Part 1 code.
 8. PRE-D3 (`Event loop is closed` on the first JSON-mode call, `src/llm/client.py:302-304`) and `tests/part1/test_p19_attack.py:145` (`.venv/bin/python` -> `sys.executable`).
-Rules: verifier derives each check first and attacks after; two rejections -> lead takes over; a third -> [BLOCKED]. The cloud cannot rerun the benchmarks: for every defect record which benchmark the user must re-run locally. After the queue: Phase 6 gate, Phase 6 section in LOCAL_VERIFY_REPORT.md, then "Part 1 complete" (SUPERVISOR 7b). Never merge.
+Rules: verifier derives each check first and attacks after; two rejections -> lead takes over; a third -> [BLOCKED]. The cloud cannot rerun the benchmarks: for every defect record which benchmark the user must re-run locally. After the queue: Phase 6 gate, Phase 6 section in LOCAL_VERIFY_REPORT.md, then finish as SUPERVISOR 7b says. Never merge. This Next action is ACTIVE WORK: do not exit on it.
 **Phase 3, step 1:** lead serial chain in `T/resolve_entities.py`: P15 -> P6 -> P7 -> P8 -> P20 (derive acceptance
 with `part1-verifier` before each); side lanes beside it (cap 2): P9 (new decision-memory module only), P17
 (`N/load_data.py` only), P19 (`tests/eval/score.py` + tests). Gate hooks for P9/P17 in `human_nodes.py`/`graph.py`
