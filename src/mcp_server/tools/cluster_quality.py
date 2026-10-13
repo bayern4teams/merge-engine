@@ -47,6 +47,11 @@ def comparable_name(name: str | None) -> str:
     return " ".join(_NOT_WORD.sub(" ", folded).split())
 
 
+# D4: joins the columns one name was keyed over (given name, surname); not a
+# word character, so ``comparable_name`` reads it as a space.
+PART_SEP = "\x1f"
+
+
 def name_variation_rate(names: list[str | None]) -> float:
     """Mean pairwise dissimilarity (1 - difflib ratio) of the usable names, in
     [0, 1]: 0.0 when they are all the same or fewer than two are usable, near 1
@@ -200,9 +205,12 @@ def _name_threshold(reps: list[str]) -> float:
     return name_variation_rate(_sample([*reps])) / 2
 
 
-def _name_groups(usable: list[str]) -> list[list[str]]:
+def _name_groups(usable: list[str], parts: Mapping[str, set[str]] | None = None) -> list[list[str]]:
     """Group sorted distinct comparable names that share a significant token or
-    where one is contained in another (covers unspaced scripts and tickers); union-find, near-linear."""
+    where one is contained in another (covers unspaced scripts and tickers); union-find, near-linear.
+    ``parts``: name -> the comparable values it was keyed from, when it spans
+    several columns (D4); two names sharing a whole part (a given name, a
+    surname) are one group, whatever their order or the other part."""
     parent = list(range(len(usable)))
 
     def find(i: int) -> int:
@@ -221,6 +229,13 @@ def _name_groups(usable: list[str]) -> list[list[str]]:
         if any(2 * len(token) >= len(usable[i]) for i in idx):
             for i in idx:
                 parent[find(i)] = find(idx[0])
+    by_part: dict[str, list[int]] = {}
+    for i, name in enumerate(usable):
+        for part in (parts or {}).get(name, ()):
+            by_part.setdefault(part, []).append(i)
+    for idx in by_part.values():
+        for i in idx:
+            parent[find(i)] = find(idx[0])
     joined = "\n".join(usable)
     starts = [0]
     for name in usable:
@@ -239,7 +254,13 @@ def _name_groups(usable: list[str]) -> list[list[str]]:
 def _incoherent(names: list[str | None], threshold: float) -> bool:
     """Do the cluster's names fall into two or more unrelated groups, one of
     which differs from the largest by more than ``threshold``? (Stops at the first.)"""
-    groups = _name_groups(sorted({comparable_name(n) for n in names} - {""}))
+    parts: dict[str, set[str]] = {}
+    for n in names:
+        if comparable_name(n) and n and PART_SEP in n:
+            parts.setdefault(comparable_name(n), set()).update(
+                p for p in map(comparable_name, n.split(PART_SEP)) if p
+            )
+    groups = _name_groups(sorted({comparable_name(n) for n in names} - {""}), parts)
     if len(groups) < 2:
         return False
     anchor = min(groups, key=lambda g: (-len(g), g[0]))[0]
