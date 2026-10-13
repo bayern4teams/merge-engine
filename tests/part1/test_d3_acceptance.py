@@ -29,7 +29,9 @@ from src.orchestrator.nodes.load_data import _pre_load_failure, pre_load_gate
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC_FILE = "src/orchestrator/nodes/load_data.py"
-BASE_SHA = "2f90c83867319c5af1fd3edec98a26f0d1167037"  # HEAD of feat/part1-fixes when D3 was derived
+BASE_SHA = (
+    "2f90c83867319c5af1fd3edec98a26f0d1167037"  # HEAD of feat/part1-fixes when D3 was derived
+)
 CAP = 1 / 2  # "never a majority"
 SHARE = "largest_cluster_share"
 
@@ -278,7 +280,12 @@ def test_d1_no_entity_with_a_majority_cluster_is_ever_passed_random_multi_entity
         for e, sizes in spec.items():
             if sum(sizes) > 1 and share(sizes) > CAP:
                 majority_seen += 1
-                assert e in g["entities_violating"][SHARE], (e, sizes, share(sizes), g["invariants"][SHARE])
+                assert e in g["entities_violating"][SHARE], (
+                    e,
+                    sizes,
+                    share(sizes),
+                    g["invariants"][SHARE],
+                )
         assert g["invariants"][SHARE]["threshold"] <= CAP
         assert g["invariants"]["null_identity_share"]["threshold"] <= CAP
     assert majority_seen >= 30
@@ -304,7 +311,9 @@ def test_d3_just_above_the_cap_beside_huge_siblings_is_refused_just_below_is_not
 
 # ═══ (e) plan 2.4: no fitted numeric constants in the diff of load_data.py ═══════════════════════
 ALLOWED_NUMS = {0, 1, 2}  # 1/2 is written 1 / 2 in the existing cap; nothing else is sanctioned
-FORBID_PARAM_RX = re.compile(r"(thresh|slack|cap|floor|ceil|limit|margin|ratio|share|min_|max_)", re.I)
+FORBID_PARAM_RX = re.compile(
+    r"(thresh|slack|cap|floor|ceil|limit|margin|ratio|share|min_|max_)", re.I
+)
 
 
 def _num_counts(src: str) -> dict:
@@ -345,7 +354,11 @@ def new_numeric_literals(base_src: str, new_src: str) -> list:
 
 def _base_src() -> str:
     return subprocess.run(
-        ["git", "show", f"{BASE_SHA}:{SRC_FILE}"], cwd=ROOT, check=True, capture_output=True, text=True
+        ["git", "show", f"{BASE_SHA}:{SRC_FILE}"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout
 
 
@@ -357,13 +370,13 @@ def test_e1_no_new_numeric_literal_and_no_numeric_threshold_default_in_load_data
 
 def test_e2_added_diff_lines_carry_no_decimal_or_corpus_number():
     diff = subprocess.run(
-        ["git", "diff", "-U0", BASE_SHA, "--", SRC_FILE], cwd=ROOT, check=True, capture_output=True, text=True
+        ["git", "diff", "-U0", BASE_SHA, "--", SRC_FILE],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout
-    added = [
-        ln[1:]
-        for ln in diff.splitlines()
-        if ln.startswith("+") and not ln.startswith("+++")
-    ]
+    added = [ln[1:] for ln in diff.splitlines() if ln.startswith("+") and not ln.startswith("+++")]
     code = [ln.split("#", 1)[0] for ln in added]
     hits = [ln for ln in code if re.search(r"(?<![\w.])\d+\.\d+|(?<![\w.])\d{2,}(?![\w.])", ln)]
     # numbers inside string/docstring text are ignored only when the whole line is prose
