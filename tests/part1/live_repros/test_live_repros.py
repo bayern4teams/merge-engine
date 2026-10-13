@@ -122,7 +122,6 @@ def test_p14_text_similarity_cost_is_not_quadratic_in_tokens():
     assert calls <= 20 * (len(a) + len(b)), (calls, len(a), len(b))
 
 
-@pytest.mark.xfail(strict=True, reason="LOCAL_VERIFY_REPORT P14-D2: 'Addendum to X' auto-matches X")
 def test_p14_addendum_is_not_an_auto_match():
     """DBLP-ACM, 40 records, LLM off. 'Automatic Generation of Production Rules ...' (1994)
     vs 'Addendum to Automatic Generation of Production Rules ...' (1995): main scores

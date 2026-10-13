@@ -3,7 +3,7 @@
 Overwrite this file at every commit. A fresh session reads it first, then
 [the plan](../PART1_IMPLEMENTATION_PLAN.md). Git is the memory; a session's context is not.
 
-**Lock:** 2026-10-13T16:09:07Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-13T16:09:07Z
+**Lock:** 2026-10-13T16:23:04Z · **Autonomy:** unattended-through-phase-5 · **Last heartbeat:** 2026-10-13T16:23:04Z
 
 (Lock/heartbeat protocol: plan §7. A session sets `Lock: <ISO time>`, pushes it, and refreshes it at every commit; a lock older than 75 min is stale. `Autonomy` is `off`, `dryrun` (a tick only records what works and exits) or `unattended-through-phase-5` (authorises the supervisor to chain phases). Only the user changes it.)
 
@@ -152,6 +152,10 @@ attack agent. P13: prior rescaled to the random-pair population (lead decision, 
 - [PHASE 1 DONE] 2026-10-04: P1, P2, P11, P12, P13, P14, P18 accepted (all `unverified-live`, see LOCAL_VERIFY.md). `check.py all` green locally; CI green on the phase head; `/ponytail-review` of the phase diff: net -6 lines possible, deferred (discover_schemas `run_kwargs` kept for a dozen one-argument test stubs; `_names` str-or-list and the two metadata lookups too small to churn).
 
 ## Phase 6 fix queue
+
+### Phase 6 status (lead verdicts)
+- **D2 ACCEPT (unverified-live)**, 8b16530: `Feedback` gains `pair_decisions` (list) / `band_thresholds` (dict), forwarded only when sent (plain approve unchanged, wrong types 422); matches gate lists `pending_merge_candidates` with Merge / Keep separate per pair, sent as `pair_decisions` on approve. Derive 26 checks (17 failed on the unfixed tree), attack 19 more (real route + `resume_workflow` + `apply_band_decisions`, only LangGraph mocked; MatchBody bundled with esbuild and clicked through): all pass; live repro XPASS -> marker removed. UI does not send `band_thresholds` (API accepts it). User must re-run locally: `run_bench febrl4 after --tag p9r1 --oracle --memory <file>` then `--tag p9r2` (report D2 Verify).
+- **D5 WIP (lead item)**: `idf_soft_similarity` takes the weaker direction when one token set contains the other, else the mean as before. Attack pending.
 
 From the local live verification on public benchmarks ([LOCAL_VERIFY_REPORT.md](LOCAL_VERIFY_REPORT.md), verified commit `6d7c4b4`). Each defect has a committed repro under `tests/part1/live_repros/` (strict xfail; a fix flips it to XPASS) or names the public dataset it needs. The cloud has no access to the local runs: verify against the repro, and say which benchmark the user must re-run locally (commands in the report's "Regenerate").
 

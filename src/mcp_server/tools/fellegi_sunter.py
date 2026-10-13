@@ -163,7 +163,10 @@ def idf_soft_similarity(
     Each token scores the best ``token_sim`` it finds on the other side
     (character-level, so "jonh" still earns most of "john"), and the scores
     are averaged with IDF weights ``log2(N/df)``; the two directions are then
-    averaged (a symmetric Monge-Elkan). A token shared by most names carries
+    averaged (a symmetric Monge-Elkan) -- unless one token set contains the
+    other, where the weaker direction is the score: averaging gave X vs
+    "Addendum to X" a free full match one way and halved the rare extra
+    token's cost (D5). A token shared by most names carries
     almost no weight, so "Acme X Ltd" vs "Beta X Ltd" no longer looks alike
     because of "X" and "Ltd" -- the inversion the report names (P14).
 
@@ -175,6 +178,10 @@ def idf_soft_similarity(
     turn every typo into DISAGREE (person recall 0.85 -> 0.26), so the token
     match is soft. No SoftTFIDF theta: the caller's own character similarity
     is used as is. Deferred: a continuous sum(-log2(df/N)) text weight.
+    ponytail: D5 ceiling -- a superset with ONE rare extra token still lands
+    in the weak level; if such near-duplicates are common among the
+    candidates, EM learns that level (and the year off by one) as match
+    evidence. Upgrade path: score calibration against labels (D12).
     """
     if n <= 0 or not tokens1 or not tokens2:
         return None
@@ -191,6 +198,10 @@ def idf_soft_similarity(
     d1, d2 = directed(tokens1, tokens2), directed(tokens2, tokens1)
     if d1 is None or d2 is None:
         return None
+    if tokens1 <= tokens2 or tokens2 <= tokens1:
+        # D5: one name wholly inside the other scores a free 1.0 one way, so
+        # only the longer name's side says whether the extra words matter.
+        return min(d1, d2)
     return (d1 + d2) / 2
 
 
