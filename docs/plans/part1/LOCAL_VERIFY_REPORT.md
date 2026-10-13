@@ -1,6 +1,6 @@
 # Part 1 — local live verification report
 
-**Status: S3 public benchmarks done (MusicBrainz / DBLP-Scholar rows: see S3); S4 gate = STOP (failures) — S5 not started, waiting for the user.**
+**Status: S3 public benchmarks done (11 scenarios); S4 gate = STOP (6 scenario failures) — S5 not started, waiting for the user's decision.**
 Resume from this file + `git log`; every number below is regenerable from the commands in "Regenerate".
 
 | | |
@@ -52,7 +52,7 @@ Ground-truth facts that matter for reading the numbers: Geographic Settlements' 
 | dblp_acm | 2 origins, publications | **FAIL** (rules 1, 2, 3) | recall 0.905 → 0.983 but cross-source precision 0.925 → 0.903, B-cubed precision 0.963 → 0.950, over-merged 65 → 107 (allowed 87), largest 18 (main 22); reproduced in a clean r2 | `runs/dblp_acm_*_r2` (r1 identical) |
 | amazon_google | 2 origins, products, long descriptions | **FAIL** (rule 5) | main completed in 21 min; **after never left resolve_entities in 140 min** (driver timeout) — D1 | `runs/amazon_google_*_r1` |
 | musicbrainz | 5 origins, recordings, cross-source truth only | **FAIL** (rule 2) | recall 0.433 → 0.661, F1 0.592 → 0.782, over-merged 136 → 124; but largest cluster 14 vs true 5 (main 10 = exactly 2×); cross-source precision 0.994 → 0.984 (inside the 1 pp tolerance) | `runs/musicbrainz_*_r1` |
-| dblp_scholar | 2 origins, 66,879 records | see S3 | | |
+| dblp_scholar | 2 origins, 66,879 records | **FAIL** (rule 5) | main completed in 620 s (TP 4,880 / FP 5,203 / FN 8,883, F1 0.409); after still inside resolve_entities after ≈ 70 min (0 destination rows), stopped by decision of the user — D1 (profile: ≈ 2.9 ms per pair in `_token_ratio`) | `runs/dblp_scholar_*_r1` |
 
 ### Items (what the public benchmarks can show; S5 items are UNVERIFIED until the user's databases are restored)
 
@@ -61,7 +61,7 @@ Ground-truth facts that matter for reading the numbers: Geographic Settlements' 
 | P1 | UNVERIFIED | benchmarks have no concatenated lowercase identifiers; Amazon `title → name` mapped identically on both (0.9) | S5 |
 | P2 | **PARTIAL** | budget gone: febrl4 main C = 250,000 (cap), `uncompared_pairs` 993,586 vs true discard 466,880 (over-count ×2.1, as warned), 79 true pairs lost to the budget → after PC 1.000; musicbrainz main PC 0.536 at the cap → 0.990; dblp_scholar main reports 26.1 M uncompared; `uncompared_pairs` 0. But block filtering discards pairs it never counts as pairs (Abt-Buy G − C = 1,213,649 vs 161,535 reported) | blocking probe; **D9** |
 | P3, P4, P7, P12, P17(fix) | UNVERIFIED | single-table benchmarks: no INDs, junctions, catalog/ETL columns or broken DDL | S5 |
-| P5 | **PARTIAL** | PC ≥ main on 6/7 scored pairs of sets (febrl4 0.980 → 1.000, febrl3 0.981 → 0.999, dblp_acm 0.987 → 1.000, affiliations 0.459 → 0.757, musicbrainz 0.536 → 0.990, geo 0.973 = 0.973), PQ higher on all but geo (0.380 → 0.241); **Abt-Buy PC 0.928 → 0.897** (115 vs 80 true pairs lost in blocking) | blocking probe |
+| P5 | **PARTIAL** | PC ≥ main on 6 of 7 sets (febrl4 0.980 → 1.000, febrl3 0.981 → 0.999, dblp_acm 0.987 → 1.000, affiliations 0.459 → 0.757, musicbrainz 0.536 → 0.990, geo 0.973 = 0.973), PQ higher on all but geo (0.380 → 0.241); **Abt-Buy PC 0.928 → 0.897** (115 vs 80 true pairs lost in blocking) | blocking probe |
 | P6 | UNVERIFIED | no parent/subsidiary truth in public sets. Observation: Abt-Buy within-source variant FPs 2,716 → 1,207 (still unusable) | — |
 | P8 | **PARTIAL** | one pair per call confirmed (≈ 200 calls/entity vs 4–6 batched on main); precision of LLM-decided merges vs truth: persons 37/37, DBLP-ACM 10/17 (r2) and 11/14 (r1), **Abt-Buy 2/34**; wall time 2–4× main; under a serial endpoint a parallel run's preflight times out | audit probe; **D13** |
 | P9 | **FAIL** | 3 oracle answers sent through the REST API: no memory file written; run 2 with the same memory path paused at the matches gate with 5 pending pairs (asks again) | **D2** |
@@ -77,7 +77,7 @@ Ground-truth facts that matter for reading the numbers: Geographic Settlements' 
 | P20 | **FAIL** | over-merged clusters febrl3 0 → 8, febrl3x2 0 → 8, plant 18 → 20, geo 0 → 1, Abt-Buy 304 → 301, **DBLP-ACM 65 → 107** (rule 3); new over-merges are true pair + related paper chains (D5) | compare |
 
 Item tally (20): **PASS 2** (P11, P17 — both weak, healthy-path only) · **PARTIAL 4** (P2, P5, P8, P13) · **FAIL 6** (P9, P10, P14, P15, P16, P20) · **UNVERIFIED 7** (P1, P3, P4, P6, P7, P12, P18) · **not re-verified 1** (P19, accepted-cloud).
-Scenario tally (10 scored so far): PASS 5 (one vacuous) · FAIL 5.
+Scenario tally (11): PASS 5 (one vacuous) · FAIL 6.
 
 
 ## S1 — static gate on `feat/part1-fixes` (`6d7c4b4`)
@@ -149,6 +149,8 @@ All numbers: `python -m scripts.verify_local.compare <scenario> [--tag r2]` (pai
 | amazon_google before | see `runs/amazon_google_before_r1/result.json` (completed, 1,274 s) | | | | | | | | | 1,274 | 5 |
 | musicbrainz before | 7,033 | 469 | 9,217 | 0.938 | 0.433 | 0.592 | 0.838 | 136 | 10 (5) | 307 | 8 |
 | musicbrainz after | 10,744 | 481 | 5,506 | 0.957 | 0.661 | 0.782 | 0.904 | 124 | 14 (5) | 1,180 | 204 |
+| dblp_scholar before | 4,880 | 5,203 | 8,883 | 0.484 | 0.355 | 0.409 | 0.960 | 1,919 | 29 (37) | 620 | 4 |
+| dblp_scholar after | **no result: stopped after ≈ 70 min inside resolve_entities (user decision; D1)** | | | | | | | | | — | 4 |
 | amazon_google after | **no result: driver timeout after 140 min inside resolve_entities** | | | | | | | | | 8,403 | 4 |
 
 Stratified (within / cross-source) and review counts: febrl3x2 after within TP 3,317 FP 9 FN 5, cross TP 3,209 FP 14 FN 7; dblp_acm: every within-source pair is an FP on both (504 → 450; recurring column titles such as "Book review column", "Editor's Notes" merged across years); Abt-Buy within FP 2,716 → 1,207, cross TP 16 → 21 of 1,097. Review pairs listed at the matches gate (after): febrl4 7, febrl3 15, febrl3x2 13, geo 50, abt_buy 50, dblp_acm 50, plant 5 — all ≤ 10 % of true pairs, so rule 6 never downgraded a verdict; but see D15 (50 is a cap).
@@ -164,7 +166,7 @@ Blocking (pair completeness from the truth; `blocking_probe`):
 | affiliations | 141,310 / 0.459 / 0.055 | 30,593 / 0.757 / 0.416 |
 | geo | 11,241 / 0.973 / 0.380 | 17,701 / 0.973 / 0.241 |
 | musicbrainz | 250,000 (cap) / **0.536** / 0.035 — `uncompared_pairs` 596,814, true discard 593,421 | 331,316 / **0.990** / 0.049 |
-| dblp_scholar | 250,000 (cap) / **0.457** / 0.025 — `uncompared_pairs` 26,107,859 | see the dblp_scholar row |
+| dblp_scholar | 250,000 (cap) / **0.457** / 0.025 — `uncompared_pairs` 26,107,859 | not measured (run stopped) |
 
 Pre-LLM scores (`score_probe`, recall over ALL true pairs; FP@0.95 before clustering):
 
@@ -247,10 +249,9 @@ Priority: P0 data-corrupting · P1 wrong result · P2 quality. Root causes are *
 - P1, P3, P4, P7, P12, P17 (broken-table half), P18 (numeric alert): need the user's origins / destination (S5); public single-table benchmarks have none of the structures.
 - P6: no public dataset with parent/subsidiary truth was found.
 - P19: accepted-cloud; not re-run, but its counting is consistent with the probes.
-- DBLP-Scholar: see S3 row.
 
 ## S4 — gate
-Five scenarios fail the pass rule (plant_febrl4, abt_buy, dblp_acm, amazon_google, musicbrainz). Per the brief: **STOP**; S5 waits for the user's decision and for the S5 preconditions (credentials, `ground_truth`, destination per §0.7).
+Six scenarios fail the pass rule (plant_febrl4, abt_buy, dblp_acm, amazon_google, musicbrainz, dblp_scholar). Per the brief: **STOP**; S5 waits for the user's decision and for the S5 preconditions (credentials, `ground_truth`, destination per §0.7).
 
 ## USER DECISIONS (from PHASE5_REPORT.md — not decided here; one deciding fact each)
 1. **CI does not run `tests/part1`.** Deciding fact: the full suite runs in 69 s locally and its only failure is the `.venv` interpreter path (S1); the `P10_BASE_REV`-style git-revision tests are the remaining obstacle for a shallow CI clone.
