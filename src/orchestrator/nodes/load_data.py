@@ -457,8 +457,9 @@ def pre_load_gate(state: dict[str, Any], confirmed: Any = None) -> dict[str, Any
     cluster ceilings = 2 m, never a majority; flagged ceiling = 2 m of the
     per-entity flagged counts. Each entity is judged against the ceiling or its
     OWN slack, whichever is higher (a number the operator changed is used as given) -- one NULL record; a cluster twice the median
-    entity's largest -- so a small healthy lookup is not refused for being small
-    and never lifts the ceiling of another entity.
+    largest of the OTHER entities, never a majority -- so a small healthy lookup is not refused
+    for being small, never lifts the ceiling of another entity, and cannot lift its own (D3);
+    a single-entity run has no other entities, so no slack.
 
     ponytail: refusing is all it can do -- it cannot roll back a partial write
     (report P10 Ceiling); the proposals are rules of thumb relative to the run's
@@ -480,14 +481,19 @@ def pre_load_gate(state: dict[str, Any], confirmed: Any = None) -> dict[str, Any
     def values(key: str) -> list[float]:
         return [m[key] for m in per.values() if key in m]
 
-    typical = 2 * statistics.median(values("largest")) - 1 if values("clustered") else 0.0
     widest = max(values("fields"), default=0.0)
 
-    def slack(name: str, m: dict[str, float]) -> float:
-        if name == _NULL_IDENTITY:
+    def slack(name: str, entity: str, m: dict[str, float]) -> float:
+        # D3 (user decision, rule 1): slack is measured on the OTHER entities, so
+        # an entity's own giant cluster cannot lift its own ceiling, a single-
+        # entity run gets none (the plain cap applies), and no slack passes a
+        # majority cluster.
+        others = [o for k, o in per.items() if k != entity]
+        largest = [o["largest"] for o in others if "largest" in o]
+        if others and name == _NULL_IDENTITY:
             return 1 / m["identity_records"]
-        if name == _LARGEST_CLUSTER and m["clustered"] > 1:
-            return typical / (m["clustered"] - 1)
+        if largest and name == _LARGEST_CLUSTER and m["clustered"] > 1:
+            return min((2 * statistics.median(largest) - 1) / (m["clustered"] - 1), 1 / 2)
         return 0.0
 
     def ceiling(xs: list[float]) -> float:
@@ -528,7 +534,7 @@ def pre_load_gate(state: dict[str, Any], confirmed: Any = None) -> dict[str, Any
                 m[name] < used
                 if name == _COVERAGE
                 # the operator's own number is used as given; slack eases the proposal only
-                else m[name] > (used if edited else max(used, slack(name, m)))
+                else m[name] > (used if edited else max(used, slack(name, e, m)))
             )
         ]
         invariants[name] = {

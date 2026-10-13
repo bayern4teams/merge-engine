@@ -36,7 +36,6 @@ def test_p16_true_person_pairs_are_not_flagged():
     assert q["flagged_count"] == 0, sorted(q["flagged_clusters"])
 
 
-@pytest.mark.xfail(strict=True, reason="LOCAL_VERIFY_REPORT P10-D1: own slack defeats the 1/2 cap")
 def test_p10_single_entity_giant_cluster_is_refused():
     """One entity, one cluster absorbing 21 of 30 distinct people (Febrl4 records).
 
