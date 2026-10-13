@@ -16,6 +16,7 @@ from typing import Any
 
 from src.mcp_server.tools.metadata_classification import metadata_columns_by_table
 from src.mcp_server.tools.resolve_entities import (
+    _LLM_CONCURRENCY,
     _MIN_COHESION,
     _PROCESS_POOL_MIN_RECORDS,
     CandidatePairBudgetExceeded,
@@ -317,6 +318,9 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
     if any(concept_matches("company", et) for et, _records in prepared):
         relationship_index = _relationship_index_for_companies(state, extracted_data)
 
+    # D13: one bound for the run's LLM pair calls across all entities, the same
+    # _LLM_CONCURRENCY P11 uses. Built here so it binds to the running loop.
+    llm_semaphore = asyncio.Semaphore(_LLM_CONCURRENCY)
     try:
         logger.debug("Dispatching %d entity resolution(s) concurrently", len(prepared))
         results = await asyncio.gather(
@@ -336,6 +340,7 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
                     relationship_index=(
                         relationship_index if concept_matches("company", entity_type) else None
                     ),
+                    llm_semaphore=llm_semaphore,
                 )
                 for entity_type, records in prepared
             ),

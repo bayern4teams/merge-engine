@@ -423,6 +423,7 @@ async def resolve_entities_impl(
     connector: Any | None = None,
     matching_config: dict[str, Any] | None = None,
     relationship_index: dict[str, set[str]] | None = None,
+    llm_semaphore: asyncio.Semaphore | None = None,
 ) -> dict[str, Any]:
     """Cluster matching records for an entity type (hybrid heuristic + LLM).
 
@@ -764,7 +765,12 @@ async def resolve_entities_impl(
             entity_type,
         )
         llm_results = await _judge_pairs_with_llm(
-            entity_type, borderline, llm_config, evidence_sink=pair_evidence, auto_match=auto_match
+            entity_type,
+            borderline,
+            llm_config,
+            evidence_sink=pair_evidence,
+            auto_match=auto_match,
+            semaphore=llm_semaphore,
         )
         llm_scored = len(llm_results)
         scored_pairs.extend(llm_results)
@@ -2917,6 +2923,7 @@ async def _judge_pairs_with_llm(
     llm_config: dict[str, Any],
     evidence_sink: dict[tuple[str, str], dict[str, Any]] | None = None,
     auto_match: float = _AUTO_MATCH,
+    semaphore: asyncio.Semaphore | None = None,
 ) -> list[tuple[str, str, float]]:
     """Judge review-band pairs with the LLM, ONE pair per call (report P8).
 
@@ -2926,7 +2933,9 @@ async def _judge_pairs_with_llm(
     heuristic score, so the pair stays in human review rather than being
     dropped because an honest "about 0.5" sits under the exclude bar. A pair per call means one malformed reply, a timeout or an
     out-of-range number damages that pair only: it keeps its heuristic score.
-    Calls run concurrently, at most ``_LLM_CONCURRENCY`` in flight. Returns one
+    Calls run concurrently, at most ``_LLM_CONCURRENCY`` in flight -- across the
+    whole run when the caller passes its ``semaphore`` (D13: entities resolve
+    concurrently, and the endpoint is the ceiling, not one entity). Returns one
     ``(id1, id2, score)`` per input pair, in input order.
 
     ``evidence_sink`` (Phase 7.1), when given, is filled in place with one
@@ -2949,7 +2958,7 @@ async def _judge_pairs_with_llm(
         return [(i1, i2, c) for i1, i2, _r1, _r2, c in borderline]
 
     client = LLMClient(llm_config)
-    semaphore = asyncio.Semaphore(_LLM_CONCURRENCY)
+    semaphore = semaphore or asyncio.Semaphore(_LLM_CONCURRENCY)
 
     async def judge(
         pair: tuple[str, str, dict, dict, float],
