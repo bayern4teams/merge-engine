@@ -31,8 +31,8 @@ The criterion used throughout, stated once and applied everywhere:
   - [0.7 Destination schema defects](#07-destination-schema-defects-found-by-direct-inspection)
   - [0.8 Environment constraints](#08-environment-facts-that-constrain-the-design)
 - [Architecture: three states](#architecture-three-states)
-- [PART 1 — Defects and fixes to apply now](#part-1--defects-and-fixes-to-apply-now) — P1–P20
-- [PART 2 — Research, cited](#part-2--research-cited) — §2.1–§2.21
+- [PART 1 — Defects and fixes to apply now](#part-1--defects-and-fixes-to-apply-now) — P1–P22 (P21 ER service contract first)
+- [PART 2 — Research, cited](#part-2--research-cited) — §2.1–§2.22
 - [PART 3 — Architecture](#part-3--architecture) — §3.1–§3.14
 - [PART 4 — Appendices](#part-4--appendices) — incl. **4.6 Decision register**, **4.7 Corrections register**
 - [References](#references)
@@ -389,6 +389,12 @@ re-projection.
 Everything here runs against the pipeline exactly as it exists today. Anything
 requiring the `merge_engine` store or the unification stage is in Part 3, and is
 marked as such where the two halves of one fix are split.
+
+> **Amended 2026-11-21 (D-44).** P21 is the one exception: it adds side tables
+> in a `merge_engine` schema and `/v1` routes, because the Enrichment Engine's
+> contract ([`docs/er_contract.md`](docs/er_contract.md)) cannot be met
+> without them. **P21 goes first**, before the open Phase 6b items. P22 is a
+> recorded decision, not scheduled work.
 
 **Ordering.** The dependency order changed in this revision and the change
 matters — see [Part 1 ordering](#part-1-ordering-and-dependencies). In short:
@@ -1521,6 +1527,247 @@ cost is superlinear before the cheap version is shown to fail.
 
 ---
 
+## P21 — The Enrichment Engine cannot search, read, create or update entities (ER service contract)
+
+> **Added 2026-11-21. Highest priority in Part 1 (user decision): implement
+> before the open Phase 6b items (D9, D5, D1, D6).** Research only in this
+> revision — nothing below is implemented yet. Every decision here is the
+> user's (register D-44 … D-55). The counter-party's spec is
+> [`docs/er_contract.md`](docs/er_contract.md) v1 (2026-11-18), and our answer
+> to it is that file (now v1.2, with §10 listing every change from v1; the original is `docs/er_contract_v1_original.md`).
+
+### Evidence (checked 2026-11-21, graph first, then the source lines named)
+
+| contract needs | what exists today | gap |
+|---|---|---|
+| 6 endpoints under `/v1` (§2) | `src/api/main.py` has only `/api/workflow/*`, `/api/splink/*`, `/api/config/*`, `/api/profiles/*` and lineage/explore routes | **all six missing** |
+| ER assigns stable ids | destination row `id` = cluster id; `merge_engine_entity_map(entity_type, record_id, cluster_id, first_seen_run)` keeps it stable across runs (`postgresql_destination.py` `ensure_entity_map`) | **good fit** — reuse, do not invent a second id |
+| a merged id keeps working (§4.4) | no redirect anywhere in `src/` (grep `redirect\|superseded\|merged_into`: none) | when a later run merges cluster A into B, A's id silently disappears — enrichment's stored ids 404 |
+| `version` for optimistic locking (§4.4, §4.6) | none | missing |
+| provenance, `inferred_fields`, idempotency keys ≥ 30 days (§4.5) | none | missing |
+| search one record against the unified DB, p95 ≤ 500 ms / 100 items (§6) | the match model (m/u, term frequencies) is fitted **inside each batch run** (`_fit_match_model`) and never persisted; blocking runs over the run's own records only | no online scoring path |
+| `score` comparable within a type (§4.3 rule 2) | probabilities exist but are **uncalibrated** (P8 ceiling; D6/D12 deferred to Part 3) | partly met — see D-50 |
+| app state outside the user's schema (D-34) | `merge_engine_entity_map` and the audit table sit in `public` | pre-existing D-34 debt, not fixed by P21 |
+
+### Where the contract is good — keep as written
+
+ER is the only id-assigner; search is batch and side-effect free; per-item
+status instead of failing the batch; `Idempotency-Key` on every write; parents
+created before children so references are always real ER ids; fill-empty-only
+updates; provenance on every write; no delete; enrichment holds its data during
+an ER outage. Each of these removes a failure mode we would otherwise have to
+handle ourselves.
+
+### Where it is not — and the change (all carried into `er_contract.md` v1.2)
+
+| # | problem in v1 | change |
+|---|---|---|
+| C1 | Field and type names are enrichment's (`manufacturer`, `website`, `organization`). Our destination schema is fixed; a name that is not ours would need mapping or a new column. | Enrichment uses **exactly** the names `/v1/entity-types` returns. `entity_type` = our entity name; field = destination column name. An unknown attribute → `422 VALIDATION_FAILED` (`"fields": {"x": "unknown"}`), never a new column (D-33). |
+| C2 | "Which table holds an entity type" is not answered; enrichment reads the unified DB directly. | `/v1/entity-types` adds `"table"` (schema-qualified destination table) per type. Since field = column, no column mapping is needed. |
+| C3 | No change feed: destination tables have no `updated_at` and may not get one (D-33). | `merge_engine.er_entity_version(entity_type, id, version, updated_at)` is readable by enrichment's read-only role and is bumped by every ER write **and** every batch load. It is the watermark: `WHERE updated_at > $last`. |
+| C4 | Cluster **splits** are not covered (only merges). | The id stays with one part; the other part gets a new id; no redirect for the split-off part. Implementer must first verify what the batch does today on a split and document it. |
+| C5 | PATCH implies a field set once stays set. With enrichment as an origin (D-46) a later real source value wins. | Contract states ER has the final say **over time**: the PATCH response shows what was actually stored; a later batch run can replace an enrichment value with a source value. Enrichment must re-read, never assume. |
+| C6 | Score calibration is assumed (§8 Q3). | `/v1/entity-types` adds `"thresholds": {"auto_match": p, "review": p}` per type — the bars the last successful run used. Scores are comparable only within one type. |
+| C7 | Writes during a batch load would race the load's own rewrite of the same rows. | Writes return `503` + `Retry-After` while a load runs (D-49); enrichment already retries `503`. Search and read stay up. |
+| C8 | `context.related` (e.g. person *used_by* company) hints at relationships, but the contract cannot **create** a relationship (a junction row). | Open question back to enrichment (§10). v1: `context` is ignored. |
+| C9 | `er_service_openapi.json` is referenced but is **not in this repo**. | Request it; it is the machine check for acceptance below. |
+| C10 | A type with no successful batch run has no fitted model, so search cannot score it. | Such a type is not listed in `/v1/entity-types`; requests for it get `UNSUPPORTED_ENTITY_TYPE`. |
+
+### Design, for whoever implements it
+
+Smallest change that meets the contract: **reuse** the destination connector,
+`entity_map`, the P5 blocking keys, the P13/P14 model, `_score_pair`, and P18
+survivorship. New code is the HTTP layer, five side tables, and two small hooks
+in `load_data`. Layering (`CLAUDE.md`): routes in `src/api` call a new
+orchestrator-level module, which calls tools — no reverse import.
+
+**P21a — side tables, schema `merge_engine` in the destination DB (D-45).**
+Created idempotently by the destination connector, like `ensure_entity_map`.
+
+| table | key | holds |
+|---|---|---|
+| `er_entity_version` | `(entity_type, id)` | `version int`, `updated_at` — optimistic lock + change feed (C3) |
+| `er_redirect` | `(entity_type, old_id)` | `new_id`, `run_id`, `at`; chains compressed on write so a read is one hop |
+| `er_idempotency` | `key` | `entity_type`, `request_sha256`, `status`, `response jsonb`, `created_at`; purge rows older than 30 days |
+| `er_enrichment_record` | `record_id` | `entity_type`, `attributes jsonb`, `references jsonb`, `inferred_fields text[]`, `provenance jsonb`, `created_at` — append-only; **this is the enrichment origin** (D-46) |
+| `er_model` | `(entity_type)` | `run_id`, `params jsonb` (whatever `_fit_match_model` returns: m/u, term/IDF tables, band thresholds) — overwritten after each successful load |
+
+**P21b — `GET /v1/health`, `GET /v1/entity-types`.** Built from
+`read_destination_schemas` + the last `er_model` row per type: `fields` =
+destination columns minus key and P12 metadata columns, SQL type → contract
+type; `reference_fields` = declared FKs into another entity's table;
+`identity_fields` = fields the stored model compares; `required_fields` =
+`NOT NULL` non-key columns; plus `table` (C2) and `thresholds` (C6). Health
+checks the DB connection only (≤ 50 ms target).
+
+**P21c — `POST /v1/entities:search`.** On service start and after each load,
+load the type's destination rows and build an in-memory token → ids index with
+the **same** key function P5 uses (`_token_keys`) — no second blocking logic.
+Per item: index lookup → candidate ids (cut by the same rule P5's node-centric
+WNP uses, no new constant) → `_score_pair` with the stored model → drop below
+`thresholds.review` (contract rule 3) → sort → `limit` (default 5, max 20).
+`matched_fields` = fields at the top comparison level; a reference field is an
+exact-match comparison on the ER id. Must handle sparse items (only `name`):
+verify the model treats a missing field as neutral, not as disagreement. Pure
+read: no writes, no LLM call. Max 100 items per request, else `400`.
+
+**P21d — `GET /v1/entities/{type}/{id}`.** Follow `er_redirect` (set
+`redirected_from`), read the destination row, `version` from
+`er_entity_version`. `404` only when the id was never issued (not in
+`entity_map`, not in `er_redirect`).
+
+**P21e — `POST /v1/entities/{type}` (find-or-create, D-47).** In one
+transaction: (1) API key; (2) idempotency — same key + same sha → stored
+response with `idempotent_replay: true`, same key + other sha → `422
+IDEMPOTENCY_PAYLOAD_MISMATCH`; (3) validate types, required fields, unknown
+fields (C1), references exist (follow redirects); (4) take
+`pg_try_advisory_xact_lock(write-lock)` — fails during a load → `503` (D-49) —
+then `pg_advisory_xact_lock(hash(entity_type))` so two workers cannot both
+miss and both create; (5) run P21c's search; top score ≥
+`thresholds.auto_match` → `200 EXISTING`; (6) else insert an
+`er_enrichment_record`, its `entity_map` row, and the destination row projected
+through survivorship (single source), using **the same id function the batch
+uses** for a singleton cluster, so the next batch run reproduces the id;
+`version = 1`; store the idempotency row; `201 CREATED`.
+
+**P21f — `PATCH /v1/entities/{type}/{id}`.** Same idempotency, auth and locks.
+Follow redirect. `If-Match` ≠ current version → `412`. Append a new
+`er_enrichment_record` mapped to the cluster, recompute **that one cluster's**
+projection with P18 survivorship where the enrichment origin has the lowest
+priority and an `inferred` value only fills a field no other value fills
+(D-48); write the destination row; `version + 1`; return the full entity (C5).
+`add_aliases` only if the type has an aliases field, else `422` on it.
+
+**P21g — batch runs see enrichment, and tell enrichment about merges.** Three
+hooks, all inside the load transaction:
+1. Extraction reads `er_enrichment_record` as one more origin named
+   `enrichment_engine`. **Without this the next load rewrites the rows from the
+   source origins only and silently drops every enrichment value** — the most
+   likely way P21 fails in production.
+2. `load_data` holds the write lock (`pg_advisory_xact_lock(write-lock)`) for
+   its whole transaction (C7).
+3. After the entity map is saved: for every cluster id that lost all its
+   records to another cluster, insert `er_redirect(old → new)`; bump
+   `er_entity_version` for every cluster whose row changed; refresh `er_model`
+   and the in-memory search index.
+
+**P21h — auth and access (D-51, D-52).** `X-API-Key` header checked by one
+FastAPI dependency against env `ER_API_KEY`; env unset → `/v1` is disabled
+(fail closed). Enrichment's read access is a read-only Postgres role, created
+by the DBA from a documented SQL snippet: `SELECT` on the entity tables of
+`public` and on `merge_engine.er_entity_version` / `er_redirect` only.
+
+### Acceptance — live, independent (per `CLAUDE.md`, not the API's own answers)
+
+Pre-register in `.handoff/P21.acceptance.md` before implementing.
+
+1. Every response validates against enrichment's `er_service_openapi.json`
+   (C9) — run their simulator's client against our service.
+2. Create, then direct SQL: one destination row, one `entity_map` row, one
+   `er_enrichment_record`, `version = 1`. Replay the same key: same id, row
+   count unchanged.
+3. Two concurrent creates of the same new entity (different keys): exactly one
+   destination row (SQL `count`), the other answer is `EXISTING`.
+4. Plant two records that a batch run will merge (A into B): after the run,
+   `GET A` returns B with `redirected_from = A`; `er_redirect` has the row.
+5. PATCH an empty field, run a batch: the value is still in the destination
+   (SQL) — proves hook P21g-1.
+6. An `inferred` value never replaces a source value (SQL on a planted pair).
+7. A write during a running load gets `503`; the load's result is unchanged.
+8. Search p95 for 100 items on the real `company` type ≤ 500 ms, measured.
+9. Search returns the planted true match in its top-5 for a held-out set of
+   destination rows queried by `name` only (recall@5, reported, not asserted).
+
+### Revision 2026-11-21b — ER decides the match (`resolve`), user decisions D-56 … D-60
+
+The conversation was redesigned after P21a–h were written. **Where this
+subsection and P21c/P21e disagree, this subsection wins.** Contract text:
+`er_contract.md` v1.2 §3–§4.
+
+- **`POST /v1/entities:resolve` replaces `search` and `create`** (both dropped,
+  D-60). Per item: P21c's candidate search and scoring, then ER decides:
+  ≥ `auto_match` → `MATCHED`; below `review` → `CREATED` through P21e's create
+  path (locks, idempotency, singleton id function); in between → `AMBIGUOUS`
+  with candidates, the fields where they differ, and a `resolve_token`.
+- **Second ask** (same item with the `resolve_token` and more evidence): score
+  again; still in the band → `PENDING_REVIEW` with a ticket.
+- **Review queue:** new side table `merge_engine.er_review(ticket, entity_type,
+  item jsonb, candidates jsonb, status, decision, decided_id, decided_by,
+  decided_at)`. The token is the ticket id issued early (status `AMBIGUOUS`),
+  so no second table. Reviewers need a list + decide action: the P15 band UI is
+  inside the batch workflow's HITL gate, so this is **new** — two `/api`
+  routes and one screen. A human answer is written to P9 decision memory so a
+  batch run does not ask again. `GET /v1/reviews/{ticket}` reads the row.
+- **Hybrid shape (D-56):** `attributes` = our field names only, used to match
+  and store; `extra` = everything else enrichment found, stored in
+  `er_enrichment_record.provenance`, never matched, never projected (D-33);
+  `source_text` goes to the reviewer.
+- **Known rows by id (D-58):** a row enrichment read from the destination is
+  addressed by its `id`; only entities found inside text are resolved.
+- **Schema once per run (D-59):** `/v1/entity-types` at run start.
+- Acceptance additions: (10) a planted in-band pair → `AMBIGUOUS`, second ask
+  → `PENDING_REVIEW`, a human decision via the review route → ticket answers
+  `MATCHED` with the right id (SQL on `er_review` and `entity_map`); (11) an
+  `extra` key never appears in any destination column (SQL on the schema and
+  the row).
+
+### Ceilings, stated
+
+- Scores are uncalibrated across types (C6); thresholds are per type.
+- Search uses the model of the last successful run; a type never run is
+  unsupported (C10).
+- Relationship creation is not in v1 (C8).
+- `merge_engine_entity_map` stays in `public` (D-34 debt, unchanged).
+- One write lock for all types during a load: writes pause for the whole load.
+
+---
+
+## P22 — Field mapping by embedding + reranker — **decision recorded, not scheduled**
+
+> **Added 2026-11-21. Status: OPEN (D-53).** The user has a local embedding +
+> reranker model; it is not ready yet. Do not implement until the user says it
+> is. This section records where it fits so the work can start without
+> re-research.
+
+### Every place an embedding could map fields, and the verdict
+
+| # | mapping | today | verdict |
+|---|---|---|---|
+| 1 | **source column → destination column** (`map_fields_impl`) | Valentine phase 0 → name heuristic (`_heuristic_match`, P1 tokeniser) → LLM for what is left | **Recommended.** Biggest effect: catches synonyms the tokeniser cannot (`org_title` ↔ `company_name`) and shrinks the LLM prompt to a shortlist. |
+| 2 | cross-origin field equivalence (`schema_matching.py`, §3.2 unified corpus) | Valentine + heuristic, discovered schema | Same mechanism as 1; arrives with Part 3. |
+| 3 | enrichment attribute → destination column | — | **Not needed.** Contract v1.1 (C1) makes enrichment send our field names; an unknown name is a `422`. |
+| 4 | dimension **values** (`"IT"` ↔ `"Information Technology"`, P4 dimension rows) | exact text | Possible later; a value-normalisation problem, not field mapping. |
+| 5 | **record** retrieval for `/v1/entities:search` on sparse items | P5 token index (P21c) | This is the §3.6 ANN tier (D-28, D-29), Part 3 — not Part 1. |
+
+### How #1 would work (embedding retrieves, reranker decides, existing guards stay)
+
+1. Text per column: `table.column (type): v1, v2, v3` — name plus a few
+   sampled values from the profile the run already has.
+2. Embed every destination column once per run (cache by text hash; the
+   destination schema is fixed). Embed each source column; take the top-k
+   destination columns by cosine — retrieval only.
+3. Cross-encoder reranker scores (source text, candidate text) for those k.
+4. The result enters the **existing** decision path, not a new one: a clear
+   reranker winner goes through `_incompatible_with_column` and the `taken`
+   set like any heuristic match; an ambiguous one goes to the LLM with only the
+   shortlist. Unmatched stays in `unmapped_fields` — never a new column (D-33).
+
+Why §2.7's objection to embeddings does not apply here: that objection is
+about a **persistent, incrementally updated vector index over records**. A
+schema has tens to hundreds of columns; the vectors are recomputed per run and
+need no index, no update path and no id mapping.
+
+### Gate before it may replace anything
+
+A bake-off against current `map_fields`, rule pre-registered (as plan §2.4
+requires): needs a labelled source→destination mapping set (build one from the
+ground-truth scripts if none exists — that is the first task), measures
+precision/recall of accepted mappings and the count of LLM calls. Wins only if
+precision does not drop. Model, k and the reranker cut-off are decided by that
+measurement, not set in advance.
+
+---
+
 ## Part 1 ordering and dependencies
 
 **The order changed in this revision.** One dependency is hard and getting it
@@ -1546,6 +1793,10 @@ flowchart TB
   P9[P9 decision memory file]
   P11[P11 map_fields concurrency]
   P12[P12 metadata exclusion]
+  P5 --> P21[P21 ER service contract<br/>FIRST in 2026-11-21 revision]
+  P14 --> P21
+  P18 --> P21
+  P22[P22 embedding field mapping<br/>decision only]
 ```
 
 **The hard constraint, stated plainly:** P5's replacement produces candidate
@@ -1554,7 +1805,12 @@ Ship P5 before P2 and the first run afterwards generates **more** comparisons
 than the current code, not fewer. P2's block cleaning and meta-blocking are what
 make P5 affordable.
 
-**Recommended sequence:** P2 → P5 → P1 → P3 → P4 → P13 → P14 → P15 → P6 → P7 →
+**Revision 2026-11-21:** P1–P20 are landed on `feat/part1-fixes` (Phase 6b
+open). Next: **P21a → P21b → P21c → P21d → P21e/P21f → P21g → P21h**, then
+the Phase 6b items, then P22 when its model is ready (D-53). P21 depends on
+P5 (blocking keys), P13/P14 (model), P18 (survivorship) — all landed.
+
+Original sequence for P1–P20: P2 → P5 → P1 → P3 → P4 → P13 → P14 → P15 → P6 → P7 →
 P8 → P20 → P16 → P19 → P11 → P12 → P17 → P18 → P9 → P10.
 
 ### Net speed effect of Part 1
@@ -2720,6 +2976,29 @@ quoted as primary text.
 
 ---
 
+## 2.22 Retrieve-then-rerank schema matching (for P22) — sources not yet read
+
+> **Added 2026-11-21. Disclosure, per §2.21:** no paper below was read for this
+> revision. They are pointers for whoever implements P22, to be read and
+> checked before any number from them is relied on.
+
+- **Magneto** (Liu et al., VLDB 2025, "combining small and large language
+  models for schema matching") — the shape P22 proposes: a small model
+  retrieves and ranks candidate target columns, a larger model reranks only the
+  shortlist. Read it for the column-text serialisation and for its reported
+  cost/accuracy trade-off.
+- **Valentine** (already adopted, ADR 0005) — the benchmark suite and matchers
+  P22's bake-off compares against; reuse its evaluation, do not write a second.
+- Cross-encoder reranking in general (sentence-transformers' "retrieve &
+  re-rank" pattern) — the standard reason to rerank: a bi-encoder scores each
+  side alone, a cross-encoder reads both together and is more precise on the
+  few candidates retrieval returns.
+
+**What this section does not claim:** any accuracy figure. P22's gate is a
+measurement on our own schemas, not a number from these sources.
+
+---
+
 # PART 3 — Architecture
 
 Part 3 is what Part 1 cannot reach: it needs new storage and one new pipeline
@@ -3714,6 +3993,23 @@ a measurement, recorded here.
 | **D-41** | Blocking tuned on **zero-label metrics**; PC/PQ only where ground truth exists | U/R | `recordlinkage` ships only `reduction_ratio`; PC/PQ need labels we will not have | P19 |
 | **D-42** | **P2 lands before P5** | R | P5's blocking is deliberately less selective; the reverse order makes the next run worse | §Part 1 ordering |
 | **D-43** | The report lives at **repo root**; the `.tmp/` copy is dead | U | — | — |
+| **D-44** | **P21 (ER service contract) first**, before the open Phase 6b items; Part 1's "no new storage" scope rule is lifted **for P21 only** | U | The Enrichment Engine is blocked on it; Phase 6b items are quality tuning that can wait | P21 |
+| **D-45** | ER side tables in a **`merge_engine` schema inside the destination DB** | U | Keeps D-34 (not in `public`), one connection, and the load's transaction can cover them | P21a |
+| **D-46** | Enrichment writes enter as **a new origin `enrichment_engine`**, lowest survivorship priority | U | Source-DB facts beat extracted text; the next batch run keeps enrichment values instead of dropping them | P21f, P21g |
+| **D-47** | Create is **find-or-create** (`EXISTING` at ≥ the type's auto-match bar) | U | Parallel enrichment workers cannot make two ids for one entity | P21e |
+| **D-48** | `inferred_fields` **stored, lowest trust**: only fill a field nothing else fills | U | Guesses are kept for audit but never overwrite evidence | P21f |
+| **D-49** | Writes **return 503 + Retry-After during a batch load**; search/read stay up | U | No queue to build; enrichment already retries 503 | P21e, P21g |
+| **D-50** | Scores comparable **within one type only**; per-type thresholds published in `/v1/entity-types` | R | Probabilities are uncalibrated (P8 ceiling, D6/D12 deferred) | P21b |
+| **D-51** | Auth = **`X-API-Key` header**, env `ER_API_KEY`, fail closed when unset | U | One internal client; no identity provider needed | P21h |
+| **D-52** | Enrichment reads the unified DB through a **read-only Postgres role**; change feed = `merge_engine.er_entity_version.updated_at` | U | Zero read API to build; no new destination column (D-33) | P21h |
+| **D-53** | Embedding + reranker for **source→destination field mapping** recorded, **not scheduled** until the user's local model is ready; gated by a bake-off | U | Recommended mapping #1 of five considered; enrichment-attribute mapping is unnecessary under C1 | P22 |
+| **D-54** | The ER service lives **inside `src/api`** (same FastAPI app, `/v1` routes) | U | One process, one deploy | P21 |
+| **D-55** | An entity type with **no destination table** is `UNSUPPORTED_ENTITY_TYPE`; ER never creates tables | U | Fixed-schema contract (D-33) | P21b |
+| **D-56** | Entity description is **hybrid**: our field names in `attributes`, everything else in `extra` (provenance only), plus `source_text` | U | Nothing enrichment found is lost; only known fields are matched and stored | P21 rev. b |
+| **D-57** | **ER decides** match/new via `resolve`; ambiguous twice → **ER review queue** (`PENDING_REVIEW` + ticket) | U | Matching logic, thresholds and human review in one system, not two | P21 rev. b |
+| **D-58** | A row enrichment read from the DB is named **by its id**; only entities found in text are resolved | U | The id column is the ER id; searching a known row can only add wrong matches | P21 rev. b |
+| **D-59** | Enrichment fetches `/v1/entity-types` **once per run** | U | A schema change cannot silently break them | P21b |
+| **D-60** | `search` and `create` endpoints **dropped**; `resolve` covers both | U | One less endpoint to build and keep in sync | P21 rev. b |
 
 ---
 
