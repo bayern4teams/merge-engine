@@ -297,6 +297,105 @@ class ErService:
             }
         return None
 
+    def register_extension_type(
+        self, entity_type: str, body: dict[str, Any]
+    ) -> tuple[int, dict[str, Any]]:
+        """PUT /v1/entity-types/{type} (contract §5.2, P21j).
+
+        Registration is validation + insert/upsert into er_type_registry.
+        Fields are only ever ADDED (§5.2): an existing extension type keeps
+        every field it has; same definition twice is a 200 no-op. A name the
+        destination already owns is 409 — a unified table is not movable by
+        an HTTP call. Thresholds are ER's provisional bars (no fitted model
+        exists for a type nobody has ever loaded).
+        """
+        fields = body.get("fields") or {}
+        identity = body.get("identity_fields") or []
+        required = body.get("required_fields") or []
+        refs = body.get("reference_fields") or {}
+        allowed_types = {"string", "integer", "number", "boolean", "date", "datetime", "string[]"}
+        bad = {k: v for k, v in fields.items() if v not in allowed_types}
+        if bad:
+            raise ErError(422, "VALIDATION_FAILED", "bad field type(s)", bad)
+        unknown = [f for f in list(identity) + list(required) if f not in fields]
+        if unknown:
+            raise ErError(
+                422,
+                "VALIDATION_FAILED",
+                "identity/required fields must be declared in fields",
+                {f: "not in fields" for f in unknown},
+            )
+        for ref_field, ref_type in refs.items():
+            if ref_field in fields:
+                raise ErError(
+                    422,
+                    "VALIDATION_FAILED",
+                    "reference field is also a data field",
+                    {ref_field: "cannot be both"},
+                )
+            if self.type_def(str(ref_type)) is None:
+                raise ErError(
+                    422,
+                    "VALIDATION_FAILED",
+                    "reference target type is unknown",
+                    {ref_field: f"'{ref_type}' is in neither store"},
+                )
+        if entity_type in self.unified_types():
+            raise ErError(409, "TYPE_TAKEN", f"'{entity_type}' is a unified type")
+        s = self.conn._er_schema
+        existing_rows = self.conn.execute_sql(
+            f'SELECT fields, identity_fields, required_fields FROM "{s}".er_type_registry '
+            "WHERE entity_type = %s",
+            (entity_type,),
+        )
+        if not existing_rows:
+            self.conn.execute_sql(
+                f'INSERT INTO "{s}".er_type_registry (entity_type, store, fields, '
+                "identity_fields, required_fields, reference_fields, thresholds, collection) "
+                "VALUES (%s, 'enrichment', %s, %s, %s, %s, %s, %s)",
+                (
+                    entity_type,
+                    json.dumps(fields),
+                    list(identity),
+                    list(required),
+                    json.dumps(refs),
+                    json.dumps(dict(PROVISIONAL_THRESHOLDS)),
+                    entity_type,
+                ),
+            )
+            self.invalidate()
+            entry = self.type_def(entity_type)
+            return 201, entry or {"entity_type": entity_type, "store": "enrichment"}
+        # Additive update (§5.2): fields only ever added, lists only ever
+        # extended. Same definition again changes nothing → 200 no-op.
+        cur_fields, cur_identity, cur_required = existing_rows[0]
+        merged = dict(cur_fields or {})
+        merged_identity = list(cur_identity or [])
+        merged_required = list(cur_required or [])
+        changed = False
+        for k, v in fields.items():
+            if k not in merged:
+                merged[k] = v
+                changed = True
+        for f in identity:
+            if f not in merged_identity:
+                merged_identity.append(f)
+                changed = True
+        for f in required:
+            if f not in merged_required:
+                merged_required.append(f)
+                changed = True
+        if changed:
+            self.conn.execute_sql(
+                f'UPDATE "{s}".er_type_registry '
+                "SET fields = %s, identity_fields = %s, required_fields = %s "
+                "WHERE entity_type = %s",
+                (json.dumps(merged), merged_identity, merged_required, entity_type),
+            )
+            self.invalidate()
+        entry = self.type_def(entity_type)
+        return 200, entry or {"entity_type": entity_type, "store": "enrichment"}
+
     def entity_types_payload(self) -> dict[str, Any]:
         entries = []
         for name in sorted(self.unified_types()):
