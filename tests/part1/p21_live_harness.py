@@ -108,6 +108,24 @@ def dest(itest_schema: str) -> Iterator[Any]:
 
 
 @pytest.fixture()
+def mongo_db() -> Any:
+    """The throwaway local mongod (acceptance 15/16); None skips Mongo tests.
+
+    serverSelectionTimeoutMS keeps an outage a fast, honest skip instead of
+    a 30s hang."""
+    import pymongo
+
+    client = pymongo.MongoClient(mongo_uri(), serverSelectionTimeoutMS=1500)
+    try:
+        client.admin.command("ping")
+    except Exception:
+        pytest.skip("ER_TEST_MONGO_URI unreachable — start the itest mongod")
+    db = client["enrichment_entities_itest"]
+    yield db
+    client.close()
+
+
+@pytest.fixture()
 def sql(dest: Any) -> Iterator[Any]:
     """Raw cursor on the same isolated connection (independent verification)."""
     conn = dest._ensure_connection()
@@ -119,11 +137,9 @@ def sql(dest: Any) -> Iterator[Any]:
         cur.close()
 
 
-def count(
-    cur: Any, table: str, schema: str | None = None, where: str = "", params: tuple[Any, ...] = ()
-) -> int:
-    """SQL truth for acceptance counts (`schema` defaults to the session schema)."""
-    s = schema or os.environ.get("_P21_ITEST_SCHEMA", "public")
+def count(cur: Any, table: str, schema: str, where: str = "", params: tuple[Any, ...] = ()) -> int:
+    """SQL truth for acceptance counts (schema = the session's isolated one)."""
+    s = schema
     cur.execute(
         f'SELECT count(*) FROM "{s}"."{table}"' + (f" WHERE {where}" if where else ""), params
     )

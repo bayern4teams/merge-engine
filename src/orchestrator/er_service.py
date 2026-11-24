@@ -20,6 +20,7 @@ import hashlib
 import json
 import logging
 import secrets
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -227,9 +228,13 @@ class ErService:
         self.mongo_db = mongo_db
         self.mongo_database = mongo_database
         self._types: dict[str, TypeState] = {}
-        # One in-process lock per type guarding find-then-create; the real
-        # serialization across processes is the pg_advisory_xact_lock taken
-        # inside resolve (contract: concurrent creates get one id).
+        # In-process write serialization: FastAPI runs the sync route
+        # handlers on a thread pool, and two threads sharing this service
+        # share one psycopg2 session — session advisory locks do NOT
+        # serialize against your own session, so the advisory pair below
+        # guards OTHER processes only. Within the process the batches
+        # queue here (contract guarantee 4: concurrent creates get one id).
+        self._write_gate = threading.Lock()
         self.sweep_grace_seconds = 60.0
 
     # ── type registry ───────────────────────────────────────────────────
@@ -614,11 +619,13 @@ class ErService:
         # isolation); a unified batch never pays their latency.
         if any((t := self.type_def(et)) is not None and t["store"] == "enrichment" for et in types):
             self._extension_state_probe(types)
+        if not self._write_gate.acquire(timeout=2.0):
+            raise ErError(503, "LOAD_RUNNING", "a batch load is running; retry later")
         try:
-            self.acquire_write_locks(types)
-        except WritePaused:
-            raise ErError(503, "LOAD_RUNNING", "a batch load is running; retry later") from None
-        try:
+            try:
+                self.acquire_write_locks(types)
+            except WritePaused:
+                raise ErError(503, "LOAD_RUNNING", "a batch load is running; retry later") from None
             self.prepare_batch(types)
             results = []
             for raw_item in items:
@@ -661,6 +668,7 @@ class ErService:
             return 200, {"results": results}
         finally:
             self.release_write_locks()
+            self._write_gate.release()
 
     def run_search(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         """POST /v1/entities:search (P21i, D-68): side-effect-free preview of
@@ -950,17 +958,32 @@ class ErService:
         create (contract guarantee 4).
 
         Session-level advisory locks on this service's dedicated connection:
-        the load (P21g-2) holds the same write key for its whole transaction,
-        so the try-lock is exactly the pause signal — no queue to build, and
-        search/read never touch it. Per-type keys are taken in sorted order
-        (and released the same way) so two multi-type batches can't deadlock.
+        the load (P21g-2) holds the same write key for its whole transaction.
+        The try is given a BOUNDED wait (~2s) rather than a single attempt:
+        a concurrent ER worker holds it only for its own short batch, so
+        waiting turns acceptance-3's "two concurrent creates" into a queue
+        (second worker rebuilds under the lock and answers MATCHED — exactly
+        one row); a batch load holds it for seconds-to-minutes, so the wait
+        expires and the request 503s exactly as D-49 demands. Per-type keys
+        are taken in sorted order (released likewise) so multi-type batches
+        can't deadlock.
+
+        ``prepare_batch`` (the index rebuild) MUST run after this returns —
+        that ordering is what makes the queued worker see the first one's
+        committed row.
         """
         conn = self.conn._ensure_connection()
         keys = sorted(_lock_key("er-type", et) for et in entity_types)
-        with conn.cursor() as cur:
-            cur.execute("SELECT pg_try_advisory_lock(%s)", (WRITE_LOCK_KEY,))
-            if not cur.fetchone()[0]:
+        deadline = time.monotonic() + 2.0
+        while True:
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_try_advisory_lock(%s)", (WRITE_LOCK_KEY,))
+                if cur.fetchone()[0]:
+                    break
+            if time.monotonic() >= deadline:
                 raise WritePaused()
+            time.sleep(0.05)
+        with conn.cursor() as cur:
             for k in keys:
                 cur.execute("SELECT pg_advisory_lock(%s)", (k,))
         conn.commit()
@@ -1113,13 +1136,22 @@ class ErService:
         enrichment record id — reproduction property (P21e step 6)."""
         attrs = {k: v for k, v in (item.get("attributes") or {}).items() if v is not None}
         refs = item.get("references") or {}
-        record_id = f"{ENRICHMENT_ORIGIN}:{uuid4hex()}"
+        # Derive record_id from the idempotency key when there is one: a
+        # REPLAY must reuse the exact reservation (same id, same entity_map
+        # row), not mint a second entity. uuid only for keyless callers.
+        key = str(item.get("idempotency_key") or "") or uuid4hex()
+        record_id = f"{ENRICHMENT_ORIGIN}:k:{key}"
         entity_id = new_id(entity_type, record_id)
         prov = item.get("provenance") or {}
         conn = self.conn._ensure_connection()
         s = self.conn._er_schema
-        with self.conn.atomic():
-            cur = conn.cursor()
+        # Own transaction on the shared connection WITHOUT atomic(): the
+        # idempotency layer above may already own atomic()'s slot, and
+        # nesting it deadlocks the commit ownership (connector's own
+        # _commit() is transaction-aware and defers inside one).
+        cur = conn.cursor()
+        try:
+            self.conn.ensure_entity_map()
             cur.execute(
                 f'INSERT INTO "{s}".er_enrichment_record (record_id, entity_type, attributes, '
                 '"references", inferred_fields, extra, source_text, provenance) '
@@ -1151,6 +1183,12 @@ class ErService:
                 "VALUES (%s, %s, 1, now()) ON CONFLICT (entity_type, id) DO NOTHING",
                 (entity_type, entity_id),
             )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cur.close()
         self.log_history(
             entity_type,
             entity_id,
@@ -1203,7 +1241,8 @@ class ErService:
             f"INSERT INTO {table} ({col_sql}) VALUES ({placeholders}) "
             f"ON CONFLICT (id) DO UPDATE SET {updates}"
             if updates
-            else f"INSERT INTO {table} ({col_sql}) VALUES ({placeholders}) ON CONFLICT (id) DO NOTHING"
+            else f"INSERT INTO {table} ({col_sql}) VALUES ({placeholders}) ON CONFLICT (id) DO NOTHING",
+            tuple(vals),
         )
 
     def _create_extension(
@@ -1228,7 +1267,8 @@ class ErService:
         attrs = {k: v for k, v in (item.get("attributes") or {}).items() if v is not None}
         refs = item.get("references") or {}
         prov = item.get("provenance") or {}
-        record_id = f"{ENRICHMENT_ORIGIN}:{uuid4hex()}"
+        key = str(item.get("idempotency_key") or "") or uuid4hex()
+        record_id = f"{ENRICHMENT_ORIGIN}:k:{key}"
         entity_id = new_id(entity_type, record_id)
         coll = (tdef.get("collection") or "").split(".")[-1] or entity_type
         s = self.conn._er_schema
@@ -1642,8 +1682,8 @@ WRITE_LOCK_KEY = _lock_key("merge-engine", "load-write-lock")
 # ── helpers used across the module and by the routes ────────────────────────
 
 
-def _qualify(table: str) -> str:
-    return table if "." in table else f"public.{table}"
+def _qualify(table: str, schema: str = "public") -> str:
+    return table if "." in table else f"{schema}.{table}"
 
 
 def data_projection(rec: dict[str, Any], cols: list[str]) -> dict[str, Any]:
@@ -1702,6 +1742,10 @@ def build_entity_type_catalog(connector: Any) -> dict[str, dict[str, Any]]:
     schemas = read_destination_schemas(connector)
     catalog: dict[str, dict[str, Any]] = {}
     for table, schema in schemas.items():
+        # ER's own bookkeeping tables are not entity types (in the isolated
+        # live-test schema they share a schema with the data tables).
+        if table.startswith("er_") or table.startswith("merge_engine_"):
+            continue
         cols = schema.get("columns") or []
         pk = schema.get("primary_key")
         try:
@@ -1734,7 +1778,7 @@ def build_entity_type_catalog(connector: Any) -> dict[str, dict[str, Any]]:
             if compared:
                 identity = compared
         catalog[entity_type] = {
-            "table": _qualify(table) if "." not in table else table,
+            "table": _qualify(table, getattr(connector, "_schema", "public")),
             "fields": fields,
             "identity_fields": identity,
             "required_fields": required,
