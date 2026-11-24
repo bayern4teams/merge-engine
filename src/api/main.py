@@ -442,6 +442,13 @@ def create_api(config_path: str = "config/config.yaml") -> FastAPI:
         allow_headers=["*"],
     )
 
+    # ER service (P21): the /v1 contract surface for the Enrichment Engine.
+    # Built lazily per-request so a missing destination config can't stop the
+    # dashboard app from starting.
+    from src.api.er_routes import build_er_router
+
+    app.include_router(build_er_router())
+
     # ── Connections ──────────────────────────────────────────────────────────
 
     @app.post("/api/connections/test")

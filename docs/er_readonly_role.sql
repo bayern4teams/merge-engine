@@ -1,0 +1,31 @@
+-- P21h companion: the read-only DB role for the ER service's READ paths.
+--
+-- The /v1 service itself must connect as a read-write app role (it writes
+-- idempotency rows, the extension ledger, history). For anyone who only
+-- needs to READ the store — dashboards, the review panel, debugging — hand
+-- them this role instead of the app credentials.
+--
+-- Run once as a superuser on the destination database. Replace the
+-- password placeholder via \\password (never inline it here or anywhere
+-- tracked):
+--
+--   CREATE ROLE er_readonly LOGIN;
+--   \password er_readonly
+--
+--   -- destination data schema(s): read only
+--   GRANT USAGE ON SCHEMA public TO er_readonly;
+--   GRANT SELECT ON ALL TABLES IN SCHEMA public TO er_readonly;
+--   -- future tables created by later loads stay readable:
+--   ALTER DEFAULT PRIVILEGES IN SCHEMA public
+--       GRANT SELECT ON TABLES TO er_readonly;
+--
+--   -- ER side tables: read only (the ledger/history are audited, not edited)
+--   GRANT USAGE ON SCHEMA merge_engine TO er_readonly;
+--   GRANT SELECT ON ALL TABLES IN SCHEMA merge_engine TO er_readonly;
+--   ALTER DEFAULT PRIVILEGES IN SCHEMA merge_engine
+--       GRANT SELECT ON TABLES TO er_readonly;
+--
+--   REVOKE CREATE ON SCHEMA public FROM er_readonly;
+--   REVOKE CREATE ON SCHEMA merge_engine FROM er_readonly;
+-- (USAGE above never includes CREATE; the REVOKEs are belt-and-braces in
+--  case an earlier grant leaked write rights to PUBLIC.)
