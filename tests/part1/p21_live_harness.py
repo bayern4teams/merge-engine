@@ -126,6 +126,31 @@ def mongo_db() -> Any:
 
 
 @pytest.fixture()
+def seeded(dest: Any) -> Any:
+    """The connector plus a `companies` destination table for the service to
+    serve — the acceptance tests' one entity type. Created inside the session
+    schema, so it drops with it."""
+    with dest._ensure_connection().cursor() as cur:
+        cur.execute(
+            f'CREATE TABLE IF NOT EXISTS "{dest._schema}".companies ('
+            "id TEXT PRIMARY KEY, name TEXT NOT NULL, country TEXT, website TEXT, "
+            "notes TEXT)"
+        )
+    dest._ensure_connection().commit()
+    dest.ensure_entity_map()  # the batch's map table — hooks tests need it real
+    return dest
+
+
+@pytest.fixture()
+def svc(seeded: Any) -> Any:
+    """ErService over the seeded connector, no Mongo (extension tests inject
+    their own)."""
+    from src.orchestrator.er_service import ErService
+
+    return ErService(seeded)
+
+
+@pytest.fixture()
 def sql(dest: Any) -> Iterator[Any]:
     """Raw cursor on the same isolated connection (independent verification)."""
     conn = dest._ensure_connection()

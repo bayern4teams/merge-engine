@@ -16,6 +16,7 @@ come from the stored model, bars from its bands or the provisional
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -138,6 +139,8 @@ def serialize_model(model: Any) -> dict[str, Any] | None:
             for name, fm in model.fields.items()
         },
         "token_df": list(token_df) if token_df is not None else None,
+        # explicit band if this model carries one (tests + tuned runs)
+        "thresholds": getattr(model, "thresholds", None),
     }
 
 
@@ -162,6 +165,12 @@ def deserialize_model(params: dict[str, Any] | None) -> MatchModel | None:
         token_df = params.get("token_df")
         if token_df is not None:
             model.token_df = (token_df[0], token_df[1])
+        # C6: an explicit band stored with the run's model survives the
+        # round-trip (thresholds_from_model reads the attribute back); the
+        # batch fit bars stay implicit and read back as the defaults.
+        band = params.get("thresholds")
+        if isinstance(band, dict):
+            model.thresholds = band
         return model
     except Exception as exc:  # a corrupt row must not take the service down
         logger.warning("Could not rebuild match model: %s", exc)
@@ -452,7 +461,7 @@ class ErService:
             col_list = ", ".join(f'"{c}"' for c in ["id", *data_cols])
             for r in self.conn.execute_sql(f"SELECT {col_list} FROM {tdef['table']}"):
                 rid = str(r[0])
-                rec = dict(zip(["id", *data_cols], r[1:], strict=False))
+                rec = dict(zip(data_cols, r[1:], strict=False))
                 rec = {"id": rid, **data_projection(rec, data_cols)}
                 rows[rid] = rec
                 for tok in _token_keys({k: v for k, v in rec.items() if k != "id"}):
@@ -600,7 +609,14 @@ class ErService:
         return state
 
     def _mongo_coll(self, name: str) -> Any:
-        return self.mongo_db.collection(name)
+        db = self.mongo_db
+        coll = db[name] if hasattr(db, "__getitem__") else db.collection(name)
+        # pymongo lazily connects; fail FAST here so the ledger-first
+        # protocol never reserves an id for a store that cannot be reached.
+        with contextlib.suppress(AttributeError):
+            # dict-backed fakes (unit tests) have no client to ping
+            coll.database.client.admin.command("ping")
+        return coll
 
     # ── batch entry points (what the /v1 routes call) ───────────────────
 
@@ -617,8 +633,7 @@ class ErService:
         types = {str(i.get("entity_type")) for i in items if isinstance(i, dict)}
         # extension items 503 ONLY when their store is actually down (D-62
         # isolation); a unified batch never pays their latency.
-        if any((t := self.type_def(et)) is not None and t["store"] == "enrichment" for et in types):
-            self._extension_state_probe(types)
+        self._extension_state_probe(types)
         if not self._write_gate.acquire(timeout=2.0):
             raise ErError(503, "LOAD_RUNNING", "a batch load is running; retry later")
         try:
@@ -1228,15 +1243,31 @@ class ErService:
         priority.
         """
         cols, vals = ["id"], [entity_id]
+        inferred_cols = [
+            f'"{f}"' for f in inferred if f in tdef["fields"] and (f in attrs or f in refs)
+        ]
         for field_name, value in {**attrs, **refs}.items():
             if field_name not in tdef["fields"] and field_name not in tdef["reference_fields"]:
                 continue
             cols.append(f'"{field_name}"')
             vals.append(value)
         table = tdef["table"]
+        # ON CONFLICT DO UPDATE expressions refer to the existing row as
+        # <relation>.col — the bare relation name, never schema-qualified.
+        relation = table.split(".")[-1]
         col_sql = ", ".join(cols)
         placeholders = ", ".join(["%s"] * len(cols))
-        updates = ", ".join(f"{c} = EXCLUDED.{c}" for c in cols if c != "id")
+        # D-48 rule 2: an INFERRED value only fills a field nothing else
+        # fills — COALESCE keeps an existing (source) value on conflict.
+        # Non-inferred enrichment values may write over (the next batch run
+        # re-decides them under the origin priority anyway, D-46).
+        updates = ", ".join(
+            f'{c} = COALESCE("{relation}".{c}, EXCLUDED.{c})'
+            if c in inferred_cols
+            else f"{c} = EXCLUDED.{c}"
+            for c in cols
+            if c != "id"
+        )
         cur.execute(
             f"INSERT INTO {table} ({col_sql}) VALUES ({placeholders}) "
             f"ON CONFLICT (id) DO UPDATE SET {updates}"

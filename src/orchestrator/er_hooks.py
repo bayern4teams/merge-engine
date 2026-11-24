@@ -275,10 +275,10 @@ def write_load_side_effects(
     conflict records the unify node attached (P21k evidence).
     """
     if not _is_er_capable(connector):
-        return {"redirects": 0, "versions": 0, "history": 0}
+        return {"redirects": 0, "versions": 0, "history": 0, "splits": 0}
     s = connector._er_schema
     conn = connector._ensure_connection()
-    stats = {"redirects": 0, "versions": 0, "history": 0}
+    stats = {"redirects": 0, "versions": 0, "history": 0, "splits": 0}
 
     # -- er_redirect: ids that lost all their records to one other cluster.
     # The map is upserted in place, so the truth is before-vs-after: the
@@ -291,6 +291,7 @@ def write_load_side_effects(
     alive_after: set[tuple[str, str]] = {(et, cid) for (et, _rid), cid in after.items()}
 
     redirect_rows: list[tuple[str, str, str, str]] = []
+    split_rows: list[tuple[str, str, str]] = []
     if snapshot:
         moved: dict[tuple[str, str], set[str]] = {}
         for key, old_cid in snapshot.items():
@@ -300,20 +301,28 @@ def write_load_side_effects(
         for (et, old_cid), targets in moved.items():
             if (et, old_cid) in alive_after:
                 continue  # the id still holds at least one record
-            if len(targets) != 1:
-                # Several targets means a batch split, which connected-
-                # components clustering cannot produce; if it ever happens,
-                # refusing to guess is the honest answer (er_split is for
-                # human-driven splits, P21l).
-                logger.warning(
-                    "ER hook 3: cluster '%s' (%s) scattered to %d clusters — no redirect.",
-                    old_cid,
-                    et,
-                    len(targets),
-                )
-                continue
             table_name = _table_for_type(connector, et)
-            redirect_rows.append((table_name, old_cid, next(iter(targets)), run_id))
+            if len(targets) == 1:
+                redirect_rows.append((table_name, old_cid, next(iter(targets)), run_id))
+                continue
+            # Several targets = the human split this cluster at the matches
+            # gate (P21l). GET old must keep resolving (acceptance 19), so
+            # old redirects to the SURVIVING part — the smallest id, the
+            # batch's own deterministic tie-break (_assign_cluster_id) — and
+            # er_split records every part, survivors and new ids alike.
+            parts = sorted(targets)
+            redirect_rows.append((table_name, old_cid, parts[0], run_id))
+            for new_id in parts:
+                split_rows.append((table_name, old_cid, new_id))
+        if split_rows:
+            with conn.cursor() as cur:
+                psycopg2.extras.execute_batch(
+                    cur,
+                    f'INSERT INTO "{s}".er_split (entity_type, id, new_id, at) '
+                    "VALUES (%s, %s, %s, now()) ON CONFLICT (entity_type, id, new_id) DO NOTHING",
+                    split_rows,
+                )
+            stats["splits"] = len(split_rows)
         if redirect_rows:
             with conn.cursor() as cur:
                 psycopg2.extras.execute_batch(
@@ -360,7 +369,6 @@ def write_load_side_effects(
                             table_name,
                             cluster_id,
                             c.get("field"),
-                            None,
                             json.dumps(winner, default=str),
                             loser.get("origin"),
                             "HIGHER_PRIORITY_SOURCE",
