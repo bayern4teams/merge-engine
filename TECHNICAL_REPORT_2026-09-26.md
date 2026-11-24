@@ -31,9 +31,9 @@ The criterion used throughout, stated once and applied everywhere:
   - [0.7 Destination schema defects](#07-destination-schema-defects-found-by-direct-inspection)
   - [0.8 Environment constraints](#08-environment-facts-that-constrain-the-design)
 - [Architecture: three states](#architecture-three-states)
-- [PART 1 — Defects and fixes to apply now](#part-1--defects-and-fixes-to-apply-now) — P1–P22 (P21 ER service contract first)
-- [PART 2 — Research, cited](#part-2--research-cited) — §2.1–§2.22
-- [PART 3 — Architecture](#part-3--architecture) — §3.1–§3.14
+- [PART 1 — Defects and fixes to apply now](#part-1--defects-and-fixes-to-apply-now) — P1–P22 (P21 ER service contract first; rev. c 2026-11-23 aligned to contract v1.3)
+- [PART 2 — Research, cited](#part-2--research-cited) — §2.1–§2.23
+- [PART 3 — Architecture](#part-3--architecture) — §3.1–§3.15
 - [PART 4 — Appendices](#part-4--appendices) — incl. **4.6 Decision register**, **4.7 Corrections register**
 - [References](#references)
 
@@ -390,11 +390,16 @@ Everything here runs against the pipeline exactly as it exists today. Anything
 requiring the `merge_engine` store or the unification stage is in Part 3, and is
 marked as such where the two halves of one fix are split.
 
-> **Amended 2026-11-21 (D-44).** P21 is the one exception: it adds side tables
-> in a `merge_engine` schema and `/v1` routes, because the Enrichment Engine's
-> contract ([`docs/er_contract.md`](docs/er_contract.md)) cannot be met
-> without them. **P21 goes first**, before the open Phase 6b items. P22 is a
-> recorded decision, not scheduled work.
+> **Amended 2026-11-21 (D-44), amended again 2026-11-23 (D-61 … D-70).** P21 is
+> the one exception: it adds side tables in a `merge_engine` schema and `/v1`
+> routes, because the Enrichment Engine's contract
+> ([`docs/er_contract_v1.md`](docs/er_contract_v1.md) v1 →
+> [`docs/er_contract_v12.md`](docs/er_contract_v12.md) our v1.2 answer →
+> [`docs/er_contract_v13.md`](docs/er_contract_v13.md) their v1.3 draft)
+> cannot be met without them. **P21 goes first**, before the open Phase 6b
+> items. P22 is a recorded decision, not scheduled work. Revision 2026-11-23c
+> below re-aligns P21 to v1.3; where earlier text and rev. c disagree, rev. c
+> wins.
 
 **Ordering.** The dependency order changed in this revision and the change
 matters — see [Part 1 ordering](#part-1-ordering-and-dependencies). In short:
@@ -1533,8 +1538,11 @@ cost is superlinear before the cheap version is shown to fail.
 > before the open Phase 6b items (D9, D5, D1, D6).** Research only in this
 > revision — nothing below is implemented yet. Every decision here is the
 > user's (register D-44 … D-55). The counter-party's spec is
-> [`docs/er_contract.md`](docs/er_contract.md) v1 (2026-11-18), and our answer
-> to it is that file (now v1.2, with §10 listing every change from v1; the original is `docs/er_contract_v1_original.md`).
+> [`docs/er_contract_v1.md`](docs/er_contract_v1.md) v1 (2026-11-18), our answer
+> to it is [`docs/er_contract_v12.md`](docs/er_contract_v12.md) (v1.2, §10 lists
+> every change from v1), and their reply to that is
+> [`docs/er_contract_v13.md`](docs/er_contract_v13.md) (v1.3 draft, 2026-11-23) —
+> re-aligned by Revision 2026-11-23c at the end of this section.
 
 ### Evidence (checked 2026-11-21, graph first, then the source lines named)
 
@@ -1558,7 +1566,7 @@ updates; provenance on every write; no delete; enrichment holds its data during
 an ER outage. Each of these removes a failure mode we would otherwise have to
 handle ourselves.
 
-### Where it is not — and the change (all carried into `er_contract.md` v1.2)
+### Where it is not — and the change (all carried into `docs/er_contract_v12.md` v1.2)
 
 | # | problem in v1 | change |
 |---|---|---|
@@ -1591,6 +1599,10 @@ Created idempotently by the destination connector, like `ensure_entity_map`.
 | `er_idempotency` | `key` | `entity_type`, `request_sha256`, `status`, `response jsonb`, `created_at`; purge rows older than 30 days |
 | `er_enrichment_record` | `record_id` | `entity_type`, `attributes jsonb`, `references jsonb`, `inferred_fields text[]`, `provenance jsonb`, `created_at` — append-only; **this is the enrichment origin** (D-46) |
 | `er_model` | `(entity_type)` | `run_id`, `params jsonb` (whatever `_fit_match_model` returns: m/u, term/IDF tables, band thresholds) — overwritten after each successful load |
+
+*(Rev. c 2026-11-23 adds three more to this set — `er_type_registry`,
+`er_field_history`, `er_split` — specified in P21j/P21k/P21l below; the five
+above are unchanged.)*
 
 **P21b — `GET /v1/health`, `GET /v1/entity-types`.** Built from
 `read_destination_schemas` + the last `er_model` row per type: `fields` =
@@ -1682,7 +1694,8 @@ Pre-register in `.handoff/P21.acceptance.md` before implementing.
 
 The conversation was redesigned after P21a–h were written. **Where this
 subsection and P21c/P21e disagree, this subsection wins.** Contract text:
-`er_contract.md` v1.2 §3–§4.
+`docs/er_contract_v12.md` v1.2 §3–§4. (Partly superseded by Revision
+2026-11-23c below.)
 
 - **`POST /v1/entities:resolve` replaces `search` and `create`** (both dropped,
   D-60). Per item: P21c's candidate search and scoring, then ER decides:
@@ -1710,6 +1723,160 @@ subsection and P21c/P21e disagree, this subsection wins.** Contract text:
   `MATCHED` with the right id (SQL on `er_review` and `entity_map`); (11) an
   `extra` key never appears in any destination column (SQL on the schema and
   the row).
+
+### Revision 2026-11-23c — the v1.3 answer: two stores, client choice, search revived, full history (D-61 … D-70)
+
+The Enrichment team answered v1.2 with **v1.3 (draft, 2026-11-23)**,
+`docs/er_contract_v13.md`. The user accepted or negotiated each of its eight
+§11 questions; every position below is register-backed (D-61 … D-70). **Where
+this subsection and P21a–h or rev. b disagree, this subsection wins** (it also
+supersedes named bullets of rev. b, listed under "Rev. b, superseded").
+
+**What v1.3 changed, and each answer** (their §12 is the full diff):
+
+| v1.3 ask | answer | decision |
+|---|---|---|
+| §11.1 send the real `/v1/entity-types` output | ship a hand-built snapshot now, labelled pre-service; thresholds = last run's bars, default 0.95 (`_AUTO_MATCH`, `resolve_entities.py:72`) | D-61 |
+| §11.2 extension types resolved by ER inside **their** MongoDB | **accepted with four conditions** (D-62's) — this amends D-55: ER still never creates *destination tables*, but it now writes documents to a store they own | D-62 |
+| §11.3 `PUT /v1/entity-types/{type}` shape; who sets thresholds | shape OK; **ER sets thresholds** — a type with no batch run has no fitted model, so extension types get provisional defaults (0.95 / 0.70), published in `/v1/entity-types` like any type | D-63 |
+| §11.4 field history incl. **rejected attempts** | **full commitment**: `merge_engine.er_field_history`, every field change *and* every survivorship loss, both stores, both paths (API and batch) | D-64 |
+| §11.5 splits — which records move | accept their `merge_engine.er_split(entity_type, id, new_id, at)` proposal; honest caveat: splits arise today **only** from human cluster-edit overrides (`load_data.py` `human_override: "split"`), so the table stays empty until one happens | D-65 |
+| §11.6 accept the client's `choice` | **yes as written**: `{id}` accepted (follow redirect, tag `decided_by: "client"`), `UNKNOWN_ID` on never-issued ids, `{new: true}` guarded by the find-before-create recheck (`MATCH_APPEARED`) | D-66 |
+| §11.7 two+ candidates ≥ `auto_match` → `AMBIGUOUS` | **yes** — one comparison on the already-sorted candidate list; and since `_build_clusters` deliberately tolerates in-ER near-duplicates (over-merge is the worse failure), their rule turns that liability into client-driven cleanup | D-66 |
+| §11.8 extension → unified promotion, ids kept | conditional yes — a one-off migration when such a table is actually added; no date promised | D-62 |
+| our pushback: their "no size limit on `extra`/`source_text`" | **soft cap 64 KB combined per item**, stored truncated + flagged, never an error, never silent | D-67 |
+
+**Rev. b, superseded** (keep the text, it is history — but these bullets no
+longer describe what gets built):
+
+- *token flow*: `resolve_token` is **gone** in v1.3. Nothing links a later ask
+  to an earlier one; each attempt carries a **new idempotency key**
+  (`run1:cand_9f3a`, then `:2`, `:3`). This also fixes a real v1.2 bug we
+  shipped: second ask + same key + new evidence would have hit
+  `IDEMPOTENCY_PAYLOAD_MISMATCH` under the v1.2 rule (their catch, our debt —
+  recorded in §4.7 row 22).
+- *"ambiguous twice → PENDING_REVIEW + ticket"*: **never returned to the
+  Enrichment Engine** — they decide (`choice`) on `AMBIGUOUS`. The `er_review`
+  table and review routes stay **for our own HITL gate (P15)**, marked
+  not-used-by-enrichment. D-57 reversed.
+- *`search` and `create` dropped* (D-60 reversed): **`POST /v1/entities:search`
+  returns**, side-effect-free, answering `would_decide` — which is exactly what
+  P21c was already designed to be. `create` stays folded into `resolve`.
+- *`AMBIGUOUS` only on the first ask*: v1.3 returns it **on every ask**, with
+  `candidates` + `differing_fields`.
+- *PATCH only sets empty fields* (v1.2 guarantee): relaxed — they **may** send
+  values that differ from ER's; §3.13's survivorship decides as always
+  (enrichment lowest priority, D-46 unchanged); multi-valued findings go best-in-
+  `set`, rest-in-`extra`.
+
+**P21i — `POST /v1/entities:search` revived (was dropped by rev. b).** Same
+request items as `resolve` minus `idempotency_key`/`provenance`/`choice`; runs
+P21c's index lookup + `_score_pair` exactly as designed; answers per item:
+`would_decide` (what `resolve` would say right now), up to 10 candidates,
+`differing_fields`. Pure read, no decision logged. `resolve` keeps calling the
+same internal scorer — one code path, two doors.
+
+**P21j — the extension store (D-62, D-63).** New module under the P21
+orchestrator; reuses the existing `MongoDBConnector`
+(`src/mcp_server/connectors/mongodb.py`, `AsyncMongoClient`) widened to writes,
+plus `PUT /v1/entity-types/{type}` registration into a new
+`merge_engine.er_type_registry(entity_type, store, fields jsonb,
+identity_fields, required_fields, reference_fields, thresholds jsonb,
+collection)`. `/v1/entity-types` gains `store` (`unified` | `enrichment`) and
+`collection`. **The cross-store protocol is the crux — there is no
+cross-engine transaction, so don't pretend otherwise.** Ledger-first,
+idempotent-write-second (the transactional-outbox argument, §2.23 [ID1]):
+
+1. In Postgres, under the per-type advisory lock: idempotency check, find-or-
+   create search (P21e steps 1–5 unchanged), and on a miss reserve the id and
+   write the `entity_map` + `er_idempotency` rows **in one transaction** —
+   the reservation commits before anything touches Mongo. A crash after this
+   point leaves a reserved id, never a second one.
+2. Upsert into `enrichment_entities.<type>` keyed by `_id = <reserved id>` —
+   keyed-by-id upsert is replay-safe by construction, so a retry after a
+   crash re-applies the same document (at-least-once delivery + idempotent
+   effects, §2.23 [ID2]).
+3. Mark the reservation `written`; bump `er_entity_version`; write
+   `er_field_history`; done.
+- A `written`-never state older than a reconciliation sweep's grace period is
+  an alarm, not a silent orphan: the sweeper re-upserts from the ledger.
+- **Failure isolation:** their Mongo down ⇒ extension-type create/resolve/PATCH
+  answer `503` + `Retry-After`; unified-store endpoints unaffected and the
+  unified perf targets never charge their latency.
+- `store: unified` reads/behaviour are unchanged everywhere else; promotion
+  (§11.8) is a copy-keeping-ids insert script, run once, flipping `store`.
+
+**P21k — `er_field_history` + `GET /v1/entities/{type}/{id}/history` (D-64).**
+One row per field-level event, from any source, **including rejected
+attempts** (their §5.7 shape: `version, at, field, old, new, source, reason,
+attempted, provenance`). Written from (a) every API mutation, and (b) **inside
+the batch load's per-field survivorship decision** — every winner *and* every
+loser gets a row (`HIGHER_PRIORITY_SOURCE`, `LOWER_PRIORITY_REJECTED`, …).
+Postgres has no native SQL:2011 system-versioned tables (§2.23 [ID4]); this is
+a purpose-built event table, not generic row history, because the contract asks
+for *why* (reason + provenance), which triggers don't know. Honest costs,
+stated as ceilings: the hook sits on the load's hot path (one insert per
+changed *and* per lost field value — batching via `COPY` inside the load
+transaction is mandatory, mirrors `_write_child_rows`' bulk style); history
+volume scales with batch size, so a retention/compaction policy (rows past N
+runs summarized, `since_version` answers from the detail window) ships with it.
+This is the single biggest scope item of rev. c.
+
+**P21l — `er_split` + client-choice handling (D-65, D-66).**
+`merge_engine.er_split(entity_type, id, new_id, at)`, written in the same
+post-entity-map hook as `er_redirect` (P21g-3) whenever a human cluster-edit
+split produces a new id; both redirect and split rows appear in the change
+feed, one feed covers both stores and both id events. `choice` handling lives
+in the `resolve` per-item path after the scorer: `{id}` → follow redirect,
+`MATCHED`, `decided_by: "client"`, history entry; `{new: true}` → recheck
+(≥ `auto_match` → `MATCHED` + `reason: MATCH_APPEARED`, else create); two or
+more candidates ≥ `auto_match` → `AMBIGUOUS` regardless of scores.
+Per-attempt keys need no schema change — `er_idempotency` keys on the client's
+string as before, one row per attempt key.
+
+**Acceptance additions (pre-register in `.handoff/P21.acceptance.md` with the
+rest):**
+
+12. `search` on a planted in-band pair returns `would_decide: AMBIGUOUS` +
+    both candidates + `differing_fields`, and **zero writes** (SQL row counts
+    unchanged across the call).
+13. `AMBIGUOUS` → `choice {id}` → `MATCHED decided_by:"client"` even when the
+    score is below `auto_match`; `choice {id: never-issued}` → `INVALID
+    UNKNOWN_ID`; `choice {new:true}` when a candidate has since crossed
+    `auto_match` → `MATCHED MATCH_APPEARED`, no new row (SQL count).
+14. Per-attempt keys: run1:x then run1:x:2 with different payloads → both
+    succeed (no `IDEMPOTENCY_PAYLOAD_MISMATCH`); retry of run1:x replays the
+    first answer.
+15. Extension type: register → resolve → **direct query of their Mongo**: one
+    document with `_id` = the id ER returned; `entity_map` +
+    `er_entity_version` + history rows exist (SQL); kill their Mongo, unified
+    `resolve` still answers, extension resolve answers 503.
+16. Crash injection between step 1 (reserve) and step 2 (upsert): restart +
+    same key → same id, exactly one document after the sweep (upsert replay).
+17. History: PATCH a field a source origin already fills → destination
+    unchanged (SQL) **and** a `LOWER_PRIORITY_REJECTED` history row exists;
+    run a batch over a planted contested pair → `HIGHER_PRIORITY_SOURCE` rows
+    with old/new both recorded.
+18. `GET .../history?since_version=n` returns only later rows; merged id →
+    survivor's history with `redirected_from` set.
+19. Human cluster-edit split in a run → `er_split` row + change-feed entry;
+    `GET` of the old id still resolves to the surviving part.
+20. `extra` at 64 KB+1 bytes → stored truncated, `truncated: true` in the
+    response, item not failed.
+
+**Ceilings added by rev. c** (in addition to the ones below):
+
+- Extension-store matching quality is **unvalidated** — provisional thresholds,
+  no fitted model, until a collection has volume (D-63).
+- Cross-store creates are **at-least-once with idempotent effects**, not
+  atomic; the reconciliation sweep is the safety net, so it must never be
+  disabled for "performance".
+- Full history multiplies write volume on the batch hot path; retention policy
+  is part of the feature, not an afterthought.
+- `er_split` only populates on human-initiated splits until automatic split
+  logic exists (Part 3 §3.2's corpus may change this).
+- 64 KB is a soft cap we chose; if their real extractions exceed it, renegotiate
+  with their measured p99, don't silently truncate real findings twice.
 
 ### Ceilings, stated
 
@@ -1806,7 +1973,12 @@ than the current code, not fewer. P2's block cleaning and meta-blocking are what
 make P5 affordable.
 
 **Revision 2026-11-21:** P1–P20 are landed on `feat/part1-fixes` (Phase 6b
-open). Next: **P21a → P21b → P21c → P21d → P21e/P21f → P21g → P21h**, then
+open). **Revision 2026-11-23:** P21's build order grows with rev. c — the
+sequence is now **P21a → P21b → P21c → P21d → P21e/P21f → P21g → P21h → P21i
+(search) → P21l (split table + choice) → P21j (extension store) → P21k
+(history)**. The extension store and history come last deliberately: they are
+the two new-scope items (D-62, D-64), and the endpoints before them already
+answer everything the Enrichment team needs for their unified-type flow. Then
 the Phase 6b items, then P22 when its model is ready (D-53). P21 depends on
 P5 (blocking keys), P13/P14 (model), P18 (survivorship) — all landed.
 
@@ -2999,6 +3171,105 @@ measurement on our own schemas, not a number from these sources.
 
 ---
 
+## 2.23 The v1.3 contract asks — what shipping systems do about a second store, client decisions, idempotency windows, and history (added 2026-11-23 for P21 rev. c)
+
+> **Added 2026-11-23 alongside Revision 2026-11-23c.** v1.3 asks ER to do four
+> things this repo has never done: write into a second store the counter-party
+> owns, accept a client's match decision, honour per-attempt idempotency keys,
+> and keep field-level history including rejections. Sources were read for each,
+> because "we've never done this" is not an answer to "can you".
+
+**[ID1] The dual-write problem is not fixable by retries, and reordering does not
+help.** The transactional-outbox literature walks the crash interleavings:
+write-Postgres-then-write-Mongo loses the Mongo side on a crash after commit;
+reversing the order loses the Postgres side; wrapping both in one transaction is
+impossible across engines — "no ordering of two non-transactional writes survives
+every crash, because the two systems share no notion of 'this happened'"
+[DevOps Daily, "Getting a Row Change Out of Postgres Without Dual-Writing";
+Confluent, "Understanding the Dual-Write Problem"; same reasoning in
+`aws-samples/transactional-outbox-pattern`, README]. The fix family: make one
+engine the *first* committed writer and make the second write **idempotent**, so
+at-least-once delivery produces exactly-once *effects*
+[`tonisliblik/transactional-outbox` ADR-0002]. P21j's reserve-then-upsert-by-id
+protocol is exactly this shape: Postgres (our ledger) commits first; the Mongo
+write is keyed by `_id = <reserved id>` so a replay re-applies and cannot
+duplicate. What the pattern does *not* buy: atomicity — the reconciliation
+sweep is load-bearing, and the outbox literature is candid that teams run
+"temporarily" reconciliation scripts that are "load-bearing by year three"
+[DevOps Daily]. The sweep being permanent-and-monitored is the design, not the
+debt.
+
+**[ID2] MongoDB's own contract says the same thing about our side of the
+protocol.** Change streams (the mechanism they will consume for id sync) are
+**at-least-once**: "it is up to the listening application to make sure that it
+has not already processed the change stream events… especially where actions are
+not idempotent" [MongoDB, "An Introduction to Change Streams"; official docs,
+`changeStreams`: resume via `resumeAfter`/`startAfter`, whole opaque `_id` token,
+same pipeline]. Their §6 already commits to consuming the feed from day one; the
+split/redirect rows in P21l are the machine-readable half of what they resume
+against. Practical consequence for us: any Mongo-side sync we build must save
+the resume token **after** applying the effect, and treat a `ChangeStreamHistoryLost`
+(286) as stop-and-rebuild, never a silent reset-to-now [jusdb production guide,
+resume tokens + oplog window].
+
+**[ID3] Idempotency windows and per-attempt keys: the industry is explicit, and
+their v1.3 rule is the sane one.** Stripe — the pattern's namesake — caps keys
+at 255 chars, replays the first response *including 5xx* to same-key retries,
+compares parameters and errors on mismatch, and prunes keys ≥ 24 h old [Stripe
+API docs, "Idempotent requests"]. The widely-copied Postgres implementation
+stores `(key, request_params, response)` under a SERIALIZABLE lock and prunes in
+~24–72 h [Brandur Leach, "Implementing Stripe-like Idempotency Keys in
+Postgres"]. Two details land directly on P21e: (a) our ≥ 30-day retention is
+**deliberately longer** than Stripe's 24 h — justified because their workers can
+queue a resolved-but-unpublished item across an ER outage for days (their v1 §5
+pause-and-publish-later), so the TTL must exceed the *client's retry window*,
+not ours [ankurm TTL write-up makes the failure mode explicit: short TTL + long
+client retry = a second payment]; (b) their v1.3 switch to a **new key per
+attempt** (retry = same key, re-ask = `:2`) is the shape Stripe's
+params-mismatch rule assumes — the v1.2 rule that punished a second ask with
+new evidence was our drafting error, and their §12 fix removes it without any
+change to `er_idempotency`.
+
+**[ID4] Postgres does not give us history for free, and generic row-history is
+the wrong tool for what they asked.** SQL:2011 system-versioned temporal tables
+are not native to Postgres; the ecosystem fills the gap with trigger-based
+emulations (`temporal_tables`) or ORM versioning [PostgreSQL wiki, SQL2011Temporal;
+"Temporal Tables and System-Versioned History in Postgres", Backend Developer;
+hypirion implementation notes]. Every one of these records *what the row was*,
+on update/delete — none records **a write that never touched the row**, which is
+precisely v1.3 §5.7's `LOWER_PRIORITY_REJECTED` case (attempted value, old=new).
+That is survivorship-decision provenance, and the provenance world models it as
+assertions with agents and reasons, not as row snapshots [W3C PROV-DM: entity /
+activity / agent, wasDerivedFrom, qualified attributes]. Hence P21k's
+purpose-built `er_field_history` written at the decision point — matching the
+report's standing rule that mechanisms belong where the meaning is.
+
+**[ID5] A shipping ER product ran the exact feed architecture v1.3 asks of us.**
+Senzing's `WithInfo` functions return `AFFECTED_ENTITIES` after every resolving
+call, explicitly so clients can "create an eventually consistent view of the
+entities… even in a very asynchronous parallel processing system" — with the
+documented client protocol: dedupe per entity id, re-`getEntity` for current
+state, and *if the entity no longer exists, it was moved or deleted — reflect
+that* [Senzing support, "Real-time replication and analytics"]. That is our
+`er_entity_version` + `er_redirect` design with the roles swapped, and
+precedent that the pattern survives production at "1B+ record" scale (their
+customer quote). Senzing's docs also pre-figure P21l: an entity can be *moved*
+between ids by a later re-resolution, and downstream consumers are expected to
+follow — which is exactly the redirect-following `choice` path. What Senzing
+does *not* support by precedent: handing the match decision to the client —
+their model is engine-decides. v1.3's `choice` (D-66) has no shipping precedent
+we found; it is genuinely new for us, and that is why `decided_by: "client"` +
+history (D-64) are not optional garnish but the auditability that makes the
+concession safe.
+
+**What this section does not claim:** that any of these systems resolves into a
+*client-owned* store (Senzing, Prisme-class MDMs all own their repository; no
+shipping product found that writes entities into a customer's database), or a
+latency number for the cross-store protocol. The second point is measured work
+for implementation, acceptance item 15/16.
+
+---
+
 # PART 3 — Architecture
 
 Part 3 is what Part 1 cannot reach: it needs new storage and one new pipeline
@@ -3781,6 +4052,49 @@ claim §2.3 was demoted for.
 
 ---
 
+## 3.15 Two stores, one ledger — where the v1.3 extension store lives architecturally (added 2026-11-23)
+
+§3.1's thesis was "the destination stops being the system of record." v1.3
+bolts a **client-owned** store onto the architecture, so the thesis gets its
+sharper form, and D-45's side-table placement gets a footnote it must never
+outgrow:
+
+**The ledger is the system of record; every store is a projection.** Ids,
+version numbers, idempotency answers, redirects, splits and field history are
+Postgres facts — `merge_engine` holds them. The *unified* destination table and
+the *enrichment* Mongo collection are both projections of a decision the ledger
+already recorded. That is what makes P21j's reserve-then-upsert protocol sound
+rather than lucky: a crashed cross-store create is a **stale projection, never a
+corrupt ledger**, which is §3.1's crash property re-derived for the second store
+with the same repair mechanism (the reconciliation sweep is re-projection, not
+improvisation).
+
+**Why history lives where decisions are made, not in a generic layer** (§3.13's
+protocol, now with a durable record — D-64): §3.13's chain answers *which value
+wins*; `er_field_history` records *that it won, over whom, and why* — including
+the losers and the rejected API attempts no row ever saw (§2.23 [ID4]). The two
+are the same hook: emit the history row at the point the chain narrows to one
+candidate. This also retires a latent temptation: `temporal_tables`-style row
+versioning was rejected not for weakness but for type error — it cannot express
+`LOWER_PRIORITY_REJECTED` [ID4].
+
+**The client-choice path is a provenance event, not a policy exception** (§3.7's
+revocability principle, exercised). §3.7 already required that a recorded
+resolution must not permanently prevent a correct merge tomorrow [RLT]. A
+`choice {id}` is a client-asserted resolution: stored as `decided_by: "client"`
+in history, overridable by no ER run silently — but visible to every later
+review, and consistent with §3.8's negative assertions, which are also
+"human-stated facts the pipeline must replay and never silently contradict."
+The difference in risk from Senzing's engine-decides norm (§2.23 [ID5]) is
+exactly what the audit trail is for.
+
+**Ceiling.** This section describes an architecture the code does not yet have.
+The extension store ships (if it ships) as P21j *last* in P21's order, and every
+ledger invariant above is checked by acceptance items 15–16 (crash injection,
+outage isolation) before it is called done.
+
+---
+
 # PART 4 — Appendices
 
 ## 4.1 Constants that govern output quality
@@ -4004,12 +4318,22 @@ a measurement, recorded here.
 | **D-52** | Enrichment reads the unified DB through a **read-only Postgres role**; change feed = `merge_engine.er_entity_version.updated_at` | U | Zero read API to build; no new destination column (D-33) | P21h |
 | **D-53** | Embedding + reranker for **source→destination field mapping** recorded, **not scheduled** until the user's local model is ready; gated by a bake-off | U | Recommended mapping #1 of five considered; enrichment-attribute mapping is unnecessary under C1 | P22 |
 | **D-54** | The ER service lives **inside `src/api`** (same FastAPI app, `/v1` routes) | U | One process, one deploy | P21 |
-| **D-55** | An entity type with **no destination table** is `UNSUPPORTED_ENTITY_TYPE`; ER never creates tables | U | Fixed-schema contract (D-33) | P21b |
+| **D-55** | An entity type with **no destination table** is `UNSUPPORTED_ENTITY_TYPE`; ER never creates tables | U | Fixed-schema contract (D-33). **Amended 2026-11-23 (D-62):** with no *registered extension type* either it stays `UNSUPPORTED`; ER still never creates destination tables, but registered extension types are now resolved and written to the Enrichment team's MongoDB | P21b, P21j |
 | **D-56** | Entity description is **hybrid**: our field names in `attributes`, everything else in `extra` (provenance only), plus `source_text` | U | Nothing enrichment found is lost; only known fields are matched and stored | P21 rev. b |
-| **D-57** | **ER decides** match/new via `resolve`; ambiguous twice → **ER review queue** (`PENDING_REVIEW` + ticket) | U | Matching logic, thresholds and human review in one system, not two | P21 rev. b |
+| **D-57** | **ER decides** match/new via `resolve`; ambiguous twice → **ER review queue** (`PENDING_REVIEW` + ticket) | U | Matching logic, thresholds and human review in one system, not two. **Reversed 2026-11-23 (D-66):** v1.3 §5.4 — on `AMBIGUOUS` the *client* decides (`choice`); `PENDING_REVIEW` is never returned to the Enrichment Engine. `er_review` and the review routes stay for our own HITL gate (P15) | P21 rev. b → rev. c |
 | **D-58** | A row enrichment read from the DB is named **by its id**; only entities found in text are resolved | U | The id column is the ER id; searching a known row can only add wrong matches | P21 rev. b |
 | **D-59** | Enrichment fetches `/v1/entity-types` **once per run** | U | A schema change cannot silently break them | P21b |
-| **D-60** | `search` and `create` endpoints **dropped**; `resolve` covers both | U | One less endpoint to build and keep in sync | P21 rev. b |
+| **D-60** | `search` and `create` endpoints **dropped**; `resolve` covers both | U | One less endpoint to build and keep in sync. **Reversed 2026-11-23 (D-68):** v1.3 §5.3 revives side-effect-free `POST /v1/entities:search` (`would_decide`); `create` stays folded into `resolve` | P21 rev. b → P21i |
+| **D-61** | Ship a **hand-built `/v1/entity-types` snapshot** to the Enrichment team now (v1.3 §11.1), labelled pre-service; thresholds = last successful run's bars, default `auto_match 0.95` | U | Their only hard blocker today; costs no code and stops them inventing field names | P21b |
+| **D-62** | **Extension store accepted with four conditions** (v1.3 §11.2): (1) dedicated Mongo user RW on `enrichment_entities` only, connection string + network from them, TLS; (2) failure isolation — their Mongo down ⇒ extension-type writes 503, unified endpoints unaffected, unified perf targets never charge their latency; (3) ER's write order is ours — id reserved and committed in Postgres *before* the Mongo upsert, keyed by `_id = id`, reconciliation sweep as the safety net; (4) thresholds provisional | U | Their §11.2 ask; the outbox argument says an idempotent second write is the only honest protocol (§2.23 [ID1], [ID2]). Promotion of a type to `unified` keeps ids (§11.8), as a one-off when the table actually lands | P21j |
+| **D-63** | Extension-type **thresholds are ER's to set** (provisional 0.95 / 0.70 defaults, published in `/v1/entity-types`), not the client's to propose | U | A type with no batch run has no `_fit_match_model` output — fitted thresholds are impossible by definition; and one system owns the bars (C6 unchanged) | P21j |
+| **D-64** | **Full field history now**, including batch-internal survivorship losses — `merge_engine.er_field_history` written at every decision point (API writes *and* the batch's per-field chain), rejected attempts included, retention/compaction policy part of the feature | U | Their §11.4, taken at full depth by the user over the cheaper tiers, knowingly accepting the hot-path cost; generic row-history cannot express a rejected attempt (§2.23 [ID4]); audit trail for the client-choice concession (D-66) | P21k, §3.15 |
+| **D-65** | Accept `merge_engine.er_split(entity_type, id, new_id, at)` (their §11.5 proposal) into the same post-entity-map hook as `er_redirect`, covered by the change feed | U | Cheap, and the machine-readable half of the split story §4.5 prose only hinted at; caveat recorded — splits arise today only from human cluster-edit overrides, so the table stays empty until one happens | P21l |
+| **D-66** | **Client-choice package accepted as written** (v1.3 §5.4/§11.6/§11.7): `choice {id}` accepted with redirect-following + `decided_by: "client"`; `choice {new:true}` guarded by the find-before-create recheck (`MATCH_APPEARED`); two+ candidates ≥ `auto_match` → `AMBIGUOUS` on every ask; per-attempt idempotency keys | U | Their §11 fix to our v1.2 key bug (§4.7 row 22); the guard *is* P21e step 5 — zero new machinery; no shipping precedent for handing the decision over (§2.23 [ID5]), which is why D-64's audit trail is its precondition | P21l |
+| **D-67** | `extra` + `source_text` **soft cap 64 KB combined per item**; stored truncated with `truncated: true` in the response; never an error, never silent | U | Their §8 asked for no size limit; `extra` lands in `jsonb` and an unbounded promise is how 50 MB extraction blobs arrive. Renegotiate from their measured p99 if it binds | P21i, P21f |
+| **D-68** | **`POST /v1/entities:search` returns** (D-60 partly reversed): side-effect-free, per item `would_decide` + ≤ 10 candidates + `differing_fields`; one internal scorer with `resolve` | U | Exactly what P21c was already designed to be; preview/manual-mode/review-panel need is legitimate and costs a wrapper, not a feature | P21i |
+| **D-69** | Enrichment is **never sent `PENDING_REVIEW`**; the review queue (table + routes + screen) stays scoped to our own HITL gate | U | Their §5.4/§9 have their own review flow with humans who may decide days later; keeping our queue serves the batch gate (P15), not the contract | P21l, rev. b superseded |
+| **D-70** | P21 build order updated: **…P21h → P21i (search) → P21l (split + choice) → P21j (extension store) → P21k (history)** — the two new-scope items last | U | The unified-type flow unblocks the Enrichment team before either risky item exists; each last-mile item is independently acceptance-tested (items 15–20) | Part 1 ordering |
 
 ---
 
@@ -4043,6 +4367,7 @@ component inside.**
 | 19 | Anti-pattern 7 (random negative sampling) applies here | own analysis | **It does not** — the model is unsupervised EM. The live analogue is `u` on the post-blocking population (P13) |
 | 20 | diffbot (priority 1) wins contested identity fields | own re-reading | **`max()` means higher wins** — zoominfo (2) wins. Invisible only because P1 stopped the conflict occurring |
 | 21 | "Exactly two FKs ⇒ junction table" | research [SCH] | Filed as a bug against a shipping tool; the correct test is **minimal UCC = union of ≥2 FK sets** |
+| 22 | **v1.2's idempotency rule allowed a second resolve ask only under the same key** — so adding evidence to an ambiguous item hit `IDEMPOTENCY_PAYLOAD_MISMATCH`, the error meant to catch client bugs | the counter-party (v1.3 §12) | Real contract bug in our v1.2. Fixed their way in v1.3 and adopted: **new key per attempt, same key per retry** (D-66); Stripe's params-mismatch rule assumes exactly this shape (§2.23 [ID3]) |
 
 **Two defects the research found that no one had been looking for:** **no
 attribute-coherence mechanism** (a merged entity can exist in no source) and **no
@@ -4405,6 +4730,54 @@ only hash-identical is documented safe to auto-merge; family handled by
 *"lineage is about flow, while provenance is about proof"*; **none mentions
 crosswalks**.
 
+**[ID1]** Dual-write problem and the transactional outbox — read 2026-11-23 for
+§2.23 / P21j.
+<https://dev.to/devopsdaily/getting-a-row-change-out-of-postgres-without-dual-writing-16p1>
+(crash interleavings; "no ordering of two non-transactional writes survives
+every crash"; outbox-vs-logical-decoding; the year-three reconciliation-script
+warning) · <https://confluent.io/blog/dual-write-problem> (transactions don't
+span engines; separating the writes with a retry dependency) ·
+<https://github.com/tonisliblik/transactional-outbox> (ADR-0002: at-least-once
+transport, exactly-once effects via consumer-side dedupe) ·
+<https://github.com/aws-samples/transactional-outbox-pattern> (pattern README).
+
+**[ID2]** MongoDB change streams — official docs and production guides, read
+2026-11-23.
+<https://www.mongodb.com/blog/post/an-introduction-to-change-streams>
+(at-least-once; reapplying operations is safe; the listener must dedupe) ·
+<https://www.mongodb.com/docs/manual/changestreams/> (resume tokens are the
+whole opaque `_id`; `resumeAfter` vs `startAfter`; same pipeline required) ·
+<https://jusdb.com/blog/mongodb-change-streams-production-resume-tokens>
+(save token **after** the effect; error 286 `ChangeStreamHistoryLost` =
+stop-and-rebuild, never silent reset).
+
+**[ID3]** Idempotency keys — Stripe docs and the reference Postgres write-up,
+read 2026-11-23.
+<https://docs.stripe.com/api/idempotent_requests> (≤ 255 chars; replay of the
+first response incl. 500s; params-mismatch error; prune at ≥ 24 h) ·
+<https://www.brandur.org/idempotency-keys> (the `locked_at` /
+`recovery_point` / stored-response table under SERIALIZABLE; ~72 h horizon) ·
+<https://ankurm.com/idempotency-keys-spring-boot-redis-postgres/> (TTL must
+exceed the client's retry window or the retry creates a second charge).
+
+**[ID4]** System-versioned history on Postgres, read 2026-11-23.
+<https://wiki.postgresql.org/wiki/SQL2011Temporal> ·
+<https://hypirion.com/musings/implementing-system-versioned-tables-in-postgres> ·
+<https://thebackenddevelopers.substack.com/p/temporal-tables-and-system-versioned>
+(Postgres has no native SQL:2011 temporal tables; `temporal_tables` and ORM
+versioning are row-level and record only what a row *was* — the basis for
+rejecting them for §5.7's rejected-attempt rows). W3C PROV-DM (the model v1.3
+§5.7's shape matches: entity/activity/agent + reason):
+<https://www.w3.org/TR/prov-dm/>.
+
+**[ID5]** Senzing — real-time replication, read 2026-11-23.
+<https://senzing.zendesk.com/hc/en-us/articles/4417768234131--Advanced-Real-time-replication-and-analytics>
+(`WithInfo` → `AFFECTED_ENTITIES`; client protocol: dedupe per entity id,
+re-`getEntity`, reflect moved/deleted ids) ·
+<https://senzing.com/docs/tutorials/get_entity_response/> (entity centric: ids
+move under re-resolution; downstream must follow). *Core product proprietary;
+REST server + ~100 assets open source on GitHub.*
+
 ---
 
-*End of report. Revision 2026-09-29.*
+*End of report. Revision 2026-11-23c.*
