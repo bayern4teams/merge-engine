@@ -234,6 +234,11 @@ class MatchModel:
         # P14: ({field: {token: df}}, {field: N}) the comparison vectors were
         # built with; scoring must build its vectors with the same table.
         self.token_df: tuple[dict[str, dict[str, int]], dict[str, int]] | None = None
+        # The bars THIS model was used with, when they differ from the
+        # module defaults (P21b "the bars the last run used": persisted in
+        # er_model params so the online scorer ships exactly them). None =
+        # the module defaults apply.
+        self.thresholds: dict[str, float] | None = None
 
     @property
     def prior_weight(self) -> float:
@@ -258,6 +263,7 @@ class MatchModel:
                 for name, fm in self.fields.items()
             },
             "token_df": list(self.token_df) if self.token_df is not None else None,
+            "thresholds": self.thresholds,
         }
 
     @staticmethod
