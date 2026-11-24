@@ -96,6 +96,10 @@ class PostgreSQLDestinationConnector:
         self._config = config
         self._connection: Psycopg2Connection | None = None
         self._schema: str = config.get("schema", "public")
+        # P21 ER side tables live in their own schema (D-45). A test harness
+        # may point them at an isolated schema via config without touching
+        # the destination's `public`.
+        self._er_schema: str = config.get("er_schema", self.ER_SCHEMA)
         # Set inside an `atomic()` block: individual writes stop committing
         # so the whole block lands or none of it does.
         self._in_transaction: bool = False
@@ -1427,6 +1431,219 @@ class PostgreSQLDestinationConnector:
                 origin_id,
                 table_name,
             )
+            return removed
+        finally:
+            cursor.close()
+
+    # ── P21 ER service side tables (D-45, rev. c) ─────────────────────────
+    #
+    # D-45 places these in a `merge_engine` SCHEMA inside the destination DB
+    # (not `public` — the pre-existing D-34 debt around `merge_engine_*`
+    # tables must not spread). The set: the original five (P21a) plus
+    # `er_review` (rev. b, our own HITL gate), plus rev. c's
+    # `er_type_registry` / `er_field_history` / `er_split`
+    # (P21j/P21k/P21l), plus `er_extension_outbox` — the ledger row P21j's
+    # reserve-then-upsert protocol and reconciliation sweep need (D-62's
+    # condition 3: the reservation must survive a crash before Mongo is
+    # touched, so it gets its own table rather than a flag on the response).
+
+    ER_SCHEMA: ClassVar[str] = "merge_engine"
+
+    def ensure_er_side_tables(self) -> None:
+        """Create the ER-service side tables if they don't exist (P21a).
+
+        Idempotent like ``ensure_entity_map`` — safe to call from the API
+        service start-up, from the load pipeline, and from tests alike. The
+        whole set is transactional DDL, so a concurrent first-ever pair of
+        callers either both succeed or one retries, never half-creates.
+        """
+        conn = self._ensure_connection()
+        cursor = conn.cursor()
+        s = self._er_schema
+        try:
+            cursor.execute(f'CREATE SCHEMA IF NOT EXISTS "{s}"')
+            # C3 change feed + optimistic lock: bumped by every ER write
+            # AND every batch load; enrichment polls `updated_at > watermark`.
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS "{s}".er_entity_version (
+                    entity_type TEXT NOT NULL,
+                    id TEXT NOT NULL,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (entity_type, id)
+                )
+            """)
+            # Merged ids keep working (contract §4.5): chains are compressed
+            # on write so a read is one hop.
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS "{s}".er_redirect (
+                    entity_type TEXT NOT NULL,
+                    old_id TEXT NOT NULL,
+                    new_id TEXT NOT NULL,
+                    run_id TEXT,
+                    at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (entity_type, old_id)
+                )
+            """)
+            # Stripe-shaped idempotency (§2.23 [ID3]): the client's key is
+            # the PK, the payload sha detects same-key-different-body, and
+            # retention (>= 30 days, purge below) exceeds the client's retry
+            # window, not ours. Per-attempt keys (run1:x, run1:x:2) need no
+            # schema change — one row per attempt key.
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS "{s}".er_idempotency (
+                    key TEXT PRIMARY KEY,
+                    entity_type TEXT,
+                    request_sha256 TEXT NOT NULL,
+                    status INTEGER NOT NULL,
+                    response JSONB,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """)
+            cursor.execute(f"""
+                CREATE INDEX IF NOT EXISTS er_idempotency_created_idx
+                    ON "{s}".er_idempotency (created_at)
+            """)
+            # The enrichment origin (D-46): append-only; its record_id enters
+            # merge_engine_entity_map exactly like a source record's.
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS "{s}".er_enrichment_record (
+                    record_id TEXT PRIMARY KEY,
+                    entity_type TEXT NOT NULL,
+                    attributes JSONB NOT NULL DEFAULT '{{}}',
+                    "references" JSONB NOT NULL DEFAULT '{{}}',
+                    inferred_fields TEXT[] NOT NULL DEFAULT '{{}}',
+                    extra JSONB NOT NULL DEFAULT '{{}}',
+                    source_text TEXT,
+                    provenance JSONB,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """)
+            # The persisted match model (C10: a type with no row here is
+            # UNSUPPORTED). One row per type, overwritten after each
+            # successful load with whatever _fit_match_model returned.
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS "{s}".er_model (
+                    entity_type TEXT PRIMARY KEY,
+                    run_id TEXT,
+                    params JSONB NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """)
+            # Our own HITL review queue (P15). PENDING_REVIEW is never
+            # returned to the Enrichment Engine (D-57 reversed by D-66/69) —
+            # this table and its routes serve the batch gate only.
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS "{s}".er_review (
+                    ticket TEXT PRIMARY KEY,
+                    entity_type TEXT NOT NULL,
+                    item JSONB,
+                    candidates JSONB,
+                    status TEXT NOT NULL DEFAULT 'AMBIGUOUS',
+                    decision TEXT,
+                    decided_id TEXT,
+                    decided_by TEXT,
+                    decided_at TIMESTAMPTZ
+                )
+            """)
+            # P21j type registry: extension types live in THEIR MongoDB
+            # (D-62); unified rows mirror /v1/entity-types for unified types.
+            # Thresholds are ER's to set (D-63) — extension types get the
+            # provisional 0.95 / 0.70 defaults until a batch run fits a model.
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS "{s}".er_type_registry (
+                    entity_type TEXT PRIMARY KEY,
+                    store TEXT NOT NULL DEFAULT 'unified',
+                    fields JSONB NOT NULL DEFAULT '{{}}',
+                    identity_fields TEXT[] NOT NULL DEFAULT '{{}}',
+                    required_fields TEXT[] NOT NULL DEFAULT '{{}}',
+                    reference_fields JSONB NOT NULL DEFAULT '{{}}',
+                    thresholds JSONB NOT NULL DEFAULT '{{}}',
+                    collection TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    CHECK (store IN ('unified', 'enrichment'))
+                )
+            """)
+            # P21k full field history (D-64): one row per field-level event
+            # from ANY source, including survivorship losses (reason
+            # HIGHER_PRIORITY_SOURCE) and rejected attempts
+            # (LOWER_PRIORITY_REJECTED: old=new, `attempted` carries what was
+            # offered). Purpose-built, not trigger-based — triggers cannot
+            # know a write that never touched the row (§2.23 [ID4]).
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS "{s}".er_field_history (
+                    event_id BIGSERIAL PRIMARY KEY,
+                    entity_type TEXT NOT NULL,
+                    id TEXT NOT NULL,
+                    version INTEGER,
+                    at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    field TEXT NOT NULL,
+                    old JSONB,
+                    new JSONB,
+                    source TEXT,
+                    reason TEXT,
+                    attempted JSONB,
+                    run_id TEXT,
+                    provenance JSONB
+                )
+            """)
+            cursor.execute(f"""
+                CREATE INDEX IF NOT EXISTS er_field_history_lookup_idx
+                    ON "{s}".er_field_history (entity_type, id, event_id)
+            """)
+            # P21l splits (D-65): written beside er_redirect whenever a
+            # human cluster-edit split produces a new id; stays empty until
+            # one happens (the honest ceiling).
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS "{s}".er_split (
+                    entity_type TEXT NOT NULL,
+                    id TEXT NOT NULL,
+                    new_id TEXT NOT NULL,
+                    at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (entity_type, id, new_id)
+                )
+            """)
+            # P21j outbox (ledger-first protocol, D-62 cond. 3): the id
+            # reservation commits in Postgres BEFORE anything touches Mongo;
+            # the keyed-by-_id upsert is replay-safe; `reserved` rows older
+            # than the sweep's grace period are re-upserted from the ledger,
+            # never silently dropped (at-least-once + idempotent effects =
+            # exactly-once effects, §2.23 [ID1]).
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS "{s}".er_extension_outbox (
+                    entity_type TEXT NOT NULL,
+                    id TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'reserved',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    written_at TIMESTAMPTZ,
+                    PRIMARY KEY (entity_type, id),
+                    CHECK (state IN ('reserved', 'written'))
+                )
+            """)
+            self._commit(conn)
+        finally:
+            cursor.close()
+
+    def purge_er_idempotency(self, days: int = 30) -> int:
+        """Drop idempotency keys older than `days` (contract: kept >= 30 days).
+
+        Called opportunistically from the service, never on a hot path. The
+        window must exceed the CLIENT's retry window (§2.23 [ID3] — their
+        workers can queue a resolved-but-unpublished item across an ER
+        outage), so 30 is a floor, not a suggestion.
+        """
+        self.ensure_er_side_tables()
+        conn = self._ensure_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                f'DELETE FROM "{self._er_schema}".er_idempotency '
+                "WHERE created_at < now() - make_interval(days => %s)",
+                (days,),
+            )
+            removed = cursor.rowcount or 0
+            self._commit(conn)
             return removed
         finally:
             cursor.close()
