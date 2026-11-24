@@ -613,6 +613,71 @@ def test_j16_crash_between_reserve_and_upsert(
     assert svc.sweep_extension_outbox() == 0
 
 
+# P21h over real HTTP: the route mount, X-API-Key fail-closed, ETag ->
+# If-Match round-trip, and error shapes — the live tier runs the service
+# directly, so this is the only test that exercises the wire (it found two
+# route bugs the service-level tests could not see).
+def test_h_routes_over_http(svc: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi.testclient import TestClient
+
+    import src.api.er_routes as er_routes
+    from src.api.main import create_api
+
+    monkeypatch.setenv("ER_API_KEY", "itest-wire-key")
+    er_routes.reset_service()
+    monkeypatch.setattr(er_routes, "_service", svc)
+    try:
+        client = TestClient(create_api())
+        key = {"X-API-Key": "itest-wire-key"}
+
+        r = client.post("/v1/entities:resolve", json={"items": []})
+        assert r.status_code == 401  # fail-closed even with a key set: no header sent
+
+        r = client.get("/v1/entity-types", headers=key)
+        assert r.status_code == 200
+        assert any(e["entity_type"] == "companies" for e in r.json()["entity_types"])
+
+        r = client.post(
+            "/v1/entities:resolve",
+            headers=key,
+            json={
+                "items": [
+                    {
+                        "item_id": "w1",
+                        "idempotency_key": "wire:1",
+                        "entity_type": "companies",
+                        "attributes": {"name": "Quorvex Wireproto Qzx"},
+                    }
+                ]
+            },
+        )
+        assert r.status_code == 200 and r.json()["results"][0]["decision"] == "CREATED"
+        eid = r.json()["results"][0]["id"]
+        assert "_status" not in r.json()["results"][0]
+
+        r = client.get(f"/v1/entities/companies/{eid}", headers=key)
+        assert r.status_code == 200
+        etag = r.headers["etag"]  # the GET carries the version as an ETag
+        assert etag.strip('"') == "1"
+        r = client.patch(
+            f"/v1/entities/companies/{eid}",
+            headers={**key, "If-Match": etag},
+            json={"set": {"country": "NL"}},
+        )
+        assert r.status_code == 200 and int(r.headers["etag"].strip('"')) == 2
+        r = client.patch(
+            f"/v1/entities/companies/{eid}",
+            headers={**key, "If-Match": '"99"'},
+            json={"set": {"country": "XX"}},
+        )
+        assert r.status_code == 412 and r.json()["error"] == "VERSION_CONFLICT"
+
+        r = client.get("/v1/entities/companies/never-issued-xyz", headers=key)
+        assert r.status_code == 404 and r.json()["error"] == "NOT_FOUND"
+    finally:
+        er_routes.reset_service()
+
+
 # items 8 + 9: MEASURED, never asserted (owner rule).
 def test_a8_9_measured_performance_and_recall(
     seeded: Any, sql: Any, itest_schema: str, record_property: Any

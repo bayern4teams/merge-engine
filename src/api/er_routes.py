@@ -86,7 +86,7 @@ def _service_errors() -> tuple[type[Exception], ...]:
 
 
 def _error_response(exc: ErError) -> JSONResponse:
-    return JSONResponse(status_code=exc.status, content=exc.body)
+    return JSONResponse(status_code=exc.status, content=exc.body())
 
 
 def build_er_router() -> APIRouter:
@@ -166,9 +166,14 @@ def build_er_router() -> APIRouter:
     ) -> Any:
         _check_api_key(x_api_key)
         try:
-            return get_service().get_entity(entity_type, entity_id)
+            result = get_service().get_entity(entity_type, entity_id)
         except ErError as exc:
             return _error_response(exc)
+        return JSONResponse(
+            status_code=int(result.pop("_status", 200)),
+            content=result,
+            headers={"ETag": f'"{result.get("version", 1)}"'},
+        )
 
     @router.get("/entities/{entity_type}/{entity_id}/history")
     def history(
@@ -225,8 +230,9 @@ def build_er_router() -> APIRouter:
             return _error_response(exc)
         finally:
             service.release_write_locks()
+        status = int(result.pop("_status", 200))
         headers = {"ETag": f'"{result.get("version", 1)}"'}
-        return JSONResponse(status_code=200, content=result, headers=headers)
+        return JSONResponse(status_code=status, content=result, headers=headers)
 
     return router
 
