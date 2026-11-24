@@ -78,6 +78,31 @@ scope:
   # edge's inclusion dependency.
   join_graph_sample_size: 500
 
+# ── Embeddings + reranker (retrieve-then-rerank, report §2.22 / P22) ────────
+# Two vLLM endpoints on the same box as the LLM (llm.base_url above is :8000;
+# the served ids are what /v1/models actually reports — verified 2026-11-23,
+# do not rename them from the report's draft text). Config only so far: the
+# retrieve-then-rerank wiring (P22 / §3.6 Tier) is a separate work item.
+# Same fail-fast rule as llm: these are private LAN addresses, unreachable
+# from CI — an unbounded client hangs the run, so timeout/max_retries are
+# never left unset here either.
+embedding:
+  model: "qwen3-embedding-4b"
+  api_key: "${EMBEDDING_API_KEY}"
+  base_url: "http://10.10.9.45:8001/v1"
+  timeout: 30
+  max_retries: 2
+  # Vectors are stored against this id: bump it only together with a full
+  # re-embed, never mid-corpus.
+  dimensions: 2560   # measured against the live endpoint, 2026-11-23
+
+reranker:
+  model: "qwen3-reranker-4b"
+  api_key: "${RERANKER_API_KEY}"
+  base_url: "http://10.10.9.45:8002/v1"   # /v1/rerank (Cohere-style body)
+  timeout: 30
+  max_retries: 2
+
 # ── Entity Resolution: Splink engine (B.4) ──────────────────────────────────
 # The default engine is NOT declared here. The promotion surface is the
 # per-entity `matching_rules` (currently none), and the code falls back to

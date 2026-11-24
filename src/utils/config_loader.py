@@ -163,6 +163,54 @@ class MatchingConfig(BaseModel):
     trigram_similarity_threshold: float = 0.6
 
 
+class EmbeddingConfig(BaseModel):
+    """Configuration for the embedding endpoint (report §2.22, P22).
+
+    Config + typed access only for now — the retrieve-then-rerank tier that
+    reads it is P22's wiring, deliberately not scheduled here (D-53's
+    gating lives in the pipeline, not in the loader).
+    """
+
+    model: str
+    api_key: str = ""
+    base_url: str | None = None
+    # Same fail-fast rationale as LLMClient's timeout comment: base_url is a
+    # private LAN address, silently black-holed from CI.
+    timeout: float = 30
+    max_retries: int = 2
+    # Bound the vector space of stored vectors: a stored vector is only
+    # comparable against vectors produced by the same model at the same
+    # dimension (changing either means a full re-embed, so bump together).
+    dimensions: int = 2560
+
+    @field_validator("dimensions")
+    @classmethod
+    def validate_dimensions(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError(f"embedding dimensions must be >= 1, got {v}")
+        return v
+
+
+class RerankerConfig(BaseModel):
+    """Configuration for the rerank endpoint (report §2.22, P22).
+
+    The endpoint speaks the Cohere-style ``POST /v1/rerank`` body (vLLM's
+    rerank deployment: ``model`` / ``query`` / ``documents`` / ``top_n``),
+    verified against the live server 2026-11-23. Scores are stable and
+    index-mapping is correct, but the ranking itself was WRONG on short
+    name-vs-name probes (Apple Inc. scored above an exact company-name
+    match, consistently across document orders and runs) and the scale is
+    compressed. Consumers must treat outputs as a signal to be validated
+    by the D-53 bake-off against ground truth, not a calibrated score.
+    """
+
+    model: str
+    api_key: str = ""
+    base_url: str | None = None
+    timeout: float = 30
+    max_retries: int = 2
+
+
 class Config(BaseModel):
     """Top-level application configuration."""
 
@@ -172,6 +220,10 @@ class Config(BaseModel):
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
     scope: ScopeConfig = Field(default_factory=ScopeConfig)
     matching: MatchingConfig = Field(default_factory=MatchingConfig)
+    # Optional sections: absent config.yaml (older files, test fixtures) must
+    # keep loading, and nothing in the current pipeline reads them yet.
+    embedding: EmbeddingConfig | None = None
+    reranker: RerankerConfig | None = None
 
 
 # ---------------------------------------------------------------------------
