@@ -555,6 +555,12 @@ class MergeState(TypedDict):
     origins: list[dict[str, Any]]
     destination: dict[str, Any]
 
+    # ER hook P21g-3: per-entity JSON model params the resolve node's run
+    # actually fitted ({entity_type: params}). Declared so LangGraph keeps it
+    # for the load node to persist as er_model after commit (an undeclared
+    # key is silently dropped, see _entity_tables_fingerprint above).
+    er_match_models: dict[str, Any]
+
     llm_config: dict[str, Any]
     extraction_config: dict[str, Any]
     scope_config: dict[str, Any]

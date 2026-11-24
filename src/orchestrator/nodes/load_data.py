@@ -887,8 +887,24 @@ async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
         )
 
     rolled_back = False
+    from src.orchestrator.er_hooks import (
+        hold_load_write_lock,
+        persist_er_models,
+        snapshot_entity_map,
+        write_load_side_effects,
+    )
+
+    er_map_snapshot: dict[tuple[str, str], str] = {}
     try:
         with atomic(dry_run=dry_run) if dry_run else atomic():
+            # ER hook P21g-2 (C7/D-49): the write lock for the whole
+            # transaction. ER's /v1 writes try the same key and answer
+            # 503 + Retry-After while this load runs. Dry runs skip it —
+            # they hold the lock briefly only to validate, and pausing ER
+            # for a preview would be rude, not protective.
+            if not dry_run:
+                hold_load_write_lock(load_connector)
+                er_map_snapshot = snapshot_entity_map(load_connector)
             if pending_schema_changes:
                 await _apply_schema_changes(
                     destination,
@@ -924,6 +940,33 @@ async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
                 _persist_merge_audit(
                     state, destination, set(load_results), connector=load_connector
                 )
+                # ER hook P21g-3 / P21k: redirects for cluster ids that lost
+                # all their records, version bumps for every row this run
+                # wrote, and one er_field_history row per survivorship loss —
+                # same transaction, so a rolled-back load leaves no side
+                # effects behind (the entity-map rule, one layer up).
+                if not dry_run:
+                    er_loaded: dict[str, list[str]] = {}
+                    er_conflicts: dict[str, list[tuple[str, list[dict[str, Any]]]]] = {}
+                    for loaded_entity in load_results:
+                        records = collection_records(
+                            unified_entities, loaded_entity, kind="unified"
+                        )
+                        er_loaded[loaded_entity] = [
+                            str(r.get("id")) for r in records if r.get("id")
+                        ]
+                        er_conflicts[loaded_entity] = [
+                            (str(r.get("id")), r.get("_conflicts") or [])
+                            for r in records
+                            if r.get("id") and r.get("_conflicts")
+                        ]
+                    write_load_side_effects(
+                        load_connector,
+                        str(state.get("run_id") or ""),
+                        er_map_snapshot,
+                        er_loaded,
+                        er_conflicts,
+                    )
             else:
                 # Raising is what triggers the rollback: everything written
                 # in this transaction, including earlier entities, is undone.
@@ -957,6 +1000,15 @@ async def load_data_node(state: dict[str, Any]) -> dict[str, Any]:
         failed_entities = [
             e for e in entity_order if collection_count(unified_entities, e)
         ] or list(dict.fromkeys(failed_entities))
+
+    # ER hook P21g-3 (after commit, best-effort): what the run's resolve
+    # actually fitted becomes er_model — the bars the online scorer ships.
+    # Outside the transaction on purpose: a model that failed to persist
+    # must not roll back a committed load, and a committed load whose model
+    # did not persist keeps scoring on the previous bars (labelled
+    # provisional by /v1/entity-types when there are none).
+    if not rolled_back and not dry_run:
+        persist_er_models(state, dict(state.get("er_match_models") or {}))
 
     report = build_reconciliation_report(
         state,

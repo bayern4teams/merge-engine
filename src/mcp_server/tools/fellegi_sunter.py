@@ -240,6 +240,55 @@ class MatchModel:
         """Starting evidence from the base rate of matches among candidates."""
         return math.log2(self.match_prior / (1.0 - self.match_prior))
 
+    def to_params(self) -> dict[str, Any]:
+        """JSON-safe form (what merge_engine.er_model.params holds): the m/u
+        tables, per-field term frequencies, the match prior, and P14's token
+        document frequencies — everything needed to rebuild this model and
+        reproduce its scoring exactly (P21b: the bars the last run used)."""
+        return {
+            "match_prior": self.match_prior,
+            "fields": {
+                name: {
+                    "name": fm.name,
+                    "m": fm.m,
+                    "u": fm.u,
+                    "term_frequency": fm.term_frequency,
+                    "is_unique_id": fm.is_unique_id,
+                }
+                for name, fm in self.fields.items()
+            },
+            "token_df": list(self.token_df) if self.token_df is not None else None,
+        }
+
+    @staticmethod
+    def from_params(params: dict[str, Any] | None) -> MatchModel | None:
+        """Inverse of ``to_params``, exact. A corrupt row yields None rather
+        than an exception — a broken persisted model must not take down
+        whichever run reads it."""
+        if not params or "fields" not in params:
+            return None
+        try:
+            model = MatchModel(
+                fields={
+                    name: FieldModel(
+                        name=spec["name"],
+                        m=spec["m"],
+                        u=spec["u"],
+                        term_frequency=spec.get("term_frequency", {}),
+                        is_unique_id=spec.get("is_unique_id", False),
+                    )
+                    for name, spec in params["fields"].items()
+                },
+                match_prior=params["match_prior"],
+            )
+            token_df = params.get("token_df")
+            if token_df is not None:
+                model.token_df = (token_df[0], token_df[1])
+            return model
+        except Exception:
+            logger.warning("Could not rebuild match model from params", exc_info=True)
+            return None
+
     def score(self, comparisons: dict[str, tuple[str, str | None]]) -> float:
         """Total match weight in bits for one pair's comparison vector."""
         total = self.prior_weight

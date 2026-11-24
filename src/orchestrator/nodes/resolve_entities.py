@@ -215,6 +215,7 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
     errors: list[str] = []
     entity_clusters: dict[str, list[dict]] = dict(state.get("entity_clusters", {}))
     resolution_stats: dict[str, dict] = dict(state.get("resolution_stats", {}))
+    er_match_models: dict[str, dict] = {}
 
     run_id = str(state.get("run_id") or "unknown")
     spool = RunSpool(run_id)
@@ -237,6 +238,14 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
     # reading every destination person unfiltered would both be unbounded and
     # pollute clustering with unrelated rows.
     _inject_subject_destination_rows(state, spool, entity_map, extracted_data)
+
+    # ER hook P21g-1: every er_enrichment_record joins the candidate pool as
+    # origin 'enrichment_engine', pre-seeded in the entity map with the id ER
+    # issued — without this the load rewrites enriched rows from source
+    # origins only and silently drops every enrichment value. Best-effort.
+    from src.orchestrator.er_hooks import inject_enrichment_records
+
+    inject_enrichment_records(state, spool, entity_map, extracted_data, run_id)
 
     # ── Phase 1: sequential prep (Part 1.5 B.3, same shape as B.1's
     # map_fields split) ──────────────────────────────────────────────
@@ -374,6 +383,11 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
         logger.debug("resolve_entities_impl result keys: %s", list(result.keys()))
 
         clusters = result.get("clusters", [])
+        # ER hook P21g-3: remember what this run actually fitted so the load
+        # node can persist it as er_model after commit ("the bars the last
+        # run used", P21b). Plain JSON data; only a fitted model rides.
+        if result.get("match_model_params"):
+            er_match_models[entity_type] = result["match_model_params"]
 
         # Stats
         total_records = result.get("total_records", 0)
@@ -526,6 +540,9 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
         "errors": errors,
         "extracted_data": extracted_data,
         "interrupt_data": None,
+        # ER hook P21g-3: models fitted this run, persisted as er_model by the
+        # load node after commit (P21b's "bars the last run used").
+        "er_match_models": er_match_models,
         **quality_update,
     }
     # P9: remembered band decisions are applied HERE, before the matches gate --

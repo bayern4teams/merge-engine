@@ -393,6 +393,12 @@ def _resolve_core(
         "borderline": borderline,
         "pair_evidence": pair_evidence,
         "model_fitted": match_model is not None,
+        # P21g-3: JSON-safe form of what was actually fitted this run, so the
+        # node can persist it as er_model ("the bars the last run used",
+        # P21b). Plain data (str/float/dict), picklable across the process
+        # pool. None when no model was fit — the online scorer then keeps the
+        # previously persisted model rather than this run's heuristic.
+        "match_model_params": match_model.to_params() if match_model is not None else None,
         "possibly_related": possibly_related,
         "blocking_seconds": t_fit_start - t_blocking_start,
         "fit_model_seconds": t_scoring_start - t_fit_start,
@@ -844,6 +850,10 @@ async def resolve_entities_impl(
             scored_pairs, auto_match, auto_exclude
         ),
         **_band_fields(scored_pairs, auto_match, auto_exclude, core.get("model_fitted", False)),
+        # P21g-3: the model params ride to the node in the result (the node,
+        # not this tool, owns destination writes — and it is the one that
+        # knows whether this is a dry run, which must not persist a model).
+        "match_model_params": core.get("match_model_params"),
         # P6: Possibly Related -- typed edges, no human, never a merge.
         "possibly_related": _related_edges(core.get("possibly_related", []), clusters),
     }
