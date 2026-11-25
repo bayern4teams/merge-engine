@@ -23,7 +23,8 @@ Subcommands:
     arch        scripts/lint_arch.py, ratcheted against arch-lint-baseline.txt
     docs        scripts/lint_docs.py (broken links / stale file:line citations)
     portability scripts/lint_portability.py (no hardcoded conda/na180 paths; from-scratch files present)
-    test        pytest tests/unit tests/integration (full unit + integration suite)
+    test        pytest tests/unit + tests/integration + the P21 mocked tier
+                (tests/part1/test_p21_acceptance.py — no DBs, CI-safe)
     test-fast   pytest tests/unit -x (stop on first failure, for tight loops)
     frontend    npm run typecheck && npm run build (src/ui/frontend)
     eval        python -m tests.eval.score (matcher precision/recall gate)
@@ -171,9 +172,21 @@ def check_portability() -> bool:
 
 
 def check_test() -> bool:
+    # tests/part1/test_p21_acceptance.py is the P21 MOCKED tier (E2/E3/E4):
+    # no DBs, no env — it belongs in the CI tier like tests/unit. The rest
+    # of tests/part1 is not gated here (pre-existing failures predate P21;
+    # migrating that tree is a separate, larger task).
     return _run(
-        [PYTHON, "-m", "pytest", "tests/unit", "tests/integration", "-q"],
-        label="pytest tests/unit tests/integration",
+        [
+            PYTHON,
+            "-m",
+            "pytest",
+            "tests/unit",
+            "tests/integration",
+            "tests/part1/test_p21_acceptance.py",
+            "-q",
+        ],
+        label="pytest tests/unit tests/integration tests/part1/test_p21_acceptance.py",
     )
 
 

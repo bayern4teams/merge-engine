@@ -1471,8 +1471,25 @@ class ErService:
                 history.append(
                     {"field": f, "old": doc.get(f), "new": value, "source": ENRICHMENT_ORIGIN}
                 )
+            if aliases:
+                # add_aliases was validated against the type's fields above;
+                # without this branch it would validate and then silently do
+                # nothing. Merge into the doc's list, de-duplicated, order
+                # preserved (the ledger entry below carries the full request).
+                merged_aliases = list(doc.get("aliases") or [])
+                added = [a for a in aliases if a not in merged_aliases]
+                if added:
+                    stored["aliases"] = merged_aliases + added
+                    history.append(
+                        {
+                            "field": "aliases",
+                            "old": merged_aliases,
+                            "new": merged_aliases + added,
+                            "source": ENRICHMENT_ORIGIN,
+                        }
+                    )
             version = int(doc.get("_version", current)) + 1
-            if stored or body.get("references"):
+            if stored or body.get("references") or aliases:
                 self._mongo_coll(coll).update_one(
                     {"_id": sid}, {"$set": {**stored, "_version": version}}
                 )
