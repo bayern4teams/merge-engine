@@ -11,6 +11,7 @@ carries the flag **`provisional-key`** except `google_v1` (owner-final).
 | google_v1 | **final** | stage0g_scoped | 1997 s | same 0.000/0.000/0.000; related 1.000/0.075/0.138; different 1.000/0.062/0.116 | — | 1.000 (7/7) + abstain 1/1 | 0.000 | 1.000 (2/2 emitted) | 0/0 (see note) | 0.511 | `20261125-1529_2d1101e_stage0g_scoped`; repro in `docs/BENCH_STAGE0.md` |
 | google_v1 | final | stage0f_full | 1700 s | not emitted (see BENCH_STAGE0 findings 2–3) | — | 15/16 (driver) | — | — | — | 0.398 in-process arm | `20261125-1451_2d1101e_stage0f_full` |
 | dblp_acm | provisional-key | s1dblp5_full | 1229 s | 0.925 / 0.956 / 0.940 | (must_merge 2127/2224; must_not_auto 41/46; must_not 252/270) | 3829/4081 = 0.938 | — | — | — | 0.667 | `20261125-1759_906e9bb_s1dblp5_full_DRAFT`; repro below¹ |
+| abt_buy | provisional-key | s1abtbuy_full | 265 s | 0.043 / 0.015 / 0.022 | (must_merge 17/1118; must_not_auto 23/24; must_not 50/124) | 1749/1905 = 0.918 | — | — | — | 0.727 | `20261125-1825_d0cdd42_s1abtbuy_full_DRAFT`; same repro, bench=abt_buy² |
 
 **Crosswalk note:** google_v1 crosswalk scoring demands the truth's XW row
 ids, which no app run can observe; emitting app cluster ids would be
@@ -28,6 +29,17 @@ must_not_auto_merge 41/46, must_not_merge 252/270 on the D5-fixed tree —
 the 5+9 misses are over-merges of the forbidden classes (the destructive
 direction; per-pair attribution not verified — scores.json carries no pair
 detail).
+
+² **abt_buy:** same command with `bench=abt_buy`. Honest headline: this suite
+is the app's weakest terrain — pairwise recall 0.015 (17 of 1,118 must_merge
+pairs merged). Blocking reached 30,680 candidates from 2.36 M, but true
+Abt-Buy duplicates score below the auto bar: long noisy product names with
+model-code variants where `_conflicting_codes` is masked by shared family
+codes (docs/BENCH_ISSUES.md I-5) while the IDF/name signal is too weak to
+carry 0.95 alone. 1,262 borderline pairs exceeded the LLM budget (200);
+1,062 kept heuristic scores. The in-process D1 bake-off (four comparator
+arms) moves nothing here (best F1 0.0164, A-tree) — the gap is the
+comparator's mid band + the code rule, not the soft-compare budget.
 
 ## Suite-level verdicts so far
 
