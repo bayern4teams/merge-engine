@@ -16,6 +16,12 @@ def topological_sort(dependency_tree: dict[str, list[str]]) -> list[str]:
     Entities with no dependencies (leaf nodes) come first.  Entities
     that depend on others appear after their prerequisites.
 
+    A self-dependency (``{"company": ["company"]}`` — a self-referencing
+    FK such as ``parent_company_id``) is dropped: an entity cannot be
+    extracted "before itself", so the self-edge constrains nothing, and
+    keeping it makes Kahn report every table in a self-linking component
+    as a cycle (APP_FINDINGS 2026-10 #1, first hit on google_v1).
+
     Parameters
     ----------
     dependency_tree : dict[str, list[str]]
@@ -29,7 +35,7 @@ def topological_sort(dependency_tree: dict[str, list[str]]) -> list[str]:
     Raises
     ------
     ValueError
-        If the dependency tree contains a cycle.
+        If the dependency tree contains a (genuine, multi-entity) cycle.
 
     Examples
     --------
@@ -37,13 +43,15 @@ def topological_sort(dependency_tree: dict[str, list[str]]) -> list[str]:
     >>> topological_sort(tree)
     ['company', 'person', 'product']  # order of person/product may vary
     """
-    # Build in-degree map and adjacency list
+    # Build in-degree map and adjacency list (self-edges dropped, see above)
     all_nodes: set[str] = set(dependency_tree.keys())
     in_degree: dict[str, int] = {node: 0 for node in all_nodes}
     dependents: dict[str, list[str]] = {node: [] for node in all_nodes}
 
     for node, deps in dependency_tree.items():
         for dep in deps:
+            if dep == node:
+                continue
             if dep not in all_nodes:
                 # Unknown entity referenced — add it with no deps
                 all_nodes.add(dep)

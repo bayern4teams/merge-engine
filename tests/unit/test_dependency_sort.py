@@ -75,10 +75,19 @@ class TestTopologicalSort:
             topological_sort(tree)
 
     def test_self_referencing(self):
-        """Self-referencing entity should raise ValueError."""
+        """Self-referencing entity is sortable (self-edge constrains nothing).
+
+        2026-11-25 (benchmark Stage 0, google_v1): a self FK
+        (`company_master.parent_company_id`) made every table in a
+        self-linking component report as a cycle and killed the run —
+        APP_FINDINGS 2026-10 #1. The old "raise" expectation encoded the
+        defect; Postgres itself loads such a schema fine.
+        """
         tree = {"a": ["a"]}
-        with pytest.raises(ValueError, match="Circular dependency detected"):
-            topological_sort(tree)
+        assert topological_sort(tree) == ["a"]
+        tree2 = {"a": ["a"], "b": ["a"]}
+        order = topological_sort(tree2)
+        assert order.index("a") < order.index("b")
 
     def test_unknown_entity_added(self):
         """Unknown entity referenced should be added with no deps."""

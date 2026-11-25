@@ -83,13 +83,13 @@ class TestDependencyAnalysisEdgeCases:
             topological_sort(dep_tree)
 
     def test_self_referencing_dependency(self):
-        """Dependency sort should detect self-referencing deps."""
+        """Self-referencing dep is sortable, not a cycle (see unit test,
+        2026-11-25 google_v1 Stage 0 fix)."""
         from src.orchestrator.utils.dependency_sort import topological_sort
 
         dep_tree = {"A": ["A"]}
 
-        with pytest.raises(ValueError, match="Circular"):
-            topological_sort(dep_tree)
+        assert topological_sort(dep_tree) == ["A"]
 
     def test_empty_dependency_tree(self):
         """Empty dependency tree should return empty result."""
