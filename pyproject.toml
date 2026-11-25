@@ -55,7 +55,13 @@ dependencies = [
     # Logging
     "structlog>=24.0.0",
     # Per-run extraction spool: rows live here instead of in graph state.
-    "duckdb>=1.0.0",
+    # Pinned <2.0 (2026-11-25): duckdb 2.0.1 changed cursor behaviour so
+    # extract_data's pagination raises ResourceInUse on unfinished results
+    # under py3.11 (CI-proven: identical 34-failure set at baseline 768fdda
+    # and HEAD on 2.0.1; 1.5.5 is green). DEBT: adapt extract_data to duckdb
+    # 2.x cursor semantics and lift this cap -- tracked as deliberate debt so
+    # the pin is not silently forgotten.
+    "duckdb>=1.0.0,<2.0",
     # ADR 0009: in-process traversal over P-1's metadata tables (P-8 graph
     # view, P-9 entity subgraph traversal) -- core V3 discovery
     # functionality, not an optional accelerator like the Valentine/
