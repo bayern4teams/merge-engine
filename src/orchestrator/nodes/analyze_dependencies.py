@@ -33,6 +33,16 @@ logger = logging.getLogger("merge-engine.orchestrator.analyze_dependencies")
 # NOT here; an entity resting on only heuristic edges still needs the LLM.
 _VERIFIED_CONFIDENCES = ("declared", "verified", "probable")
 
+# Evidence strength per join-graph confidence tier, for arbitrating a MUTUAL
+# entity dependency (A<-B and B<-A). A value-verified IND runs both ways on
+# sibling tables that share a key column (google_v1: company_master.parent_
+# company_id's values sit inside contacts.company_id, so IND "proves"
+# company depends on contacts against the real declared contacts->company
+# FK) — APP_FINDINGS 2026-10 #2. A lower tier never outranks a higher one;
+# equal tiers cancel to "unknown" (LLM + human gate decide), they do not flip
+# a coin.
+_TIER_RANK = {"declared": 3, "verified": 2, "probable": 1}
+
 
 async def analyze_dependencies(state: dict[str, Any]) -> dict[str, Any]:
     """Analyze schemas to determine entity dependencies.
@@ -593,6 +603,9 @@ def _join_graph_to_dependency_tree(
     confirmed: list[dict[str, Any]] = []
     seen_confirmed: set[tuple[str, str, str, str]] = set()
     covered: set[str] = set()
+    # best evidence tier seen per entity-level dep direction, for the
+    # mutual-pair arbitration below (see _TIER_RANK)
+    tier_of: dict[tuple[str, str], int] = {}
 
     for entity in target_entities:
         nodes = entity_nodes.get(entity) or set()
@@ -629,6 +642,12 @@ def _join_graph_to_dependency_tree(
                 has_verified_edge = True
                 if is_child_side:
                     deps.add(other_entity)
+                    # entity-level evidence tier for the A depends-on-B edge;
+                    # used to arbitrate mutual pairs below (declared beats a
+                    # value-verified IND, which beats a probable one).
+                    _rank = _TIER_RANK.get(edge.confidence, 0)
+                    if _rank > tier_of.get((entity, other_entity), 0):
+                        tier_of[(entity, other_entity)] = _rank
                 dedupe_key = (
                     edge.child_table,
                     edge.child_column,
@@ -655,8 +674,63 @@ def _join_graph_to_dependency_tree(
         if has_verified_edge or not has_unverified_edge:
             covered.add(entity)
 
+    # Mutual entity dependency (A depends-on B and B depends-on A) is a 2-cycle
+    # topological_sort can only fail on — and the join graph reliably produces
+    # false ones: a value-verified IND reads both directions when sibling
+    # tables share a key column's value set (google_v1 stage 0, APP_FINDINGS
+    # 2026-10 #2). Arbitrate by evidence tier; an equal-tier pair is genuinely
+    # unknown, so BOTH deps drop and neither entity stays "covered" — the LLM
+    # fallback plus the human dependency gate decide, never a coin flip.
+    for a, b in list(tier_of):
+        if (b, a) not in tier_of or a >= b:
+            continue
+        ra, rb = tier_of[(a, b)], tier_of[(b, a)]
+        if ra > rb:
+            tree[b] = [e for e in tree.get(b, []) if e != a]
+        elif rb > ra:
+            tree[a] = [e for e in tree.get(a, []) if e != b]
+        else:
+            tree[a] = [e for e in tree.get(a, []) if e != b]
+            tree[b] = [e for e in tree.get(b, []) if e != a]
+            covered.discard(a)
+            covered.discard(b)
+    # Longer residual cycles (a 3-cycle of value-verified INDs survives
+    # pairwise arbitration) must not crash the run either: the ALGORITHMIC
+    # answer is only trusted when it is a DAG; otherwise the LLM fallback
+    # and the human dependency gate decide, same as any partial coverage.
+    if covered == set(target_entities) and _has_cycle(tree):
+        logger.info(
+            "Join-graph dependency tree still contains a cycle; falling through to the LLM."
+        )
+        return tree, False, confirmed
     fully_covered = covered == set(target_entities)
     return tree, fully_covered, confirmed
+
+
+def _has_cycle(tree: dict[str, list[str]]) -> bool:
+    """True when the dependency tree contains any cycle (iterative DFS,
+    colours: 1 = on stack, 2 = done)."""
+    colour: dict[str, int] = {}
+    for start in tree:
+        if colour.get(start):
+            continue
+        stack: list[tuple[str, bool]] = [(start, False)]
+        while stack:
+            node, returning = stack.pop()
+            if returning:
+                colour[node] = 2
+                continue
+            if colour.get(node) == 1:
+                colour[node] = 2
+                continue
+            colour[node] = 1
+            stack.append((node, True))
+            for dep in tree.get(node, []):
+                if colour.get(dep) == 1:
+                    return True
+                if not colour.get(dep):
+                    stack.append((dep, False))
+    return False
 
 
 def _format_confirmed_lines(confirmed_edges: list[dict[str, Any]]) -> str:
