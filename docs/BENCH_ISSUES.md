@@ -48,6 +48,25 @@ driver now confirms the gate's own proposed thresholds verbatim.
 `proc.wait(timeout=30)` raised after SIGTERM teardown, losing score output of
 an otherwise-completed run (s1dblp). Fixed: escalate to SIGKILL.
 
+## I-5  shared family code masks a model-code conflict (over-merge, destructive direction)
+
+`_conflicting_codes` calls codes conflicting only when NO code of one name
+appears anywhere in the other. Verified live (in-process, this tree):
+"…Media Player - MB562LL/A" vs "…MB565LL/A": code sets
+{mb562ll, 120gb} / {mb565ll, 120gb}; the shared `120gb` makes
+`_conflicting_codes` False, the pair scores 1.000 and auto-merges. Same for
+"Samsung YP-S2ZW" vs "YP-S2ZG", "…- Sil" vs "…- Bla" (no codes at all),
+"LaCie … 301278" vs "301829". This is the abt_buy FP class in the D1
+bake-off driver (top FPs all at conf 1.0) and plausibly part of dblp_acm's
+must_not_auto_merge 41/46 + must_not_merge 252/270 misses. Fix shape
+(owner call): per-code conflict should ignore codes shared by BOTH names
+(the pair shares 120gb, differs on mb562ll/mb565ll — a model variant), i.e.
+compare the code sets after removing the intersection, mirroring how
+shared rare-name tokens are already handled. Not touched mid-benchmark.
+Repro: `python -c "from src.mcp_server.tools.resolve_entities import
+_conflicting_codes as f; print(f({'name': 'x 120GB - MB562LL/A'},
+{'name': 'x 120GB - MB565LL/A'}))"`  # prints False, wants True
+
 ## I-4  (pre-existing, HEAD) numeric-literal gates red at HEAD
 
 test_p14_acceptance::test_6c fails at HEAD (introduced by 2f90c83:
