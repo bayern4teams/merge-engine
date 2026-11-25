@@ -1895,6 +1895,9 @@ rest):**
 > reranker model; it is not ready yet. Do not implement until the user says it
 > is. This section records where it fits so the work can start without
 > re-research.
+> *(rev. d, 2026-11-25: the model is ready and acceptance-verified; the
+> bake-off ran — see the measured table at the end of this section. B lost on
+> precision; D-53 stays OPEN.)*
 
 ### Every place an embedding could map fields, and the verdict
 
@@ -1932,6 +1935,38 @@ ground-truth scripts if none exists — that is the first task), measures
 precision/recall of accepted mappings and the count of LLM calls. Wins only if
 precision does not drop. Model, k and the reranker cut-off are decided by that
 measurement, not set in advance.
+
+### Bake-off run 2026-11-25 — **B LOSES; D-53 stays OPEN** (rev. d)
+
+Labels: `google_v1/truth/mapping.csv` (final, owner-approved key), 133 labelled
+source columns (51 mappable-else-UNMAPPED across 3 origins × `company/staff/
+contact/product` destination tables); mapping one of the UNMAPPED rows is a
+false positive. Arms run by `.tmp/bench_tools/p22_bakeoff.py` on the laptop
+against the served models (`qwen3-embedding-4b` @8001, `qwen3-reranker-4b`
+@8002, both acceptance-verified 2026-11-25); B serializes exactly as step 1
+specifies, `COL name VAL values` for the reranker pair. Sweep: k ∈ {3,5,10} ×
+cutoff ∈ {0, 0.3, 0.5, 0.7}. Precision = share of accepted mappings that match
+`expected`; one rerank call per source column (B), LLM calls counted for A.
+
+| arm | precision | recall | F1 | accepted acc. | TP | FP | calls |
+|---|---|---|---|---|---|---|---|
+| A (current `map_fields_impl`, heuristic+LLM) | **0.933** | 0.151 | 0.259 | 0.398 | 14 | 1 | 4 |
+| B k=3 cut=0.7 (best B) | 0.814 | 0.376 | **0.515** | **0.519** | 35 | 8 | 51 |
+| B k=5 cut=0.5 | 0.778 | 0.376 | 0.507 | 0.511 | 35 | 10 | 51 |
+| B k=10 cut=0.0 (worst) | 0.667 | 0.366 | 0.472 | 0.459 | 34 | 17 | 51 |
+
+B doubles recall and F1 but its precision (0.814 at the best cell; no cell
+reaches 0.9) is below A's 0.933 — **the pre-registered rule ("B wins only if
+precision does not drop") says B loses.** A's precision rides on a brutal
+abstain rate (recall 0.151: it refuses 79 of 93 mappable columns); B's errors
+are confident wrong column choices, the destructive kind. Caveats, honestly:
+A ran without the Valentine phase-0 tier (needs a live origin connector — the
+heuristic+LLM tiers are what production runs for the unmapped remainder), and
+A made only 4 LLM calls in-process because its heuristic tier answered most
+columns; B's F1 gain is real and a future hybrid (retrieve + rerank as *an
+additional heuristic tier in front of the LLM*, not as the decider) is the
+upgrade path this table points at. Status stays: clients wired to nothing,
+D-53 OPEN with these numbers.
 
 ---
 
@@ -4316,7 +4351,7 @@ a measurement, recorded here.
 | **D-50** | Scores comparable **within one type only**; per-type thresholds published in `/v1/entity-types` | R | Probabilities are uncalibrated (P8 ceiling, D6/D12 deferred) | P21b |
 | **D-51** | Auth = **`X-API-Key` header**, env `ER_API_KEY`, fail closed when unset | U | One internal client; no identity provider needed | P21h |
 | **D-52** | Enrichment reads the unified DB through a **read-only Postgres role**; change feed = `merge_engine.er_entity_version.updated_at` | U | Zero read API to build; no new destination column (D-33) | P21h |
-| **D-53** | Embedding + reranker for **source→destination field mapping** recorded, **not scheduled** until the user's local model is ready; gated by a bake-off | U | Recommended mapping #1 of five considered; enrichment-attribute mapping is unnecessary under C1 | P22 |
+| **D-53** | Embedding + reranker for **source→destination field mapping** recorded, **not scheduled** until the user's local model is ready; gated by a bake-off | U | Recommended mapping #1 of five considered; enrichment-attribute mapping is unnecessary under C1. Bake-off ran 2026-11-25 (google_v1 mapping labels): the reranker arm doubled recall/F1 but precision 0.814 < 0.933 — pre-registered rule says it loses; stays OPEN with the table in P22 | P22 |
 | **D-54** | The ER service lives **inside `src/api`** (same FastAPI app, `/v1` routes) | U | One process, one deploy | P21 |
 | **D-55** | An entity type with **no destination table** is `UNSUPPORTED_ENTITY_TYPE`; ER never creates tables | U | Fixed-schema contract (D-33). **Amended 2026-11-23 (D-62):** with no *registered extension type* either it stays `UNSUPPORTED`; ER still never creates destination tables, but registered extension types are now resolved and written to the Enrichment team's MongoDB | P21b, P21j |
 | **D-56** | Entity description is **hybrid**: our field names in `attributes`, everything else in `extra` (provenance only), plus `source_text` | U | Nothing enrichment found is lost; only known fields are matched and stored | P21 rev. b |
