@@ -275,7 +275,8 @@ def test_2g_engine_stage_counts_reported_and_consistent_with_report() -> None:
         "blocks_used",
         "blocks_purged",
         "block_memberships_filtered",
-        "pairs_pruned_by_purging",
+        "pairs_lost_by_block_filtering_ub",
+        "pairs_pruned_by_purging_ub",
         "pairs_pruned_by_meta_blocking",
     ):
         assert isinstance(stats.get(key), int) and stats[key] >= 0, (key, stats)

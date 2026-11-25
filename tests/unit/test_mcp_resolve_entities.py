@@ -381,6 +381,42 @@ class TestGenerateCandidatePairs:
         assert ("o:t:0", "o:t:20") not in pairs
         assert stats["blocks_purged"] + stats["block_memberships_filtered"] >= 1
 
+    def test_block_filtering_pair_loss_bound_is_exact_when_unique(self) -> None:
+        """D9: `pairs_lost_by_block_filtering_ub` bounds the distinct pairs
+        lost to block filtering, and is EXACT here. 4 `r` records share one
+        `big` block (size 4) but each also sits in a size-2 partner block
+        (geometric mean sqrt(8) < 4 — every r discards `big`, keepers=∅, so
+        the block dies at 2a and all C(4,2)=6 r-r pairs are lost); each
+        r-p pair survives via its own size-2 `partner` block. No lost pair
+        reappears (G - C = 6), so the bound is exact: memberships 4, ub 6,
+        kept 4."""
+        records = []
+        for i in range(4):
+            records.append(
+                {
+                    "_origin_id": "o",
+                    "_origin_table": "t",
+                    "_origin_id_row": f"r{i}",
+                    "name": f"big partner{i}",
+                }
+            )
+            records.append(
+                {
+                    "_origin_id": "o",
+                    "_origin_table": "t",
+                    "_origin_id_row": f"p{i}",
+                    "name": f"extra{i} partner{i}",
+                }
+            )
+        stats: dict[str, int] = {}
+        pairs = {
+            frozenset((a, b)) for a, b, _1, _2 in _generate_candidate_pairs(records, stats=stats)
+        }
+        assert pairs == {frozenset((f"o:t:r{i}", f"o:t:p{i}")) for i in range(4)}
+        assert stats["block_memberships_filtered"] == 4  # memberships, not pairs
+        assert stats["pairs_lost_by_block_filtering_ub"] == 6  # == exact G - C
+        assert stats["pairs_pruned_by_purging_ub"] == 0
+
     def test_skips_self_comparisons(self) -> None:
         """Test that identical record IDs are skipped."""
         records = [

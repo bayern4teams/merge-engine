@@ -422,8 +422,12 @@ async def resolve_entities(state: dict[str, Any]) -> dict[str, Any]:
             "uncompared_pairs": uncompared,
             "candidate_pairs": result.get("candidate_pairs", 0),
             # P2: pairs excluded by purging / meta-blocking (computed, not
-            # budgeted) — the reviewer sees what blocking chose not to compare.
-            "pairs_pruned_by_purging": result.get("pairs_pruned_by_purging", 0),
+            # budgeted) — the reviewer sees what blocking chose not to
+            # compare. D9: the *_ub counts are upper bounds (a pair is
+            # counted once per shared block), and memberships are not pairs.
+            "block_memberships_filtered": result.get("block_memberships_filtered", 0),
+            "pairs_lost_by_block_filtering_ub": result.get("pairs_lost_by_block_filtering_ub", 0),
+            "pairs_pruned_by_purging_ub": result.get("pairs_pruned_by_purging_ub", 0),
             "pairs_pruned_by_meta_blocking": result.get("pairs_pruned_by_meta_blocking", 0),
             # Uncertain pairs left unmerged. They form no multi-record
             # cluster, so without this the matches gate would auto-skip

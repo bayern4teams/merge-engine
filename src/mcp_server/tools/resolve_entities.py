@@ -832,8 +832,14 @@ async def resolve_entities_impl(
         "uncompared_pairs": blocking_stats.get("uncompared_pairs", 0),
         "candidate_pairs": blocking_stats.get("candidate_pairs", 0),
         # P2: pairs excluded by a computed property of the block collection
-        # (not by a budget) — the measurable cost of meta-blocking.
-        "pairs_pruned_by_purging": blocking_stats.get("pairs_pruned_by_purging", 0),
+        # (not by a budget) — the measurable cost of meta-blocking. Each is
+        # an UPPER BOUND (D9): a pair lost from one block can survive via
+        # another, so these are per-shared-block counts, never exact.
+        "block_memberships_filtered": blocking_stats.get("block_memberships_filtered", 0),
+        "pairs_lost_by_block_filtering_ub": blocking_stats.get(
+            "pairs_lost_by_block_filtering_ub", 0
+        ),
+        "pairs_pruned_by_purging_ub": blocking_stats.get("pairs_pruned_by_purging_ub", 0),
         "pairs_pruned_by_meta_blocking": blocking_stats.get("pairs_pruned_by_meta_blocking", 0),
         "blocks_purged": blocking_stats.get("blocks_purged", 0),
         # Clustering cost profile (BUG D.1) — largest component, how many
@@ -1206,7 +1212,9 @@ def _generate_candidate_pairs(
     against a local mean.
 
     ponytail: meta-blocking is lossy by design — a recall/cost trade, measured
-    here as counts (``block_memberships_filtered``, ``pairs_pruned_by_purging``,
+    here as counts (``block_memberships_filtered`` — memberships, not pairs;
+    ``pairs_lost_by_block_filtering_ub`` and ``pairs_pruned_by_purging_ub`` —
+    upper bounds, a pair counted once per shared block;
     ``pairs_pruned_by_meta_blocking``); pair completeness needs ground truth
     and is computed by the eval harness, never guessed here (P19). A name in a
     script without spaces (CJK) is one token, so a one-character variant does
@@ -1281,9 +1289,15 @@ def _generate_candidate_pairs(
     # keepers; a non-keeper is linked only to the keepers.
     keepers_of: dict[str, frozenset[str]] = {}
     filtered_out = 0
+    filter_pairs_lost_ub = 0  # D9: upper bound, see the stats block below
     for key, members in blocks:
         keepers = frozenset(r for r in members if _keeps(r, len(members)))
         filtered_out += len(members) - len(keepers)
+        # sum of C(size,2) before minus C(keepers,2) after — cheap because
+        # the sizes are already in hand; no enumeration of the pair space.
+        filter_pairs_lost_ub += (
+            len(members) * (len(members) - 1) - len(keepers) * (len(keepers) - 1)
+        ) // 2
         keepers_of[key] = keepers
     blocks = [(key, members) for key, members in blocks if keepers_of[key]]
 
@@ -1402,11 +1416,16 @@ def _generate_candidate_pairs(
     stats["candidate_pairs"] = len(pairs)
     stats["blocks_used"] = len(kept)
     stats["blocks_purged"] = len(purged)
-    # Comparisons inside purged blocks (an upper bound on distinct pairs lost:
-    # a purged pair may still come back through another block).
-    # Block memberships dropped by local-mean block filtering.
+    # D9: every "pairs" count below is an UPPER BOUND on distinct pairs lost
+    # (a pair lost from one block may survive through another); pair
+    # completeness against ground truth is the eval harness's job (P19).
+    # Units stated in the name: memberships, not pairs.
     stats["block_memberships_filtered"] = filtered_out
-    stats["pairs_pruned_by_purging"] = purged_comparisons
+    # sum C(size,2) before minus C(keepers,2) after, per filtered block —
+    # the cheap bound on pairs lost to local-mean block filtering (D9): a
+    # pair is counted once per shared block, never enumerated.
+    stats["pairs_lost_by_block_filtering_ub"] = filter_pairs_lost_ub
+    stats["pairs_pruned_by_purging_ub"] = purged_comparisons
     stats["pairs_pruned_by_meta_blocking"] = meta_pruned
     logger.debug(
         "_generate_candidate_pairs: %d pairs (%d pruned by meta-blocking, %d block "

@@ -326,8 +326,10 @@ a counter ran out (`_generate_candidate_pairs` in `resolve_entities.py`):
 
 Pruning is lossy by design (a true pair whose only shared block is dropped is
 lost), so it is measured, not assumed: the run report carries
-`block_memberships_filtered`, `pairs_pruned_by_purging` and
-`pairs_pruned_by_meta_blocking`, and pair completeness is computed against
+`block_memberships_filtered` (memberships, not pairs),
+`pairs_lost_by_block_filtering_ub` and `pairs_pruned_by_purging_ub` (both UPPER
+BOUNDS — a pair is counted once per shared block, never enumerated), and
+`pairs_pruned_by_meta_blocking`; pair completeness is computed against
 ground truth by `tests/eval/score.py` (`blocking_report`, P19). Without labels
 blocking recall is unmeasured. A name in a script without spaces (CJK) is one
 token, so a one-character variant does not co-block.
