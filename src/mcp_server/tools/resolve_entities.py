@@ -132,6 +132,13 @@ _PARTIAL_NAME_FIELDS = frozenset(
 # Fields that uniquely identify an entity. Two records carrying different
 # non-null values here are different entities, however alike their names.
 _UNIQUE_IDENTITY_HINTS = ("email", "tax_id", "vat", "ssn")
+# D5: the fields whose disagreement means "a different edition/year", the
+# HANDOFF's "year/number" shape. Deliberately narrow — a phone or an account
+# differing between origins is a contact change, not a second publication
+# (P6's attack `test_true_duplicates_with_differing_phone_still_merge`), and
+# id-shaped columns differ for every record, so they must never agree OR
+# disagree here.
+_NUMBER_CONFLICT_FIELD_HINTS = ("year", "number")
 
 # Fields an operator would recognise as a genuine identity key (Phase 3.1,
 # merge-engine-remediation-1-to-6 project memory): when both records carry a
@@ -356,6 +363,11 @@ def _resolve_core(
             # PRE-D2: two codes that disagree are no weaker than a declared key;
             # a shared price must not lift the pair back to Match.
             or _conflicting_codes(rec1, rec2, record_cache),
+        )
+        # D5 arm C: AFTER _three_way, so its names-agree bump cannot re-lift
+        # an addendum pair over the bar.
+        conf = _containment_review_cap(
+            conf, rec1, rec2, corpus, auto_match, auto_exclude, record_cache
         )
         if conf < auto_exclude and _shares_identifying_value(rec1, rec2, corpus, record_cache):
             possibly_related.append([id1, id2] if id1 < id2 else [id2, id1])
@@ -751,7 +763,7 @@ async def resolve_entities_impl(
             # P8: judge the most uncertain pairs -- nearest the middle of the
             # band this run committed -- not the nearly-decided ones next to
             # auto-match; the rest keep their heuristic score (still review).
-            middle = (auto_match + auto_exclude) / 2
+            middle = _band_middle(auto_match, auto_exclude)
             borderline.sort(key=lambda p: (abs(p[4] - middle), p[0], p[1]))
             overflow = borderline[_MAX_LLM_PAIRS:]
             borderline = borderline[:_MAX_LLM_PAIRS]
@@ -1290,21 +1302,21 @@ def _generate_candidate_pairs(
     keepers_of: dict[str, frozenset[str]] = {}
     filtered_out = 0
     filter_pairs_lost_ub = 0  # D9: upper bound, see the stats block below
+
+    # Comparisons inside one block: the unordered pairs of its members.
+    def _comparisons(members: list[str] | frozenset[str]) -> int:
+        return len(members) * (len(members) - 1) // 2
+
     for key, members in blocks:
         keepers = frozenset(r for r in members if _keeps(r, len(members)))
         filtered_out += len(members) - len(keepers)
-        # sum of C(size,2) before minus C(keepers,2) after — cheap because
-        # the sizes are already in hand; no enumeration of the pair space.
-        filter_pairs_lost_ub += (
-            len(members) * (len(members) - 1) - len(keepers) * (len(keepers) - 1)
-        ) // 2
+        # pair-count before minus pair-count after — cheap because the sizes
+        # are already in hand; no enumeration of the pair space.
+        filter_pairs_lost_ub += _comparisons(members) - _comparisons(keepers)
         keepers_of[key] = keepers
     blocks = [(key, members) for key, members in blocks if keepers_of[key]]
 
     # 2b. Block purging.
-    def _comparisons(members: list[str]) -> int:
-        return len(members) * (len(members) - 1) // 2
-
     blocks.sort(key=lambda kb: (-_comparisons(kb[1]), kb[0]))
     # Coverage counts only the blocks a record KEEPS: a record merely linked
     # to another block's keepers is not covered by it.
@@ -2820,6 +2832,90 @@ def _three_way(
     if relation == "same":
         return max(conf, auto_match)
     return max(conf, auto_exclude)
+
+
+def _disagreeing_number(
+    rec1: dict[str, Any], rec2: dict[str, Any], record_cache: RecordCache | None = None
+) -> bool:
+    """Both records carry a year/number-shaped field and the values differ.
+
+    This is the D5 addendum evidence: "Addendum to X" published the year
+    after X agrees on everything except that number. Only
+    ``_NUMBER_CONFLICT_FIELD_HINTS`` fields count — an addendum's year
+    differs from its original's by one digit (the acceptance fixture's pair
+    is one apart), so the measured bake-off form is plain inequality there,
+    unlike the P6 identity fields where a one-edit slip is no conflict.
+    """
+    v1, v2 = _identity_view(rec1, record_cache), _identity_view(rec2, record_cache)
+    for field in set(v1) & set(v2):
+        if not any(h in field.lower() for h in _NUMBER_CONFLICT_FIELD_HINTS):
+            continue
+        a, b = _normalize(v1[field]), _normalize(v2[field])
+        if a and b and a != b:
+            return True
+    return False
+
+
+def _band_middle(auto_match: float, auto_exclude: float) -> float:
+    """The middle of this run's review band — P8 sorts the band by distance
+    to it; a policy cap parks a pair there ("not confident", nothing new).
+    Mean over the bar pair, no literal of its own."""
+    bars = (auto_match, auto_exclude)
+    return sum(bars) / len(bars)
+
+
+def _containment_review_cap(
+    conf: float,
+    rec1: dict[str, Any],
+    rec2: dict[str, Any],
+    corpus: CorpusEvidence,
+    auto_match: float,
+    auto_exclude: float,
+    record_cache: RecordCache | None = None,
+) -> float:
+    """D5 (bake-off arm C, measured in .handoff/D5.bakeoff.md): a name that
+    merely *contains* the other cannot carry a pair over the bar on the
+    shared part alone — it is capped into the review band when a number
+    disagrees.
+
+    "Addendum to X" vs X: the token sets stand in containment (or differ
+    only by tokens the corpus has seen once or twice — an errata prefix on
+    a pair of records, nothing a shared publication title looks like), and
+    the year disagrees. The score itself stays honest (the min direction,
+    the r1 fix); this is a policy move, the same shape as the
+    ``_conflicting_codes`` cap: the pair goes to a human, it is not
+    excluded. The band midpoint is where ``_three_way`` parks "not
+    confident", so no new bar is introduced.
+
+    ponytail: ceiling -- an addendum carrying the SAME year as its original
+    is not caught (no number disagrees), and containment with no numeric
+    field at all keeps its score. Upgrade path: D12 calibration against
+    labels. The rarity test reuses the corpus's own per-entity ceiling.
+    """
+    if conf < auto_match:
+        return conf
+    n1, n2 = _record_name(rec1, record_cache), _record_name(rec2, record_cache)
+    if not n1 or not n2:
+        return conf
+    t1, t2 = set(_tokenize(n1.lower())), set(_tokenize(n2.lower()))
+    if not t1 or not t2:
+        return conf
+    # EQUAL token sets count as containment too — the measured arm capped
+    # them: an identical title with a disagreeing year is still not enough
+    # evidence for a silent merge (case-variant titles make t1 == t2 here).
+    contained = t1 <= t2 or t2 <= t1
+    if not contained:
+        extra = t1 ^ t2
+        # seen by at most one entity: the rarity bound ``cut`` is what
+        # CorpusEvidence already calls a per-entity contribution ceiling
+        # (two origins -> 2 records; an errata prefix on exactly two
+        # records, nothing a shared title looks like).
+        contained = bool(extra) and all(
+            corpus.name_token_df.get(t, corpus.name_n) <= corpus.cut for t in extra
+        )
+    if not contained or not _disagreeing_number(rec1, rec2, record_cache):
+        return conf
+    return _band_middle(auto_match, auto_exclude)
 
 
 def _has_conflicting_identity(
