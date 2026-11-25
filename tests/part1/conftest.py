@@ -7,6 +7,7 @@ from tests.part1.p21_live_harness import (  # noqa: F401
     dest,
     itest_schema,
     mongo_db,
+    p21_mongo_stack,
     seeded,
     sql,
     svc,
