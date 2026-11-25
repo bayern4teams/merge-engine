@@ -51,6 +51,7 @@ def topological_sort(dependency_tree: dict[str, list[str]]) -> list[str]:
     for node, deps in dependency_tree.items():
         for dep in deps:
             if dep == node:
+                # self-edge: constrains nothing (see docstring)
                 continue
             if dep not in all_nodes:
                 # Unknown entity referenced — add it with no deps
