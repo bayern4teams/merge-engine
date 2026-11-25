@@ -61,6 +61,15 @@ async def unify_entity_groups(state: dict[str, Any]) -> dict[str, Any]:
     for entity_type in target_entities:
         clusters = clusters_for(state, entity_type)
         all_records = entity_rows(state, entity_type)
+        # ER hook P21g-1 (the other half): when P21g-1's injected enrichment
+        # rows are in this entity's record set, the 'enrichment_engine'
+        # origin joins survivorship at priority -1 (D-46) — below every
+        # source, even one that never set `priority` (default 0 makes
+        # priority a no-op tiebreak otherwise, silently letting enrichment
+        # TIE with sources). No-op for runs without enrichment data.
+        from src.orchestrator.er_hooks import ensure_enrichment_origin
+
+        ensure_enrichment_origin(origins, all_records)
         logger.debug(
             "Processing entity '%s': %d clusters, %d records",
             entity_type,

@@ -153,6 +153,176 @@ def test_a5_enrichment_row_persists(svc: Any, sql: Any, itest_schema: str) -> No
     assert r2["decision"] == "MATCHED" and r2["id"] == r["id"]
 
 
+# item 5 BATCH half + 17 (batch side) — the P21g-1 silent-value-loss failure
+# mode, made as mean as the failure (review F3). Full pipeline, real nodes:
+# resolve-create an entity whose `notes` starts EMPTY, PATCH fills it, then a
+# batch run whose source row re-states the same company WITHOUT the notes
+# value drives the very hook call the resolve node makes
+# (resolve_entities.py:246 — inject_enrichment_records through
+# _connector_for_state), the real unify node (ensure_enrichment_origin's
+# priority -1, D-46) and the real load node. If hook 1 were broken, the
+# source-only cluster would upsert notes=NULL over ER's row and silently drop
+# the enriched value — the exact D-46 failure the hook exists to prevent —
+# so the surviving value is asserted FROM SQL, not from any node's report.
+# The contested `country` (PATCHed value vs the source's) must land on the
+# SOURCE side of survivorship and record a HIGHER_PRIORITY_SOURCE
+# er_field_history row.
+#
+# Isolation note: `_get_destination_connector` is patched to the session
+# connector so the batch's entity map, hooks and load all read/write the SAME
+# isolated p21_itest_* schema ER used (production keeps `merge_engine`, D-45).
+def test_g1_batch_load_keeps_enriched_value(
+    svc: Any,
+    dest: Any,
+    sql: Any,
+    itest_schema: str,
+    tmp_path: Any,
+) -> None:
+    import asyncio
+    from unittest.mock import patch
+
+    from src.mcp_server.tools import load_data as tld
+    from src.orchestrator.nodes import load_data as nld
+    from src.orchestrator.nodes.resolve_entities import resolve_entities
+    from src.orchestrator.nodes.unify_entities import unify_entity_groups
+
+    s = itest_schema
+    # Unique per session: the run spool lives at logs/spool/<run_id>.duckdb
+    # and a second concurrent/older run of this test must not share it.
+    run_id = f"p21-g1-{itest_schema.rsplit('_', 1)[-1]}"
+    # 1) resolve-create with notes EMPTY (no notes attribute at all)
+    name = "Kappa Enrichprobe Qz7"
+    r = _resolve_one(svc, "g1:create", {"name": name, "country": "DE"})
+    assert r["decision"] == "CREATED"
+    eid = r["id"]
+    assert count(sql, "companies", s, "id = %s AND notes IS NULL", (eid,)) == 1
+
+    # 2) PATCH fills the empty notes; SQL confirms the fill. The PATCH also
+    # restates the identity name (what an enrichment writer really does): a
+    # ledger record without any name would form a nameless singleton cluster
+    # and the load would try to insert a NULL-name row — the constraint, not
+    # the hook, would decide this test.
+    svc.patch_entity("companies", eid, {"set": {"notes": "enriched-by-g1", "name": name}}, None)
+    assert count(sql, "companies", s, "id = %s AND notes = %s", (eid, "enriched-by-g1")) == 1
+
+    # 3) a batch run sees the SAME company from a source origin that re-states
+    # name and country but knows nothing about notes. The rows are PRE-SPOOLED
+    # (the shape extract_data leaves behind — hook 1 appends to the same spool
+    # and refreshes the handle, so an inline list here would not be the
+    # production path). `largest_cluster_share` is confirmed at 1.0 (the run's
+    # own gate value — this run IS one cluster by design); everything else
+    # stays on the proposed bars.
+    from src.orchestrator.spool import RunSpool, make_handle
+
+    source_row = {
+        "name": name,
+        "country": "US",
+        "_origin_id": "src_g1",
+        "_origin_table": "companies",
+        "_origin_id_row": "1",
+    }
+    run_spool = RunSpool(run_id)
+    run_spool.reset_entity("companies")
+    run_spool.append("companies", [source_row])
+
+    state: dict[str, Any] = {
+        "run_id": run_id,
+        "user_request": "P21g-1 live injection test",
+        "target_entities": ["companies"],
+        "origins": [{"id": "src_g1"}],  # priority UNSET: the D-46 no-op case
+        "extracted_data": {
+            "companies": make_handle(run_id, "companies", run_spool.row_count("companies"))
+        },
+        "destination": {
+            "type": "postgresql",
+            "host": dest._config["host"],
+            "port": dest._config["port"],
+            "user": dest._config["user"],
+            "password": dest._config["password"],
+            "database": dest._config["database"],
+            "schema": s,
+        },
+        "field_mappings": {
+            "companies": {
+                "name": {"dest_column": "name"},
+                "country": {"dest_column": "country"},
+                "notes": {"dest_column": "notes"},
+            }
+        },
+        "human_feedback": {
+            "node": "human_final_approval",
+            "thresholds": {"largest_cluster_share": 1.0},
+        },
+        "errors": [],
+        "load_approval": True,
+        "dry_run": False,
+    }
+
+    # Fresh connector per factory call (production shape): the load node
+    # CLOSES the connector it gets, and the session `dest`/`sql` fixtures
+    # must outlive the run. Config comes from `dest._config`, so entity map,
+    # hooks and load all address the same isolated schema as ER (D-45 note
+    # above).
+    def _fresh(cfg: Any) -> Any:
+        from src.mcp_server.connectors.postgresql_destination import (
+            PostgreSQLDestinationConnector,
+        )
+
+        return PostgreSQLDestinationConnector(dict(dest._config))
+
+    with (
+        patch.object(tld, "_get_destination_connector", _fresh),
+        patch.object(nld, "_get_destination_connector", _fresh),
+        patch.object(nld, "_RUN_REPORTS_DIR", tmp_path / "run_reports"),
+    ):
+        upd = asyncio.run(resolve_entities(dict(state)))
+        assert not upd.get("errors"), upd["errors"]
+        state.update(upd)
+        # Hook 1 really joined: the cluster spans the source row AND the
+        # injected enrichment record, and adopted the id ER issued.
+        from src.orchestrator.spool import clusters_for
+
+        clusters = clusters_for(state, "companies")
+        members = [m for c in clusters for m in c.get("record_ids", [])]
+        assert any(str(m).startswith("enrichment_engine:") for m in members), (
+            f"P21g-1 injection missing: cluster members {members}"
+        )
+        cluster_ids = [c.get("cluster_id") for c in clusters]
+        assert eid in cluster_ids, f"cluster ids {cluster_ids} != ER id {eid}"
+
+        upd2 = asyncio.run(unify_entity_groups(dict(state)))
+        assert not upd2.get("errors"), upd2["errors"]
+        state.update(upd2)
+        upd3 = asyncio.run(nld.load_data_node(dict(state)))
+    assert not upd3.get("errors"), upd3["errors"]
+
+    # 4) SQL truth: value SURVIVED the load and no SECOND row for THIS entity
+    # appeared (the tier shares its schema, so "one row overall" is not the
+    # claim — "exactly the ER-issued id, name-unique, no twin" is). A broken
+    # hook 1 would have upserted the source-only record (notes NULL) over ER's
+    # row — the silent loss this guards (D-46 / acceptance 5).
+    assert count(sql, "companies", s, "id = %s", (eid,)) == 1
+    assert count(sql, "companies", s, "name = %s", (name,)) == 1, (
+        "the load duplicated the entity under a fresh id"
+    )
+    sql.execute(f'SELECT notes, country FROM "{s}".companies WHERE id = %s', (eid,))
+    notes, country = sql.fetchone()
+    assert notes == "enriched-by-g1", f"enriched value lost by the load: {notes!r}"
+    assert country == "US", f"source value should have won survivorship: {country!r}"
+
+    # 5) the losing PATCH value recorded its loss (acceptance 17 batch half)
+    assert (
+        count(
+            sql,
+            "er_field_history",
+            s,
+            "id = %s AND field = 'country' AND reason = %s",
+            (eid, "HIGHER_PRIORITY_SOURCE"),
+        )
+        == 1
+    )
+
+
 # item 6 + 17 (patch half): an inferred value never replaces a source value,
 # and the rejected attempt is recorded anyway (D-48/D-64).
 def test_a6_inferred_never_overwrites(svc: Any, sql: Any, itest_schema: str) -> None:
@@ -216,6 +386,11 @@ def _plant_band(dest: Any, schema: str, auto: float, review: float) -> None:
 
 
 # items 10 + 12 + 13: AMBIGUOUS, side-effect-free search, client choice.
+# SEQUENCING (review note — do not "simplify"): the final choice {new:true}
+# branch RE-PLANTS the band at auto=0.5 on purpose. With the first half's
+# 0.995 bar still cached, no candidate crosses it on a re-score and the
+# MATCH_APPEARED branch tests nothing; only the lower re-planted bar makes
+# it real. The re-plant + invalidate is load-bearing, not tidying.
 def test_a10_12_13_band_search_and_choice(svc: Any, sql: Any, itest_schema: str) -> None:
     s = itest_schema
     _plant_band(svc.conn, s, auto=0.995, review=0.10)  # near-everything in band
