@@ -23,7 +23,9 @@ destination:
 # ── LLM Configuration ──────────────────────────────────────────────────────
 llm:
   provider: "openai"      # "openai" | "azure" | "anthropic"
-  model: "Qwen/Qwen3.6-35B-A3B-FP8"
+  model: "qwen3.8-flash-next"  # served id on :8000 (verified 2026-11-25 via
+  # /v1/models; the old Qwen/Qwen3.6-35B-A3B-FP8 alias 404s — preflight dies
+  # on it). Fallbacks below are provider-side ids, kept for a provider switch.
   # Tried in this exact order (LLMClient.call) whenever the active model
   # hits a quota/billing error — a same-account retry can't recover from
   # that, so the client advances to the next entry instead of failing.
