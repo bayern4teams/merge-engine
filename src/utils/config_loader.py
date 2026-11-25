@@ -196,12 +196,14 @@ class RerankerConfig(BaseModel):
 
     The endpoint speaks the Cohere-style ``POST /v1/rerank`` body (vLLM's
     rerank deployment: ``model`` / ``query`` / ``documents`` / ``top_n``),
-    verified against the live server 2026-11-23. Scores are stable and
-    index-mapping is correct, but the ranking itself was WRONG on short
-    name-vs-name probes (Apple Inc. scored above an exact company-name
-    match, consistently across document orders and runs) and the scale is
-    compressed. Consumers must treat outputs as a signal to be validated
-    by the D-53 bake-off against ground truth, not a calibrated score.
+    verified against the live server 2026-11-23. Scores were initially WRONG
+    on short name-vs-name probes (Apple Inc. above an exact company-name
+    match, compressed scale) — root cause was a deployment missing Qwen3's
+    yes/no-logit scoring + judge template. FIXED server-side 2026-11-25
+    (re-verified: name pairs 0.92-0.93 top-1, order-invariant, spread ~0.9;
+    docs/inference_rerank_acceptance_2026-11-25.md). Scores are usable as a
+    ranking signal now, but any THRESHOLD on them must come from the D-53
+    bake-off against ground truth, not from spot probes.
     """
 
     model: str

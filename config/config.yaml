@@ -83,6 +83,9 @@ scope:
 # the served ids are what /v1/models actually reports — verified 2026-11-23,
 # do not rename them from the report's draft text). Config only so far: the
 # retrieve-then-rerank wiring (P22 / §3.6 Tier) is a separate work item.
+# reranker note: mis-scored deployment was fixed server-side 2026-11-25
+# (yes/no-logit scoring + judge template); acceptance record in
+# docs/inference_rerank_acceptance_2026-11-25.md. Thresholds still wait D-53.
 # Same fail-fast rule as llm: these are private LAN addresses, unreachable
 # from CI — an unbounded client hangs the run, so timeout/max_retries are
 # never left unset here either.

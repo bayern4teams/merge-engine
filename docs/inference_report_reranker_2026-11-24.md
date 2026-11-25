@@ -1,5 +1,13 @@
 # Inference report — embedding & rerank endpoints on 10.10.9.45
 
+> **RESOLVED 2026-11-25:** the reranker defect below was fixed by ai-stack
+> ops on 09:37 UTC (Qwen3 yes/no-logit scoring + judge template applied —
+> our hypothesis was correct). Independently re-verified by the ER team the
+> same morning: probes A/B/C + name-pair set all pass, order-invariant
+> (max drift 0.0014), spread ~0.92, latency unchanged (~19–45 ms). The
+> endpoint is ACCEPTED; the sections below stand as the incident record.
+> See `docs/inference_rerank_acceptance_2026-11-25.md` for the pass record.
+
 **From:** merge-engine (ER team) · **Date:** 2026-11-24 · **Action requested on:** `:8002` (reranker)
 All numbers below were measured live from the ER dev box today; every claim is reproducible with the commands at the end. Auth: the bearer key already shared with the ER team (kept out of this document on purpose).
 

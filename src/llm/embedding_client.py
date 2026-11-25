@@ -19,12 +19,12 @@ Deliberate choices, each with a reason:
   black-holed from CI; LLMClient's docstring records a 30-minute test
   hang from exactly that. The timeout here is therefore mandatory, with
   the same never-unset rule as llm.timeout.
-* **rerank output is a signal, not a calibrated score** — measured against
-  the live server 2026-11-23: stable across runs and document orders, index
-  mapping correct, but the ranking was wrong on short name-vs-name probes
-  (Apple Inc. above an exact company-name match) and the scale is
-  compressed. The D-53 bake-off — not a number copied from these probes —
-  decides whether this endpoint earns a place in the pipeline.
+* **rerank scores rank; thresholds are D-53's job** — the endpoint was
+  mis-deployed until 2026-11-25 (missing Qwen3 yes/no scoring; ranking was
+  wrong on name pairs — measured and reported to ai-stack ops, who fixed
+  and we re-verified: name pairs 0.92-0.93 top-1, order-invariant within
+  0.0014, control spread ~0.9). The score's absolute scale still earns no
+  threshold before the D-53 bake-off against ground truth.
 * **deterministic, no cache** — embeddings of the same text are the
   same vectors; rerank reads both sides per call. Caching rerank results
   is P22's call (it changes what a "run" replays), not this layer's.
@@ -149,9 +149,10 @@ class RerankerClient:
     """``POST {base_url}/rerank`` (vLLM's Cohere-style body).
 
     ``rerank(query, documents)`` returns ``(original_index, score)`` pairs
-    sorted by score, highest first. Scores rank correctly but the absolute
-    scale is compressed (measured 2026-11-23) — treat them as an ordering,
-    not a calibrated threshold.
+    sorted by score, highest first. Deployment history: mis-scored until
+    2026-11-25 (see module docstring); scores now rank correctly on name
+    and paraphrase probes — still treat any threshold as pending D-53
+    calibration, not a number from spot probes.
     """
 
     def __init__(self, config: Any) -> None:
