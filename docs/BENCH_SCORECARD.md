@@ -14,6 +14,7 @@ carries the flag **`provisional-key`** except `google_v1` (owner-final).
 | abt_buy | provisional-key | s1abtbuy_full | 265 s | 0.043 / 0.015 / 0.022 | (must_merge 17/1118; must_not_auto 23/24; must_not 50/124) | 1749/1905 = 0.918 | — | — | — | 0.727 | `20261125-1825_d0cdd42_s1abtbuy_full_DRAFT`; same repro, bench=abt_buy² |
 | amazon_google | provisional-key | s1amaz3_full | 549 s | 0.055 / 0.077 / 0.064 (missing 0) | (must_merge 119/1553; must_not_auto 40/295; must_not 252/423) | 2144/3094 = 0.693 | — | — | — | 0.750 | `20261126-1514_84ec8df_s1amaz3_full_DRAFT`; same repro, bench=amazon_google³ |
 | dblp_scholar_sub8k | provisional-key | s1ds8k_full | 542 s | 0.458 / 0.257 / 0.330 (missing 0) | (must_merge 149/579; must_not_auto 1/1; must_not 16/17) | 178/180 = 0.989 | — | — | — | 0.667 | `20261126-1535_84ec8df-dirty_s1ds8k_full_DRAFT`; same repro, bench=dblp_scholar_sub8k⁴ |
+| febrl | provisional-key | s1febrl_full | 190 s | 0.991 / 0.999 / 0.995 (missing 0) | (must_merge 13953/13972; must_not_auto 76/76; must_not 100/100) | 12783/17030 = 0.751 | — | — | — | 20/60 = 0.333 | `20261126-1614_b5b0dbe_s1febrl_full_DRAFT`; same repro, bench=febrl⁵ |
 
 **Crosswalk note:** google_v1 crosswalk scoring demands the truth's XW row
 ids, which no app run can observe; emitting app cluster ids would be
@@ -67,6 +68,19 @@ authors,venue,year}` expected→UNMAPPED by the scorer; the gate payload lists
 mapping rows keyed `public.papers` without per-origin attribution, so the
 cause (per-origin rows not emitted vs mapper skipping dblp's bare names) is
 NOT established from this run — recorded as an observation, not filed.
+
+⁵ **febrl:** first Stage-1 row on a 5-origin suite (21,000 records; truth
+pairs collide across files BY DESIGN — `benchmark.yaml` header: rec numbers
+repeat, only d1/d2/d3 within-file and a↔b cross-file links are truth). ER is
+the mission's best so far (0.991/0.999/0.995, must_merge 13953/13972, every
+forbidden-pair guard clean: 76/76 + 100/100). The weak column is mapping
+20/60 = 0.333 — `scores.json` wrong list is EXACTLY 40 UNMAPPED misses, 10
+columns each for origins `a`, `d1`, `d2`, `d3`: the app mapped only origin
+`b`'s person-shaped table and left the four siblings' columns unmapped
+(same UNMAPPED-miss shape as footnote 4, at 4× scale; mapped-side precision
+1.0, recall 0.2). Conflicts 12783/17030 = 0.751 rides the same cause
+(unmapped columns can't resolve). Single-run observation, not filed as an
+issue.
 
 ## Suite-level verdicts so far
 
