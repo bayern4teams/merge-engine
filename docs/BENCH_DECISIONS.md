@@ -13,6 +13,7 @@ escapes the PRE-D2 conflict cap and can score 1.0 — the over-merge direction,
 the one this mission scores worst (F0.5 bias).
 
 Measured cost of the status quo (scorecard rows, app runs):
+
 - abt_buy: must_not_merge 50/124 → **74 forbidden merges auto-applied**;
   precision 0.043 at recall 0.015.
 - amazon_google: must_not_merge 252/423 → 171 forbidden edges; P 0.055.
@@ -30,6 +31,7 @@ filled from `.handoff/STAGE4.i5-options.json`):
 | opt2 last-code (model code) | | | | | | |
 
 Reading for the call (pre-registered shapes, not post-hoc):
+
 - **Option 1 (all codes must appear)** is the strictest reading of PRE-D2's
   own docstring sentence ("neither code appears in the other"). Cost: any
   name that gains a token on one side (typos, "Model X (2019)" vs "Model X")
