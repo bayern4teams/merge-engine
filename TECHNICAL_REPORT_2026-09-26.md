@@ -1,6 +1,28 @@
 # Merge-engine — technical report
 
-**Revision 2026-09-29.** Supersedes the 2026-09-26 draft in full.
+**Revision 2026-09-29, banner rev. d 2026-11-26.** Supersedes the 2026-09-26
+draft in full.
+
+> **Rev. d status banner (2026-11-26).** The "research only — nothing below
+> is implemented yet" framing in P21's intro is stale and superseded by this
+> banner: **P1–P20 are landed** on `feat/part1-fixes` (Phase 6b closed 2026-11-26:
+> D9/D5/D6 implemented with measured bake-offs, D1 closed as an honest negative,
+> per `.handoff/D5.bakeoff.md`, `D1.bakeoff.md`, `D6.bakeoff.md` and
+> `docs/plans/part1/LOCAL_VERIFY_REPORT.md`); **P21 is implemented,
+> reviewed and accepted** — the `/v1` ER routes ship on the app
+> (`src/api/er_routes.py`, commits `a9aa693`…`b7b6164`), the independent
+> fix-round reviewer verdict is **ACCEPTED, F1–F5 all closed**
+> (`.handoff/P21.fixround-acceptance.md`), with the reviewer's CI green at
+> commit `d59f0a1` (run `45806779520`); the branch has moved past that SHA
+> since, and Actions re-run per push on GitHub.
+> **P22 ran its bake-off: B lost (precision 0.814 < 0.933); D-53 stays OPEN**
+> (measured table at the end of §P22, rev. d). Benchmark program so far:
+> scorecard with 6 rows over 5 suites in `docs/BENCH_SCORECARD.md` —
+> google_v1 (final key), dblp_acm 0.940 F1, amazon_google 0.064, abt_buy
+> 0.022, dblp_scholar via the documented 8k subsample 0.330; every non-google
+> row is **`provisional-key`** (owner Argilla approval pending — read the
+> numbers as relative, not absolute), and `docs/BENCH_ISSUES.md` is the live
+> defect ledger. Threshold calibration for rev. d §Stage-4: see below.
 
 This revision exists because the 2026-09-26 draft failed its own test. Four of
 its twelve Part 1 fixes were fitted to the two databases they were measured on
@@ -1535,8 +1557,16 @@ cost is superlinear before the cheap version is shown to fail.
 ## P21 — The Enrichment Engine cannot search, read, create or update entities (ER service contract)
 
 > **Added 2026-11-21. Highest priority in Part 1 (user decision): implement
-> before the open Phase 6b items (D9, D5, D1, D6).** Research only in this
-> revision — nothing below is implemented yet. Every decision here is the
+> before the open Phase 6b items (D9, D5, D1, D6).** ~~Research only in this
+> revision — nothing below is implemented yet.~~ **(Rev. d, 2026-11-26:
+> superseded — the contract's routes are implemented and live on the app
+> (`src/api/er_routes.py`, `/v1/health`, `/v1/entity-types[/{type}]`,
+> `entities:search`, `entities:resolve`, get/history/PATCH + reviews); the
+> fix-round reviewer verdict is ACCEPTED (F1–F5 closed,
+> `.handoff/P21.fixround-acceptance.md`) with CI green at the branch tip.
+> Acceptance item 1 remains BLOCKED on enrichment's
+> `er_service_openapi.json` — unchanged from the fix-round record.)**
+> Every decision here is the
 > user's (register D-44 … D-55). The counter-party's spec is
 > [`docs/er_contract_v1.md`](docs/er_contract_v1.md) v1 (2026-11-18), our answer
 > to it is [`docs/er_contract_v12.md`](docs/er_contract_v12.md) (v1.2, §10 lists
