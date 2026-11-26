@@ -309,3 +309,31 @@ Gate: `python scripts/check.py all` 11/11 on ed55698. `pytest tests/part1 tests/
 "no new numeric constant" guards; D5 residuals; PRE-D1's 13 derive checks; PRE-D2's waived "not parked under the bar"
 x6) or is an over-broad guard that diffs ALL of `src/` against its own base (`test_d2_acceptance::test_d1_...`,
 `test_d15_acceptance::test_g3_...`). CI does not run `tests/part1`.
+
+## Phase 6b — the six open items (cloud, 2026-11-25/26, `feat/part1-fixes`)
+
+User decisions 2026-10-14 (order D9, D5, D1, D6, record-only). Every bake-off
+rule was written to its `.handoff/<id>.bakeoff.md` BEFORE any arm ran; all
+arms in-process, LLM off, scored against the suite's own truth (box
+`/home/benchmark/suites/merge-engine/*`, sha-checked copies local).
+
+| item | outcome | commit | measured evidence | re-run locally |
+|---|---|---|---|---|
+| D9 | closed | 3fba3bf | stats renamed to honest `_ub` upper bounds + cheap block-size bound; no O(G) pass; unit 1952 green | blocking_probe abt_buy, febrl4 (report shows the new `_ub` fields) |
+| D5 | closed | 906e9bb | dblp_acm: over-merged 106→69, cross precision 0.9037→0.9834 (arm C, pre-registered rule); implementation reproduces the arm exactly; febrl4-shape bit-identical via the box's febrl suite (P .9917 / R .3573 both arms) | DBLP-ACM before/after; febrl4 unchanged |
+| D1 | NO WINNER (rule honest) | f486dff | B fails wall 65×, C fails wall 16× + dblp_scholar F1 −0.013, F fails dblp_scholar F1 −0.041 / dblp_acm R@.70 −0.022; A stays in tree; dblp_scholar row labeled SUBSAMPLE@8k (full corpus hits the honest 5M-pair guard, ladder measured) | none required (tree unchanged); dblp_scholar full-corpus app run is the owner's open question (I-6) |
+| D6 | helps → implemented | b610af5 | abt_buy recall@0.70 +0.0108, precision@0.95 +0.0136, over-merged −1; two wrong iterations caught+reverted by the P14 atomic snapshot (dot-strip, digit-digit join) | score_probe abt_buy after (same lift expected); febrl3/febrl4 unchanged (person data) |
+| record-only | done | c805587 | PRE-D1 open + S5 step added (LOCAL_VERIFY.md); D6+D12 calibration → Part 3, three label-free methods in PHASE5_REPORT debt addendum | S5 on the restored corpus |
+
+Gate: `python scripts/check.py all` **11/11 on c805587** (this machine).
+`pytest tests/part1` 30 fail vs a controlled HEAD-baseline stash run of 30 —
+0 new failures (rule-4 A/B; families are the I-4 gate set from 2f90c83 +
+documented residuals). `tests/unit` 1955 pass (D6 +3). CI: **NOT RERUN** —
+github.com unreachable from this machine since 2026-11-26 (push to the
+`gitlab` remote succeeded; no GitLab CI file in the repo). Before claiming
+green, the owner must push and let Actions run on the tip.
+Benchmark side of the same window: docs/BENCH_SCORECARD.md rows (dblp_acm
+F1 0.940, abt_buy 0.022), docs/BENCH_ISSUES.md I-1..I-8 (I-1 parse_request
+entity flake and I-5 code masking are the owner's fix-shape calls; I-8
+amazon_google resolve-stage death is unreproduced-outside-the-run and needs
+a memory-instrumented retry).
