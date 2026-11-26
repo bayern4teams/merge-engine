@@ -17,6 +17,7 @@ carries the flag **`provisional-key`** except `google_v1` (owner-final).
 | febrl | provisional-key | s1febrl_full | 190 s | 0.991 / 0.999 / 0.995 (missing 0) | (must_merge 13953/13972; must_not_auto 76/76; must_not 100/100) | 12783/17030 = 0.751 | — | — | — | 20/60 = 0.333 | `20261126-1614_b5b0dbe_s1febrl_full_DRAFT`; same repro, bench=febrl⁵ |
 | geo_settlements | provisional-key | s1geo_full | 111 s | 0.994 / 0.430 / 0.600 (missing 0) | (must_merge 1888/4391; must_not_auto —; must_not 53/55) | 2306/2858 = 0.807 | — | — | — | 14/32 = 0.438 | `20261126-1620_182f347_s1geo_full_DRAFT`; same repro, bench=geo_settlements⁶ |
 | affiliations | provisional-key | s1aff_full | 18 s | — / 0.000 / — (missing 0) | (must_merge 0/16795; must_not_auto 87/87; must_not 91/91) | 69/323 = 0.214 | — | — | — | 3/3 = 1.000 | `20261126-1623_80fee52_s1aff_full_DRAFT`; same repro, bench=affiliations⁷ |
+| pagila | provisional-key | s1pagila_full | 636 s | FAILED before load — all 10 entities missing 100% (guardrail abort⁸) | (must_not_auto 0/22) | 0/0 | — | FK 1.000/1.000/1.000; junction 0.667/0.667; weak 0.000 | — | 59/65 = 0.908 | `20261126-1624_cd52a4c_s1pagila_full_DRAFT`; run FAILED in load_data, see ⁸ |
 
 **Crosswalk note:** google_v1 crosswalk scoring demands the truth's XW row
 ids, which no app run can observe; emitting app cluster ids would be
@@ -97,6 +98,29 @@ NOTHING: fit collapsed to match_prior=0.000, all 30,593 candidate pairs
 excluded (matched=0), recall 0/16795. Filed **I-10** with the log chain.
 The must_not guards passing 87/87 + 91/91 is vacuous truth (nothing merged
 can violate a must-not); reported with that caveat, not as a win.
+
+⁸ **pagila (FAILED row, honest):** 10-entity FK-rich relational suite (15
+tables, 121,209 rows loaded from origins cleanly; FK scoring ran off the
+origin FKS, 1.000). The run died at the app's OWN pre-load guardrail
+(P10): `mapping_coverage = 0 (threshold 0.273; violating: film_actor,
+film_category, inventory, payment, rental); largest_cluster_share = 0.002
+(threshold 0; violating: customer)` — nothing was written, every destination
+entity scored missing 100%. From `load_data.py` pre_load_gate semantics
+(verified in code, not guessed): (a) coverage is a FLOOR — five
+junction/transaction entities measured 0 coverage against the run-proposed
+0.273, the same UNMAPPED shape as I-9 on tables the contract wants loaded;
+(b) largest_cluster_share is a CEILING proposed as 2× the cross-entity
+MEDIAN (capped ½, `pre_load_gate.ceiling`) — on a near-clean corpus nine
+entities have largest = 0, so median = 0 and the ceiling collapses to 0;
+customer's single 2-record cluster (share 0.002) then exceeds a threshold of
+0. The gate's own docstring warns the symmetric case ("a run whose entities
+are ALL bad alike is caught only by the floors"); the mirror failure is what
+bit here — a run whose entities are ALL good but one. Mapping column scored
+59/65 (its 6 wrong entries are expected-UNMAPPED FK columns the mapper
+mapped — the inverse of I-9). must_not_auto 0/22 = all 22 forbidden pairs
+landed inside the fitted map before the abort. Filed as **I-11**; no
+implementation, owner-side shape call (relative-proposal gates vs
+clean-data corpora).
 
 ## Suite-level verdicts so far
 

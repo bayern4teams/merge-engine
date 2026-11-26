@@ -202,3 +202,28 @@ zero-match fixed point, then every scored pair falls under the exclude line.
 Root cause inside the fit NOT established (would need the m/u tables; one
 run's evidence). Cost: the entire suite's recall (0/16795) — an ER floor
 equal to zero for single-column within-origin data.
+
+## I-11  P10 pre-load gate's relative proposals abort a near-clean corpus (pagila)
+
+pagila s1pagila (`20261126-1624_cd52a4c_s1pagila_full_DRAFT`, FAILED, 636 s):
+guardrail text — `mapping_coverage = 0 (threshold 0.273; violating:
+film_actor, film_category, inventory, payment, rental); largest_cluster_share
+= 0.002 (threshold 0; violating: customer)`; nothing written (all 10
+destination entities missing 100%; FK/junction/weak-role and mapping numbers
+still scored from pre-load state, see scorecard row 8).
+
+Shapes (semantics read from `src/orchestrator/nodes/load_data.py`
+pre_load_gate, not inferred):
+(a) coverage floor m/2 — five junction/transaction entities at 0 coverage.
+    Whether the mapper refuses junction tables by design or misses them the
+    way I-9 misses sibling origins is NOT established here.
+(b) largest_cluster_share ceiling = min(2×median, ½): on a clean copy of a
+    production DB, most entities have largest_cluster 0 → median 0 →
+    ceiling 0, and customer's single legit 2-record cluster (0.002) trips a
+    threshold of 0. Any run that merges almost nothing AND one small cluster
+    fails this invariant — the gate's own docstring admits relative
+    proposals only catch "ALL bad alike" via floors; the mirror (ALL good
+    but one) aborts.
+Cost: whole pagila suite unscoreable end-to-end (plus chinook is the same
+corpus family FK-rich shape — expect the same until resolved).
+No implementation; owner-side call on the gate's proposal shape.
