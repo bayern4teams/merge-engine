@@ -208,6 +208,13 @@ ignore = ["DEP003"] # imports of transitive deps (openai, langchain_core, and th
 # cleanup; revisit before tightening.
 
 [tool.deptry.per_rule_ignores]
+# DEP001 (imported but not declared) — one entry:
+#   scipy - optional enhancement in resolve_entities' 1:1 reduction, guarded
+#           by try/except ImportError (graceful skip when absent). Declaring
+#           it in base deps would add ~40 MB to the Docker image for a
+#           best-effort step — open design question (owner, 2026-11-26), NOT
+#           a silent dependency change.
+DEP001 = ["scipy"]
 # DEP002 (declared but not imported) — every entry is load-bearing WITHOUT an
 # `import` statement, verified by grep on 2026-11-26:
 #   langchain        - meta-package of the langchain-* providers declared above
