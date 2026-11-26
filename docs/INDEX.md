@@ -89,6 +89,7 @@ Split from the old root `TECHNICAL_README.md`, by subsystem, in reading order:
 - `TECHNICAL_IMPLEMENTATION.md` — the developer map: modules, workflows, how to change safely.
 - `GLOSSARY.md` — one fixed term per concept, each with its code home.
 - `docs/LESSONS.md` — what was tried and did not work, and why (J14).
+- `docs/PONYTAIL_DEBT.md` — the `/ponytail-debt` ledger: every `ponytail:`/`shortcut:` marker, and the owner's recorded decisions on audit findings (F4), so a later audit does not re-ask a settled question.
 - `User_Guide.md` — end-user walkthrough of the UI.
 - `TECHNICAL_README.md` — pointer left by the Phase 0 Sec 0.4 split; the content is `architecture/`.
 - `TODO.md` — the live, continuously-updated task list. Not moved into `docs/plans/` because it changes far more often than anything else here and mixing that churn into a directory of stable reference docs would bury the signal.
