@@ -45,6 +45,16 @@ jobs:
       - name: Install pip-audit
         run: pip install pip-audit==2.10.1
 
+      # M4 (ponytail-audit finding 8, owner approved 2026-11-26): every declared
+      # dependency must be used and no import undeclared. deptry reads
+      # [tool.deptry] in pyproject.toml; every whitelist entry there carries its
+      # reason. Fails only on NEW orphans -- dspy/pytest-cov/pytest-xdist slipped
+      # in unnoticed for months precisely because nothing checked this.
+      - name: M4 dependency-use check (deptry)
+        run: |
+          pip install deptry==0.23.0
+          deptry src
+
       # pip-audit exits non-zero on ANY advisory; `|| true` hands the verdict
       # to audit_deps.py, which is the thing that decides red vs not.
       - name: Audit requirements.txt

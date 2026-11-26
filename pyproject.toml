@@ -73,8 +73,6 @@ dependencies = [
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
-    "pytest-cov>=5.0.0",
-    "pytest-xdist>=3.5.0",
     # pytest has no per-test timeout of its own. Without one, a single hung
     # test takes the whole suite down in silence: CI emitted 2026 progress
     # dots and then nothing for 30 minutes, with no way to say which test was
@@ -94,7 +92,10 @@ dev = [
 # file. Each group belongs to exactly one planned branch (see
 # docs/plans/ — the harness-foundation plan's branch ownership table);
 # installing one does not pull in another branch's engine.
-dspy = ["dspy-ai>=2.6"]
+# dspy extra removed 2026-11-26 (ponytail-audit finding 2): dspy-ai was never
+# imported by any branch's code (git grep tree-wide: zero hits) -- a declared
+# dependency nothing uses (M4). Re-add it in the branch that actually builds
+# on dspy.
 # <5: splink 5.0.0 broke the Linker/DuckDBAPI API that src/mcp_server/tools/splink_*.py use (9 mypy errors in CI).
 splink = ["splink>=4.0.0,<5"]
 dq = ["great-expectations>=1.0.0"]
@@ -196,3 +197,28 @@ markers = [
 # including on a 2-core CI runner. On failure pytest-timeout prints the stack
 # of the offending test rather than leaving a blank log.
 addopts = "-m \"not live\" --timeout=120"
+
+# M4 check (ponytail-audit finding 8, owner approved 2026-11-26): every
+# declared dependency must be used. Runs in .github/workflows/audit.yml.
+# Each whitelist entry carries its reason (C5) — remove one when the reason dies.
+[tool.deptry]
+ignore = ["DEP003"] # imports of transitive deps (openai, langchain_core, and the
+# repo's own `src` package, which deptry mistakes for an installed dependency
+# because the package layout is `src/`). M4-forward but out of scope for this
+# cleanup; revisit before tightening.
+
+[tool.deptry.per_rule_ignores]
+# DEP002 (declared but not imported) — every entry is load-bearing WITHOUT an
+# `import` statement, verified by grep on 2026-11-26:
+#   langchain        - meta-package of the langchain-* providers declared above
+#   asyncpg          - used as SQLAlchemy DSN scheme "postgresql+asyncpg"
+#                      (src/mcp_server/connectors/postgres.py:97), never imported
+#   pytest, pytest_asyncio, pytest_timeout, mypy, ruff, pre_commit - dev tools
+#                      run as CLIs/pytest plugins, not imported by src/
+#   langgraph_swarm  - swarm extra: pre-declared for the still-planned swarm
+#                      branch (owner decision 2026-11-26: keep)
+#   numpy            - perf extra pin exists to hold the mypy-parseable stub
+#                      series (see comment at its declaration); splink imports it
+DEP002 = ["langchain", "asyncpg", "pytest", "pytest_asyncio", "pytest-asyncio",
+          "pytest_timeout", "pytest-timeout", "mypy", "ruff", "pre_commit",
+          "pre-commit", "langgraph_swarm", "langgraph-swarm", "numpy"]
