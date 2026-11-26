@@ -13,6 +13,7 @@ carries the flag **`provisional-key`** except `google_v1` (owner-final).
 | dblp_acm | provisional-key | s1dblp5_full | 1229 s | 0.925 / 0.956 / 0.940 | (must_merge 2127/2224; must_not_auto 41/46; must_not 252/270) | 3829/4081 = 0.938 | — | — | — | 0.667 | `20261125-1759_906e9bb_s1dblp5_full_DRAFT`; repro below¹ |
 | abt_buy | provisional-key | s1abtbuy_full | 265 s | 0.043 / 0.015 / 0.022 | (must_merge 17/1118; must_not_auto 23/24; must_not 50/124) | 1749/1905 = 0.918 | — | — | — | 0.727 | `20261125-1825_d0cdd42_s1abtbuy_full_DRAFT`; same repro, bench=abt_buy² |
 | amazon_google | provisional-key | s1amaz3_full | 549 s | 0.055 / 0.077 / 0.064 (missing 0) | (must_merge 119/1553; must_not_auto 40/295; must_not 252/423) | 2144/3094 = 0.693 | — | — | — | 0.750 | `20261126-1514_84ec8df_s1amaz3_full_DRAFT`; same repro, bench=amazon_google³ |
+| dblp_scholar_sub8k | provisional-key | s1ds8k_full | 542 s | 0.458 / 0.257 / 0.330 (missing 0) | (must_merge 149/579; must_not_auto 1/1; must_not 16/17) | 178/180 = 0.989 | — | — | — | 0.667 | `20261126-1535_84ec8df-dirty_s1ds8k_full_DRAFT`; same repro, bench=dblp_scholar_sub8k⁴ |
 
 **Crosswalk note:** google_v1 crosswalk scoring demands the truth's XW row
 ids, which no app run can observe; emitting app cluster ids would be
@@ -49,6 +50,23 @@ pressure from my own parallel probes, not the app (docs/BENCH_ISSUES.md I-8).
 Same product-suite floor as abt_buy: recall 0.077 (119/1553 must_merge),
 and I-5 code masking applies here too; destination cell accuracy 0.767,
 conflicts 2144/3094 = 0.693 is the suite's noisiest-field load (description).
+
+⁴ **dblp_scholar_sub8k:** the honest 5M-pair-suite row the owner asked for. The
+full dblp_scholar corpus hits the app's own 5,000,000-pair OOM guard
+(I-6) — instead of monkey-patching the guard, this run uses a new draft
+package, `dblp_scholar_sub8k`: the exact D1/`I-6` documented prefix (dblp's
+2,616 rows + scholar's first 5,384 = 8,000 records → 174,743 candidate pairs
+in the D1 measurement, 152,113 here), with truth FILTERED from dblp_scholar's
+own labels (hard pairs need both ends; destination/conflicts cover CLOSED
+entities only — survivorship never depends on unloaded records; box
+`selfcheck.py` green, `load_origins.py` zero mismatches, owner approval still
+pending like every draft). The app row independently corroborates the D1
+in-process bake-off on the same prefix (A_tree 0.439/0.259/0.326 vs app
+0.458/0.257/0.330). Mapping 8/12: the 4 misses are `dblp.papers.{title,
+authors,venue,year}` expected→UNMAPPED by the scorer; the gate payload lists
+mapping rows keyed `public.papers` without per-origin attribution, so the
+cause (per-origin rows not emitted vs mapper skipping dblp's bare names) is
+NOT established from this run — recorded as an observation, not filed.
 
 ## Suite-level verdicts so far
 

@@ -109,6 +109,16 @@ error names the levers (tighter blocking keys / raise the guard), owner
 call. The bake-off will NOT monkey-patch the guard upward on the full set
 without stating it.
 
+**Policy exercised (2026-11-26, owner instruction "8k-subscribe policy so a
+5M-pair-suite row exists honestly"):** new draft package
+`dblp_scholar_sub8k` — the documented prefix (dblp 2,616 + scholar 5,384 =
+8,000 records) with truth FILTERED from dblp_scholar's own labels (closed
+entities only for destination truth). Builder stored at
+`scratch/merge-engine/build_sub8k.py` on the box. selfcheck green,
+load_origins zero mismatches, Stage-1 row completed — docs/BENCH_SCORECARD.md
+row 4. The guard itself remains untouched app behavior; full-corpus scoring
+still awaits the owner's lever choice.
+
 ## I-7  (harness, FIXED) driver died on one timed-out status poll
 
 `s1amaz` (20261125-2335_a5911a1) died mid-judgement (~62/200 LLM pair
