@@ -46,9 +46,10 @@ _REPO_TOP_LEVEL = {
 
 def _scan_files() -> list[Path]:
     files = list((ROOT / "docs").rglob("*.md"))
-    claude_md = ROOT / "CLAUDE.md"
-    if claude_md.exists():
-        files.append(claude_md)
+    for name in ("CLAUDE.md", "AGENTS.md", "README.md"):
+        f = ROOT / name
+        if f.exists():
+            files.append(f)
     return files
 
 
