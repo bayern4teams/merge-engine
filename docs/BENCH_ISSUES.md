@@ -73,3 +73,28 @@ test_p14_acceptance::test_6c fails at HEAD (introduced by 2f90c83:
 `_SOFT_CALLS_PER_TOKEN = 8` unbaselined), and every "vs parent" gate that
 re-runs it (p10/p13/p17/d1/d2/d13/d15) fails transitively. Baseline suite
 run (clean HEAD) proves it is not from the D5 fix.
+
+## I-6  dblp_scholar exceeds the candidate-pair guard in-process (D1 blocker)
+
+The D1 bake-off on full dblp_scholar (66,879 records: dblp 2,616 + scholar
+64,263) dies in `_generate_candidate_pairs`:
+`CandidatePairBudgetExceeded: Blocking retained more than 5000000 distinct
+candidate pairs` — `_MAX_CANDIDATE_PAIRS = 5_000_000` is the app's
+out-of-memory guard and it refuses to truncate silently (correct app
+behaviour; the bake-off must respect it). Probe in flight for the largest
+passing record prefix; the bake-off row will be labeled SUBSAMPLE at that n.
+Consequence for the app: whatever the suite's real app path does with this
+guard decides whether Stage 1 can score dblp_scholar at all — the guard
+error names the levers (tighter blocking keys / raise the guard), owner
+call. The bake-off will NOT monkey-patch the guard upward on the full set
+without stating it.
+
+## I-7  (harness, FIXED) driver died on one timed-out status poll
+
+`s1amaz` (20261125-2335_a5911a1) died mid-judgement (~62/200 LLM pair
+calls) when ONE `/api/workflow/<tid>/status` poll exceeded the driver's 60 s
+read timeout — the app can block a status read behind long synchronous work.
+Fixed in run_driver.py: poll failures print and retry instead of raising
+(same crash also killed the first s1dblp attempt at teardown, see I-3). The
+underlying app behavior (a status endpoint that can block > 60 s) is an
+observation for the owner, not a benchmark blocker.
