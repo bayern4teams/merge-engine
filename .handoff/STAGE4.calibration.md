@@ -43,5 +43,36 @@ scored-pair set (identical set at every tau):
 ## Deviations (record as they happen)
 - (none yet)
 
-## Result
-(written after measurement)
+## Result (measured 2026-11-26, tree `84ec8df` = I-1 fix in, D5+D6 in)
+
+| suite | scored pairs | true pairs | P/R at 0.95 (today's bar) | best P at ANY tau | tau* |
+|---|---|---|---|---|---|
+| dblp_acm | 95,850 | 2,224 | 0.858 / 0.962 | 0.914 (tau 0.99) | none |
+| abt_buy | 35,090 | 1,118 | 0.048 / 0.014 | 0.096 (tau 0.94) | none |
+| amazon_google | 377,563 | 1,553 | 0.070 / 0.072 | 0.077 (tau 0.99) | none |
+| dblp_scholar@8000 | 174,743 | 579 | 0.447 / 0.261 | 0.490 (tau 0.99) | none |
+
+Curves: `.handoff/STAGE4.sweep.json` (50 taus × 4 suites).
+
+**Verdict (pre-registered branch: "tau* exists nowhere"):** `_AUTO_MATCH =
+0.95` stays **provisional**; nothing is published as `source:"calibrated"`;
+acceptances 8/9 stay BLOCKED with this table as the evidence. The number did
+NOT move because no number clears the rule: no threshold on any suite's
+score distribution reaches precision ≥ 0.95 with tp ≥ 10 — even tau = 0.99
+leaves dblp_acm at 0.914 (201 FP pairs score ≥ 0.99).
+
+What the table actually says (consistent with D1's negative and D5's win):
+the precision losses are NOT a bar-placement problem. FPs concentrate in the
+same ultra-high score band as TPs (containment-cliff / I-5 code-mask classes
+— pairs the comparator genuinely cannot separate), so *no* cut of that axis
+separates them; D5's field-conflict cap removed 37 of them precisely because
+it is a different axis, not a tighter threshold. The honest calibration
+statement for rev. d: the 0.95 bar costs nothing in recall it should keep
+(0.962 on dblp_acm) and buys nothing it promises on product suites; keep it,
+stop calling it provisional-candidate-for-calibration, and revisit only when
+D6+D12 score calibration (Part 3) makes scores comparable across corpora.
+
+Deviation recorded: LLM adjudication OFF for the sweep (pre-registered); the
+app's LLM tier can lift a handful of borderline pairs, and the app-side
+comparisons agree — app dblp_acm precision 0.925 (scorecard row 1) is also
+< 0.95, so the conclusion is the same with LLM on.

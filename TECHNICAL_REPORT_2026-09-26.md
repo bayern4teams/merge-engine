@@ -2069,6 +2069,34 @@ a slowdown:
 The two measured runs took 828.1 s and 395.4 s (warm LLM cache). Part 1 is not
 expected to exceed the cold-cache figure.
 
+### Threshold calibration 2026-11-26 (rev. d) — `_AUTO_MATCH` stays 0.95 provisional
+
+The staged program's Stage 4 asked whether the suites' `hard_pairs` truth
+honestly supports the 0.95 auto-merge bar (or a different number). The rule
+was pre-registered before any sweep ran (`.handoff/STAGE4.calibration.md`):
+`tau*` = smallest threshold with precision ≥ 0.95 and tp ≥ 10 on a suite's
+full in-process score distribution (A_tree comparator, LLM off — the same
+convention as every D-series bake-off; deviation stated there).
+
+| suite | scored pairs | at 0.95: P / R | best P at ANY tau ∈ [0.50, 0.99] | tau* |
+|---|---|---|---|---|
+| dblp_acm | 95,850 | 0.858 / 0.962 | 0.914 @ 0.99 | **none** |
+| abt_buy | 35,090 | 0.048 / 0.014 | 0.096 @ 0.94 | **none** |
+| amazon_google | 377,563 | 0.070 / 0.072 | 0.077 @ 0.99 | **none** |
+| dblp_scholar@8000 (I-6 policy subsample) | 174,743 | 0.447 / 0.261 | 0.490 @ 0.99 | **none** |
+
+`tau*` exists on **no suite** → the pre-registered branch: 0.95 stays
+provisional, nothing is published as `calibrated` via `/v1/entity-types`,
+acceptances 8/9 stay BLOCKED with this table as the evidence, and the number
+does not move. The reading (consistent with D1's negative and D5's win): the
+FPs share the ultra-high score band with TPs — even cutting at 0.99 leaves
+dblp_acm at 0.914 — so precision is not a bar-placement problem; D5 removed
+its 37 over-merges on a different axis (field-conflict cap), not a tighter
+threshold. Revisit only with D6+D12 score calibration (Part 3), which is
+what would make scores comparable enough for a shared bar to mean anything.
+Full curves: `.handoff/STAGE4.sweep.json`; harness
+`.tmp/bench_tools/threshold_sweep.py`.
+
 ---
 
 # PART 2 — Research, cited
