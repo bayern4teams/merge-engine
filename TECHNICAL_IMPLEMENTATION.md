@@ -133,7 +133,7 @@ flowchart TD
     G -->|0.70-0.95 band| I[pending_merge_candidates -> matches gate]
     G -->|< 0.70| J[excluded]
     H --> K[cluster: WNP prune -> conflict repair -> triangle support]
-    K --> L[deterministic cluster ids<br/>sha256 of sorted member ids]
+    K --> L[cluster ids<br/>reuse entity-map id, else deterministic_uuid]
     I -->|human pair/band decisions| M[rebuild_band_clusters]
     M --> L
 ```
@@ -149,6 +149,8 @@ Key invariants (why each exists is in
 - Borderline pairs are never auto-unioned — over-merging is the worse error.
 - Conflict repair: records disagreeing on an exclusive identifier (measured
   from the run's own corpus, P6) cannot share a cluster.
+
+<!-- verified: 4d33e0c -->
 
 ## Workflow: extraction, mapping, loading
 
@@ -187,6 +189,8 @@ Key invariants (why each exists is in
 | `ErError` | `src/orchestrator/er_service.py` | maps to contract HTTP codes; 503 LOAD_RUNNING during a batch load |
 | `RetryPolicy` (`NETWORK_RETRY`) | `src/orchestrator/graph.py` | attached per node at build time; HITL gates and pure-compute nodes carry none |
 
+<!-- verified: 4d33e0c -->
+
 ## Prompt layer
 
 Eight stages, each a `.system.txt`/`.human.txt` pair under `src/llm/prompts/`
@@ -211,7 +215,9 @@ problem, §19.5 of `docs/architecture/known_problems.md`.
 | `.env` | `LLM_API_KEY`, `LANGFUSE_*` | python-dotenv at config-loader import |
 | UI at runtime | all origin/destination connections | cached in `config/recent_connections.json` (plaintext passwords — known problem §18.3) |
 | `config/profiles/*.json` | the 4 pinned decisions | `src/orchestrator/profiles.py::load_profile` |
-| `MERGE_ENGINE_DECISION_MEMORY` (env) | decision-memory file path | `src/orchestrator/decision_memory.py` |
+| `MERGE_ENGINE_DECISION_MEMORY` (env) | decision-memory file path (fallback when the state key is absent) | `src/orchestrator/nodes/resolve_entities.py` reads it for `src/orchestrator/decision_memory.py` |
+
+<!-- verified: 4d33e0c -->
 
 ## Tests, checks, CI
 
@@ -228,6 +234,8 @@ Rules that read like style are scar tissue: each guard in `.pre-commit-config.ya
 maps to a measured past failure (`AGENTS.md` §"Rules that are mechanically
 enforced"). Do not add a new destination column, ever; do not hand-edit
 `arch-lint-baseline.txt` to hide a new violation.
+
+<!-- verified: 4d33e0c -->
 
 ## How to change this safely
 

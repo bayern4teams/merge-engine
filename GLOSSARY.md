@@ -14,7 +14,7 @@ these words and no synonyms (rule J5).
 | HITL gate | A human-in-the-loop pause where the graph stops and an operator approves, edits, retries, or rejects. | `src/orchestrator/graph.py::HITL_NODES` |
 | merge request | The user's plain-English description of what to merge, parsed by the LLM into entity types. | `src/orchestrator/nodes/parse_request.py` |
 | entity type | A business object the merge reasons about (`person`, `company`, …), not a table. | `src/mcp_server/tools/select_entity_tables.py::select_entity_tables_impl` |
-| entity map | The destination table recording which source record became which canonical entity id. | `src/mcp_server/connectors/postgresql_destination.py::ensure_er_side_tables` (docstring) |
+| entity map | The destination table recording which source record became which canonical entity id. | `src/mcp_server/connectors/postgresql_destination.py::ensure_entity_map` (docstring) |
 | candidate pair | Two extracted records worth comparing for same-entity identity. | `src/mcp_server/tools/resolve_entities.py::resolve_entities_impl` |
 | blocking | The lossy-by-design step that narrows all-pairs down to candidate pairs (token blocks, filtering, purging, WNP meta-blocking). | `src/mcp_server/tools/resolve_entities.py::_generate_candidate_pairs` |
 | meta-blocking (WNP) | Weighted-node-pair pruning: a candidate edge survives when its shared-block weight reaches the mean at either endpoint. | `src/mcp_server/tools/resolve_entities.py::_wnp_prune` |
@@ -23,14 +23,14 @@ these words and no synonyms (rule J5).
 | comparison level | How two field values compare: exact, strong, weak, disagree, or null (null contributes zero evidence). | `src/mcp_server/tools/fellegi_sunter.py::FieldModel` |
 | auto-match / auto-exclude thresholds | The score bars at 0.95 and 0.70: above, below, and (between) the human-review band. | `src/mcp_server/tools/resolve_entities.py::_AUTO_MATCH` |
 | band | The score region between the two thresholds; pairs there are never auto-merged, they go to the matches gate. | `src/mcp_server/tools/resolve_entities.py::rebuild_band_clusters` |
-| cluster | A set of candidate records resolved to one real-world entity; id is a deterministic sha256 of its sorted member ids. | `src/mcp_server/tools/resolve_entities.py::_build_clusters` |
+| cluster | A set of candidate records resolved to one real-world entity; the id reuses a member's previously assigned id when one exists, else `deterministic_uuid(entity_type, *member_ids)` (sha256-derived). | `src/mcp_server/tools/resolve_entities.py::_assign_cluster_id` |
 | unification | Merging a cluster's records into one destination record, field by field. | `src/mcp_server/tools/unify_entity_group.py::unify_entity_group_impl` |
 | survivorship | Which conflicting field value survives unification, per a per-field rule chain. | `src/mcp_server/tools/unify_entity_group.py::resolve_policy` |
 | conflict policy | The configurable per-field rule chain (`priority`, `longest`, `recency`, `shortest`, `first_seen`, numeric rules). | `src/mcp_server/tools/unify_entity_group.py::resolve_policy` |
 | field mapping | The assignment of unified source fields to destination columns; `map`/`skip` only — new columns are refused. | `src/mcp_server/tools/map_fields.py::map_fields_impl` |
 | unmapped field | A unified field with no confident destination column; it triggers the mapping review gate. | `src/orchestrator/nodes/map_fields_node.py::has_unmapped_fields` |
 | spool | The per-run DuckDB file holding extracted rows outside graph state. | `src/orchestrator/spool.py::RunSpool` |
-| keyset pagination | Seek-style extraction (`>=` boundary plus a hash tiebreak), replacing OFFSET, so no row is skipped or repeated. | `src/mcp_server/connectors/keyset.py` |
+| keyset pagination | Seek-style extraction (`>=` boundary plus a hash tiebreak), replacing OFFSET, so no row is skipped or repeated. | `src/mcp_server/connectors/keyset.py` (contract; tiebreak SQL in `connectors/postgres.py`, `connectors/clickhouse.py`) |
 | watermark | The per `{origin}:{table}` last-seen value that makes a later run incremental. | `src/mcp_server/connectors/watermark.py` |
 | preflight | The first node: seconds-scale reachability and permission checks before extraction starts. | `src/orchestrator/nodes/preflight.py` |
 | error taxonomy | The four exception classes (`TransientError`, `PermanentError`, `DataQualityError`, `UserInputError`) and their dispositions. | `src/orchestrator/utils/retry.py::classify_exception` |

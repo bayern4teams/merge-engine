@@ -57,7 +57,7 @@ measured against is
 | Result (measured) | Value | Evidence |
 |---|---|---|
 | Matcher on the labelled eval harness | precision 1.0000, recall 0.9950, 0.2% of pairs to human review | docs/verification/BASELINE_V1.md §2 |
-| Extraction scale proof | 43,276,150-row ClickHouse table in 44.6 min, 16,184 rows/s, 380.8 MB peak RSS, verified row-for-row | TODO.md (Phase N) |
+| Extraction scale proof | 43,276,150-row ClickHouse table in 44.6 min, 16,184 rows/s, 380.8 MB peak RSS, verified row-for-row | git blob `2a48845:TODO.md` §N.5 (living TODO.md since rewritten) |
 | Speed after Part 1.5 | one full Boeing run 50.7 → 23.4 min; `resolve_entities` 2.44× faster | docs/verification/BASELINE_V1.md |
 | Idempotent re-run | same input data → same cluster ids → destination updated, not duplicated | `src/mcp_server/tools/resolve_entities.py::_build_clusters` |
 | Targeted merge | scoped "Nova" run added exactly its 10 rows to 732 → 742 companies, zero non-Nova rows | live-run record, commit 2a48845 (TODO.md Phase P evidence) |

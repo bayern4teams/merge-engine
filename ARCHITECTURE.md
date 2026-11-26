@@ -114,23 +114,31 @@ measured test (`src/mcp_server/connectors/keyset.py`).
 
 ## Data contract (destination tables)
 
-The system writes destination data tables plus its own bookkeeping tables in
-schema `merge_engine` (`src/mcp_server/connectors/postgresql_destination.py::ensure_er_side_tables`).
+The system writes destination data tables plus its bookkeeping tables:
+`merge_engine_*` in the configured destination schema (default `public`)
+(`src/mcp_server/connectors/postgresql_destination.py::ensure_entity_map`,
+`::ensure_extraction_state`, `::ensure_merge_audit`) and the ER-service
+`er_*` tables in schema `merge_engine` (`::ensure_er_side_tables`).
 
 ```mermaid
 erDiagram
     merge_engine_entity_map {
         text entity_type
-        text source_key
-        uuid entity_id
+        text record_id
+        text cluster_id
     }
     merge_engine_merge_audit {
-        text entity_type
-        json decision
+        text run_id
+        text record_a
+        text record_b
+        double confidence
+        jsonb evidence
     }
     merge_engine_extraction_state {
-        text origin_table
-        json watermark
+        text origin_id
+        text table_name
+        text watermark_kind
+        text last_value
     }
     er_entity_version {
         text entity_type
@@ -138,40 +146,63 @@ erDiagram
         int version
     }
     er_redirect {
+        text entity_type
         text old_id
         text new_id
     }
+    er_idempotency {
+        text key
+        int status
+        jsonb response
+    }
     er_enrichment_record {
         text record_id
-        json attributes
+        text entity_type
+        jsonb attributes
     }
     er_model {
         text entity_type
-        json params
-    }
-    er_field_history {
-        bigint event_id
-        text field
-        json old
-        json new
+        jsonb params
     }
     er_review {
         text ticket
         text status
     }
+    er_type_registry {
+        text entity_type
+        jsonb fields
+        text identity_fields
+    }
+    er_field_history {
+        bigint event_id
+        text id
+        text field
+        jsonb old
+        jsonb new
+    }
+    er_split {
+        text entity_type
+        text id
+        text new_id
+    }
+    er_extension_outbox {
+        text entity_type
+        text id
+        jsonb payload
+        text state
+    }
     merge_engine_entity_map ||--o{ er_redirect : "merged ids redirect"
     merge_engine_entity_map ||--o| er_entity_version : "versioned per id"
-    er_enrichment_record ||--o{ merge_engine_entity_map : "enters map as one more origin"
     er_entity_version ||--o{ er_field_history : "field events"
-    er_model ||--o{ merge_engine_entity_map : "model per entity_type"
 ```
 
 Hard rules of the contract: the destination schema is fixed — field mapping
 is `map`/`skip` only, a new destination column is refused in code
 (`src/mcp_server/tools/map_fields.py::map_fields_impl`); unmapped fields go to
-`unmapped_fields`, never invented into columns. Cluster ids are deterministic
-sha256 hashes of sorted member ids, so re-running unchanged data updates rows
-instead of duplicating them. The online contract for integrators is the `/v1`
+`unmapped_fields`, never invented into columns. Cluster ids reuse a member's
+previously assigned id when the entity map has one, else derive
+deterministically (`_assign_cluster_id` → `deterministic_uuid`), so re-running
+unchanged data updates rows instead of duplicating them. The online contract for integrators is the `/v1`
 ER service: `MATCHED` / `CREATED` / `AMBIGUOUS` decisions and `503 + Retry-After`
 during a batch load (docs/er_contract_v13.md, `src/api/er_routes.py::build_er_router`).
 
@@ -191,7 +222,7 @@ sequenceDiagram
     UI->>API: POST /api/workflow/start
     API->>WM: start_workflow
     WM->>G: stream (checkpointed per node)
-    Note over G: preflight → parse_request →<br/>discover_schemas → analyze_dependencies
+    Note over G: preflight → discover_schemas →<br/>parse_request → analyze_dependencies
     G-->>OP: deps gate (interrupt)
     OP->>UI: approve/edit/retry/reject
     UI->>API: POST /api/workflow/{id}/feedback
@@ -237,14 +268,14 @@ borderline pairs go to a human, never to an auto-merge.
 | Claim | Value | Source |
 |---|---|---|
 | Matcher on the eval harness | precision 1.0000, recall 0.9950 (Fellegi–Sunter + term frequency), 0.2% of pairs to review | docs/verification/BASELINE_V1.md §2 |
-| Extraction at scale | 43,276,150-row ClickHouse table: 44.6 min, 16,184 rows/s, 380.8 MB peak RSS, verified row-for-row | `TODO.md` (Phase N evidence) |
+| Extraction at scale | 43,276,150-row ClickHouse table: 44.6 min, 16,184 rows/s, 380.8 MB peak RSS, verified row-for-row | git blob `2a48845:TODO.md` §N.5 (the living TODO.md was since rewritten; row count also in docs/architecture/data_pipeline.md §6) |
 | One full Boeing run | 50.7 min → 23.4 min; `resolve_entities` 2.44× | docs/verification/BASELINE_V1.md |
 | Blocking pruning loss (WNP) | 4–19% of true pairs vs uncapped, measured | docs/architecture/known_problems.md §18.4 |
 | Resolution at 43M rows | **unknown — never measured**; 20k records in 39 s is the best measured so far | docs/architecture/known_problems.md §19.1 |
 
 The eval fixture (1,500 rows) was lost to a blanket `.gitignore` rule and is
 being regenerated; until then the harness runs on a 2-row stub and these
-baseline numbers date from the full fixture (see TODO.md's test-skips note).
+baseline numbers date from the full fixture (see the eval skip-guard note in TODO.md).
 
 <!-- verified: 4d33e0c -->
 

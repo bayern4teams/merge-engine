@@ -56,7 +56,7 @@ source does not say why, the entry says "reason not recorded".
   (pre-commit and `check.py guards`). The 1,500-row fixture still needs
   regeneration (recorded BLOCKED in `dc4d65b`).
 - Records: AGENTS.md §"Rules that are mechanically enforced",
-  docs/architecture/known_problems.md §18.1, README test-skips note.
+  docs/architecture/known_problems.md §18.1, TODO.md eval skip-guard note.
 
 ### A decorated function lied about its signature (before 2026-08)
 
@@ -68,6 +68,7 @@ source does not say why, the entry says "reason not recorded".
 - Replaced by: `@functools.wraps` on all decorators.
 - Record: docs/architecture/state_and_graph.md §4.
 
+<!-- verified: 4d33e0c -->
 ## LLM over-reach
 
 ### The destination schema grew by invention (found 2026-09, Phase 0)
@@ -82,8 +83,9 @@ source does not say why, the entry says "reason not recorded".
 - Replaced by: `map`/`skip` only — an LLM-proposed `new_column` is refused in
   code (`src/mcp_server/tools/map_fields.py`), unmappable fields land in
   `unmapped_fields`.
-- Records: AGENTS.md §"Rules that are mechanically enforced" (BUG A), README
-  "Harness foundation" note, docs/verification/BASELINE_PRE_CHANGE.md.
+- Records: AGENTS.md §"Rules that are mechanically enforced" (BUG A),
+  `4d33e0c:README.md` §Status ("Harness foundation" bullet),
+  docs/verification/BASELINE_PRE_CHANGE.md.
 
 ### LLM metadata non-determinism changed schema shape between identical runs (Phase O, 2026)
 
@@ -104,6 +106,7 @@ source does not say why, the entry says "reason not recorded".
   so a future change doesn't cross it "reason not recorded" applies to any
   earlier per-row experiment — none is documented.
 
+<!-- verified: 4d33e0c -->
 ## Matching that merged too much
 
 ### Union-find over all above-threshold edges (before Phase L)
@@ -148,6 +151,7 @@ source does not say why, the entry says "reason not recorded".
   swapped in afterwards.
 - Record: docs/architecture/data_pipeline.md §7 (P13).
 
+<!-- verified: 4d33e0c -->
 ## State, checkpointing, resume
 
 ### Row data inside LangGraph state (before Phase N)
@@ -195,6 +199,7 @@ source does not say why, the entry says "reason not recorded".
   body is a silent structural bug.
 - Record: docs/architecture/llm_and_profiles.md §11.
 
+<!-- verified: 4d33e0c -->
 ## Rejected dependencies (measured or checked, with reasons)
 
 | Tried | Result | Replaced by / outcome | Record |
@@ -208,10 +213,11 @@ source does not say why, the entry says "reason not recorded".
 | Utopia (Rust KG system) | this repo's own `kg` schema already is its decision ledger | reference pointer only | docs/decisions/0019-utopia-reference-only.md |
 | AWS Ontop accelerator | Neptune/Bedrock cloud coupling | Ontop kept as a portable OBDA reference if a SPARQL need appears | docs/decisions/0020-ontop-study-not-aws-accelerator.md |
 | `semantica` rule engine | pre-1.0, dragged an unrelated audio/CV dependency tree, failed to install | native rules-as-data engine (B.4) | docs/decisions/0021-semantica-immature-native-rule-engine.md |
-| Databricks destination connector | unreachable, untested, no live instance to verify | connector deleted 2026-09-23; rebuild is new work | docs/architecture/known_problems.md §20 item 15, README CI note |
+| Databricks destination connector | unreachable, untested, no live instance to verify | connector deleted 2026-09-23; rebuild is new work | docs/architecture/known_problems.md §20 item 15, `4d33e0c:README.md` §Status |
 | Splink 5.x | broke the Linker/DuckDBAPI surface `splink_*.py` use (9 mypy errors in CI) | pinned `>=4,<5` | `pyproject.toml` splink extra comment |
 | numpy 2.5 stubs | PEP 695 syntax halted the whole `mypy src` run silently (93 files unchecked) | pinned narrowly in `pyproject.toml` | `pyproject.toml` numpy comment |
 
+<!-- verified: 4d33e0c -->
 ## CI, build, and environment
 
 ### "Mocked" integration tests making live LLM calls (2026-09)
@@ -222,7 +228,7 @@ source does not say why, the entry says "reason not recorded".
 - Replaced by: test config isolation, LLM timeouts; CI green for the first
   time after four independent root causes (also: 47 unlinted ruff errors,
   the lost eval fixture, CI installing 5 of 8 extras).
-- Record: README "CI, cleanup and tooling" note, git log 2026-09.
+- Record: `4d33e0c:README.md` §Status ("CI, cleanup and tooling" bullet), git log 2026-09.
 
 ### Docker image shipped a missing import (2026)
 
@@ -233,7 +239,7 @@ source does not say why, the entry says "reason not recorded".
 - Replaced by: generated requirements (`scripts/generate_requirements.py`),
   the requirements/pyproject drift guard, and the docker workflow's import
   resolution assertion.
-- Record: README "Continuous integration", `Dockerfile` comments.
+- Record: `4d33e0c:README.md` §"Continuous integration", `Dockerfile` comments.
 
 ### The app bound to 127.0.0.1 only (Part 1.6.C)
 
@@ -242,7 +248,8 @@ source does not say why, the entry says "reason not recorded".
   cannot reach a loopback-only bind.
 - Replaced by: 0.0.0.0 bind with the auth caveat (API is unauthenticated —
   keep it localhost/trusted-network).
-- Record: README "Configurability, investigation UI, portability" note,
+- Record: `4d33e0c:README.md` §Status ("Configurability, investigation UI,
+  portability" bullet),
   docs/architecture/known_problems.md §19.8.
 
 ### Undeclared `python-dotenv` (found live 2026-08-10)
@@ -254,6 +261,7 @@ source does not say why, the entry says "reason not recorded".
 - Replaced by: explicit declaration + the M4 (declared-deps-used) discipline.
 - Record: `pyproject.toml` python-dotenv comment.
 
+<!-- verified: 4d33e0c -->
 ## Reporting that lied
 
 ### `completed` treated as proof (measured 2026-09-24)
@@ -270,6 +278,7 @@ source does not say why, the entry says "reason not recorded".
   before writing; the write-the-scorer-before-the-run rule.
 - Record: AGENTS.md §"Live verification is mandatory".
 
+<!-- verified: 4d33e0c -->
 ## Open items with no lesson learned yet
 
 - Resolution at 43M-row scale: never measured; 20k records in 39 s is the
@@ -278,3 +287,5 @@ source does not say why, the entry says "reason not recorded".
   matcher numbers date from the full fixture.
 - License not chosen (owner decision pending as of 2026-11-26; this docs pass
   flagged it).
+
+<!-- verified: 4d33e0c -->
