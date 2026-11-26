@@ -1,0 +1,118 @@
+{
+ "abt_buy": {
+  "main": {
+   "prec": 0.0482,
+   "rec": 0.0143,
+   "f1": 0.0221,
+   "recall070": 0.0537,
+   "over_merged": 118,
+   "true_pairs": 1118,
+   "scored": 35090
+  },
+  "opt1_all": {
+   "prec": 0.0758,
+   "rec": 0.0134,
+   "f1": 0.0228,
+   "recall070": 0.0537,
+   "over_merged": 74,
+   "true_pairs": 1118,
+   "scored": 35090
+  },
+  "opt2_last": {
+   "prec": 0.0673,
+   "rec": 0.0134,
+   "f1": 0.0224,
+   "recall070": 0.0537,
+   "over_merged": 80,
+   "true_pairs": 1118,
+   "scored": 35090
+  }
+ },
+ "amazon_google": {
+  "main": {
+   "prec": 0.0696,
+   "rec": 0.0715,
+   "f1": 0.0705,
+   "recall070": 0.1269,
+   "over_merged": 458,
+   "true_pairs": 1553,
+   "scored": 377563
+  },
+  "opt1_all": {
+   "prec": 0.0705,
+   "rec": 0.0715,
+   "f1": 0.071,
+   "recall070": 0.1269,
+   "over_merged": 451,
+   "true_pairs": 1553,
+   "scored": 377563
+  },
+  "opt2_last": {
+   "prec": 0.0697,
+   "rec": 0.0715,
+   "f1": 0.0706,
+   "recall070": 0.1269,
+   "over_merged": 455,
+   "true_pairs": 1553,
+   "scored": 377563
+  }
+ },
+ "dblp_scholar@8000": {
+  "main": {
+   "prec": 0.4467,
+   "rec": 0.2608,
+   "f1": 0.3293,
+   "recall070": 0.5078,
+   "over_merged": 114,
+   "true_pairs": 579,
+   "scored": 174743
+  },
+  "opt1_all": {
+   "prec": 0.4467,
+   "rec": 0.2608,
+   "f1": 0.3293,
+   "recall070": 0.5078,
+   "over_merged": 114,
+   "true_pairs": 579,
+   "scored": 174743
+  },
+  "opt2_last": {
+   "prec": 0.4467,
+   "rec": 0.2608,
+   "f1": 0.3293,
+   "recall070": 0.5078,
+   "over_merged": 114,
+   "true_pairs": 579,
+   "scored": 174743
+  }
+ },
+ "dblp_acm": {
+  "main": {
+   "prec": 0.858,
+   "rec": 0.9618,
+   "f1": 0.9069,
+   "recall070": 0.9708,
+   "over_merged": 102,
+   "true_pairs": 2224,
+   "scored": 95850
+  },
+  "opt1_all": {
+   "prec": 0.858,
+   "rec": 0.9618,
+   "f1": 0.9069,
+   "recall070": 0.9708,
+   "over_merged": 102,
+   "true_pairs": 2224,
+   "scored": 95850
+  },
+  "opt2_last": {
+   "prec": 0.858,
+   "rec": 0.9618,
+   "f1": 0.9069,
+   "recall070": 0.9708,
+   "over_merged": 102,
+   "true_pairs": 2224,
+   "scored": 95850
+  }
+ }
+}

@@ -26,9 +26,20 @@ filled from `.handoff/STAGE4.i5-options.json`):
 
 | arm | abt_buy P/R/F1 | over-merged | amazon P/R/F1 | over-merged | dblp_scholar@8k P/R | dblp_acm P/R (regression) |
 |---|---|---|---|---|---|---|
-| main (today) | (fill from measurement) | | | | | |
-| opt1 all-codes-disjoint | | | | | | |
-| opt2 last-code (model code) | | | | | | |
+| main (today) | 0.0482 / 0.0143 / 0.0221 | 118 | 0.0696 / 0.0715 / 0.0705 | 458 | 0.4467 / 0.2608 | 0.8580 / 0.9618 |
+| opt1 all-codes-disjoint | 0.0758 / 0.0134 / 0.0228 | **74** | 0.0705 / 0.0715 / 0.0710 | 451 | 0.4467 / 0.2608 | 0.8580 / 0.9618 |
+| opt2 last-code (model code) | 0.0673 / 0.0134 / 0.0224 | 80 | 0.0697 / 0.0715 / 0.0706 | 455 | 0.4467 / 0.2608 | 0.8580 / 0.9618 |
+
+Measured cost of each option (the honest headline): **opt1 halves abt_buy
+over-merge (118 → 74) at a recall cost of 0.0009** (R 0.0143 → 0.0134 — two
+true pairs); opt2 sits between. On the other three suites both options are
+**bit-identical to main** (no code-bearing name pairs collide differently),
+and neither changes amazon_google materially (458 → 451/455 over-merges —
+amazon's over-merge there is NOT I-5). So I-5's measured blast radius is
+abt_buy-like name-shape suites only. Raw numbers:
+`.handoff/STAGE4.i5-options.json`; harness `.tmp/bench_tools/i5_options.py`
+(monkeypatched predicate, app code untouched — per instruction, no
+implementation).
 
 Reading for the call (pre-registered shapes, not post-hoc):
 
