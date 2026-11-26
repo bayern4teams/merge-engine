@@ -565,3 +565,25 @@ class TestJudgePairsOnePerCall:
             results = await mod._judge_pairs_with_llm("company", borderline, {"provider": "openai"})
 
         assert sorted(score for _i1, _i2, score in results) == [0.01, 0.01, 0.01, 0.75]
+
+
+class TestD6IntraCodeSeparator:
+    _t = staticmethod(
+        __import__("src.mcp_server.tools.resolve_entities", fromlist=["_tokenize"])._tokenize
+    )
+    """D6: a separator inside an alphanumeric run is a code spelling
+    variant ("DP-29F" == "DP29F"); a dot is NOT (email sides stay two
+    evidence tokens — the P14 snapshot names that failure mode)."""
+
+    def test_dash_underscore_join_within_a_run(self) -> None:
+        assert TestD6IntraCodeSeparator._t("dp-29f") == TestD6IntraCodeSeparator._t("dp29f")
+        assert TestD6IntraCodeSeparator._t("ps_lx350h") == ("pslx350h",)
+
+    def test_dot_and_word_boundaries_unchanged(self) -> None:
+        assert TestD6IntraCodeSeparator._t("user1@mail.test") == ("user1", "mail", "test")
+        assert TestD6IntraCodeSeparator._t("dp 29f") == ("dp", "29f")
+        assert TestD6IntraCodeSeparator._t("co., ltd") == ("co", "ltd")
+
+    def test_leading_trailing_and_double_separators_are_untouched(self) -> None:
+        assert TestD6IntraCodeSeparator._t("-dp29f-") == ("dp29f",)
+        assert TestD6IntraCodeSeparator._t("dp--29f") == ("dp", "29f")  # not a run join

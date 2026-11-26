@@ -81,8 +81,11 @@ The D1 bake-off on full dblp_scholar (66,879 records: dblp 2,616 + scholar
 `CandidatePairBudgetExceeded: Blocking retained more than 5000000 distinct
 candidate pairs` — `_MAX_CANDIDATE_PAIRS = 5_000_000` is the app's
 out-of-memory guard and it refuses to truncate silently (correct app
-behaviour; the bake-off must respect it). Probe in flight for the largest
-passing record prefix; the bake-off row will be labeled SUBSAMPLE at that n.
+behaviour; the bake-off must respect it). Measured ladder (prefix n ->
+retained pairs): 8,000 -> 174,743; 16,000 -> 499,217; 24,000 -> 936,329;
+32,000 -> 1,488,715; 66,879 -> > 5,000,000 (guard fires; growth ~O(n^1.9),
+so the guard binds somewhere around 50k records for this corpus). The bake-off
+row is labeled SUBSAMPLE at n=8,000.
 Consequence for the app: whatever the suite's real app path does with this
 guard decides whether Stage 1 can score dblp_scholar at all — the guard
 error names the levers (tighter blocking keys / raise the guard), owner

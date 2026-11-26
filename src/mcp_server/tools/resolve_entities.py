@@ -1110,6 +1110,13 @@ def _best_name_field(rec: dict[str, Any]) -> str | None:
 # Letters and digits of any script ("müller", "株式会社" stay whole tokens).
 _WORD_RE = re.compile(r"[^\W_]+")
 
+# D6: the separators that split one alphanumeric CODE into pieces when they
+# sit INSIDE it ("DP-29F"); PRE-D2's separator family, seen at token level.
+# At least one side of the separator must be a letter: "555-1000" is phone
+# formatting, not a code spelling — joining digit-digit runs moves the
+# fitted model on phone-bearing corpora (the P14 snapshot catches that).
+_INTRA_CODE_SEP = re.compile(r"(?<=[a-z])[-_]|[-_](?=[a-z])")
+
 
 def _token_keys(rec: dict[str, Any], fields: set[str] | None = None) -> set[str]:
     """Token blocking (P5): every alphanumeric token of every data value.
@@ -1484,8 +1491,20 @@ def _seq_ratio(a: str, b: str) -> float:
 
 @lru_cache(maxsize=_SIMILARITY_CACHE_SIZE)
 def _tokenize(s: str) -> tuple[str, ...]:
-    """Distinct alphanumeric tokens, in order of first appearance."""
-    return tuple(dict.fromkeys(re.findall(r"[a-z0-9]+", s)))
+    """Distinct alphanumeric tokens, in order of first appearance.
+
+    D6: a separator INSIDE an alphanumeric run ("DP-29F") is a spelling
+    variant of the same code ("DP29F"), not a word boundary — PRE-D2's
+    `_conflicting_codes` already compares names with separators removed, so
+    the token level had the inconsistent hole: such a code tokenizes to
+    fragments that neither the prefix rule nor the typo rule can bridge
+    across a length gap. The measured lift (recall and precision up,
+    over-merge flat) is in .handoff/D6.bakeoff.md. The strip set is exactly
+    PRE-D2's (`_WORD_RE` removal): a DOT is not stripped — an email is two
+    evidence tokens, and joining its sides moves the fitted model (the P14
+    snapshot test names that failure mode).
+    """
+    return tuple(dict.fromkeys(re.findall(r"[a-z0-9]+", _INTRA_CODE_SEP.sub("", s))))
 
 
 @lru_cache(maxsize=_SIMILARITY_CACHE_SIZE)
