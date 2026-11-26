@@ -2,13 +2,40 @@
   // markdownlint-cli2 config file: rules go under "config" (a bare rule
   // object at top level is parsed as cli2 settings and silently ignored —
   // verified against v0.24.0). Small config, per J12/Step 4: defaults minus
-  // the rules this repo's house style breaks on purpose. Tightening these is
-  // prompt 2's prose pass, not agent-setup's.
+  // the rules this repo's house style breaks on purpose.
+  //
+  // Prompt 2 docs pass (2026-11-26): the doc set (docs/** + the five main
+  // files + AGENTS.md) was auto-fixed to whitespace only (blank lines around
+  // headings/lists/fences; verified zero content lines changed) and now lints
+  // clean with this config. The disabled rules below carry a C5 note each.
   "config": {
     "MD013": false, // line-length: tables and citations run long by design
     "MD024": { "siblings_only": true }, // same heading under different parents is fine
     "MD025": false, // multiple H1s: docs use them as page banners
     "MD033": false, // inline HTML: managed tool blocks (OPENWIKI markers) embed it
-    "MD041": false // first-line H1: front-matter-style headers exist in docs/
+    "MD041": false, // first-line H1: front-matter-style headers exist in docs/
+    "MD060": false, // table-column-style: house style is the compact `|---|`
+                    // delimiter row everywhere (incl. AGENTS.md); enforcing
+                    // spaces reformats every table for zero information.
+    // C5 EXCEPTION (owner approved 2026-11-26 in the docs-pass plan Q&A;
+    // review date: next docs audit). Reason: markdownlint's own --fix for
+    // these rules rewrites evidence text inside legacy reports — MD029
+    // renumbers continued ordered lists (9..22 became 1..4 across sections),
+    // MD036 restyles emphasis-as-heading lines, MD040 would force a language
+    // guess onto 59 measured-output fences, MD034/MD037/MD038 alter text
+    // inside code-like spans and backticks, MD004 would normalize list
+    // markers across evidence files, MD018/MD026 edit heading text, MD028
+    // inserts markers inside GitHub-alert blockquotes. Preserving evidence
+    // verbatim outranks these style rules; new docs should still avoid them.
+    "MD004": false,
+    "MD018": false,
+    "MD026": false,
+    "MD028": false,
+    "MD029": false,
+    "MD034": false,
+    "MD036": false,
+    "MD037": false,
+    "MD038": false,
+    "MD040": false
   }
 }

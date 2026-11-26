@@ -2,10 +2,18 @@ name: Docs checks
 
 # J12: CI checks the docs — markdownlint, link check (lychee), Vale, and
 # Mermaid render (scripts/check_mermaid.py: a block that does not render
-# fails the check). Scope is the J12 doc set; ARCHITECTURE.md,
-# TECHNICAL_IMPLEMENTATION.md, GLOSSARY.md and docs/LESSONS.md do not exist
-# yet — the file list is built from what IS there, so the job works before
-# and after prompt 2 creates them.
+# fails the check).
+#
+# Prompt 2 docs pass (2026-11-26): the checks are BLOCKING now — the C5
+# non-exception exception below was reviewed and removed as instructed.
+# Scope was widened where prompt 1 recorded it waits for prompt 2:
+#   - markdownlint, lychee and Mermaid render now cover the full doc set
+#     (the five main files, AGENTS.md, and docs/**) — the tree was made
+#     clean for them first (whitespace-only auto-fixes + documented rule
+#     exceptions in .markdownlint-cli2.jsonc).
+#   - Vale stays on the main doc set (five files + AGENTS.md): owner
+#     decision 2026-11-26 — widening Vale spelling to docs/** is deferred;
+#     ~340 legacy-report vocabulary additions would flood the vocabulary.
 #
 # Runs on every push AND pull request that touches Markdown (many projects
 # merge locally and push, with no pull requests — a PR-only trigger would
@@ -16,6 +24,7 @@ on:
     paths:
       - "**.md"
       - ".vale.ini"
+      - ".vale/**"
       - ".markdownlint-cli2.jsonc"
       - ".lychee.toml"
       - "scripts/check_mermaid.py"
@@ -24,6 +33,7 @@ on:
     paths:
       - "**.md"
       - ".vale.ini"
+      - ".vale/**"
       - ".markdownlint-cli2.jsonc"
       - ".lychee.toml"
       - "scripts/check_mermaid.py"
@@ -40,18 +50,11 @@ jobs:
   docs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # C5 EXCEPTION (all four checks): the existing doc set was never linted,
-    # so findings today are not caused by the push they block, and a red
-    # badge nobody can fix gets ignored (audit.yml's OpenWiki lesson).
-    # Reason: legacy prose. Approved by: owner chat decision 2026-11-26.
-    # Review date: prompt 2 (docs pass) — prompt 2 MUST remove this
-    # continue-on-error and make all four checks blocking.
-    continue-on-error: true
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Collect the doc set that exists
+      - name: Collect the main doc set that exists (Vale scope)
         id: docs
         run: |
           files=""
@@ -60,18 +63,25 @@ jobs:
           done
           echo "files=$files" | tee "$GITHUB_OUTPUT"
 
-      - name: markdownlint
+      - name: markdownlint (full doc set)
         uses: DavidAnson/markdownlint-cli2-action@36744e48c825cb8d549f6353f8837505de1922c7 # v25.1.0
         with:
-          globs: ${{ steps.docs.outputs.files }}
+          globs: |
+            README.md
+            ARCHITECTURE.md
+            TECHNICAL_IMPLEMENTATION.md
+            GLOSSARY.md
+            docs/LESSONS.md
+            AGENTS.md
+            docs/**/*.md
 
-      - name: Link check (lychee)
+      - name: Link check (lychee, full doc set)
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
-          args: --config .lychee.toml ${{ steps.docs.outputs.files }}
+          args: --config .lychee.toml README.md ARCHITECTURE.md TECHNICAL_IMPLEMENTATION.md GLOSSARY.md docs/LESSONS.md AGENTS.md docs
           fail: true
 
-      - name: Vale (simple-English style)
+      - name: Vale (simple-English style — main doc set, see header note)
         uses: vale-cli/vale-action@518a9136acc6e6668ce7c00d367051e0941e87ff # v3.0.0
         with:
           scope: ${{ steps.docs.outputs.files }}
@@ -80,4 +90,4 @@ jobs:
         run: |
           npm install -g @mermaid-js/mermaid-cli@12.2.0
           npx puppeteer browsers install chrome-headless-shell
-          python3 scripts/check_mermaid.py ${{ steps.docs.outputs.files }}
+          python3 scripts/check_mermaid.py $(git ls-files '*.md')
