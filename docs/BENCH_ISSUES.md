@@ -98,3 +98,16 @@ Fixed in run_driver.py: poll failures print and retry instead of raising
 (same crash also killed the first s1dblp attempt at teardown, see I-3). The
 underlying app behavior (a status endpoint that can block > 60 s) is an
 observation for the owner, not a benchmark blocker.
+
+## I-8  amazon_google app run dies after match-model fit (twice)
+
+s1amaz2 (20261125-2346_3e39933) survived every harness poll (I-7 retry
+worked: ~40 ReadTimeouts logged) but the APP went silent 2 min after
+"Match model fitted over 359326 candidate pairs (match_prior=0.001)" — last
+log 23:48, process later found gone; the machine was at 14/15 GiB RAM with
+load 300+ at the time (my own dblp_scholar probes contributed). Driver
+timed out at budget with 0/1553 must_merge — the run never got past scoring.
+s1amaz died at the same resolve stage one attempt earlier. Observation for
+the owner: in-process scoring of a 359k-pair amazon_google candidate set is
+where this suite dies; the abt_buy run (30k pairs) passed the same stage.
+Root cause (OOM vs hang) unconfirmed — no dmesg/journal access here.
