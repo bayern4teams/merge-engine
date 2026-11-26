@@ -206,3 +206,18 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Independent check: SQL row counts on the destination before and after (must be unchanged on a refusal); the run's error names the violated invariants and the entities in `entities_violating`; `SELECT count(*) FILTER (WHERE name IS NULL) FROM company` on the restored sources.
 - Expected evidence: the incident shape (8/16 entities with zero mappings, `company.name` NULL 78/99, a giant cluster) FAILS pre-load with 0 rows written (before: `completed`); after the P1-P20 fixes a healthy run passes unedited. Residual ceilings: entities all equally bad, a nameless document carrying another name column, mapper-unlisted carried fields once any field is listed, `nickname` beating `email`.
 - Result (filled in locally):
+
+### S5 (added by Phase 6b record-only item) — any entity with a single compared field
+- Why cloud could not verify: PRE-D1 stays OPEN (user decision 3) — the
+  one-field model is unidentified; public benchmarks always give the fitted
+  model ≥ 2 compared fields per entity.
+- Command: on the restored corpus, list every entity whose comparison
+  vector has exactly one field (per-entity field mapping + the mapped
+  columns; one SQL/psql pass over the run report is enough); for each such
+  entity, pull the score distribution of its compared pairs.
+- Expected evidence: with one field the log-odds reduce to that field's
+  weight alone — check that identical values reach at least the review band
+  (PRE-D1's repro shape) rather than being auto-excluded, and that the
+  review band for that entity is not empty by construction. Record what the
+  real corpus shows; PRE-D1's fix shape depends on it.
+- Result (filled in locally):

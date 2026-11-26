@@ -144,6 +144,16 @@ Trigger rule used: a trigger is a stated condition or event for revisiting ("Par
 MISSING-TRIGGER rows: 1, 2, 7, 9, 11, 12, 15, 17, 19, 20, 22, 23, 24, 25, 27, 30, 31, 35, 37, 38, 39 = **21** (2 of them `pre`: 7, 11; 4 are path-only: 11, 15, 35, 38). Row 32 is partial and not in the 21.
 Several MISSING rows are stances with no deferral (22-25, 27, 31, 37): they are accepted ceilings, not debts, but they still lack the sentence saying so.
 
+##### 1a-addendum. Phase 6b record-only items (added 2026-11-26, `feat/part1-fixes`)
+
+Ledger additions required by Phase 6b item 5 (record only, no code); the
+table above stays as its snapshot commit's record.
+
+| # | item | debt / deferred state | the three label-free methods (Part 3) | trigger |
+|---|---|---|---|---|
+| A1 | PRE-D1 | stays OPEN (user decision 3): one-field entity's model unidentified; the heuristic fix breaks 9 accepted P14/P6 single-field tests | n/a (needs the S5 observation first) | S5 step "any entity with a single compared field" (LOCAL_VERIFY.md) shows what the real corpus does |
+| A2 | D6+D12 score calibration | deferred to Part 3 (plan 2.4 forbids fitting cut-offs to a benchmark; production runs have no labels). D6's in-tree tokenizer fix (`b610af5`) does not touch calibration | (1) expected precision from the model's posteriors; (2) a reviewer/LLM-labelled sample per database via the P15 review band and P9 memory; (3) pseudo-labels from unique-key agreement | Part 3 section 2.17 work |
+
 ##### 1b. Strict-xfail ceilings in tests/part1
 
 27 `xfail(strict=True)` markers in tests/part1 (AST count, parametrized cases count once). **10 carry "ceiling" or "waiver" in their reason:**
