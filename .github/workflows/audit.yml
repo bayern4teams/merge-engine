@@ -52,7 +52,7 @@ jobs:
       # in unnoticed for months precisely because nothing checked this.
       - name: M4 dependency-use check (deptry)
         run: |
-          pip install deptry==0.23.0
+          pip install -e . deptry==0.23.0
           deptry src
 
       # pip-audit exits non-zero on ANY advisory; `|| true` hands the verdict
