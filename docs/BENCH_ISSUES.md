@@ -131,3 +131,13 @@ s1amaz died at the same resolve stage one attempt earlier. Observation for
 the owner: in-process scoring of a 359k-pair amazon_google candidate set is
 where this suite dies; the abt_buy run (30k pairs) passed the same stage.
 Root cause (OOM vs hang) unconfirmed — no dmesg/journal access here.
+
+**RESOLVED by retry with instrumentation (s1amaz3, 20261126).** Third run
+on the same suite/tree completed in 549.4 s (ER 0.055/0.077/0.064). RSS of
+the app's whole process tree, sampled every 15 s (run_driver.py `rss.log`):
+peak **1.46 GiB** across the run, plateaus ~0.9 GiB while scoring the 359k
+candidate pairs — no OOM trajectory anywhere. Host at the time: ~8.8/15 GiB
+used with my probes gone. The two earlier deaths were the host under
+self-inflicted memory pressure (parallel D1/dblp probes), not an app defect:
+**I-8 closes as environment, not app.** Keep the sampler: any future silent
+death now carries its own evidence.

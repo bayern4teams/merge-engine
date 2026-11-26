@@ -12,6 +12,7 @@ carries the flag **`provisional-key`** except `google_v1` (owner-final).
 | google_v1 | final | stage0f_full | 1700 s | not emitted (see BENCH_STAGE0 findings 2–3) | — | 15/16 (driver) | — | — | — | 0.398 in-process arm | `20261125-1451_2d1101e_stage0f_full` |
 | dblp_acm | provisional-key | s1dblp5_full | 1229 s | 0.925 / 0.956 / 0.940 | (must_merge 2127/2224; must_not_auto 41/46; must_not 252/270) | 3829/4081 = 0.938 | — | — | — | 0.667 | `20261125-1759_906e9bb_s1dblp5_full_DRAFT`; repro below¹ |
 | abt_buy | provisional-key | s1abtbuy_full | 265 s | 0.043 / 0.015 / 0.022 | (must_merge 17/1118; must_not_auto 23/24; must_not 50/124) | 1749/1905 = 0.918 | — | — | — | 0.727 | `20261125-1825_d0cdd42_s1abtbuy_full_DRAFT`; same repro, bench=abt_buy² |
+| amazon_google | provisional-key | s1amaz3_full | 549 s | 0.055 / 0.077 / 0.064 (missing 0) | (must_merge 119/1553; must_not_auto 40/295; must_not 252/423) | 2144/3094 = 0.693 | — | — | — | 0.750 | `20261126-1514_84ec8df_s1amaz3_full_DRAFT`; same repro, bench=amazon_google³ |
 
 **Crosswalk note:** google_v1 crosswalk scoring demands the truth's XW row
 ids, which no app run can observe; emitting app cluster ids would be
@@ -40,6 +41,14 @@ carry 0.95 alone. 1,262 borderline pairs exceeded the LLM budget (200);
 1,062 kept heuristic scores. The in-process D1 bake-off (four comparator
 arms) moves nothing here (best F1 0.0164, A-tree) — the gap is the
 comparator's mid band + the code rule, not the soft-compare budget.
+
+³ **amazon_google:** same command with `bench=amazon_google`, tree `84ec8df`
+(I-1 fix in). Two earlier attempts died (I-8); the instrumented retry
+completed — peak app-tree RSS 1.46 GiB, deaths attributed to host memory
+pressure from my own parallel probes, not the app (docs/BENCH_ISSUES.md I-8).
+Same product-suite floor as abt_buy: recall 0.077 (119/1553 must_merge),
+and I-5 code masking applies here too; destination cell accuracy 0.767,
+conflicts 2144/3094 = 0.693 is the suite's noisiest-field load (description).
 
 ## Suite-level verdicts so far
 
