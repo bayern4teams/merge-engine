@@ -18,6 +18,7 @@ carries the flag **`provisional-key`** except `google_v1` (owner-final).
 | geo_settlements | provisional-key | s1geo_full | 111 s | 0.994 / 0.430 / 0.600 (missing 0) | (must_merge 1888/4391; must_not_auto —; must_not 53/55) | 2306/2858 = 0.807 | — | — | — | 14/32 = 0.438 | `20261126-1620_182f347_s1geo_full_DRAFT`; same repro, bench=geo_settlements⁶ |
 | affiliations | provisional-key | s1aff_full | 18 s | — / 0.000 / — (missing 0) | (must_merge 0/16795; must_not_auto 87/87; must_not 91/91) | 69/323 = 0.214 | — | — | — | 3/3 = 1.000 | `20261126-1623_80fee52_s1aff_full_DRAFT`; same repro, bench=affiliations⁷ |
 | pagila | provisional-key | s1pagila_full | 636 s | FAILED before load — all 10 entities missing 100% (guardrail abort⁸) | (must_not_auto 0/22) | 0/0 | — | FK 1.000/1.000/1.000; junction 0.667/0.667; weak 0.000 | — | 59/65 = 0.908 | `20261126-1624_cd52a4c_s1pagila_full_DRAFT`; run FAILED in load_data, see ⁸ |
+| chinook | provisional-key | s1chink_full | 132 s | FAILED before load — all 8 entities missing 100% (guardrail abort⁹) | (must_not_auto 0/331) | 0/0 | — | FK 0.846/1.000/0.917; junction 0.000; weak 0.000 | — | 52/56 = 0.929 | `20261126-1636_4214b2b_s1chink_full_DRAFT`; run FAILED in load_data, see ⁹ |
 
 **Crosswalk note:** google_v1 crosswalk scoring demands the truth's XW row
 ids, which no app run can observe; emitting app cluster ids would be
@@ -121,6 +122,17 @@ mapped — the inverse of I-9). must_not_auto 0/22 = all 22 forbidden pairs
 landed inside the fitted map before the abort. Filed as **I-11**; no
 implementation, owner-side shape call (relative-proposal gates vs
 clean-data corpora).
+
+⁹ **chinook (FAILED row, honest):** same corpus family as pagila, same
+guardrail, independent run — `mapping_coverage = 0 (threshold 0.462;
+violating: invoice, invoice_line, playlist_track); largest_cluster_share =
+0.0588 (threshold 0; violating: invoice, track)` (from `final_status.json`).
+Both I-11 shapes reproduced exactly as predicted (junction/transaction
+entities at coverage 0; near-clean corpus collapsing the largest-cluster
+ceiling to 0 which a real small cluster then trips), which is why I-11 is
+now a REPEATED shape, not a one-run observation. FK 0.846/1.000 scored from
+pre-load state; mapping 52/56; must_not_auto 0/331 inside the fitted map
+before the abort.
 
 ## Suite-level verdicts so far
 

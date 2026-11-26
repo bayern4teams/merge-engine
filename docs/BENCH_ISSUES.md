@@ -227,3 +227,11 @@ pre_load_gate, not inferred):
 Cost: whole pagila suite unscoreable end-to-end (plus chinook is the same
 corpus family FK-rich shape — expect the same until resolved).
 No implementation; owner-side call on the gate's proposal shape.
+
+REPEATED (chinook s1chink, `20261126-1636_4214b2b_s1chink_full_DRAFT`,
+FAILED 131.6 s — predicted before the run from this shape, then confirmed
+verbatim): `mapping_coverage = 0 (threshold 0.462; violating: invoice,
+invoice_line, playlist_track); largest_cluster_share = 0.0588 (threshold 0;
+violating: invoice, track)`. Same two shapes, different corpus, no
+intervention between runs. I-11 is a REPEATED, PREDICTIVE defect shape, not
+a one-run artifact.
