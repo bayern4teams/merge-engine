@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# E7: refresh all three code graphs after every commit, fast (no-LLM) builds.
+# Warn on failure, never fail: the commit has already landed, and a graph
+# rebuild must not be the thing that breaks committing (same reasoning as the
+# old pre-commit-framework post-commit stage this replaces).
+#
+# Run in the background (nohup, ~8s) so no clone pays the rebuild as commit
+# latency — the old setup detached via refresh_graphs.py --detach; doing it in
+# the script keeps refresh_graphs.py's CLI purely synchronous. Output goes to
+# .tmp/refresh_graphs.log. Skip with SKIP_INDEX_HOOK=1.
+set -u
+
+if [ "${SKIP_INDEX_HOOK:-0}" = "1" ]; then
+    echo "post-commit: graph refresh skipped (SKIP_INDEX_HOOK=1)"
+    exit 0
+fi
+
+mkdir -p .tmp
+PY="${PYTHON:-python3}"
+command -v "$PY" >/dev/null 2>&1 || PY=python3
+nohup "$PY" scripts/refresh_graphs.py >> .tmp/refresh_graphs.log 2>&1 &
+echo "post-commit: graph refresh started in background (log: .tmp/refresh_graphs.log)"
+exit 0

@@ -19,9 +19,15 @@ artifacts to commit -- graphify-out/ alone was 750k lines of tracked JSON,
 three quarters of the repo, and one update rewrites most of it.
 
 Usage:
-    python scripts/refresh_graphs.py              # run all three, in order
+    python scripts/refresh_graphs.py              # strict (E10): run all three, in order;
+                                                  # exit 1 naming any missing/failing tool
     python scripts/refresh_graphs.py --detach     # spawn and return immediately
     python scripts/refresh_graphs.py --if-missing # only build what isn't there
+    python scripts/refresh_graphs.py --session-start
+        # E9: build what's missing, refresh what's stale, warn and exit 0.
+        # Staleness: graft has its own check (`graft build --check`); graphify
+        # and codebase-memory-mcp have none, so a fast (incremental) refresh
+        # is the staleness check for them.
 """
 
 from __future__ import annotations
@@ -171,9 +177,72 @@ def _detach() -> int:
     return 0
 
 
+def _graft_stale() -> bool:
+    """graft's own staleness check (`graft build --check`, per its --help):
+    exit non-zero == graft/ drifts from the code. Returns True when unknown
+    (check itself failed) so session-start rebuilds rather than trusts."""
+    exe = shutil.which("graft")
+    if exe is None:
+        return True
+    try:
+        done = subprocess.run(
+            [exe, "build", ".", "--check"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return True
+    return done.returncode != 0
+
+
+def session_start() -> int:
+    """E9: at session start, build missing graphs and refresh stale ones.
+
+    Warns (stderr) and always exits 0 — a slow or broken graph at minute zero
+    of a session must not block the session; the strict default mode is the
+    one that fails loudly (E10).
+    """
+    LOG.parent.mkdir(parents=True, exist_ok=True)
+    with LOG.open("a", encoding="utf-8") as log:
+        log.write(f"\n=== session-start {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+        actions: list[str] = []
+        graphify_proof = ROOT / "graphify-out" / "graph.json"
+        graft_proof = ROOT / "graft"
+
+        if not graphify_proof.exists():
+            actions.append("graphify")
+        elif not STAMP.exists() or STAMP.read_text(encoding="utf-8").strip() != _head():
+            # No own staleness check -> a fast incremental update IS the check.
+            actions.append("graphify")
+
+        if not graft_proof.exists() or _graft_stale():
+            actions.append("graft")
+
+        # codebase-memory-mcp keeps its index in its own store, has no
+        # staleness flag, and is the fastest of the three: always refresh.
+        actions.append("codebase-memory-mcp")
+
+        log.write("refresh: " + ", ".join(actions) + "\n")
+
+    if actions:
+        rc = refresh()  # strict run, output already logged; its exit is not ours
+        if rc != 0:
+            print(
+                "refresh_graphs --session-start: some graphs are NOT current "
+                "(see .tmp/refresh_graphs.log); run `python scripts/refresh_graphs.py` "
+                "for the strict error",
+                file=sys.stderr,
+            )
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if "--detach" in argv:
         return _detach()
+    if "--session-start" in argv:
+        return session_start()
     return refresh(if_missing="--if-missing" in argv)
 
 

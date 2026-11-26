@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Chain to the pre-commit framework — the one config (.pre-commit-config.yaml,
+# 13 guards) stays the single definition of what a commit must pass. This
+# file exists because core.hooksPath .githooks disables .git/hooks/, where
+# bootstrap.py installs its hook; without this chain the 13 guards would
+# silently stop running on every clone that sets hooksPath.
+#
+# ponytail: relies on pre-commit being on PATH (the framework's own hook
+# template hardcodes a venv python instead). Upgrade path: teach
+# scripts/bootstrap.py to install core.hooksPath + point it here.
+set -u
+
+if [ "${SKIP_PRE_COMMIT:-0}" = "1" ]; then
+    echo "pre-commit: skipped (SKIP_PRE_COMMIT=1)"
+    exit 0
+fi
+
+# Venv first: bootstrap.py's venv (.venv311) is where the framework is
+# reliably installed — bootstrap's generated .git/hooks did
+# `exec .venv311/bin/python -mpre_commit`. A stray PATH shim can be broken
+# (one on this machine raises ModuleNotFoundError), so the venv wins.
+if [ -x .venv311/bin/python ] && .venv311/bin/python -c "import pre_commit" 2>/dev/null; then
+    exec .venv311/bin/python -m pre_commit run --hook-stage pre-commit
+fi
+
+if command -v pre-commit >/dev/null 2>&1 && pre-commit --version >/dev/null 2>&1; then
+    exec pre-commit run --hook-stage pre-commit
+fi
+
+echo "pre-commit: neither .venv311 (python -m pre_commit) nor a working 'pre-commit'" >&2
+echo "pre-commit: on PATH can run the framework. Run 'python scripts/bootstrap.py'" >&2
+echo "pre-commit: (or 'pipx install pre-commit'), then retry the commit. Skipping" >&2
+echo "pre-commit: silently would disable all 13 guards." >&2
+exit 1

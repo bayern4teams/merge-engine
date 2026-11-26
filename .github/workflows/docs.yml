@@ -1,0 +1,83 @@
+name: Docs checks
+
+# J12: CI checks the docs — markdownlint, link check (lychee), Vale, and
+# Mermaid render (scripts/check_mermaid.py: a block that does not render
+# fails the check). Scope is the J12 doc set; ARCHITECTURE.md,
+# TECHNICAL_IMPLEMENTATION.md, GLOSSARY.md and docs/LESSONS.md do not exist
+# yet — the file list is built from what IS there, so the job works before
+# and after prompt 2 creates them.
+#
+# Runs on every push AND pull request that touches Markdown (many projects
+# merge locally and push, with no pull requests — a PR-only trigger would
+# never fire here).
+
+on:
+  push:
+    paths:
+      - "**.md"
+      - ".vale.ini"
+      - ".markdownlint-cli2.jsonc"
+      - ".lychee.toml"
+      - "scripts/check_mermaid.py"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "**.md"
+      - ".vale.ini"
+      - ".markdownlint-cli2.jsonc"
+      - ".lychee.toml"
+      - "scripts/check_mermaid.py"
+      - ".github/workflows/docs.yml"
+
+concurrency:
+  group: docs-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # C5 EXCEPTION (all four checks): the existing doc set was never linted,
+    # so findings today are not caused by the push they block, and a red
+    # badge nobody can fix gets ignored (audit.yml's OpenWiki lesson).
+    # Reason: legacy prose. Approved by: owner chat decision 2026-11-26.
+    # Review date: prompt 2 (docs pass) — prompt 2 MUST remove this
+    # continue-on-error and make all four checks blocking.
+    continue-on-error: true
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Collect the doc set that exists
+        id: docs
+        run: |
+          files=""
+          for f in README.md ARCHITECTURE.md TECHNICAL_IMPLEMENTATION.md GLOSSARY.md docs/LESSONS.md AGENTS.md; do
+            [ -f "$f" ] && files="$files $f"
+          done
+          echo "files=$files" | tee "$GITHUB_OUTPUT"
+
+      - name: markdownlint
+        uses: DavidAnson/markdownlint-cli2-action@36744e48c825cb8d549f6353f8837505de1922c7 # v25.1.0
+        with:
+          globs: ${{ steps.docs.outputs.files }}
+
+      - name: Link check (lychee)
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          args: --config .lychee.toml ${{ steps.docs.outputs.files }}
+          fail: true
+
+      - name: Vale (simple-English style)
+        uses: vale-cli/vale-action@518a9136acc6e6668ce7c00d367051e0941e87ff # v3.0.0
+        with:
+          scope: ${{ steps.docs.outputs.files }}
+
+      - name: Mermaid render (every block must render)
+        run: |
+          npm install -g @mermaid-js/mermaid-cli@12.2.0
+          npx puppeteer browsers install chrome-headless-shell
+          python3 scripts/check_mermaid.py ${{ steps.docs.outputs.files }}

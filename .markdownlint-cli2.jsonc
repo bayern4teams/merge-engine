@@ -1,0 +1,14 @@
+{
+  // markdownlint-cli2 config file: rules go under "config" (a bare rule
+  // object at top level is parsed as cli2 settings and silently ignored —
+  // verified against v0.24.0). Small config, per J12/Step 4: defaults minus
+  // the rules this repo's house style breaks on purpose. Tightening these is
+  // prompt 2's prose pass, not agent-setup's.
+  "config": {
+    "MD013": false, // line-length: tables and citations run long by design
+    "MD024": { "siblings_only": true }, // same heading under different parents is fine
+    "MD025": false, // multiple H1s: docs use them as page banners
+    "MD033": false, // inline HTML: managed tool blocks (OPENWIKI markers) embed it
+    "MD041": false // first-line H1: front-matter-style headers exist in docs/
+  }
+}

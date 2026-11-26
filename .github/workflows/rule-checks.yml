@@ -1,0 +1,54 @@
+name: Rule checks
+
+# K4 machine-checks for two AGENTS.md rules that agents otherwise forget:
+#   C4  — no TODO/FIXME added to src/ (ponytail: comments allowed; XXX is
+#         real data — ISO 4217 "no currency" — and never matched).
+#   J13 — every commit touching src/ carries a `Docs:` decision line.
+# Both cheap (git diff/log only, no installs), so they run on every push and
+# pull request. Only what the change ADDS is checked, so existing history and
+# existing markers never block CI.
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: rules-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PR_BASE: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # J13 walks individual commits; a depth-1 checkout has nothing to
+          # walk. The script passes cleanly (with a notice) when the base is
+          # genuinely unreachable (new branch, force-push).
+          fetch-depth: 0
+          # On pull_request, check out the PR head commit itself, not the
+          # merge commit, so docs-line sees the real commit messages.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Resolve base
+        id: base
+        run: |
+          if [ -n "$PR_BASE" ]; then
+            echo "sha=$PR_BASE" >> "$GITHUB_OUTPUT"
+          else
+            git fetch -q origin main
+            echo "sha=$(git merge-base origin/main HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: C4 — no TODO/FIXME added to src/
+        run: python3 scripts/ci_rule_checks.py stub-markers "${{ steps.base.outputs.sha }}" HEAD
+
+      - name: "J13 — src/ commits carry a Docs: line"
+        run: python3 scripts/ci_rule_checks.py docs-line "${{ steps.base.outputs.sha }}" HEAD

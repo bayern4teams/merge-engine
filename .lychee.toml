@@ -1,0 +1,5 @@
+# lychee config for the docs job (J12). Local and CI both run:
+#   lychee --config .lychee.toml <doc set>
+# Exclude patterns match the URL, not the file.
+offline = true          # repo-relative links only; network links move on their own
+include_mail = false

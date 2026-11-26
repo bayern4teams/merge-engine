@@ -16,7 +16,11 @@ venv/
 env/
 
 # IDE
-.vscode/
+# (ignore contents, not the dir itself: a dir-exclusion cannot be
+# re-included for one file — git never descends into it)
+.vscode/*
+# the team-shared extension recommendations are committed (Step 4.5)
+!.vscode/extensions.json
 .idea/
 *.swp
 *.swo
@@ -142,3 +146,8 @@ docs/*.pdf
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
+
+# Vale style packages synced by `vale sync` into StylesPath — regenerated
+# cache, not reviewed (E11-style). The vocabulary config IS source: kept.
+.vale/*
+!.vale/config/

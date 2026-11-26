@@ -1,0 +1,26 @@
+# Accepted project terms — seed list; prompt 2 fills this from GLOSSARY.md
+# (J5: one fixed term per concept). Keep entries in canonical capitalisation.
+AGENTS\.md
+CLAUDE\.md
+ADR
+ADRs
+DevOps
+DBA
+DBAs
+Mermaid
+markdownlint
+lychee
+Vale
+ponytail
+Ponytail
+Splink
+Ground truth
+dataframe
+JSON
+YAML
+SQL
+Gradio
+FastAPI
+React
+HITL
+MCP
