@@ -83,7 +83,7 @@ Entry format (one per item, added by the lead when it accepts the item):
 
 ### P2 — purging + meta-blocking replace the 250k comparison cap
 - Why cloud could not verify: no origin databases (the `staff` entity).
-- Command: full merge run; then read `resolution_stats.<entity>` (`candidate_pairs`, `pairs_pruned_by_purging`, `pairs_pruned_by_meta_blocking`, `uncompared_pairs`).
+- Command: full merge run; then read `resolution_stats.<entity>` (`candidate_pairs`, `block_memberships_filtered`, `pairs_lost_by_block_filtering_ub`, `pairs_pruned_by_purging_ub`, `pairs_pruned_by_meta_blocking`, `uncompared_pairs`; the `*_ub` fields are upper bounds — D9).
 - Independent check: count distinct blocking pairs independently (`_blocking_keys_for` over the restored `staff` rows) and compare against `candidate_pairs` + pruned counts; score the run against ground truth (pair completeness on the restored truth set).
 - Expected evidence: `uncompared_pairs` = 0 (before: 711 670 for `staff`); either the run completes with the pruned counts shown, or it FAILS with `CandidatePairBudgetExceeded` (guard 5M pairs) — never `completed` with silent discards. Watch memory (~300 B/pair) and the WNP loss: synthetic attack measured 4-19 % of pairs the uncapped old code found are pruned (accepted ceiling; P5 revisits blocking).
 - Result (filled in locally):
