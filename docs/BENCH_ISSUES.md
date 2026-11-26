@@ -179,3 +179,26 @@ single candidate: map_fields maps only the priority-top table per entity).
 Cost is measured (the two mapping/conflict numbers above). Priority: blocks
 any mapping-accuracy acceptance on every multi-origin suite (most of the
 remaining program).
+
+## I-10  single-column within-origin suite: match model fits to match_prior=0.000 and excludes EVERY candidate pair
+
+affiliations (s1aff, `20261126-1623_80fee52_s1aff_full_DRAFT`): one origin,
+one business column (`affil1`), 2,260 records, 16,795 truth must_merge pairs.
+Log chain (debug.log, all within 4 s):
+
+- `_generate_candidate_pairs: 30593 pairs … from 865 blocks` (blocking fine);
+- `fellegi_sunter:518 — Estimated match model over 30593 pairs:
+  match_prior=0.021, fields=['affil1']` (init sane);
+- `resolve_entities:1666 — Match model fitted over 30593 candidate pairs
+  (match_prior=0.000)` (fit COLLAPSED to zero);
+- `resolve_entities:823 — Built 2260 clusters: matched=0, excluded=30593`.
+
+Scored row: ER P undefined / R 0.000 (0/16795 must_merge), cell accuracy
+0.214, conflicts 69/323. The app's own guard rails were clean (must_not_auto
+87/87, must_not 91/91) — it achieved them by merging NOTHING. Mapping 3/3
+(the single-origin case is exactly where I-9 cannot bite).
+Shape: EM over a one-field comparison space converges to the degenerate
+zero-match fixed point, then every scored pair falls under the exclude line.
+Root cause inside the fit NOT established (would need the m/u tables; one
+run's evidence). Cost: the entire suite's recall (0/16795) — an ER floor
+equal to zero for single-column within-origin data.

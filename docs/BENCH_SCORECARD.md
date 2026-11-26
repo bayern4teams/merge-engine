@@ -16,6 +16,7 @@ carries the flag **`provisional-key`** except `google_v1` (owner-final).
 | dblp_scholar_sub8k | provisional-key | s1ds8k_full | 542 s | 0.458 / 0.257 / 0.330 (missing 0) | (must_merge 149/579; must_not_auto 1/1; must_not 16/17) | 178/180 = 0.989 | — | — | — | 0.667 | `20261126-1535_84ec8df-dirty_s1ds8k_full_DRAFT`; same repro, bench=dblp_scholar_sub8k⁴ |
 | febrl | provisional-key | s1febrl_full | 190 s | 0.991 / 0.999 / 0.995 (missing 0) | (must_merge 13953/13972; must_not_auto 76/76; must_not 100/100) | 12783/17030 = 0.751 | — | — | — | 20/60 = 0.333 | `20261126-1614_b5b0dbe_s1febrl_full_DRAFT`; same repro, bench=febrl⁵ |
 | geo_settlements | provisional-key | s1geo_full | 111 s | 0.994 / 0.430 / 0.600 (missing 0) | (must_merge 1888/4391; must_not_auto —; must_not 53/55) | 2306/2858 = 0.807 | — | — | — | 14/32 = 0.438 | `20261126-1620_182f347_s1geo_full_DRAFT`; same repro, bench=geo_settlements⁶ |
+| affiliations | provisional-key | s1aff_full | 18 s | — / 0.000 / — (missing 0) | (must_merge 0/16795; must_not_auto 87/87; must_not 91/91) | 69/323 = 0.214 | — | — | — | 3/3 = 1.000 | `20261126-1623_80fee52_s1aff_full_DRAFT`; same repro, bench=affiliations⁷ |
 
 **Crosswalk note:** google_v1 crosswalk scoring demands the truth's XW row
 ids, which no app run can observe; emitting app cluster ids would be
@@ -90,6 +91,12 @@ footnote 5 (18 UNMAPPED = 6 columns each for dbp/fb/nyt, only gns mapped);
 filed as **I-9** once the shape repeated twice. The recall gap was NOT
 decomposed this run (I-9 explains mapping/conflicts, not ER recall) —
 recorded as measured, attribution open.
+
+⁷ **affiliations:** single-origin, single-column suite — the app merged
+NOTHING: fit collapsed to match_prior=0.000, all 30,593 candidate pairs
+excluded (matched=0), recall 0/16795. Filed **I-10** with the log chain.
+The must_not guards passing 87/87 + 91/91 is vacuous truth (nothing merged
+can violate a must-not); reported with that caveat, not as a win.
 
 ## Suite-level verdicts so far
 
