@@ -30,7 +30,7 @@ if not hasattr(Server, "list_tools"):
 
         return decorator
 
-    Server.list_tools = _list_tools_decorator  # type: ignore[attr-defined]
+    Server.list_tools = _list_tools_decorator  # type: ignore[attr-defined]  # SDK compat: added below only when the mcp build lacks it
 
 if not hasattr(Server, "call_tool"):
 
@@ -45,7 +45,7 @@ if not hasattr(Server, "call_tool"):
 
         return decorator
 
-    Server.call_tool = _call_tool_decorator  # type: ignore[attr-defined]
+    Server.call_tool = _call_tool_decorator  # type: ignore[attr-defined]  # SDK compat: added below only when the mcp build lacks it
 
 # Pydantic v2 models expose fields via model_fields, not as class attributes,
 # so a plain `hasattr(Tool, "inputSchema")` on the class is False even when
@@ -53,7 +53,7 @@ if not hasattr(Server, "call_tool"):
 # unconditionally and shadowed the real field with one reading a nonexistent
 # `input_schema` attribute (every tool then reported an empty inputSchema).
 if "inputSchema" not in getattr(Tool, "model_fields", {}):
-    Tool.inputSchema = property(lambda self: getattr(self, "input_schema", {}))  # type: ignore[attr-defined]
+    Tool.inputSchema = property(lambda self: getattr(self, "input_schema", {}))  # type: ignore[attr-defined]  # Pydantic v2: field is not a class attr (see note above)
 
 from src.mcp_server.connectors import create_connector
 
@@ -88,11 +88,11 @@ def _get_config() -> Any:
 # ── Tool Definitions ─────────────────────────────────────────────────
 
 
-@app.list_tools()  # type: ignore[attr-defined]
+@app.list_tools()  # type: ignore[attr-defined]  # SDK compat: patched above when the mcp build lacks it
 async def list_tools() -> list[Tool]:
     """Return the list of tools exposed by this MCP server."""
     return [
-        Tool(  # type: ignore[call-arg]
+        Tool(  # type: ignore[call-arg]  # mcp SDK Tool is a Pydantic model with alias kwargs mypy cannot see
             name="discover_schema",
             description=(
                 "Connect to an origin database and return all tables/collections "
@@ -109,7 +109,7 @@ async def list_tools() -> list[Tool]:
                 "required": ["origin_id"],
             },
         ),
-        Tool(  # type: ignore[call-arg]
+        Tool(  # type: ignore[call-arg]  # mcp SDK Tool is a Pydantic model with alias kwargs mypy cannot see
             name="extract_data",
             description=(
                 "Extract rows from a specific origin table/entity, filtered by "
@@ -151,7 +151,7 @@ async def list_tools() -> list[Tool]:
                 "required": ["origin_id", "table_name", "columns"],
             },
         ),
-        Tool(  # type: ignore[call-arg]
+        Tool(  # type: ignore[call-arg]  # mcp SDK Tool is a Pydantic model with alias kwargs mypy cannot see
             name="resolve_entities",
             description=(
                 "Given records from multiple sources for a given entity type, "
@@ -174,7 +174,7 @@ async def list_tools() -> list[Tool]:
                 "required": ["entity_type", "records"],
             },
         ),
-        Tool(  # type: ignore[call-arg]
+        Tool(  # type: ignore[call-arg]  # mcp SDK Tool is a Pydantic model with alias kwargs mypy cannot see
             name="unify_entity_group",
             description=(
                 "Merge attributes within a cluster: complement nulls, flag "
@@ -196,7 +196,7 @@ async def list_tools() -> list[Tool]:
                 "required": ["cluster_id", "records"],
             },
         ),
-        Tool(  # type: ignore[call-arg]
+        Tool(  # type: ignore[call-arg]  # mcp SDK Tool is a Pydantic model with alias kwargs mypy cannot see
             name="map_fields",
             description=(
                 "Map unified fields to destination columns using LLM. "
@@ -221,7 +221,7 @@ async def list_tools() -> list[Tool]:
                 "required": ["entity_type", "unified_schema", "destination_schema"],
             },
         ),
-        Tool(  # type: ignore[call-arg]
+        Tool(  # type: ignore[call-arg]  # mcp SDK Tool is a Pydantic model with alias kwargs mypy cannot see
             name="load_data",
             description=(
                 "Upsert unified records into the destination table "
@@ -248,7 +248,7 @@ async def list_tools() -> list[Tool]:
                 "required": ["entity_type", "records"],
             },
         ),
-        Tool(  # type: ignore[call-arg]
+        Tool(  # type: ignore[call-arg]  # mcp SDK Tool is a Pydantic model with alias kwargs mypy cannot see
             name="extend_schema",
             description=(
                 "Add new columns to one or more destination tables. "
@@ -280,7 +280,7 @@ async def list_tools() -> list[Tool]:
 # ── Tool Dispatch ─────────────────────────────────────────────────────
 
 
-@app.call_tool()  # type: ignore[attr-defined]
+@app.call_tool()  # type: ignore[attr-defined]  # SDK compat: patched above when the mcp build lacks it
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     """Dispatch a tool call to the appropriate implementation.
 

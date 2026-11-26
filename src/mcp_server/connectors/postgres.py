@@ -207,7 +207,7 @@ class PostgresConnector(BaseConnector):
 
         tables: list[dict[str, Any]] = []
         logger.debug("Querying information_schema.tables for user tables")
-        async with engine.connect() as conn:  # type: ignore[attr-defined]
+        async with engine.connect() as conn:
             result = await conn.execute(query)
             rows = result.mappings().fetchall()
             await conn.commit()
@@ -498,14 +498,14 @@ class PostgresConnector(BaseConnector):
             if count_conditions:
                 count_sql += " WHERE " + " AND ".join(count_conditions)
             logger.debug("Executing count query (first batch only)")
-            async with engine.connect() as conn:  # type: ignore[attr-defined]
+            async with engine.connect() as conn:
                 cr = await conn.execute(text(count_sql), params)
                 total_count = cr.scalar()
                 await conn.commit()
             logger.debug("Total count: %s", total_count)
 
         logger.debug("Executing data query")
-        async with engine.connect() as conn:  # type: ignore[attr-defined]
+        async with engine.connect() as conn:
             dr = await conn.execute(text(sql), params)
             rows = [dict(r) for r in dr.mappings().fetchall()]
             await conn.commit()

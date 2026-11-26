@@ -29,7 +29,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import pandas as pd  # type: ignore[import-untyped]
+import pandas as pd  # type: ignore[import-untyped]  # pandas stubs untyped at this pin
 from valentine import valentine_match
 from valentine.algorithms import Coma, DistributionBased, JaccardDistanceMatcher
 

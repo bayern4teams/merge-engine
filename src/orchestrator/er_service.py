@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-import psycopg2.extras  # type: ignore[import-untyped]
+import psycopg2.extras  # type: ignore[import-untyped]  # psycopg2 ships no type stubs
 
 from src.mcp_server.tools.fellegi_sunter import FieldModel, MatchModel
 from src.mcp_server.tools.resolve_entities import (

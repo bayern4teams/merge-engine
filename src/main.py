@@ -101,7 +101,7 @@ async def run_mcp_server(config: Any, port: int = 8000) -> None:
     """
 
     try:
-        from mcp.server.fastmcp import FastMCP  # type: ignore[import-not-found]
+        from mcp.server.fastmcp import FastMCP
 
         mcp = FastMCP(
             "merge-engine",
@@ -112,14 +112,14 @@ async def run_mcp_server(config: Any, port: int = 8000) -> None:
         from src.mcp_server.server import _TOOL_HANDLERS
 
         # Register tool list
-        @mcp.tool()  # type: ignore[untyped-decorator]
+        @mcp.tool()  # type: ignore[untyped-decorator]  # mcp SDK ships FastMCP.tool untyped
         async def discover_schema(origin_id: str) -> str:
             result = await _TOOL_HANDLERS["discover_schema"]({"origin_id": origin_id})
             import json
 
             return json.dumps(result, default=str)
 
-        @mcp.tool()  # type: ignore[untyped-decorator]
+        @mcp.tool()  # type: ignore[untyped-decorator]  # mcp SDK ships FastMCP.tool untyped
         async def extract_data(
             origin_id: str,
             table_name: str,

@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import networkx as nx  # type: ignore[import-untyped]
+import networkx as nx  # type: ignore[import-untyped]  # networkx ships no type stubs
 
 logger = logging.getLogger("merge-engine.tools.metadata_graph_view")
 

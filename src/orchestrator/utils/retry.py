@@ -240,7 +240,7 @@ def retry_on_transient(
         if is_async:
 
             @functools.wraps(func)
-            async def wrapper(*args: Any, **kwargs: Any) -> Any:  # type: ignore[no-untyped-def]
+            async def wrapper(*args: Any, **kwargs: Any) -> Any:
                 from tenacity import AsyncRetrying
 
                 async def _async_func():
@@ -260,7 +260,7 @@ def retry_on_transient(
                 # Should not reach here due to reraise, but for type safety
                 raise RuntimeError(f"Function {func.__name__} failed after {max_attempts} attempts")
 
-            return wrapper  # type: ignore[return-value]
+            return wrapper  # type: ignore[return-value]  # wrapper keeps func signature via functools.wraps; mypy cannot see it
         else:
 
             @functools.wraps(func)
@@ -280,6 +280,6 @@ def retry_on_transient(
                         return result
                 raise RuntimeError(f"Function {func.__name__} failed after {max_attempts} attempts")
 
-            return wrapper  # type: ignore[return-value]
+            return wrapper  # type: ignore[return-value]  # wrapper keeps func signature via functools.wraps; mypy cannot see it
 
     return decorator

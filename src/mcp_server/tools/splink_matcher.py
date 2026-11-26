@@ -56,7 +56,7 @@ from src.mcp_server.tools.splink_workbench import DEFAULT_MODEL_STORE
 logger = logging.getLogger("merge-engine.tools.splink_matcher")
 
 try:
-    import pandas as pd  # type: ignore[import-untyped]
+    import pandas as pd  # type: ignore[import-untyped]  # pandas stubs untyped at this pin
     import splink.comparison_library as cl
     from splink import DuckDBAPI, Linker, SettingsCreator, block_on
 
@@ -117,7 +117,7 @@ def _predict_with_saved_profile(
         version = sm.load_version(store_root, model_name, int(version_str))
         linker = Linker(df, version["payload"], DuckDBAPI())
         predictions = linker.inference.predict(threshold_match_probability=0.0)
-        pred_df = predictions.as_pandas_dataframe()  # type: ignore[no-untyped-call]
+        pred_df = predictions.as_pandas_dataframe()  # type: ignore[no-untyped-call]  # splink 4.x API is untyped
     except Exception as exc:
         logger.warning(
             "Splink: predict-only load of model_profile %r failed for entity "
@@ -405,7 +405,7 @@ async def score_pairs_with_splink(
         # auto_match/auto_exclude (Fix 4) decide merge/exclude/borderline
         # downstream in _build_clusters, not here.
         predictions = linker.inference.predict(threshold_match_probability=0.0)
-        pred_df = predictions.as_pandas_dataframe()  # type: ignore[no-untyped-call]
+        pred_df = predictions.as_pandas_dataframe()  # type: ignore[no-untyped-call]  # splink 4.x API is untyped
 
         scored_pairs: list[tuple[str, str, float]] = []
         for _, row in pred_df.iterrows():

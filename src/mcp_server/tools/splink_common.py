@@ -73,7 +73,7 @@ def records_to_dataframe(
     settings require a genuinely unique column) or when no records are given.
     """
     require_splink()
-    import pandas as pd  # type: ignore[import-untyped]
+    import pandas as pd  # type: ignore[import-untyped]  # pandas stubs untyped at this pin
 
     if not records:
         raise ValueError("records_to_dataframe needs at least one record")

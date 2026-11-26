@@ -3500,6 +3500,7 @@ def _one_to_one_parts(
             logger.warning("1:1 reduction skipped: %d sources in one cluster", len(sides))
         return [members]
     try:
+        # scipy ships no py.typed marker (C5 reason for the ignore below).
         from scipy.optimize import linear_sum_assignment  # type: ignore[import-untyped]
     except ImportError:
         logger.warning("1:1 reduction skipped: scipy is not installed")

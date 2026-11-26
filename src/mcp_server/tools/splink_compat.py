@@ -51,7 +51,7 @@ try:  # pragma: no cover - import guard mirrors splink_matcher's own guard
     _IMPORTED_VERSION = getattr(splink, "__version__", "unknown")
     _SPLINK_IMPORT_ERROR: Exception | None = None
 except Exception as exc:  # ImportError or a broken install
-    splink = None  # type: ignore[assignment]
+    splink = None  # type: ignore[assignment]  # module-or-None import guard (matches splink_matcher)
     _IMPORTED_VERSION = "unknown"
     _SPLINK_IMPORT_ERROR = exc
 

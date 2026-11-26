@@ -80,7 +80,7 @@ def _splink_config() -> dict[str, Any]:
     a missing file, or a non-dict value all fall back to the module constants
     below, so the workbench stays usable on a checkout without a config file.
     """
-    import yaml  # type: ignore[import-untyped]
+    import yaml  # type: ignore[import-untyped]  # PyYAML ships no type stubs
 
     from src.utils.config_loader import load_raw_config_dict
 

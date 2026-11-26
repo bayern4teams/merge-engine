@@ -177,7 +177,7 @@ def _run_format_expectations(
                     _gx_expectation_entry(
                         batch,
                         col,
-                        gxe.ExpectColumnValuesToMatchRegex(  # type: ignore[attr-defined]
+                        gxe.ExpectColumnValuesToMatchRegex(  # type: ignore[attr-defined]  # great_expectations builds gxe expectation classes dynamically
                             column=col, regex=_EMAIL_PATTERN
                         ),
                         "email",
@@ -189,7 +189,7 @@ def _run_format_expectations(
                     _gx_expectation_entry(
                         batch,
                         col,
-                        gxe.ExpectColumnValuesToMatchRegex(  # type: ignore[attr-defined]
+                        gxe.ExpectColumnValuesToMatchRegex(  # type: ignore[attr-defined]  # great_expectations builds gxe expectation classes dynamically
                             column=col, regex=_PHONE_PATTERN
                         ),
                         "phone",
@@ -201,7 +201,7 @@ def _run_format_expectations(
                     _gx_expectation_entry(
                         batch,
                         col,
-                        gxe.ExpectColumnValuesToMatchRegex(  # type: ignore[attr-defined]
+                        gxe.ExpectColumnValuesToMatchRegex(  # type: ignore[attr-defined]  # great_expectations builds gxe expectation classes dynamically
                             column=col, regex=_NUMERIC_PATTERN
                         ),
                         "numeric",
@@ -213,7 +213,7 @@ def _run_format_expectations(
                     _gx_expectation_entry(
                         batch,
                         col,
-                        gxe.ExpectColumnValuesToBeDateutilParseable(  # type: ignore[attr-defined]
+                        gxe.ExpectColumnValuesToBeDateutilParseable(  # type: ignore[attr-defined]  # great_expectations builds gxe expectation classes dynamically
                             column=col
                         ),
                         "date",

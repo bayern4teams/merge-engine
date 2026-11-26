@@ -41,7 +41,7 @@ import json
 import logging
 from typing import Any
 
-import psycopg2.extras  # type: ignore[import-untyped]
+import psycopg2.extras  # type: ignore[import-untyped]  # psycopg2 ships no type stubs
 
 logger = logging.getLogger("merge-engine.er_hooks")
 

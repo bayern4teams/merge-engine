@@ -376,7 +376,7 @@ def observed_similarity_distribution(
     pairs = _sample_candidate_pairs(df, column, sample_size)
     if not pairs:
         return {"column": column, "pairs_sampled": 0, "distribution": {}, "threshold_coverage": {}}
-    sim = comparator_score_df(pairs, "l", "r")  # type: ignore[no-untyped-call]
+    sim = comparator_score_df(pairs, "l", "r")  # type: ignore[no-untyped-call]  # splink 4.x API is untyped
     dist = {
         "jaro_winkler_similarity": [round(float(v), 4) for v in sim["jaro_winkler_similarity"]],
         "jaro_similarity": [round(float(v), 4) for v in sim["jaro_similarity"]],
