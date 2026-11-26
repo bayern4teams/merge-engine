@@ -1,26 +1,114 @@
-# Accepted project terms — seed list; prompt 2 fills this from GLOSSARY.md
-# (J5: one fixed term per concept). Keep entries in canonical capitalisation.
-AGENTS\.md
-CLAUDE\.md
+# Accepted project terms — filled from GLOSSARY.md (J5: one fixed term per
+# concept). Rules:
+#  - one entry per term; two case entries of one word flag EACH OTHER via
+#    Vale.Terms, so never list a word twice.
+#  - (?i) is used only where the term legitimately appears in another case
+#    (file names, code identifiers, link slugs — e.g. `adopt-splink-matcher.md`);
+#    plain prose terms keep a single canonical spelling that is enforced.
+# Entries are regexes.
+(?i)ACQUIRED
 ADR
 ADRs
-DevOps
+(?i)AGENTS\.md
+(?i)Argilla
+(?i)bootable
+CLI
+(?i)clickhouse
+ClickHouse
+(?i)checkpointer
+Databricks
+(?i)dataframe
+(?i)datahub
+(?i)datasketch
 DBA
 DBAs
-Mermaid
-markdownlint
-lychee
-Vale
-ponytail
-Ponytail
-Splink
-Ground truth
-dataframe
-JSON
-YAML
-SQL
-Gradio
+(?i)Debezium
+(?i)dedent
+(?i)deduplicated
+(?i)deps
+(?i)desbordante
+DevOps
+(?i)dicts
+DuckDB
+(?i)env
+(?i)eval
+(?i)EM
+(?i)FAISS
 FastAPI
-React
+(?i)Fellegi–Sunter
+(?i)gitignored
+(?i)graft
+(?i)graphify
+(?i)greppable
+(?i)gradio
+(?i)Grafana
+(?i)ground truth
+(?i)hiergat
+(?i)Hillyer
 HITL
-MCP
+(?i)HNSW
+IDF
+(?i)informatica
+(?i)jailer
+JSON
+(?i)jsonl
+(?i)keyset
+(?i)langgraph
+LangGraph
+(?i)Langfuse
+LLM
+LLMs
+LRU
+(?i)lychee
+(?i)markdownlint
+(?i)mcp
+Mermaid
+(?i)meta-blocking
+(?i)misindented
+Monge-Elkan
+Mongo
+MongoDB
+(?i)mypy
+(?i)neo4j
+(?i)networkx
+Nova
+(?i)numpy
+OKF
+(?i)ontop
+(?i)openmetadata
+Pagila
+(?i)ponytail
+Ponytail
+(?i)postgres
+PostgreSQL
+Pydantic
+(?i)ratchet
+React
+(?i)Redis
+(?i)relater
+(?i)rerank
+(?i)rollout
+(?i)runtimes
+(?i)semantica
+(?i)sha
+(?i)splink
+Splink
+(?i)spool
+SQL
+(?i)sqlglot
+SQLite
+(?i)survivorship
+(?i)unification
+(?i)unlinted
+(?i)unmappable
+(?i)unskipped
+(?i)untracked
+(?i)unvetted
+(?i)utopia
+UUID
+(?i)uvicorn
+Vale
+(?i)valentine
+WNP
+(?i)workstreams
+YAML
