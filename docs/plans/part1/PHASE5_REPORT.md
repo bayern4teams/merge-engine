@@ -235,6 +235,7 @@ Caveat: `git diff --shortstat` counts lines, not value; tests/part1 is 4.3 times
 `check.py docs` passes. Only docs/architecture/*.md changed (no INDEX link needed; overview.md TOC got a 6b entry). No file:line citations added.
 
 #### File -> change
+
 - data_pipeline.md
   - §7: EM paragraph fixed (m = EM, field-level u = sampled random pairs, P13; new "why u is not from EM" and IDF token-name comparison, P14).
   - §7 Blocking rewritten: no comparison budget; token blocking (P5) -> IDF block filtering + purging -> WNP meta-blocking; `_MAX_CANDIDATE_PAIRS` is an OOM guard raising `CandidatePairBudgetExceeded`; stats counters; loss is measured (P19), not assumed (P2).
@@ -250,10 +251,12 @@ Caveat: `git diff --shortstat` counts lines, not value; tests/part1 is 4.3 times
 - testing_and_decisions.md: decision-table rows replaced/added (u sampling, token blocking + WNP, clustering, band gate, pre-load gate, IND join graph, `longest`).
 
 #### ADRs
+
 - docs/decisions/0014-replace-budget-truncation-with-blocking-analysis.md: Consequences bullet "builtin engine's truncation-and-report behavior stays as-is" is now false (P2 removed truncation from the builtin engine). Partially superseded; not edited.
 - 0004 line ~9 describes the old builtin as "comparison-budget truncation" (history, still accurate as history).
 
 #### Could NOT verify / flags
+
 - `decision_memory_path` and `quality_history_path` are read via `state.get(...)` but not declared in `MergeState`, so only the env vars (`MERGE_ENGINE_DECISION_MEMORY`, `MERGE_ENGINE_QUALITY_HISTORY`) are reliable. The docs say so. The lead may want to declare them.
 - Figures quoted (711,670 pairs, 40/40, 4-19 % WNP loss, 20k records in 39 s) come from HANDOFF.md, not re-run.
 - The §19.10 runtime claim is marked "not re-measured on the new path".

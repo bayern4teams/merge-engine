@@ -120,6 +120,7 @@ for its MergeTree index — it guarantees nothing about uniqueness. This was
 verified directly against the real dataset used in this project: the
 cell_towers table has 43,276,150 rows for only ~42.97 million distinct
 5-column key tuples. Consequently:
+
 - `postgres.py` computes `keyset_is_unique(keyset, pk_columns)` and, when
   true, takes a faster strict-`>` path — but still calls
   `assert_key_unique()` on every batch and raises `DataQualityError` if a

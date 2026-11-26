@@ -103,6 +103,7 @@ sequenceDiagram
 200 OK
 { "status": "ok", "version": "1.4.2" }
 ```
+
 Non-200, or slower than about 2 s, means "not ready".
 
 ### 4.2 `GET /v1/entity-types`
@@ -124,6 +125,7 @@ Non-200, or slower than about 2 s, means "not ready".
   ]
 }
 ```
+
 *Shape only. Real types, fields and numbers come from our schema and our last merge run.*
 
 | Field | Meaning |
@@ -141,6 +143,7 @@ A type is listed only if it has a table in the unified DB **and** at least one c
 ### 4.3 `POST /v1/entities:resolve` (batch, up to 100 items)
 
 **Request**
+
 ```json
 {
   "items": [
@@ -179,6 +182,7 @@ A type is listed only if it has a table in the unified DB **and** at least one c
 | `resolve_token` | no | `null` on the first ask. On the second ask after `AMBIGUOUS`: the token we gave you, with your new evidence in `attributes` / `references` / `extra`. |
 
 **Response**
+
 ```json
 200 OK
 {
@@ -199,6 +203,7 @@ A type is listed only if it has a table in the unified DB **and** at least one c
 | `INVALID` | malformed item | `error`, `fields` | Log it, mark it failed. No retry. |
 
 Rules:
+
 1. One result per item, any order, linked by `item_id`.
 2. One bad item never fails the batch.
 3. Two of your workers resolving the same new entity at the same time get **the same id** — ER serializes creates per type and checks for a match before creating.
@@ -212,6 +217,7 @@ Rules:
 { "status": "DONE", "decision": "MATCHED", "id": "er_prod_501" }
 { "status": "DONE", "decision": "CREATED", "id": "er_prod_9002" }
 ```
+
 A human sees the candidates, your `attributes`, `extra` and `source_text`. That is why `extra` and `source_text` matter.
 
 ### 4.5 `GET /v1/entities/{entity_type}/{id}`
@@ -227,6 +233,7 @@ A human sees the candidates, your `attributes`, `extra` and `source_text`. That 
   "redirected_from": null
 }
 ```
+
 - **Merged ids keep working.** If `er_prod_77` was merged into `er_prod_501`, `GET .../er_prod_77` returns `er_prod_501` with `"redirected_from": "er_prod_77"`.
 - **Split entities:** if a merge run splits one entity in two, the id stays with one part; the other part gets a new id (no redirect).
 - `404` only for ids that never existed.
@@ -284,6 +291,7 @@ A human sees the candidates, your `attributes`, `extra` and `source_text`. That 
 | Temporary failure | `500`, `502`, `503`, `504`, timeout | Retry 3 times with backoff, then pause publishing and keep your data. |
 
 Error body (all errors):
+
 ```json
 { "error": "VALIDATION_FAILED", "message": "human readable text", "fields": { "name": "required", "vendor": "unknown" } }
 ```
@@ -308,6 +316,7 @@ Expected load: tens of requests per second at peak.
 ## 8. Guarantees
 
 **You guarantee**
+
 1. Our type and field names in `attributes`; everything else in `extra`.
 2. Rows you read are named by their `id`, never resolved.
 3. Parents resolved before children; references are real ER ids.
@@ -316,6 +325,7 @@ Expected load: tens of requests per second at peak.
 6. Provenance on every write. No delete.
 
 **We guarantee**
+
 1. ER alone decides match vs new, and alone assigns ids.
 2. Two concurrent resolves of the same new entity get one id.
 3. Ids never stop working: merged ids redirect; only never-issued ids `404`.

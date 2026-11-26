@@ -79,7 +79,6 @@ Ground-truth facts that matter for reading the numbers: Geographic Settlements' 
 Item tally (20): **PASS 2** (P11, P17 — both weak, healthy-path only) · **PARTIAL 4** (P2, P5, P8, P13) · **FAIL 6** (P9, P10, P14, P15, P16, P20) · **UNVERIFIED 7** (P1, P3, P4, P6, P7, P12, P18) · **not re-verified 1** (P19, accepted-cloud).
 Scenario tally (11): PASS 5 (one vacuous) · FAIL 6.
 
-
 ## S1 — static gate on `feat/part1-fixes` (`6d7c4b4`)
 
 | check | result |
@@ -97,6 +96,7 @@ Defect (P2 priority, test-only): `tests/part1/test_p19_attack.py:145` should use
 ## S2 — scorer and pass rule (fixed before the first run, confirmed by the user 2026-10-12)
 
 Scorer: `scripts/verify_local/scorer.py`. Pair counts come from the contingency table, so a giant cluster cannot exhaust memory. It reports:
+
 - pairwise TP/FP/FN/P/R/F1, split overall / within-source / cross-source;
 - B-cubed P/R/F1;
 - cluster-level exact P/R/F1;
@@ -109,10 +109,12 @@ Truth = connected components of the published mapping. For Abt-Buy, Amazon-Googl
 Predictions come from `merge_engine_entity_map` by direct SQL on the run's destination database, never from the app's status.
 
 Proof both ways:
+
 - `python -m scripts.verify_local.scorer`: synthetic; identity is perfect; an injected FP, FN, dropped record and giant cluster are each caught and named in the right stratum.
 - The same proof on all 10 real truth files (`.tmp/verify_local/scorer_proof_real.txt`): identity is perfect everywhere, and each injection is caught and named.
 
 **Pass rule per scenario** (after = `6d7c4b4`, before = `507f9d4`; same data, same scorer, cold LLM cache):
+
 1. Every metric — pairwise P/R/F1 overall, within and cross; B-cubed P/R/F1; cluster F1 — must satisfy **after ≥ before − 0.01** (absolute).
 2. No giant cluster: the largest predicted cluster is ≤ 2 × the largest *true* cluster.
 3. Over-merged clusters: after ≤ before + max(2, 1 % of true multi-member clusters).
@@ -182,6 +184,7 @@ Pre-LLM scores (`score_probe`, recall over ALL true pairs; FP@0.95 before cluste
 Priority: P0 data-corrupting · P1 wrong result · P2 quality. Nothing is classed P0: no source data was changed and nothing was written outside the benchmark destinations. The new wrong merges (D5: DBLP-ACM over-merged clusters 65 → 107) do put wrong unified rows into the destination; they are classed P1 because main writes the same kind of error at a similar rate (cross-source precision 0.925 vs 0.903). Re-class them P0 if wrong merges in the destination count as data corruption for this programme. Defect ids are stable labels; the gaps (D7, D8, D10, D11, D14) are ids retired while drafting, not missing entries. Root causes are **hypotheses** unless marked confirmed. Repro fixtures: `tests/part1/live_repros/` (each test `xfail(strict=True)`; a fix flips it to XPASS, which fails until the marker is removed). Run: `TMPDIR=$PWD/.tmp .venv311/bin/python -m pytest tests/part1/live_repros -q -p no:cacheprovider --runxfail`.
 
 ### D1 — P14: soft text similarity is quadratic in token count; Amazon-Google never finishes (P1)
+
 - Repro: `python -m scripts.verify_local.run_bench amazon_google after` (driver timeout at 140 min, still in `resolve_entities`; main's whole run 1,274 s). Offline: branch `_resolve_core` on 60 of its records 62 s, 120 records 202 s. Fixture `test_p14_text_similarity_cost_is_not_quadratic_in_tokens` (2 Amazon records, 120 + 179 tokens → 42,960 `token_sim` calls = 2·|A|·|B|). Public dataset: **Leipzig Amazon-GoogleProducts**.
 - Also at scale on short text: DBLP-Scholar (titles/authors, 66,879 records) — branch `_resolve_core` on 2,000 / 4,000 sampled records 51 s / 137 s (16k / 47k candidates, ≈ 2.9 ms per pair, 75 % in `_token_ratio`→difflib), main's whole run 620 s; see the dblp_scholar row.
 - Observed vs expected: 5.4 M `_token_ratio` calls for 926 comparison vectors (cProfile, 40 records); Amazon descriptions median 38, max 2,877 tokens. Expected: resolution time comparable to main.
@@ -190,75 +193,89 @@ Priority: P0 data-corrupting · P1 wrong result · P2 quality. Nothing is classe
 - Verify: repro test XPASS; Amazon-Google after completes and passes rules 1–5 against main; Abt-Buy and DBLP-ACM scores not lower.
 
 ### D2 — P15/P9: band answers are dropped by the API; P15 decisions and P9 memory are unreachable (P1)
+
 - Repro: `run_bench febrl4 after --tag p9r1 --oracle --memory <file>`: 3 band pairs answered `merge` through `POST /api/workflow/{id}/feedback`; SQL on `bm_dst_febrl4_after_p9r1.merge_engine_entity_map`: all 3 pairs in different clusters; the memory file was never created. Fixture `test_api_feedback_forwards_band_decisions` (no data).
 - Root cause (confirmed): `Feedback` (`src/api/main.py:260`) has no `pair_decisions` / `band_thresholds` field (pydantic drops them silently) and the route (`src/api/main.py:778-800`) forwards only the fields it lists; `src/ui/frontend/src` never sends them either (grep: 0 hits). Only tests that call `WorkflowManager.resume_workflow` directly reach `apply_band_decisions` (`src/orchestrator/workflow_manager.py:1430`).
 - Fix shape: add both fields to `Feedback` and forward them; add the per-pair merge/keep controls to the matches gate in `Gates.tsx`.
 - Verify: repro XPASS; rerun the p9r1 command: the 3 oracle pairs share a cluster id (SQL), the memory file holds 3 entries; a second run with the same memory (`--tag p9r2`) shows 0 pending pairs at the matches gate and `decisions_from_memory = 3`.
 
 ### D3 — P10: a single-entity run can never be refused for a giant cluster; the gate displays measured > threshold with violated False (P1)
+
 - Repro: every benchmark (one entity each) — e.g. plant_febrl4 after: `would_fail False` with 20 planted two-person clusters; abt_buy after: thresholds exactly 2 × measured (flagged 21 → 42, largest share 0.0069 → 0.0138). Fixture `test_p10_single_entity_giant_cluster_is_refused` (30 Febrl records, one cluster of 21 people: measured 0.69, threshold 0.50, violated False).
 - Root cause (confirmed by reading + fixture): `pre_load_gate` (`src/orchestrator/nodes/load_data.py:447`): proposals are medians over entities including the judged one; `slack` for `largest_cluster_share` (`typical = 2·median(largest) − 1`, `:483-490`) is computed from the entity itself, so `max(used, slack)` is always ≥ its own value and overrides the "never a majority" cap.
 - Fix shape: compute the median and `typical` leave-one-out (other entities only); never let slack lift a ceiling above the 1/2 cap; with no sibling entity fall back to the absolute floors/caps. This is a user-facing policy change (F4 waiver) — the user decides.
 - Verify: repro XPASS; plant_febrl4 after refuses with destination row counts unchanged (SQL before/after); febrl4 after still loads.
 
 ### D4 — P16: person names read from ONE column; 18–39 % false flags on correct person clusters (P2)
+
 - Repro: febrl4 after flags 888 of 4,989 clusters, 0 of which are wrong merges; febrl3 450 / 1,167 (1 of 8 real over-merges caught). Fixture `test_p16_true_person_pairs_are_not_flagged` (30 true Febrl4 pairs; flags the same 14 the live run flagged).
 - Root cause (confirmed): `load_data.py:183` (and `_entity_measures` `:442`) takes the name from `_best_name_field` (`resolve_entities.py:1051`), one column per record chosen per record: `given_name` when filled, else `surname`. Swapped given/surname, a missing given name, or a substituted given name then look like two people.
 - Fix shape: build the display name from all name-hint columns of the record (order-insensitive token set), or from the destination's mapped identity columns; keep the containment rule.
 - Verify: repro XPASS; febrl4 after flagged ≈ 0; plant_febrl4 still flags 20/20.
 
 ### D5 — P14 (+P20): "Addendum to X" auto-matches X; DBLP-ACM over-merged clusters 65 → 107 (P1)
+
 - Repro: `run_bench dblp_acm before|after --tag r2` → over-merged 65 → 107, cross precision 0.925 → 0.903. Fixture `test_p14_addendum_is_not_an_auto_match` (40 DBLP-ACM records, LLM off): main 0.917 (band), branch 0.968 (63 records: 0.988) for CeriFPT94 vs CeriFPT95 ("Addendum to …", 1995). Public dataset: **Leipzig DBLP-ACM**.
 - Root cause (hypothesis): the symmetric Monge-Elkan in `idf_soft_similarity` averages the two directions, so X → "Addendum to X" scores 1.0 and the rare extra token only halves one side; the year disagreement does not outweigh it. Clustering (P20, no name cut) then joins the true pair and the addendum through two confident edges.
 - Fix shape: take the weaker direction (min) or charge unmatched high-IDF tokens on either side; P20 triangle support should require the third edge to be confident too.
 - Verify: repro XPASS; DBLP-ACM after over-merged ≤ main + 2, cross precision ≥ main − 0.01.
 
 ### D6 — P14: product cross-source recall@0.70 drops 0.376 → 0.115 on Abt-Buy (P2)
+
 - Repro: `score_probe abt_buy before|after`. Full dataset needed (**Leipzig Abt-Buy**); no small fixture (scores depend on corpus statistics).
 - Root cause (hypothesis): the same soft-similarity change lowers product names with codes ("Denon DP-29F" vs "DP29F") below 0.70; the 0.90/0.70 level cut-offs were carried over from difflib (HANDOFF P14 debt).
 - Fix shape: recalibrate the level cut-offs against labelled data (needs P13/§2.17 calibration).
 - Verify: score_probe abt_buy after recall@0.70 ≥ main − 0.01.
 
 ### D9 — P2: pairs removed by block filtering are never counted as pairs (P2, reporting)
+
 - Repro: `blocking_probe abt_buy after`: G − C = 1,213,649 distinct pairs vs `pairs_pruned_by_meta_blocking` 161,535 + `pairs_pruned_by_purging` 0 (+ "25,489 block memberships filtered", a membership count).
 - Root cause (hypothesis): `_generate_candidate_pairs` (`resolve_entities.py:1152`) counts block filtering in memberships, not pairs.
 - Fix shape: count distinct pairs lost to block filtering; `G − C` must equal the reported pruned pairs.
 - Verify: blocking_probe on Abt-Buy and febrl4: G − C = sum of reported pruned counts.
 
 ### D12 — P13: precision at the auto-match bar lower before clustering (P2)
+
 - Repro: `score_probe <scenario> before|after`: FP@0.95 febrl4 1 → 44, febrl3 0 → 41, dblp_acm 636 → 814 (dblp precision at the bar 0.760 → 0.728).
 - Root cause (hypothesis): u from random pairs (P13) makes agreements look rarer, so more pairs cross 0.95; on persons clustering conflict repair removes them, on DBLP it does not.
 - Fix shape: calibrate the score (Platt/isotonic, debt row 16) or keep the bar relative to the fitted model.
 - Verify: score_probe FP@0.95 not above main on the three sets.
 
 ### D13 — P8: one LLM call per pair multiplies wall time; parallel runs fail preflight (P2)
+
 - Observed: after/before wall febrl3 1,085 / 316 s, dblp_acm 1,716 / 415 s, geo 673 / 285 s, abt_buy 1,047 / 443 s; ≈ 200 calls per entity vs 4–6. With the LAN endpoint serving ~1 request at a time, a second app's preflight ("LLM reachable", 45 s) failed three times during this verification. LLM-decided merges on products: 2 of 34 correct (Abt-Buy), vs 37/37 on persons.
 - Fix shape: user decision (report P8 accepted the cost); a per-run LLM budget in seconds, and not sending pairs from entities where the LLM's measured precision is low.
 
 ### D15 — P15: the matches gate lists at most 50 band pairs; the rest stay separate unseen (P2)
+
 - Observed: Abt-Buy after: `band_summary.predicted_counts.possible` 1,330, `pending_merge_candidates` 50 (`_MAX_PENDING_CANDIDATES = 50`, `resolve_entities.py:203`, slice at `:871`; the cap pre-dates Part 1, main `:198`).
 - Fix shape: page the band at the gate, or say "50 of N shown" in the payload.
 
 ### D16 — MusicBrainz: one cluster of 14 records against a largest true cluster of 5 (P2, not root-caused)
+
 - Repro: `run_bench musicbrainz before|after` → largest 10 → 14 (rule 2 limit 10); over-merged clusters fall 136 → 124, so this is one outlier, not a trend.
 - Root cause: **not investigated** (time went to D1–D5). First step: list that cluster's titles/artists by SQL (`bm_dst_musicbrainz_after_r1`, largest `cluster_id` in `merge_engine_entity_map`) and check whether it is a D5-style chain (same title, different recordings) joined by two confident edges.
 - Verify: largest cluster ≤ 10 on MusicBrainz after.
 
 ### Pre-existing (also on main; not caused by Part 1)
+
 - **PRE-D1 — a name-only entity never merges (P1).** Affiliations: 0 of 16,795 true pairs on both; max score over 30,593 scored pairs 0.109; identical "INRIA Rocquencourt" 0.058 (branch) / 0.085 (main). Fixture `test_identical_names_in_a_name_only_entity_reach_the_band`. Hypothesis: the heuristic/model needs more than one agreeing field to leave the exclude zone. Dataset: **Leipzig Affiliations**.
 - **PRE-D2 — product variants auto-merge (P1).** Abt-Buy "Omnimount … 20WLBK" vs "… 20WLWH" (records `abt:10101`, `abt:10102`) score 0.957 on the full corpus (0.03 on 40 records, so no small fixture); largest cluster 16 (main 19). Hypothesis: model codes differing in a suffix are not treated as conflicting identifiers. Dataset: **Leipzig Abt-Buy**.
 - **PRE-D3 — "Event loop is closed" on the first JSON-mode LLM call (P2).** Both versions log `json_object response_format rejected by endpoint, retrying without it: Event loop is closed` (`src/llm/client.py:302-304`), which sets `_json_mode_unsupported` for that client.
 - **Test infra (P2):** `tests/part1/test_p19_attack.py:145` shells out to `.venv/bin/python` (3.14); use `sys.executable`.
 
 ## UNVERIFIED (and why)
+
 - P1, P3, P4, P7, P12, P17 (broken-table half), P18 (numeric alert): need the user's origins / destination (S5); public single-table benchmarks have none of the structures.
 - P6: no public dataset with parent/subsidiary truth was found.
 - P19: accepted-cloud; not re-run, but its counting is consistent with the probes.
 
 ## S4 — gate
+
 Six scenarios fail the pass rule (plant_febrl4, abt_buy, dblp_acm, amazon_google, musicbrainz, dblp_scholar). Per the brief: **STOP**. The user decided (2026-10-13): hand off first; S5 runs later on the branch with D1–D5 fixed (with D1, a 16-entity run on the user's data may not finish; with D2, P9/P15 cannot be checked there either). S5 still needs from the user: origin hosts/credentials (env var names), a restored `ground_truth`, a disposable `global_warehouse` per report §0.7.
 
 ## USER DECISIONS (from PHASE5_REPORT.md — not decided here; one deciding fact each)
+
 1. **CI does not run `tests/part1`.** Deciding fact: the full suite runs in 69 s locally and its only failure is the `.venv` interpreter path (S1); the `P10_BASE_REV`-style git-revision tests are the remaining obstacle for a shallow CI clone.
 2. **Audit cuts that need accepted tests rewritten.** Deciding fact: P20's verdict here is FAIL on DBLP-ACM over-merging (D5); the unreachable cohesion code is the obvious place a fix might want to live, so deleting it now could be premature.
 3. **`sql_lineage.py` has no caller.** Deciding fact: no benchmark run touched it; graph + grep still show only its own unit test.
@@ -267,6 +284,7 @@ Six scenarios fail the pass rule (plant_febrl4, abt_buy, dblp_acm, amazon_google
 6. **ADR 0014 superseded by P2.** Deciding fact: live data confirms the supersession (main truncates at 250,000 pairs and over-reports `uncompared_pairs` ×2.1 on febrl4; the branch never truncates).
 
 ## Regenerate
+
 ```
 python -m scripts.verify_local.load_bench all                       # origins + truth on 127.0.0.1:5439
 python -m scripts.verify_local.scorer                               # scorer self-proof
@@ -277,6 +295,7 @@ python -m scripts.verify_local.score_probe <scenario> before|after
 python -m scripts.verify_local.audit_probe <scenario> before|after
 TMPDIR=$PWD/.tmp .venv311/bin/python -m pytest tests/part1/live_repros -q -p no:cacheprovider --runxfail
 ```
+
 (`.venv311/bin/python`, `TMPDIR=$PWD/.tmp`; the main worktree: `git worktree add --detach .tmp/wt_main origin/main`; bench server: `docker run -d --name merge_bench_pg -p 127.0.0.1:5439:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17`.)
 
 ## Phase 6 — fix queue (cloud, 2026-10-13)

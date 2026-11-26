@@ -59,6 +59,7 @@ rebuild it. `affected "X"` returning nothing means the *graph* sees no caller �
 confirm with grep before deleting anything.
 
 2.3 **Ponytail, all six commands, used for real.**
+
 - `/ponytail` full — the ladder: does it need to exist → already in this codebase →
   stdlib → native → installed dependency → one line → minimum code.
 - Every non-trivial branch leaves **one** runnable check; deliberate corners carry a
@@ -194,6 +195,7 @@ and `global_warehouse` wiped — the user must rebuild them locally from
 local verification pass).
 
 **Rules for the split:**
+
 - An item is fully implemented even when its live check is deferred; it is marked
   `unverified-live`, never `accepted-cloud`, and never silently "done".
 - Synthetic tests are *evidence of mechanism*, not proof the live numbers moved. The

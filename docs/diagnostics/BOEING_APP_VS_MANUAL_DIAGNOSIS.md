@@ -27,6 +27,7 @@ happens, with the evidence captured live from the run.
 ## The pipeline, and where it broke (in order)
 
 ### 1. `parse_request` — breadth is capped here, at the very first step (ROOT CAUSE)
+
 The LLM was healthy (it later decided field mappings correctly), so this is the
 **prompt**, not a model failure. `request_parsing.system.txt` pins output to a fixed
 **7-type enum** and its *"Company Wildcards"* rule expands *"all information about
@@ -48,6 +49,7 @@ planned, never extracted. Everything downstream is powerless to recover a concep
 `parse_request` never emitted.
 
 ### 2. `extract_data` — the wildcard's `product` turns "no products" into a hard error
+
 There is no product table in these origins, so extraction raised
 **`DataQualityError` (disposition: escalate)** and *halted the whole run* at an error
 gate: *"no source table could be found for entity(s): product"* — repeated 8×. I had
@@ -58,9 +60,11 @@ What it *did* extract for the two real entities: `company: 36` (18 origin1 + 18
 origin2), `person: 39` (origin1 only — origin2 persons matched 0 under Boeing scope).
 
 ### 3. `resolve_entities` — cross-origin matching collapsed (SECOND ROOT CAUSE)
+
 ```
 company: 36 records → 34 clusters   auto_matched=0  auto_excluded=141  llm_scored=0
 ```
+
 Only 2 of 36 company records merged; the main Boeing from each origin stayed
 **separate**. Why: the matcher's term-frequency weighting is correct for general
 dedup but **backfires in a scoped single-subject merge** — the token *"Boeing"*
@@ -73,11 +77,13 @@ The matches HITL gate was then **auto-skipped**: *"0 auto-matched, 141 auto-excl
 nothing was ambiguous."*
 
 ### 4. `unify_entities` — survivorship never engaged
+
 `total_conflicts = 0`. Because nothing merged, there were no field conflicts to
 resolve, so the per-attribute policy (and its known "completeness = string length"
 weakness) never even ran. There was no golden record to build.
 
 ### 5. `map_fields` — first-5-record sampling drops fields; columns proliferate
+
 The person mapping mapped origin1's `name` → a **new** `full_name` column, but
 origin2's `firstName/lastName/middleName` **were not in the sampled unified schema**
 (built from the first 5 records / 3 values) and so were absent from the mapping — they
@@ -87,17 +93,20 @@ existing schema (company: phone, rank, motto, ceo_name, total_investment, …; p
 full_name, role, …).
 
 ### 6. `load_data` — atomic load crashed on a type mismatch; 0 rows committed
+
 ```
 invalid input syntax for type double precision: "$1 Million"
 Load failed for entity 'company'  →  load_rolled_back: true
 load_failed_entities: [company, person]
 ```
+
 origin2's `revenue` is a human-readable **string** (`"$1 Million"`, from *Boeing
 Employees Tennis Club*), mapped straight into the numeric `revenue` column with no
 parsing. Because the load is one atomic transaction, the **entire** company+person
 load rolled back — **0 rows written**.
 
 ### 7. Side effect — the schema ALTERs did **not** roll back
+
 The 23 `ADD COLUMN`s committed **permanently** even though the data load failed
 (schema changes commit outside the data transaction), and a `merge_engine_entity_map`
 table was created. A failed run still mutates the destination schema. (I dropped all
@@ -108,6 +117,7 @@ table was created. A failed run still mutates the destination schema. (I dropped
 ## Answers to your three questions
 
 ### Should we improve the prompts? — **Yes. Highest ROI, smallest change.**
+
 The breadth ceiling is 100% the `request_parsing` prompt. Widening the enum and
 rewriting the "Company Wildcards" rule so *"all information about X"* expands to the
 full related-concept set (and making `product` conditional on a product table
@@ -117,7 +127,9 @@ existing) is the single biggest win and touches one file
 company entity it *did* handle failed to match and failed to load.
 
 ### Should we change the architecture? — **Partially, and it's the durable fix.**
+
 Two architectural gaps the prompt can't fix:
+
 - **Breadth should be schema-driven, not enum-driven.** "Everything about X" should be
   derived from the *actual origin FK/reference graph* around the subject (company →
   its financials, technographics, relations, people, locations, contacts…), not from a
@@ -128,6 +140,7 @@ Two architectural gaps the prompt can't fix:
   collapsing. This is a targeted change in `resolve_entities.py`, not a rewrite.
 
 ### Should we add a manager / orchestrator agent? — **Optional; it's the clean home for the above, not a prerequisite.**
+
 A planner ("manager") agent that, given a subject, walks the origin schema graph and
 emits the full table-closure + per-entity match/link plan is the natural place to put
 schema-driven breadth. It's worth it if you want this to generalize beyond companies —
@@ -152,6 +165,7 @@ produced **0 merges**, there wasn't even a single Boeing golden record. A busine
 asking "tell me everything about Boeing" would receive an empty warehouse.
 
 **Data-quality red flags an analyst would flag immediately:**
+
 - **No unified subject.** origin1-Boeing and origin2-Boeing stayed as two separate rows
   (141 pairs auto-excluded, 0 matched). Any `COUNT(DISTINCT company='Boeing')` is ≥2, and
   the NYSE:BA financial profile (origin2) never joins the legal/founding profile (origin1).
@@ -163,6 +177,7 @@ asking "tell me everything about Boeing" would receive an empty warehouse.
   mapping sample, so destination-native name columns would have loaded empty.
 
 **Ideas & suggestions (analyst lens):**
+
 1. **Emit a data-quality scorecard per run** — rows loaded / staged / dropped by table;
    % of subject records unified; type-coercion failure count. This run scores 0% loaded.
 2. **A "subject unification ratio"** (`unified_records / extracted_total` for the subject)

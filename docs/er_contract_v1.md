@@ -92,6 +92,7 @@ sequenceDiagram
 200 OK
 { "status": "ok", "version": "1.4.2" }
 ```
+
 Any non-200, or a response slower than about 2 s, means "not ready". We will not start publishing.
 
 ### 4.2 `GET /v1/entity-types`
@@ -135,6 +136,7 @@ Tells us what ER supports, so we don't hard-code ER's rules.
 ### 4.3 `POST /v1/entities:search` (batch)
 
 **Request**
+
 ```json
 {
   "items": [
@@ -163,6 +165,7 @@ Tells us what ER supports, so we don't hard-code ER's rules.
 | `limit` | no | Max candidates to return. Default 5, max 20. |
 
 **Response**
+
 ```json
 200 OK
 {
@@ -185,6 +188,7 @@ Tells us what ER supports, so we don't hard-code ER's rules.
 ```
 
 Rules we rely on:
+
 1. **One result per request item**, in any order, linked by `item_id`.
 2. **`candidates` is sorted by `score`, highest first.** `score` is between 0 and 1, and is comparable between candidates of the same entity type.
 3. **Empty list = no realistic candidate.** ER decides its own minimum score for listing a candidate.
@@ -295,6 +299,7 @@ Rules we rely on:
 | Temporary failure | `500`, `502`, `503`, `504`, timeout | Retry 3 times with backoff. After that we pause publishing and keep all data until ER is back. |
 
 Error body (all errors):
+
 ```json
 { "error": "VALIDATION_FAILED", "message": "human readable text", "fields": { "name": "required" } }
 ```

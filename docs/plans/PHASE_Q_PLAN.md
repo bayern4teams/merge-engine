@@ -5,6 +5,7 @@
 > complete (see `TODO.md`). Everything below is NEW work.
 >
 > **Hard constraints (carry through every step):**
+>
 > - Work only inside `D:\transfer\merging`. Never touch parent folders.
 > - Always `conda activate na180` before running Python, tests, or the app
 >   (deps: duckdb, structlog, fastapi, asyncpg, clickhouse-connect, pymongo live
@@ -26,6 +27,7 @@
 > (direct SQL/log/report inspection, never the app's own success message alone).
 > Do this **immediately after** each task, not batched at the end of a phase. If
 > a task cannot be verified live, it is NOT done — leave it unchecked and say why.
+>
 > - Match the existing house style: one file per node, typed `MergeState`,
 >   `logger.debug("ENTER …")`/`"EXIT …"` in every node, tests co-located in
 >   `tests/unit/test_*.py`, golden evals in `tests/eval/`.
@@ -53,6 +55,7 @@ repo; and direct reads of the graph, load, and map-fields nodes. The four
 strategic decisions below were confirmed with the user before writing.
 
 ### Decisions locked (user answers, 2026-07-25)
+
 1. **Splink = add as an OPTIONAL engine.** Keep the current hand-rolled
    Fellegi–Sunter matcher as the default (it scores precision/recall 1.0 on our
    eval). Add Splink as a per-entity selectable engine behind the existing
@@ -130,16 +133,19 @@ Researched each via its GitHub README (WebFetch). Grouped by our decision.
 ## Q.1 — Splink as an optional per-entity matching engine
 
 ### Goal
+
 Let a run choose, per entity type, between `engine: "builtin"` (today's matcher,
 default) and `engine: "splink"`. Zero behaviour change when unset.
 
 ### Where it plugs in (the seam)
+
 `src/mcp_server/tools/resolve_entities.py` → `resolve_entities_impl(entity_type,
 records, blocking_keys, llm_config, known_cluster_ids, matching_rules)` at
 **line 158**. This is the ONLY function the node calls. Everything downstream
 (blocking, `_fit_match_model`, `_score_pair`, `_build_clusters`) lives inside it.
 
 **Do NOT rewrite `resolve_entities_impl`.** Instead:
+
 1. Add `engine = (matching_rules or {}).get("engine", "builtin")` near the top
    (after the rule-resolution block, ~line 245).
 2. If `engine == "splink"` and Splink is importable, delegate to a NEW module
@@ -148,6 +154,7 @@ records, blocking_keys, llm_config, known_cluster_ids, matching_rules)` at
 3. Otherwise fall through to the existing code unchanged.
 
 ### The result-dict contract `resolve_with_splink` MUST reproduce (line 331–351)
+
 ```python
 {
     "entity_type": str,
@@ -171,6 +178,7 @@ records, blocking_keys, llm_config, known_cluster_ids, matching_rules)` at
 ```
 
 ### The 8 project invariants Splink does NOT give you — you must layer them on
+
 (the built-in matcher earns its keep via these; a naïve Splink swap breaks them):
 
 1. **Three-way decision, not binary.** Splink emits a probability. You must still
@@ -218,6 +226,7 @@ records, blocking_keys, llm_config, known_cluster_ids, matching_rules)` at
    matcher. Do not modify it.
 
 ### Splink integration sketch (`splink_matcher.py`)
+
 - Use Splink's **DuckDB backend** (`splink.duckdb`). Feed it a pandas DataFrame of
   the projected comparison view (invariant 6a). We already depend on pandas
   (used by `spool._bulk_insert`) and duckdb.
@@ -234,10 +243,12 @@ records, blocking_keys, llm_config, known_cluster_ids, matching_rules)` at
   falls back to the builtin engine** (never crash a run over an optional engine).
 
 ### Config surface (also fixes a dead feature)
+
 The `matching_rules` config (`{entity: {blocking_keys, unique_id_fields,
 strictness, engine}}`) exists in state (`graph.py:468`) and profiles
 (`profiles.py:47`, `PINNED_KEYS`) but **no UI/API writes it today** — every run
 uses defaults. Add a minimal authoring path so `engine: "splink"` is reachable:
+
 - **Backend:** extend the profile create/read endpoints
   (`src/api/main.py`, routes `POST/GET /api/profiles`) to accept/return a
   `matching_rules` object. It already round-trips through `profiles.py`.
@@ -249,12 +260,14 @@ uses defaults. Add a minimal authoring path so `engine: "splink"` is reachable:
   `extraction_config["max_comparisons"]` is read — nothing reads it) while here.
 
 ### Dependency
+
 Add `splink>=4.0.0` to `requirements.txt` and `pyproject.toml`. Confirm it
 imports under `na180` (`python -c "import splink; print(splink.__version__)"`).
 If it drags an incompatible duckdb pin, gate the import lazily inside
 `splink_matcher.py` so the rest of the app is unaffected.
 
 ### Tests (Q.1)
+
 - `tests/unit/test_splink_matcher.py` (new): result-dict shape parity; cluster-id
   reuse via `known_cluster_ids`; identity-conflict veto still holds; graceful
   fallback when `import splink` raises (monkeypatch).
@@ -271,11 +284,13 @@ If it drags an incompatible duckdb pin, gate the import lazily inside
 ## Q.2 — Great Expectations data-quality validation gate
 
 ### Goal
+
 After extraction, before resolution, validate each entity's extracted rows and
 surface the results in the reconciliation report (and optionally pause on hard
 failures). Today there is **no data validation anywhere** in the pipeline.
 
 ### Where it plugs in
+
 New node `validate_data` inserted in `src/orchestrator/graph.py` **between
 `extract_data` and `resolve_entities`** (current order at `graph.py:320-321`).
 Rewire the `extract_data → resolve_entities` edge to
@@ -283,12 +298,14 @@ Rewire the `extract_data → resolve_entities` edge to
 `builder.add_node("validate_data", validate_data, retry_policy=NETWORK_RETRY)`.
 
 ### Files
+
 - `src/orchestrator/nodes/validate_data.py` (new node, house style).
 - `src/mcp_server/tools/data_quality.py` (new — the GX logic, so the node stays
   thin, mirroring how nodes delegate to `tools/`).
 - `src/orchestrator/nodes/__init__.py` — export `validate_data`.
 
 ### Logic (`data_quality.py`)
+
 - Read each entity's rows from the spool (`spool.read_all(entity)` /
   `entity_rows(state, entity)` — same accessor the matcher uses,
   `nodes/resolve_entities.py:74`). Load into a pandas DataFrame (flatten the JSON
@@ -309,6 +326,7 @@ Rewire the `extract_data → resolve_entities` edge to
   column, observed, severity}]}}`. `severity` ∈ `{"warn","fail"}`.
 
 ### State + report wiring
+
 - Add `quality_report: dict` to `MergeState` (`graph.py` TypedDict) and init to
   `{}` in both `get_initial_state()` branches.
 - The node returns `{"quality_report": …}`.
@@ -320,6 +338,7 @@ Rewire the `extract_data → resolve_entities` edge to
   warnings").
 
 ### Behaviour on failure
+
 - `severity: "warn"` → record only, never block.
 - `severity: "fail"` (e.g. an entity with 0 rows, or a declared-unique column with
   duplicates) → set a flag the final-approval gate shows prominently, but **do NOT
@@ -338,6 +357,7 @@ Rewire the `extract_data → resolve_entities` edge to
   report, never crashes the run (same posture as dest-dedup in Phase P).
 
 ### Dependency
+
 Add `great-expectations>=1.0.0` to `requirements.txt` + `pyproject.toml`. GX 1.x
 pulls a fair few transitive deps — confirm under `na180` and confirm it does not
 conflict with our pandas/duckdb pins. If it's too heavy, the fallback is
@@ -345,6 +365,7 @@ conflict with our pandas/duckdb pins. If it's too heavy, the fallback is
 try GX first per the user's choice.
 
 ### Tests (Q.2)
+
 - `tests/unit/test_data_quality.py` (new): unique-violation detected; 0-row entity
   flagged `fail`; clean data → all pass; GX-import-failure path degrades
   gracefully.
@@ -359,11 +380,13 @@ try GX first per the user's choice.
 ## Q.3 — Column-level lineage in the reconciliation report
 
 ### Goal
+
 For each destination table.column, record which origin table.column(s) fed it —
 so the report answers "where did `companies.name` come from?" Today the report has
 per-entity counts but no field-level provenance.
 
 ### Data we already have (no new extraction needed)
+
 - `field_mappings[entity]` = `{source_field: {target_field/column,
   requires_schema_change, …}}` — the origin→dest field map, produced by
   `map_fields` (`nodes/map_fields_node.py:188`, structure confirmed).
@@ -388,11 +411,14 @@ per-entity counts but no field-level provenance.
   `save_entity_map`). Record this limitation in the report/lineage docs.
 
 ### Where it plugs in
+
 Two complementary pieces:
+
 1. **Field-level lineage from `field_mappings`** (the primary deliverable). New
    helper `build_lineage(state)` in a new module
    `src/orchestrator/utils/lineage.py`, called from `build_reconciliation_report`
    (`load_data.py`). Output shape:
+
    ```python
    "lineage": {
      "&lt;entity&gt;": {
@@ -404,6 +430,7 @@ Two complementary pieces:
      }, ...
    }
    ```
+
    Populate `sources` by joining `field_mappings[entity]` (source_field →
    dest_column) with, for each source_field, the set of `(origin_id,
    origin_table)` that actually carried that field — derived by sampling the
@@ -416,17 +443,20 @@ Two complementary pieces:
    and ship piece (1) alone — piece (1) is the user-visible win.
 
 ### Report + UI wiring
+
 - Add `"lineage"` to the report dict returned by `build_reconciliation_report`
   and written to `logs/run_reports/<run_id>.json`.
 - Small UI: a collapsible "Lineage" section on the final summary in `Gates.tsx`
   rendering, per entity, a `dest_column ← origin_table.source_field` list.
 
 ### Dependency
+
 Add `sqlglot>=25.0.0` to `requirements.txt` + `pyproject.toml` (zero-dependency,
 safe). `sqllineage` is NOT required (heavier, sqlfluff-based) — only reach for it
 if `sqlglot.lineage` proves insufficient; note as fallback.
 
 ### Tests (Q.3)
+
 - `tests/unit/test_lineage.py` (new): given a `field_mappings` + spooled rows
   fixture, `build_lineage` maps each dest column to the right origin sources;
   a created column is flagged; a field present in two origins lists both sources.
@@ -438,7 +468,9 @@ if `sqlglot.lineage` proves insufficient; note as fallback.
 ## Q.7 (completes the deferred P.7) — Real ClickHouse sample databases setup (`origin1` & `origin2`) — [x] COMPLETED (2026-07-28)
 
 ### Goal
+
 Stand up and verify the user's real ClickHouse databases located in `sample_databases/`:
+
 1. `origin1`: complete ClickHouse database dump located in `sample_databases/origin1/origin1_2026-07-26_095508`. Created database `origin1` and its 13 tables (`Company`, `Person`, `CompanyContact`, `CompanyExperience`, `Location`, `CompanyIndustry`, etc.).
 2. `origin2`: sample ClickHouse SQL dumps located in `sample_databases/origin2_sample/` (`Company_modified.sql`, `Person_modified.sql`, `Location_modified.sql`, `Experience_modified.sql`, `CompanyIndustry_modified.sql`, `PersonContact_modified.sql`, `Industry_modified.sql`). Populates database `origin2`.
 
@@ -462,6 +494,7 @@ Stand up and verify the user's real ClickHouse databases located in `sample_data
 ## Q.8 — PostgreSQL destination from the Global Warehouse schema — [x] COMPLETED (2026-07-29)
 
 ### Goal
+
 Origins are now real (`origin1`/`origin2` in ClickHouse, Q.7). The destination
 side of every subsequent demo/verification still points at whatever ad hoc
 `main_dest` earlier phases seeded. Stand up the destination schema the user
@@ -473,6 +506,7 @@ ClickHouse origins, on a **non-native port** (host Postgres already occupies
 any earlier ephemeral 5433/5434 seed containers from prior phases).
 
 ### Critical fact the implementing agent MUST know before starting
+
 **The `01_company.sql` … `07_technographic.sql` files the ER_DIAGRAM's own
 "Table Summary" table names do not exist anywhere in the repo.** Confirmed by a
 full `find` over `sample_databases/`: only `ER_DIAGRAM.md` and `ER_DIAGRAM.html`
@@ -490,6 +524,7 @@ insert any rows of any kind — the destination must come up as a completely
 empty schema: tables, columns, and constraints only.
 
 ### The 25 tables (from the ERD, for the agent's own bookkeeping)
+
 `industry, location, company, company_relation, person, skill, education,
 experience, person_skill, contact_email, contact_phone, contact_social,
 product_category, product, contract, contract_entity, contract_product,
@@ -506,6 +541,7 @@ finance_budget), `07_technographic.sql` (technologic_category, technologic),
 the doc's own estimate).
 
 ### Type translation (ERD type → PostgreSQL type)
+
 `BIGINT id PK` → `BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY` (or
 `BIGSERIAL PRIMARY KEY`, matching the house style already used elsewhere for
 Postgres DDL, e.g. `_pg_ddl_type()` in `postgresql_destination.py`); `string` →
@@ -519,10 +555,12 @@ the top of `ER_DIAGRAM.md` (e.g. `company.industry_id → industry.id`,
 constraints, not one.
 
 ### Docker Compose change
+
 Add a second service to the existing `sample_databases/docker-compose.yml`
 (alongside `Sample_Database`, the ClickHouse container) — do not create a
 separate compose file, so `docker compose -f sample_databases/docker-compose.yml
 up -d` still brings up the whole sample-data stack in one command:
+
 ```yaml
   postgres_destination:
     image: postgres:17
@@ -542,6 +580,7 @@ up -d` still brings up the whole sample-data stack in one command:
       timeout: 5s
       retries: 10
 ```
+
 - **Port availability check first**: `netstat -ano | findstr "55432"` — this
   session confirmed `5432` is occupied by a native Windows Postgres service and
   `55432` was free; re-verify at implementation time in case anything changed.
@@ -554,6 +593,7 @@ up -d` still brings up the whole sample-data stack in one command:
   prefixes matter and must be preserved.
 
 ### What to build
+
 1. Author `sample_databases/destination/sql/01_company.sql` through
    `07_technographic.sql` — real `CREATE TABLE` DDL for all 25 tables, FKs
    included, matching the ERD exactly (do not add columns not in the diagram;
@@ -569,6 +609,7 @@ up -d` still brings up the whole sample-data stack in one command:
    container's host/port/credentials, alongside the existing ClickHouse entry.
 
 ### Tests / Verification
+
 - No new Python unit tests are required (this is infrastructure/data, not
   application code) — verification is entirely live, per the plan's
   IMPORTANT COMMAND:
@@ -648,6 +689,7 @@ Run each phase's tests green before moving on; then the end-to-end live proof:
    (`cd src/ui/frontend && npm run build`, `npx tsc --noEmit` clean).
 
 ## Honest scope note
+
 This is now five substantial, independent work-streams; Q.7 is complete. Implement
 the rest in the priority order above (Q.8 → Q.2 → Q.3 → Q.1), each stopping for
 user go-ahead. Splink is the only one with real integration risk (the 8

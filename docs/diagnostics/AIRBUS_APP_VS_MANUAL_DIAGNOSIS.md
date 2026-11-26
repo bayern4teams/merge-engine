@@ -30,7 +30,9 @@ records but could not unify a single one of them.
 ## The pipeline, and where it broke (in order)
 
 ### 1. `parse_request` — breadth is capped at the first step (ROOT CAUSE, shared with Boeing)
+
 Captured at the deps gate:
+
 ```
 target_entities = ["company", "person", "product"]
 entity_tables   = { company: [o1.Company, o2.Company],
@@ -40,6 +42,7 @@ table_selection_notes: "No product tables found; CompanyExperience and Experienc
   contain person-related fields but are relationship/event tables rather than
   person entities."
 ```
+
 The `request_parsing.system.txt` 7-type enum + "Company Wildcards" rule expands
 *"all information about Airbus"* to only `company, person, product`. So **financials
 (28 rows, 1999–2025), technographics (2,118), relations (572), industries, locations,
@@ -48,20 +51,25 @@ all** and are never extracted. Note the table selections came from `source: "heu
 (alias matching, confidence 0.8), not even a considered LLM table pick.
 
 ### 2. `extract_data` — the wildcard's `product` turns "no products" into a hard error
+
 ```
 DataQualityError (disposition: escalate)
 "no source table could be found for entity(s): product"   (repeated 8×)
 context.rows_kept = { company: 20, person: 32 }
 ```
+
 Same as Boeing: the unconditional `product` in the wildcard makes a valid company-only
 corpus **fail by default**. I had to choose **Skip** to continue.
 
 ### 3. `resolve_entities` — every Airbus record stayed separate (SECOND ROOT CAUSE)
+
 From the reconciliation report:
+
 ```
 company: extracted o1=7 + o2=13 = 20  →  clusters_formed=20
          candidate_pairs_compared=171  auto_merged_clusters=0  conflicts=0
 ```
+
 **20 Airbus company records went in; 20 came out.** Airbus SE, Airbus SAS, the five
 Defence-and-Space subsidiaries, and all 13 origin2 shards were each left as their own
 "unified" record. This is the same term-frequency backfire that sank Boeing — the token
@@ -75,6 +83,7 @@ Person matching *did* work partially — 32 → 30 clusters, `auto_merged_cluste
 so this is intra-origin dedup, not cross-origin unification.
 
 ### 4. `unify_entities` — company survivorship never engaged; person used a weak rule
+
 `company.conflicts=0` because nothing merged. For persons, the 7 conflicts were resolved
 by `conflict_winning_rules = { first_seen: 5, completeness: 2 }` — i.e. "whichever record
 we saw first" won 5 of 7 fields, and "longest string" won the other 2. There is no
@@ -82,6 +91,7 @@ per-attribute authority (identity←origin1, revenue←financials) of the kind t
 applied.
 
 ### 5. `map_fields` — 21 brand-new columns instead of aligning to the schema
+
 The mapper proposed **21 `ADD COLUMN`s** (company: phone, rank, alexa_rank, revenue_range,
 company_type, industry_category, motto, logo_url, tags, total_investment,
 investment_currency, is_public, is_non_profit, is_acquired, is_dissolved, ceo_name,
@@ -90,12 +100,14 @@ mapped origin2's human-readable `revenue` **string** straight onto the numeric `
 column with no coercion — the seed of the load crash.
 
 ### 6. `load_data` — atomic load crashed on a type mismatch; 0 rows committed
+
 ```
 invalid input syntax for type double precision: "$6.1 Million"
   ...'www.airbusdshouston.com', '$6.1 Million'...
 Load failed for 2 entity type(s): company, person.
 Nothing was committed for them; watermarks were not advanced.
 ```
+
 origin2's `revenue` is a human string (`"$6.1 Million"`, from *Airbus DS Houston*),
 mapped into the numeric `revenue` column. Because the load is one atomic transaction,
 the **entire** company+person load rolled back — **0 rows written**. (Airbus's data is
@@ -103,6 +115,7 @@ even more crash-prone than Boeing's: its shards carry `"$6.7 Billion"`, `"$51.8 
 `"$40.1 Million"` — any one triggers the same abort.)
 
 ### 7. Side effect — the schema ALTERs did **not** roll back
+
 The 21 `ADD COLUMN`s committed **permanently** (company 14→31 cols, person 9→13) even
 though the data load failed, and a `merge_engine_entity_map` table was created (26 tables).
 A failed run still mutates the destination schema. (I dropped all 21 columns + the helper
@@ -113,6 +126,7 @@ table to restore the pristine 25-table schema.)
 ## Answers to the architecture / prompt / manager-agent questions (Airbus-specific)
 
 ### Should we improve the prompts? — **Yes, still the highest-ROI single change.**
+
 The breadth ceiling is 100% the `request_parsing` prompt: 8 of 11 families never had an
 entity type, so the app couldn't have loaded Airbus's 28-year financial history,
 2,118 technologies, or 572 relations no matter what happened downstream. Widen the enum,
@@ -121,6 +135,7 @@ conditional. **But the prompt alone would still leave Airbus with 20 un-merged c
 rows and a crashed load.**
 
 ### Should we change the architecture? — **Yes; Airbus proves two gaps the prompt can't fix.**
+
 - **The matcher needs a scoped-merge mode.** Airbus is the cleanest possible demonstration:
   171 candidate pairs compared, **0 merged**, because the subject token is in every record.
   In a single-subject run the subject token must be exempt from TF down-weighting, and
@@ -130,6 +145,7 @@ rows and a crashed load.**
   loaded *something* if the load were per-entity instead of all-or-nothing.
 
 ### Should we add a manager / orchestrator agent? — **Optional; it's the clean home for schema-driven breadth + entity-graph reasoning.**
+
 A planner that walks the origin FK graph around "Airbus" would both (a) pull in the 8
 missing families and (b) recognise SE↔SAS↔Defence-and-Space as one corporate group. Worth
 it if you want this to generalise, but you can capture ~80% of the Airbus gap with the
@@ -150,6 +166,7 @@ before load, it staged 20 companies + 30 persons = 50 records across **2 of 11 t
 Airbus" would receive an empty warehouse.
 
 **Data-quality red flags an analyst would flag immediately:**
+
 - **Duplicate-entity explosion.** 20 "Airbus" companies with no golden record means any
   `GROUP BY company` or `COUNT(DISTINCT company)` metric would be inflated ~20× for the
   subject. Revenue/employee roll-ups would be meaningless (they'd sum 20 fragments, or
@@ -164,6 +181,7 @@ Airbus" would receive an empty warehouse.
   and unauditable.
 
 **Ideas & suggestions (analyst lens):**
+
 1. **Emit a data-quality scorecard per run** — rows loaded / rows staged / rows dropped,
    by table; % of subject records unified; count of type-coercion failures. This run would
    score 0% loaded and would have surfaced the crash as a red KPI, not an 8-line error log.

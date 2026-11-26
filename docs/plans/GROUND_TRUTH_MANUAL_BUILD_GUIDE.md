@@ -9,6 +9,7 @@ company, older destinations): `scripts/goldens/boeing_manual_merge.py`,
 `airbus_manual_merge.py`, `lockheed_manual_merge.py`.
 
 **Decisions locked by the user (2026-09-16):**
+
 1. **Rebuild from scratch** — truncate `kg` fact/entity tables first; keep only the
    reference vocabularies (`taxonomy*`, `fact_predicate`, `relationship_type`).
 2. **Seed families + 3-hop chain expansion.** Hop companies are real entities (full
@@ -70,6 +71,7 @@ confirmed column-by-column. Do not rely on `information_schema` here; use this t
 | PersonContact | 4,502,966 | **personID**, freeMails (String; comma-separated emails; can be empty) |
 
 Verified quirks:
+
 - `Location.companyID` is `Int64` while `Company.companyID` is `String` — always join
   with `toString(l.companyID) = c.companyID`; a naive `WHERE companyID = '5128546'`
   returns 0 rows (type mismatch silently yields empty).
@@ -258,6 +260,7 @@ WHERE match(companyName, '(?i)\\b(boeing|airbus|thuraya|ohb|capella)\\b')
 ```
 
 Adjudication rules (record the decision as an evidence row, type 31/MANUAL):
+
 - A seed record must have the seed's **official domain** or exact legal name
   (e.g. Boeing: domain `boeing.com` → `5128546`, `EMAakygGHMUiRPfT6DPOr6Q`;
   OHB SE: diffbot `Ei7Rdy8jOPwSaA07eN7gnpw`; OHB System: zoominfo `28656225`, domain
@@ -318,6 +321,7 @@ WHERE NOT EXISTS (SELECT 1 FROM gt_build.company_closure x
 ```
 
 Rules:
+
 - Dedupe on `(origin, company_id)` globally — a company reached from two families keeps
   both `family` rows but must become ONE destination entity (§6).
 - A hop company that is itself a name match (e.g. "Boeing Australia" reached via a
@@ -376,6 +380,7 @@ SELECT * FROM PersonContact    WHERE personID IN :zi_person_ids;
 ```
 
 Extraction discipline (from the app's connector layer):
+
 - ClickHouse reads: `SELECT` with an explicit `ORDER BY` on the id columns for
   determinism; never paginate a big table with `OFFSET`; the `IN` lists must be built
   from **sorted** sets (rule 5).
@@ -395,6 +400,7 @@ a set of `(origin, record_id)` members.
 **6.1 Within-origin dedup.** Same origin, two records, same company ⇒ merge
 (diffbot has e.g. three "Airbus Defence and Space" variants, two "Boeing" rows,
 "Boeing Co. The"/"The Boeing Company"). Key order:
+
 1. identical normalized domain, or
 2. identical normalized name (`lower`, strip `.,` and legal suffixes
    inc|ltd|llc|corp|corporation|limited|company|gmbh|se|sas|sa|spa|proprietaries|pty|
@@ -412,17 +418,20 @@ does after blocking; blocking here = same family + first-token or domain block.
 
 **6.3 Clustering.** Union-find over accepted pairs, then two repairs (mirroring
 `resolve_entities.py`):
+
 - **Repair:** if a component contains two members with conflicting unique ids
   (domains/tickers) → split and demote the weakest edge to borderline.
 - **Cohesion cut:** if a component's weakest edge is a domain-only link, and the two
   endpoints' names are different families (e.g. an investment hub), split.
 
 **6.4 Entity ids.** For each final cluster:
+
 ```
 entity_id = uuid5(NAMESPACE_URL,
              'merge-engine:kg:' || entity_type_lower || ':' ||
              sha256(array_to_string(sort(member_ids), '|')))
 ```
+
 Members sorted as `origin:record_id` strings. This is reproducible: same input data ⇒
 same UUIDs, re-running the whole build is idempotent (upserts, no duplicates).
 
@@ -486,6 +495,7 @@ insert `fact_predicate` rows named `<entitytype>_<lowercased_source_field>`
 the build report; keep canonical predicates preferred when both would fit.
 
 Value coercion rules (from `value_coercion.py`):
+
 - `''` ⇒ NULL for any non-text kind.
 - Diffbot `d`-dates: strip `d`, `XX`→`01`, `date_precision` accordingly.
 - Money strings as §7; `totalinvestment` bigint stays NUMERIC with currency fact.
@@ -554,6 +564,7 @@ numbers; store as `gt_build_report.md` + raw SQL outputs.
 ## 11. Report deliverable
 
 `docs/verification/GROUND_TRUTH_BUILD_<date>.md` containing:
+
 - per-family: clusters, members per origin, merged/rejected pairs with reasons,
   borderline list for human review, unresolved-link (NULL FK) list,
   `unmapped_fields` list, raw predicates registered, V1–V10 outputs;

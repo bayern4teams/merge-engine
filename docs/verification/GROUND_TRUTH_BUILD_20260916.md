@@ -75,9 +75,11 @@
 ## Post-build reconciliation — relationship type routing (2026-09-17)
 
 ### Issue found:
+
 All 1,352 `kg.company_company_relationship` rows were loaded as PARTNERS_WITH (type 62), regardless of diffbot's actual `relationtype` column values ('subsidiarie', 'supplier', 'customer', 'competitor'). The agent had the source data in `gt_build.s_db_companyrelation` but did not route by it.
 
 ### Fix applied:
+
 1. Joined `kg.company_company_relationship` to `gt_build.s_db_companyrelation` via `description = surfaceform`.
 2. Built a routing table with `DISTINCT ON (surfaceform)` to pick one relationtype per surfaceform.
 3. Routed rows to correct `relationship_type_id`:
@@ -99,6 +101,7 @@ All 1,352 `kg.company_company_relationship` rows were loaded as PARTNERS_WITH (t
 **G3:** 0 NULL confidence values in `kg.graph_edge` (all loaded from `kg.knowledge_item.confidence`).
 
 **G4: graph_edge type distribution:**
+
 | Type | Count |
 |---|---|
 | WORKS_FOR | 8,130 |
@@ -113,6 +116,7 @@ All 1,352 `kg.company_company_relationship` rows were loaded as PARTNERS_WITH (t
 | **Total** | **9,610** |
 
 **G5: company_company_relationship type distribution:**
+
 | Type | Count |
 |---|---|
 | PARTNERS_WITH | 751 |
@@ -123,6 +127,7 @@ All 1,352 `kg.company_company_relationship` rows were loaded as PARTNERS_WITH (t
 | **Total** | **1,381** |
 
 **G6: Total counts:**
+
 | Table | Count |
 |---|---|
 | company_company_relationship | 1,381 |

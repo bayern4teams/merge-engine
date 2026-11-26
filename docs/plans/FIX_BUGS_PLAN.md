@@ -26,6 +26,7 @@ Currently the "Add Custom Dependency Link" form uses free-text `<input>` fields 
 - The interrupt data already includes `entity_tables` from state. We also need the origin schemas (table→columns map per origin).
 - Add `origin_schemas` to the data passed from the `human_review_deps` node.
 - Replace the 6 free-text `<input>` fields (child origin, table, column + parent origin, table, column) with cascading `<select>` dropdowns:
+
 1. **Origin** dropdown: populated from `data.origin_schemas` keys (e.g. `origin_1`, `origin_2`)
 2. **Table** dropdown: populated from the selected origin's tables
 3. **Column** dropdown: populated from the selected table's columns
@@ -127,6 +128,7 @@ The root cause is that `load_dotenv()` (without explicit `dotenv_path`) resolves
 
 > [!IMPORTANT]
 > **Bug #2 — Origin schemas data flow**: Does the workflow already store origin discovery results (tables + columns per origin) in state before the dependency gate? If not, how do we pass this data? Options:
+>
 > 1. Store discovery results in state during `workflow_manager.start_workflow()` (already runs `test_and_discover_schemas` at start)
 > 2. Have the UI call a separate `/api/origins/schema` endpoint and pass the data as a React prop to the Gate component
 
@@ -138,14 +140,17 @@ The root cause is that `load_dotenv()` (without explicit `dotenv_path`) resolves
 ## Verification Plan
 
 ### Automated Tests
+
 ```powershell
 .venv\Scripts\python.exe scripts/check.py all
 ```
 
 ### Manual Verification
+
 1. Start the server: `python -m src.main --mode gradio --port 7860`
 2. Verify Settings → Environment shows `.env` values as "✓ set (.env default)" instead of "not set"
 3. Run a workflow and check:
+
 - Tooltip at "Extraction Order" renders in normal font (not ALL-CAPS)
 - Extraction Order shows as a structured table with tier grouping
 - "Add Custom Dependency Link" has cascading dropdowns (if origin schemas are available)

@@ -69,6 +69,7 @@ Fix multiple issues in the merge-engine pipeline: reorder nodes so schema discov
 5. Return `entity_tables` alongside `target_entities` so `analyze_dependencies` doesn't need to re-derive it.
 
 New output keys:
+
 ```python
 return {
     "target_entities": [...],
@@ -85,12 +86,14 @@ return {
 #### [MODIFY] [request_parsing.system.txt](../../src/llm/prompts/request_parsing.system.txt)
 
 Complete rewrite to:
+
 1. Remove the hardcoded ALLOWED ENTITY TYPES list — entity types are now derived from the schema.
 2. Instruct the LLM to examine the provided database schema and group related tables under semantic entity names.
 3. Move to the new output contract that includes `entity_tables`.
 4. Reduce examples to 4 high-quality ones: single company scope, wildcard, multi-entity, multilingual.
 
 New output contract:
+
 ```json
 {
   "entity_types": ["company", "person", "location"],
@@ -146,6 +149,7 @@ Since `parse_request` now produces `entity_tables`, the table selection LLM call
 6. Add **validation + retry logic** for the LLM response: if the LLM returns `{}` or misses entities, retry once with a more explicit prompt, then fall back to coverage-matrix-only results.
 
 New function `_build_coverage_matrix(schemas, entity_tables)`:
+
 ```python
 def _build_coverage_matrix(schemas, entity_tables):
     """Scan columns for FK-like patterns and match to entity tables.
@@ -158,6 +162,7 @@ def _build_coverage_matrix(schemas, entity_tables):
 ```
 
 The matrix scans for:
+
 - Columns ending in `ID`, `_id`, `_key` (e.g., `companyID`, `personID`)
 - Column names matching table names with an ID suffix
 - Sample value overlaps between columns across tables
@@ -192,6 +197,7 @@ Computed extraction_order: []
 ```
 
 Root causes:
+
 1. `parse_request` guessed 15 entities (many non-existent) — **fixed by Component 2**
 2. The LLM had too many entities and no FK guidance — **fixed by Component 3**
 3. No validation/retry when LLM returns `{}` — **fixed here**
@@ -201,6 +207,7 @@ Root causes:
 #### [MODIFY] [analyze_dependencies.py](../../src/orchestrator/nodes/analyze_dependencies.py)
 
 Add validation after the LLM response:
+
 ```python
 # Validate: every target entity must appear as a key
 missing = [e for e in target_entities if e not in dependency_tree]
@@ -246,6 +253,7 @@ function applyCompanyPreset() {
 ```
 
 Also update the card title and hint text to reflect the enriched prompt:
+
 - Title: "Comprehensive company extraction"
 - Hint: "Type a company name to generate a detailed extraction request covering company info, personnel, products, financials, technology, locations, and contacts."
 
@@ -322,12 +330,12 @@ def _parse_llm_tree(res: Any) -> dict[str, list[str]] | None:
 
 Add unit test `test_partial_dependency_tree_omitting_entities_retries_and_falls_back()` to verify that an LLM output omitting one or more `target_entities` triggers the retry mechanism and falls back to the coverage matrix.
 
-
 ---
 
 ## Verification Plan
 
 ### Automated Tests
+
 ```bash
 python -m pytest tests/unit/test_parse_request_node.py -v
 python -m pytest tests/unit/test_analyze_dependencies_node.py -v
@@ -338,6 +346,7 @@ python scripts/check.py all
 ```
 
 ### Manual Verification
+
 - User runs the app with the enriched prompt template against their ClickHouse databases to verify:
   1. `discover_schemas` runs before `parse_request` in the pipeline
   2. `parse_request` returns schema-grounded entity types and table mappings

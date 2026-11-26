@@ -24,11 +24,13 @@ flowchart LR
 ```
 
 What stays from v1.2:
+
 - ER owns the unified DB and is **the only system that creates entities and assigns ids**.
 - Our values have the lowest priority. Delete is out of scope.
 - **Your schema stays fixed.** We never ask you to add a table or column to the unified DB.
 
 What is new in v1.3:
+
 1. **Two entity stores, one ER.**
    - Types that have a table in the unified DB live there.
    - Types you have no table for (**extension types**, e.g. `certification`) live in **our** MongoDB: a separate database, the *Enrichment Entity Store*.
@@ -84,6 +86,7 @@ From our side, **the API is the same for both stores.** We call `search`, `resol
 ### 3.3 When you later add a table for an extension type
 
 If the unified DB later gets a table for a type that lives in our store (e.g. you add `certification`):
+
 1. ER moves all records from our collection into the new table, **keeping the same ids**.
 2. The type's `store` changes to `unified`.
 3. The collection is no longer written to.
@@ -160,6 +163,7 @@ As v1.2, plus `store`, and `collection` for extension types:
 Used when our extraction finds a type you have no table for. Before we call this, a human on our side approves the type and its matching rules.
 
 **Request**
+
 ```json
 {
   "fields": { "name": "string", "issuer": "string", "valid_until": "date" },
@@ -183,11 +187,13 @@ Changing an existing extension type (adding a field) is the same call. Fields ar
 The same request items as `resolve` (§5.4), minus `idempotency_key`, `provenance` and `choice`. **Nothing is created, changed or logged as a decision.**
 
 We use it to:
+
 - preview results before a run
 - support evidence gathering
 - show results to a human in manual mode, and in our review panel
 
 **Response, per item**
+
 ```json
 {
   "item_id": "cand_9f3a",
@@ -217,6 +223,7 @@ Request items as v1.2, with three changes:
 **Ask with more evidence:** a normal resolve item with more `attributes` / `references` / `extra` (typically values for `differing_fields`) and a new key. ER decides again from scratch.
 
 **Send our choice:**
+
 ```json
 {
   "item_id": "cand_9f3a",
@@ -228,6 +235,7 @@ Request items as v1.2, with three changes:
   "choice": { "id": "er_comp_220" }
 }
 ```
+
 or `"choice": { "new": true }`.
 
 | Choice | What ER does | Answer |
@@ -248,6 +256,7 @@ or `"choice": { "new": true }`.
 | `INVALID` | As v1.2, plus `UNKNOWN_ID` for a bad `choice`. |
 
 Unchanged from v1.2:
+
 - If the entity was found, nothing on it is changed. We add our new information with `PATCH` afterwards.
 - One bad item never fails the batch.
 - Concurrent creates of the same entity get one id.
@@ -311,6 +320,7 @@ As v1.2 §5: a read-only role, the `merge_engine.er_entity_version` change feed,
 ## 7. Relationships (answer to your §9.1)
 
 We **do not** need ER to store links between entities.
+
 - We keep relationships (e.g. person *works_at* company) in our own MongoDB, using ER ids on both ends.
 - We keep them correct through the change feed.
 - Relationship types come from a list our users define; ER does not need to know them.
@@ -320,6 +330,7 @@ We **do not** need ER to store links between entities.
 ## 8. Errors and retries
 
 As v1.2 §6, with these changes:
+
 - A `503` on `resolve` rejects the whole request (§5.4). We wait for `Retry-After` and resend it all.
 - We expect no rate limiting and no size limit on `extra` / `source_text` for our client. We still honour `429` + `Retry-After` if it ever comes.
 
@@ -328,6 +339,7 @@ As v1.2 §6, with these changes:
 ## 9. Guarantees
 
 **We guarantee**
+
 1. Your type and field names in `attributes`, everything else in `extra`. Extension types are registered (§5.2) before we resolve them.
 2. Rows read from the unified DB are named by their `id`, never resolved. Rows from other sources are resolved first.
 3. Parents before children. References are real ER ids.
@@ -337,6 +349,7 @@ As v1.2 §6, with these changes:
 7. We check extractions before sending (no generic names such as "the company", required fields present).
 
 **You guarantee**
+
 1. ER alone assigns ids, in both stores.
 2. ER decides `MATCHED` / `CREATED` when it is sure. When it is not, it returns `AMBIGUOUS` with candidates and `differing_fields`, and **accepts our `choice`**, with the one exception in §5.4.
 3. `search` has no side effects.

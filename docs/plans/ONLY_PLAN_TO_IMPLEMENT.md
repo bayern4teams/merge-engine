@@ -50,6 +50,7 @@ results to the user and wait for explicit go-ahead. Do not create branches unpro
 **(This gate has now been passed — see the status banner above.)**
 
 **Part 2 — on go-ahead, for each of the five branches B1…B5:**
+
 1. `git checkout main && git pull` (main must be green), then
    `git checkout -b <branch-name>` from the same Phase-0/1.5/1.6 completion commit.
 2. Write `Branch_Plan.md` at the branch root containing **that branch's full
@@ -279,6 +280,7 @@ gate, and is counted in the reconciliation report as `fields_dropped_from_mappin
 little more is needed to make it fix B *correctly* rather than by dropping the data.
 
 **Mechanism, exactly:**
+
 - `origin2.Company` has a `name` column → exact-name match to destination
   `company.name` → those **16** rows are populated.
 - `origin1.Company` has **no `name` column at all** — it carries `entityName` and
@@ -296,6 +298,7 @@ You can read the damage directly in the destination: rows with `name` NULL have
 never have existed.
 
 **Fix (in addition to A):**
+
 - **Make the heuristic tier handle camelCase.** `_heuristic_match` must tokenize
   `entityName` → `entity name` and `fullName` → `full name` before comparing to
   destination `name` / `legal_name`. Today those comparisons happen on raw strings,
@@ -403,8 +406,6 @@ those four are noise.
   a parsed date; names through token/phonetic comparison. `website` should be
   `exact`, not `weak`.
 
-
-
 #### C1 — Block purging annihilates the *entire* candidate set at real corpus size (dominant cause)
 
 `_MAX_REF_BLOCK = 25` (`resolve_entities.py:117`): any approximate block with more
@@ -429,6 +430,7 @@ exist, I didn't look"* is silently zeroed. That is worse than the missed merges,
 because it makes the failure invisible.
 
 **Fix:**
+
 - A purge must **degrade, never annihilate.** If purging leaves a record with no
   block, fall back — sub-block on a secondary key, or admit the block and let the
   existing `_MAX_COMPARISONS = 250_000` budget do the limiting (that budget already
@@ -522,6 +524,7 @@ pathologically dense components, not per-record volume. Write the histogram to
 `docs/verification/CLUSTERING_PROFILE.md`. **Choose no fix before you have it.**
 
 **D.2 — Fix the O(n²)/O(n³) partitioning.** Three offenders:
+
 - `_partition_component` (`:1577-1610`) — nested `for i,a … for b in members[i+1:]`
   conflict check that **rebuilds two filtered dict comprehensions inside the inner
   loop** (`:1592-1593`). Hoisting those is a large constant-factor win and is
@@ -540,6 +543,7 @@ apply C1's lesson: never report zero shortfall when work was skipped.
 **no yield at all** — which is why the UI freezes for 10–30 minutes.
 
 **D.4 — Parallelize the safe sequential loops, in this order:**
+
 1. `discover_schemas.py:41-63` — **the clean one.** Origins are independent,
    `discover_schema_impl` opens and closes its own connector per call, no shared
    state. Only fix needed: sort `failed_origins` before rendering it at `:77` so
@@ -969,6 +973,7 @@ sequential becomes **bounded by the longest entity (`experience`, ~15.8 min)**.
    scores anyway.
 
 **Constraints to design for, all verified:**
+
 - **Pickling cost.** `experience` is 34,782 records; the payload is tens of
   MB per task. Measure it — if serialization eats the win for small entity
   types, apply the pool only above a record-count threshold and run small
@@ -1053,6 +1058,7 @@ FIX (merged metadata) callbacks = [H(parent-langfuse)]
 
 **Defect 2 — the trace is fragmented across HITL resumes and lost after a
 restart.**
+
 - `workflow_manager.py:199-200` is the *only* place the handler is bound.
   `rehydrate_workflow:804` rebuilds a bare `{"configurable": {"thread_id": ...}}`
   with **no callbacks**, so after an app restart every resume runs untraced.
@@ -1318,6 +1324,7 @@ run, an independent check, never the app's own success message.
 ## 1.6.A — Run-by-run + platform configuration surface
 
 ### A.1 — A typed config model, layered file → env → per-run override
+
 Introduce one resolved-config path so a value can come from `config.yaml`,
 be overridden by an env var (platform), then overridden per-run by the UI
 (run-by-run) — without a restart. Reuse the existing loader in
@@ -1329,6 +1336,7 @@ auto-approve, `entity_resolution_enabled`/`field_mapping_enabled`). Per R3, add
 it as its own `state/` fragment, not by widening the core `TypedDict` body.
 
 ### A.2 — Backend endpoints (extend `src/api/main.py`, don't restructure it)
+
 - `GET /api/config` — the effective resolved config (secrets stripped via
   `profiles.strip_secrets`, `profiles.py:65`), tagged per key with its source
   (`file` | `env` | `default`) so the Settings page can show provenance.
@@ -1340,6 +1348,7 @@ it as its own `state/` fragment, not by widening the core `TypedDict` body.
   this is the fix for the dead config surface, not a new subsystem.
 
 ### A.3 — UI: Advanced panel (run-by-run) + Settings page (platform)
+
 - **Advanced panel**: a collapsible section on the Pipeline start card
   (`PipelineScreen.tsx`, beside the existing profile/save-as/full-remerge
   controls) — model + fallback chain, temperature, batch size, per-entity
@@ -1353,6 +1362,7 @@ it as its own `state/` fragment, not by widening the core `TypedDict` body.
 - Both are strings-and-selects over `/api/config`; no new heavy components.
 
 ### A.4 — Make the dead keys live (the concrete correctness win)
+
 Wire `matching_rules` and `conflict_policy` from the request body →
 `MergeState` → the nodes that already read them (`resolve_entities_impl` reads
 `matching_rules`; `unify_entity_group` reads `conflict_policy`). Fix the false
@@ -1368,6 +1378,7 @@ Every tool reads data the pipeline **already produces** — none require new
 measurement. All are read-only; none can mutate a run or a database.
 
 ### B.1 — Match & cluster inspector
+
 *Why did/didn't these two records merge, and what clusters formed?* Surfaces the
 Fellegi–Sunter evidence the matcher already computes: per candidate pair the
 comparison vector, the agree/disagree/weak levels, the score, and the
@@ -1380,6 +1391,7 @@ payload already carries (`_build_interrupt_data`). New endpoint
 question.
 
 ### B.2 — Run trace & cost timeline
+
 Per-node waterfall with durations from `logs/run_reports/<id>.json`'s `timings`
 key (added in §0.6) rendered as a horizontal bar timeline, plus the per-run
 token/cost ledger. The cost half already has an endpoint —
@@ -1388,6 +1400,7 @@ UI. Add a small `RunTimeline.tsx`; link out to the Langfuse trace URL that
 `verify_langfuse_trace.py` already knows how to build.
 
 ### B.3 — Schema & data explorer
+
 Read-only browse of any configured origin/destination: tables, columns, types,
 row counts, a small sample of rows, and the destination's watermark /
 `merge_engine_extraction_state`. Reuses the discovery path behind
@@ -1396,6 +1409,7 @@ a new bounded `POST /api/explore/sample` (hard `LIMIT`, read-only, parameterised
 — never string-interpolated SQL). A `DataExplorer.tsx` screen.
 
 ### B.4 — Run comparison / reconciliation
+
 Compare a run against the golden (or a previous run): per-table parity, matched
 vs missed rows, and `fields_dropped_from_mapping` / `unmapped_fields`. Wraps the
 existing `scripts/diagnostics/compare_to_golden.py` (already the project's
@@ -1407,6 +1421,7 @@ independent evaluator) behind `GET /api/runs/{id}/diff`, rendering its JSON in a
 ## 1.6.C — Cross-platform portability (venv + Docker)
 
 ### C.1 — De-hardcode the environment
+
 Remove every `na180` / conda-absolute-path reference from `.claude/launch.json`
 (point `runtimeExecutable` at `python` on PATH), `CLAUDE.md` (state "any Python
 3.11 env — venv or conda; the hard constraint is the *version*, not the tool"),
@@ -1415,6 +1430,7 @@ Add a `no-hardcoded-conda-path` check to `scripts/lint_docs.py` (or a pre-commit
 hook) so it can't silently return — per R11, every failure becomes a rule.
 
 ### C.2 — Bootstrap + environment truth
+
 - `scripts/bootstrap.py` (cross-platform, Windows-first per the standing
   shell): create a `.venv`, `pip install -e ".[dev,perf]"`, `npm install &&
   npm run build` in `src/ui/frontend`, copy `.env.example`→`.env` if absent,
@@ -1428,6 +1444,7 @@ hook) so it can't silently return — per R11, every failure becomes a rule.
   clone currently can't know what to fill in.
 
 ### C.3 — Rewrite the Dockerfile + a runnable compose
+
 The current `Dockerfile` cannot run the app (stale Gradio/`--mode both`, no
 frontend build). Rewrite as a three-stage build: (1) `node` stage runs
 `npm ci && npm run build` → `dist/`; (2) `python` builder installs deps; (3)
@@ -1438,8 +1455,10 @@ existing origin/destination/Langfuse services so `docker compose up` gives a
 working stack. Keep `dist/` build-time only — never committed (CLAUDE.md rule).
 
 ### C.4 — The portability test
+
 `scripts/check.py portability` (new subcommand) + `tests/` coverage that proves
 a from-scratch install works without the developer's machine:
+
 - **venv path**: in a temp dir, create a clean venv, `pip install -e .` from the
   repo, `python -c "import src.main"`, and assert the app boots to a real UI
   (not the `{"status":"api-only"}` stub — hit `/` and check for the SPA), all
@@ -1454,11 +1473,13 @@ a from-scratch install works without the developer's machine:
 ## 1.6.D — CI/CD + branch-conflict re-audit (recheck everything, per the request)
 
 ### D.1 — Portability smoke in CI
+
 Wire `check.py portability` (C.4) into the CI config so every push proves a
 clean checkout builds and boots. CI runs exactly `python scripts/check.py all`
 plus the portability job — no logic CI can run that a developer can't (R1).
 
 ### D.2 — Re-audit the six conflict seams (§0.8) against the current tree
+
 Confirm each still does its job after 1.5/1.6's edits, with an assertion, not by
 eye: `MergeState` is still assembled from `state/` fragments (no feature keys
 inlined into the core `TypedDict` body); node/edge wiring is still the
@@ -1479,6 +1500,7 @@ currently unenforceable as written. **Whichever of B2 (new nodes) / B3 (new
 report sections) starts first should build the specific registry it needs.**
 
 ### D.3 — Pre-commit + secret hygiene recheck
+
 Re-run every pre-commit hook against the full tree (not just staged files) to
 confirm none silently stopped matching after the reorg; confirm
 `detect-private-key` + the `dashscope`/`sk-` pattern hook still fire; re-verify
@@ -1558,6 +1580,7 @@ edit.
 production plumbing wrapped around `LLMClient`.
 
 **Resources for this branch:**
+
 - DSPy docs: https://dspy.ai/
 - DSPy `BaseLM` reference (for the adapter): https://dspy.ai/api/models/LM/
 - `BootstrapFewShot` / `MIPROv2` optimizer docs: https://dspy.ai/learn/optimization/optimizers/
@@ -1568,6 +1591,7 @@ production plumbing wrapped around `LLMClient`.
 LM knows nothing about this project's four load-bearing behaviours. Subclass
 `dspy.BaseLM` (verify the exact base class against the installed DSPy version) so
 `forward()` delegates to the existing `LLMClient` and preserves **all four**:
+
 - the quota-fallback chain (`_advance_model` / `_is_quota_error`, `client.py:102-118`,
   walking `config.llm.fallback_models`' nine models);
 - `SEMANTIC_CACHE` (`cost.py:219`) — and use B2's chance to make caching happen
@@ -1580,6 +1604,7 @@ Note: those tests need `"cache_enabled": False` because `SEMANTIC_CACHE` is a
 process-wide global that cross-pollutes tests.
 
 **B1.2 — Signatures for the two pilot stages.**
+
 - `request_parsing` — outputs `entity_types`, `explicit_entity_types`, `subject`,
   `scope_type`. Golden: 14 cases.
 - `field_mapping` — outputs a **bare, dynamically-keyed object** (`{source_field:
@@ -1622,6 +1647,7 @@ than reimplementing it.
 they are the natural DSPy baseline. Do not remove them.
 
 **Acceptance gates:**
+
 - `python -m tests.prompts.harness --live` scores **≥ the regenerated
   `BASELINE_V1.md` scorecard** on both converted stages, with the other four
   unchanged.
@@ -1641,6 +1667,7 @@ and `product` (which exists in no origin) hard-errors in `extract_data`. This is
 largest single identified contributor to the 12% parity gap.
 
 **Resources for this branch:**
+
 - `langgraph-swarm` docs: https://langchain-ai.github.io/langgraph/reference/swarm/
 - `langgraph-swarm` GitHub (`create_swarm`, `create_handoff_tool` source + examples): https://github.com/langchain-ai/langgraph-swarm-py
 - LangGraph multi-agent concepts overview: https://langchain-ai.github.io/langgraph/concepts/multi_agent/
@@ -1699,6 +1726,7 @@ wire the subgraph's entry/exit points by hand and say so plainly in `Branch_Plan
 rather than pretending the registry exists.
 
 **Acceptance gates:**
+
 - Boeing under the swarm planner reaches **≥ 9 entity families** (v1: 3) at the
   `human_review_deps` gate, verified by reading the gate payload directly.
 - No `product`-style hard error: an inferred-but-absent entity warns, never
@@ -1716,6 +1744,7 @@ rather than pretending the registry exists.
 reconciliation report and would otherwise conflict with each other.
 
 **Resources for this branch:**
+
 - Great Expectations docs: https://docs.greatexpectations.io/docs/
 - GX Core Python API (expectation suites, validation): https://docs.greatexpectations.io/docs/core/introduction/
 - `sqlglot` (optional SQL-lineage enrichment): https://sqlglot.com/sqlglot.html
@@ -1776,6 +1805,7 @@ to `build_reconciliation_report`'s body and say so explicitly in `Branch_Plan.md
 — do not silently assume the registry exists.
 
 **Acceptance gates:**
+
 - A Boeing run report carries non-empty `data_quality` and `lineage` keys.
 - Deliberately seed one duplicate unique-id and one 0-row entity; prove `fail`
   severity surfaces at the final gate and that the run still reaches the gate.
@@ -1796,6 +1826,7 @@ this branch rather than a branch of its own, because it depends on exactly the s
 canonical-projection work.
 
 **Resources for this branch:**
+
 - Splink docs: https://moj-analytical-services.github.io/splink/
 - Splink API reference (`Linker`, `cluster_pairwise_predictions_at_threshold`): https://moj-analytical-services.github.io/splink/linker.html
 - `desbordante` (UCC/FD discovery for B4.1's Step 1): https://desbordante.readthedocs.io/ and https://github.com/Mstrutov/Desbordante
@@ -1829,7 +1860,6 @@ truth). Keep the existing 560 pairs unchanged as the general-dedup regression gu
 
 **Without B4.0, none of B4.1–B4.4 can be honestly claimed.** Do it first.
 
-
 ### B4.1 — Identity-key discovery from measured data, then LLM classification
 
 The user's instinct — *"find some fact column with help of LLM"* — is right, but the
@@ -1840,6 +1870,7 @@ LLM must be given **measurements**, not asked to guess from column names. Two st
 `desbordante` (`pip install desbordante`, C++ core with Python bindings) does exact
 and approximate UCC discovery with the g1 metric, plus exact/approximate FDs. Per
 column, compute:
+
 - uniqueness ratio **within** each origin,
 - **value overlap across origins** (after normalisation),
 - null rate, cardinality, and a sample.
@@ -1885,6 +1916,7 @@ Verify this first and measure it before building anything more.
 
 **(b) Neighbourhood evidence — the genuinely new capability.** Use *related*
 entities as comparison features:
+
 - two `person` records whose resolved **employer cluster-ids** overlap are more
   likely the same person (from `Experience`);
 - two `company` records sharing a resolved **CEO/founder** person cluster, or an
@@ -1908,6 +1940,7 @@ weight so it can never alone push a pair over `auto_match`.
 `_MAX_LLM_PAIRS = 200`, chunked at 40, concurrency 4, degrading to heuristic scores
 on failure. The weakness is its **inputs**: it receives stripped raw field dicts,
 which for a cross-origin pair means the same 4-field intersection C0 exposed.
+
 - Feed it the **canonical projection** from C0a plus the neighbour evidence from
   B4.2(b), serialized in the `COL/VAL` form the entity-matching literature converged
   on (Ditto, VLDB 2020 — see resources above).
@@ -1969,6 +2002,7 @@ with `cluster_id`/`record_ids`/`match_confidence`/`required_human_review`,
 hand-rolled matcher earns its keep with; a naïve swap breaks all of them. The full
 list is in `docs/plans/PHASE_Q_PLAN.md` §Q.1 and must be copied verbatim into
 `Branch_Plan.md`. The three that decide the design:
+
 - **Splink replaces *scoring*, not *clustering*.** Splink's
   `cluster_pairwise_predictions_at_threshold` is raw transitive closure — exactly
   what `_partition_component`/`_split_weakest_link` deliberately reject. Run Splink
@@ -1993,6 +2027,7 @@ per-entity `engine` field to the Advanced panel's matching-rules UI so
 `engine: "splink"` is actually selectable, default `Built-in`.
 
 **Acceptance gates:**
+
 - `python -m tests.eval.score` shows **no precision regression** on the original 560
   pairs at *every* step (B4.1, B4.2, B4.3, B4.4 each gated separately). C0–C3 and
   B4.2 all make the matcher compare far more pairs and accumulate more evidence, so
@@ -2021,6 +2056,7 @@ and often (target: weekly, or whenever a discrete piece is done), because everyt
 here makes the other five branches faster and delaying it wastes that.
 
 **Resources for this branch:**
+
 - Claude Code subagents docs: https://docs.claude.com/en/docs/claude-code/sub-agents
 - Claude Code skills/slash-commands docs: https://docs.claude.com/en/docs/claude-code/slash-commands
 - Addy Osmani, "Agent Harness Engineering" (referenced throughout this plan for the
@@ -2032,6 +2068,7 @@ here makes the other five branches faster and delaying it wastes that.
 **B5.1 — Subagent definitions in `.claude/agents/`** (committed, not local-only, so
 every branch and worktree gets them). Per the literature, isolated context per
 subagent with the filesystem as the coordination surface:
+
 - `merge-verifier` — drives a full run via `drive_app.py`, runs
   `compare_to_golden.py`, asserts `BUDGETS.yaml`, reports pass/fail with numbers.
 - `perf-profiler` — runs the B1.1 profiling harness and produces the component
@@ -2075,6 +2112,7 @@ corresponding hook, lint rule, or `CLAUDE.md` line is added here — and **every
 existing line stays traceable to the failure that caused it.**
 
 **Acceptance gates:**
+
 - `CLAUDE.md` has every line traceable to a documented failure or hard constraint.
 - `scripts/lint_docs.py` reports zero broken links / stale citations across `docs/`.
 - The `merge-verifier` subagent produces a verdict on a real run without a human

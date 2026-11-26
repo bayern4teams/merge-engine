@@ -20,6 +20,7 @@ symlink cleanup throws `PermissionError: [WinError 5] Access is denied` on Windo
 during teardown (cosmetic, doesn't affect results, but pollutes the exit code/output).
 
 Reference command:
+
 ```bash
 python -m pytest -q -p no:playwright --basetemp=<scratch-dir>
 ```
@@ -35,6 +36,7 @@ repo has grown since; 1083 passing is the real current baseline.)
 
 **Pre-existing failures/errors (not caused by, and out of scope for, this
 remediation — fixes 1-6 don't touch any of these areas):**
+
 - `tests/integration/test_config_resolution.py` (4 failed) — env-var config
   resolution edge cases.
 - `tests/integration/test_edge_cases.py` (2 failed) — MongoDB cursor pagination /

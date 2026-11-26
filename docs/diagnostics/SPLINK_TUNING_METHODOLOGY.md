@@ -12,6 +12,7 @@ summarized away for readability at the cost of precision. The audit report
 one paragraph and links here; this file is the *how*.
 
 Companion artifacts:
+
 - Code fix: `src/mcp_server/tools/splink_matcher.py` (the production Splink
   integration — this file changed).
 - New test: `tests/unit/test_splink_matcher.py::test_score_pairs_blocks_on_domain_even_when_names_disagree`.
@@ -170,6 +171,7 @@ synthesised:
 - **diffbot** (Postgres, `testdiffbot` db, `diffbot.company` table): every
   row where `entityname` or `fullname` contains "boeing" or "airbus"
   (case-insensitive) — **25 rows**. Pulled via:
+
   ```sql
   select companyid, entityname, fullname, coalesce(website,''), coalesce(left(summary,150),'')
   from diffbot.company
@@ -177,6 +179,7 @@ synthesised:
      or lower(fullname) like '%boeing%' or lower(fullname) like '%airbus%'
   order by entityname;
   ```
+
 - **zoominfo** (ClickHouse, `testzoominfo` db, `Company` table): the
   equivalent query — **27 rows, 26 distinct `companyID`s** (one duplicate row
   observed at the storage layer, harmless — `ReplacingMergeTree` had not yet
@@ -215,6 +218,7 @@ Candidate pairs scored: 565
 ```
 
 Sample scores (id1 <-> id2: match_probability):
+
 | Pair | Score |
 |---|---|
 | Boeing Co ↔ Boeing (zoominfo) | 0.6716 |

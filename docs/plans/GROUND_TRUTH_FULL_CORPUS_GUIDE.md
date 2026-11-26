@@ -110,6 +110,7 @@ V10 coverage: report per-cluster member count table (which origin records fused)
 ## 4. Deliverable
 
 docs/verification/GROUND_TRUTH_BUILD_<date>_full.md:
+
 - all V1–V10 gate numbers,
 - full multi-record cluster list (merged origin ids + evidence for each),
 - stub list, drop_list summary by reason, unmapped fields,

@@ -75,6 +75,7 @@ Entry format (one per item, added by the lead when it accepts the item):
 ```
 
 ### P1 — vocabulary-driven field-name tokeniser
+
 - Why cloud could not verify: no origin databases / destination schema.
 - Command: `python -m src.main --mode gradio --port 7860`, run the full two-origin merge.
 - Independent check: the run's `map_fields` result for zoominfo `company` (`field_mapping`, `unmapped_fields`, new `ambiguous_splits`); SQL `SELECT count(*) FILTER (WHERE name IS NULL), count(*) FROM company` on the destination.
@@ -82,6 +83,7 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Result (filled in locally):
 
 ### P2 — purging + meta-blocking replace the 250k comparison cap
+
 - Why cloud could not verify: no origin databases (the `staff` entity).
 - Command: full merge run; then read `resolution_stats.<entity>` (`candidate_pairs`, `block_memberships_filtered`, `pairs_lost_by_block_filtering_ub`, `pairs_pruned_by_purging_ub`, `pairs_pruned_by_meta_blocking`, `uncompared_pairs`; the `*_ub` fields are upper bounds — D9).
 - Independent check: count distinct blocking pairs independently (`_blocking_keys_for` over the restored `staff` rows) and compare against `candidate_pairs` + pruned counts; score the run against ground truth (pair completeness on the restored truth set).
@@ -89,6 +91,7 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Result (filled in locally):
 
 ### P18 — survivorship five sub-fixes
+
 - Why cloud could not verify: no restored corpus.
 - Command: full merge run; open the run report's `entities.<entity>.numeric_disagreements` and each unified record's `_conflicts`.
 - Independent check: SQL over the two origins for revenue/employee_count values that differ for the same resolved company; compare the count with `numeric_disagreements.<field>.clusters`.
@@ -96,6 +99,7 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Result (filled in locally):
 
 ### P13 — u from a random sample of the unblocked cross product
+
 - Why cloud could not verify: no restored corpus / ground truth.
 - Command: full merge run with and without this commit (parent: the commit before "P13:"); score both with the restored ground truth.
 - Independent check: ground-truth pair precision/recall per entity, stratified cross- vs within-source (counts, not rates), plus the review-band volume.
@@ -103,6 +107,7 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Result (filled in locally):
 
 ### P12 — catalog tables and ETL metadata columns excluded, with overrides
+
 - Why cloud could not verify: no origin databases.
 - Command: full merge run; inspect `schemas[<origin>]["classification"]` in the run state and the mapping result.
 - Independent check: list origin tables/columns with SQL (`information_schema.columns`) and compare with what was mapped and what matching saw (`resolution_stats`), and with the destination rows.
@@ -110,6 +115,7 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Result (filled in locally):
 
 ### P11 — bounded per-entity field mapping
+
 - Why cloud could not verify: no LLM endpoint / databases.
 - Command: full merge run; time the `map_fields` node (logs / Langfuse span).
 - Independent check: endpoint request log shows at most `_LLM_CONCURRENCY` (4) concurrent map_fields calls; mapping output identical to a run with `_LLM_CONCURRENCY = 1`.
@@ -117,6 +123,7 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Result (filled in locally):
 
 ### P14 — token-grain IDF for text fields
+
 - Why cloud could not verify: no restored corpus / ground truth.
 - Command: full merge run vs the parent of the "P14:" commit; score both with ground truth.
 - Independent check: ground-truth precision/recall for `company` and person entities, stratified; list the company FPs that share only a legal-form token.
@@ -124,6 +131,7 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Result (filled in locally):
 
 ### P3 — value-based inclusion-dependency discovery
+
 - Why cloud could not verify: no origin databases.
 - Command: full merge run; read `dependency_tree` / `column_dependencies` from the analyze_dependencies state and the join graph edges.
 - Independent check: SQL `SELECT count(*) FROM staff s JOIN company c ON s.main_entity_id = c.companyid` (expect 13 518) and `SELECT min(companyid), max(companyid), count(DISTINCT companyid) FROM company` — **if companyid is dense (count = max - min + 1) the coincidence rule will NOT infer this edge**; then it must come from a declared FK or the gate.
@@ -131,6 +139,7 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Result (filled in locally):
 
 ### P5 — schema-agnostic token blocking
+
 - Why cloud could not verify: no origin databases (the `staff` entity).
 - Command: full merge run vs the parent of the "P5:" commit; read `resolution_stats.<entity>` (`candidate_pairs`, pruned counts) and the blocking log lines.
 - Independent check: ground-truth pair completeness for `staff`/person and company (PC and RR computed from the truth set, not from the engine), plus wall time and peak memory of resolve_entities.
@@ -138,6 +147,7 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Result (filled in locally):
 
 ### P4 — junction/weak roles at the deps gate, dimension rows with zero new columns
+
 - Why cloud could not verify: no origin or destination databases (26-table schema, real Postgres FK ordering, `ensure_table`), no UI rendering of `table_roles`.
 - Command: full merge run vs the parent of the "P4:" commit; read the deps-gate payload `data.table_roles`, the field mappings (`mapped_by: dimension`) and the load result per table.
 - Independent check: SQL — `SELECT count(*) FROM industry` / `product_category` (expect > 0, one row per distinct text: compare to `SELECT count(DISTINCT <text col>)` on the origin), `SELECT count(*) FROM company WHERE industry_id IS NOT NULL` against the origin's non-null text count; `information_schema.columns` count per destination table unchanged vs before the run.
@@ -145,6 +155,7 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Result (filled in locally):
 
 ### P6 — three-way discrimination (measured generic / exclusive values)
+
 - Why cloud could not verify: no origin databases; the real share of phone/postcode columns that differ per origin and the real tax-id typo rate decide how many pairs move to review.
 - Command: full merge run vs the parent of the first "WIP P6" commit (055446b); read `resolution_stats.company` (`pending_merge_candidates`, `possibly_related`) and the clusters.
 - Independent check: ground-truth company pairs (restored `gt_score.py`): Match precision/recall and the number of review items, per outcome class; sample 20 `possibly_related` edges and confirm by SQL they share an address/phone but are different companies.
@@ -152,6 +163,7 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Result (filled in locally):
 
 ### P9 — decision memory (file)
+
 - Why cloud could not verify: no real LangGraph checkpointer pause/resume through the UI; no live run with the file inspected.
 - Command: two identical runs with `MERGE_ENGINE_DECISION_MEMORY=<path>`; answer the matches gate in run 1.
 - Independent check: open the JSON file (one entry per answered pair, `merge`/`keep_separate` only); run 2's matches gate does not pause, `resolution_stats.<e>.decisions_from_memory` equals the answered count; an aborted gate adds nothing.
@@ -159,6 +171,7 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Result (filled in locally):
 
 ### P7 — typed relationship edges and the name-free relationship index
+
 - Why cloud could not verify: no origin databases; whether P3 finds the real self-reference / junction INDs (dense integer keys are skipped by the coincidence rule, see P3) and whether raw FK columns survive extraction.
 - Command: full merge run; read `relationship_edges` from the analyze_dependencies state and `data.relationship_cycles` in the deps-gate payload; check the log line "Relationship index built from N relation row(s)".
 - Independent check: SQL on the origin — `SELECT count(*) FROM company_relation` (report: 21 rows recovered before; true count higher) against the RELATED edges for that junction; for any self-referencing column `SELECT count(*) FROM <t> WHERE <ptr> IS NOT NULL` against the DIRECT_PARENT count for that `column`.
@@ -166,6 +179,7 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Result (filled in locally):
 
 ### P8 — one pair per LLM call, budget on the most uncertain pairs
+
 - Why cloud could not verify: no LLM endpoint; latency, rate limits and the model's real probability distribution are unknown.
 - Command: full merge run with the LLM enabled; `python -m tests.prompts.harness --stage entity_resolution --live`.
 - Independent check: count the entity_resolution calls in the LLM log/Langfuse (= pairs sent, one pair each, ≤ 200 per entity); ground-truth precision/recall of LLM-decided pairs (restored `gt_score.py`); share of answers between `1 - auto_match` and `auto_match` (these stay in review).
@@ -173,6 +187,7 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Result (filled in locally):
 
 ### P20 — clustering: WNP prune, components, triangle support, optional 1:1 (narrowed, user decision c)
+
 - Why cloud could not verify: no restored corpus; real weight distributions (jitter, ties) and how many true clusters are chains decide WNP's recall loss; whether real wrong merges are triangle-free (bridged chains) and so survive clustering.
 - Command: full merge run vs the parent of the first "WIP P20" commit (7ba4f15); read `resolution_stats.<e>` (`largest_component_size`, cluster sizes) and the clusters.
 - Independent check: ground-truth company/person pairs (restored `gt_score.py`): pairwise FP/FN per entity vs the parent; list the 20 largest clusters and their distinct names by SQL.
@@ -180,6 +195,7 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Result (filled in locally):
 
 ### P15 — the 0.70-0.95 review band reaches the HITL gate
+
 - Why cloud could not verify: no origin databases; the real `log m/u` distribution decides how many pairs land in the band.
 - Command: full merge run; stop at the matches gate (`human_review_matches`) and read the band histogram and predicted counts in the payload; approve some band pairs and reject others, then resume.
 - Independent check: count pairs with 0.70 ≤ s < 0.95 from `resolution_stats` / the gate payload, and compare with the pairs the gate lists; after resume, SQL on the destination: an approved pair shares one unified id, a rejected pair does not; a second resume does not undo the first.
@@ -187,6 +203,7 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Result (filled in locally):
 
 ### P17 — destination defect report, never repair
+
 - Why cloud could not verify: no destination database (`public.company_industry`).
 - Command: full merge run against the restored destination with `company_industry` still one `id` column (do not fix its DDL first); read `destination_defects` at the final gate and in the run report.
 - Independent check: `SELECT count(*) FROM public.company_industry` after the run; the destination's DDL log / `pg_stat_statements` shows no `ALTER`/`CREATE` from the run.
@@ -194,6 +211,7 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Result (filled in locally):
 
 ### P16 — label-free quality signals in the run report
+
 - Why cloud could not verify: no restored corpus; the false-flag rate of the name-variation flag on real names is unknown.
 - Command: two full merge runs with the same `MERGE_ENGINE_QUALITY_HISTORY` path; read `report.entities.<e>.quality` from both run reports.
 - Independent check: list the clusters in `flagged_clusters` and inspect their distinct names by SQL; compare the largest cluster size with `SELECT max(n) FROM (SELECT count(*) n ... GROUP BY unified_id)`.
@@ -201,6 +219,7 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Result (filled in locally):
 
 ### P10 — pre-load gate refuses a bad run before any write
+
 - Why cloud could not verify: no restored corpus; the false-refusal rate of the run-relative proposals (2 x median, per-entity slack) on the 16-entity corpus is unknown.
 - Command: replay the incident run (full merge, all 16 entities); at the final gate read `pre_load_gate` (measured, proposed thresholds, `entities_at_worst`); approve without editing.
 - Independent check: SQL row counts on the destination before and after (must be unchanged on a refusal); the run's error names the violated invariants and the entities in `entities_violating`; `SELECT count(*) FILTER (WHERE name IS NULL) FROM company` on the restored sources.
@@ -208,6 +227,7 @@ Entry format (one per item, added by the lead when it accepts the item):
 - Result (filled in locally):
 
 ### S5 (added by Phase 6b record-only item) — any entity with a single compared field
+
 - Why cloud could not verify: PRE-D1 stays OPEN (user decision 3) — the
   one-field model is unidentified; public benchmarks always give the fitted
   model ≥ 2 compared fields per entity.

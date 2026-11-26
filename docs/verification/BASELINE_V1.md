@@ -21,6 +21,7 @@ de-globalization), doc-lint (zero broken links/stale citations), unit tests,
 integration tests, frontend typecheck+build, matcher eval gate.
 
 `pytest tests/unit tests/integration -q`:
+
 ```
 1255 passed, 83 skipped, 0 failed
 ```
@@ -365,6 +366,7 @@ byte-for-byte identical re-run of this same Boeing corpus would now skip
 essentially all of `resolve_entities`.
 
 **Correctness, unchanged:**
+
 - Parity: **0.9%** (31/3,427 matched), identical to §4c and §6 — confirmed
   by direct `compare_to_golden.py boeing` read of `overall_parity_pct`, not
   the driver's cached summary line.

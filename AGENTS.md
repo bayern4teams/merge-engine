@@ -5,6 +5,7 @@
 ## 1. How to work (rules A-D, F-I, K-M)
 
 ### A. Asking, never guessing
+
 - A1 Never guess. Ask before any choice that affects architecture, results, data, or a later
   decision. Small local choices (a name, formatting): decide and mention them.
   Why: a confident guess is the most expensive mistake to find later.
@@ -17,6 +18,7 @@
   Why: the user's intent is not yours to infer.
 
 ### B. Safety
+
 - B1 You MUST work on branches. You MUST NOT merge or push main until the user writes
   "merge it", and MUST NOT delete a branch unasked. Why: main is what others build on.
 - B2 You MUST NOT do anything destructive (deleting files, databases, images, volumes, cache;
@@ -40,6 +42,7 @@
   differs from the repo cannot be rebuilt or reviewed.
 
 ### C. Honesty about data and results
+
 - C1 You MUST NOT invent a value, a precision, a number or a source. Why: invented data looks real.
 - C2 Fixes MUST be general, never tuned to one test case or database; prefer authoritative data
   (standards bodies) over hand-written tables. Why: a tuned fix breaks on the next input.
@@ -54,6 +57,7 @@
   permanent.
 
 ### D. Verification
+
 - D1 Verify directly (SQL, the service's own API, reading the file). A job status, a log line or
   an agent's report is not proof. Why: they report intent, not outcome.
 - D2 Confirm a command ran on the intended inputs (counts, current file lists). A failed step in
@@ -64,6 +68,7 @@
 - D4 "Done" means verified; say how in one line. Why: "done" without proof is a guess.
 
 ### F. Code changes
+
 - F1 Understand the full flow and every caller before changing anything. Why: the smallest
   change in the wrong place is a second bug.
 - F2 Fix in the shared place, once, not in each caller. Why: one fix cannot drift; many do.
@@ -88,6 +93,7 @@
   Why: the best code is code someone already wrote, tests and maintains.
 
 ### G. Running work
+
 - G1 Cap memory on heavy commands; run tests in batches, never the whole suite unbounded.
   Why: an unbounded run can take the machine down.
 - G2 Check free disk (including `/tmp`) before copying or creating anything large.
@@ -95,6 +101,7 @@
 - G3 Run the CI checks locally before pushing. Why: a red CI blocks everyone.
 
 ### H. Workspace
+
 - H1 Benchmark data, downloads and outputs live outside the repo; scratch files go to the
   session scratch folder. Why: the repo stays small and clean.
 - H2 Clean up what you created, with a yes before deleting. Why: leftovers fill the disk.
@@ -102,6 +109,7 @@
   Why: the user should never wonder what is happening.
 
 ### I. Other agents
+
 - I1 Before delegating, check which models you can actually start (the agent tool's model
   options). Skip this check if you are a Claude Opus model. Why: a plan built on an unavailable
   model fails late.
@@ -114,6 +122,7 @@
 - I4 Recheck anything an agent reports that decides pass or fail. Why: see D1.
 
 ### K. These files
+
 - K1 CLAUDE.md is the single line `@AGENTS.md`; all rules live in AGENTS.md.
   Why: one source, read by every agent.
 - K2 Every rule has a one-line why. Why: agents apply a rule with judgment only if they know why.
@@ -126,6 +135,7 @@
   Why: projects can see which rules they follow.
 
 ### L. Tests
+
 - L1 You MUST NOT edit, weaken, skip or delete a test to make it pass. If a test and the spec
   disagree, stop and ask. Why: agents have been measured doing this, and a test changed to pass
   proves nothing.
@@ -148,6 +158,7 @@
   (Not met yet — set up by prompt 4.)
 
 ### M. Repository layout
+
 - M1 Every file has a fixed home: source, tests, scripts, docs, and `docs/archive/` for
   superseded documents; downloads and outputs live outside the repo (H1). The root folder holds
   only an agreed list of files. Why: a file in the wrong place is hard to find and easy to
