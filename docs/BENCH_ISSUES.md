@@ -151,3 +151,31 @@ used with my probes gone. The two earlier deaths were the host under
 self-inflicted memory pressure (parallel D1/dblp probes), not an app defect:
 **I-8 closes as environment, not app.** Keep the sampler: any future silent
 death now carries its own evidence.
+
+## I-9  mapper maps ONE origin of a multi-origin same-shape suite, siblings UNMAPPED
+
+Two independent Stage-1 runs, same failure shape, no intervention between
+them:
+
+- febrl (s1febrl): mapping 20/60 = 0.333. `scores.json` wrong list = 40
+  UNMAPPED misses, exactly 10 columns for each of origins a/d1/d2/d3; only
+  origin b's person table mapped. Mapped-side precision 1.0, recall 0.2.
+  Conflicts rode down with it: 12783/17030 = 0.751 (unmapped columns cannot
+  conflict-resolve).
+- geo_settlements (s1geo): mapping 14/32 = 0.438. Wrong list = 18 UNMAPPED
+  misses, exactly 6 columns each for dbp/fb/nyt; only gns mapped — and gns
+  is the HIGHEST-priority origin (`origin_priority: {gns: 2, ...}`), so
+  destination-cell damage is smaller than febrl's (0.818 cell accuracy,
+  conflicts 2306/2858 = 0.807 still depressed).
+
+Shape: when several origins expose near-identical table shapes to one
+destination entity, the field mapper emits mapping rows for ONE origin and
+leaves every sibling column UNMAPPED — while ER on the same runs stays high
+(febrl 0.991/0.999/0.995), i.e. entity resolution sees all origins but the
+column mapping does not. The I-1 fix (destination-contract naming) is in
+both runs' tree; this is downstream of it, in mapping, not parse_request.
+Attribution inside map_fields is NOT established (needs a focused repro —
+single candidate: map_fields maps only the priority-top table per entity).
+Cost is measured (the two mapping/conflict numbers above). Priority: blocks
+any mapping-accuracy acceptance on every multi-origin suite (most of the
+remaining program).

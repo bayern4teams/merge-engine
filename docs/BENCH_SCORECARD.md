@@ -15,6 +15,7 @@ carries the flag **`provisional-key`** except `google_v1` (owner-final).
 | amazon_google | provisional-key | s1amaz3_full | 549 s | 0.055 / 0.077 / 0.064 (missing 0) | (must_merge 119/1553; must_not_auto 40/295; must_not 252/423) | 2144/3094 = 0.693 | — | — | — | 0.750 | `20261126-1514_84ec8df_s1amaz3_full_DRAFT`; same repro, bench=amazon_google³ |
 | dblp_scholar_sub8k | provisional-key | s1ds8k_full | 542 s | 0.458 / 0.257 / 0.330 (missing 0) | (must_merge 149/579; must_not_auto 1/1; must_not 16/17) | 178/180 = 0.989 | — | — | — | 0.667 | `20261126-1535_84ec8df-dirty_s1ds8k_full_DRAFT`; same repro, bench=dblp_scholar_sub8k⁴ |
 | febrl | provisional-key | s1febrl_full | 190 s | 0.991 / 0.999 / 0.995 (missing 0) | (must_merge 13953/13972; must_not_auto 76/76; must_not 100/100) | 12783/17030 = 0.751 | — | — | — | 20/60 = 0.333 | `20261126-1614_b5b0dbe_s1febrl_full_DRAFT`; same repro, bench=febrl⁵ |
+| geo_settlements | provisional-key | s1geo_full | 111 s | 0.994 / 0.430 / 0.600 (missing 0) | (must_merge 1888/4391; must_not_auto —; must_not 53/55) | 2306/2858 = 0.807 | — | — | — | 14/32 = 0.438 | `20261126-1620_182f347_s1geo_full_DRAFT`; same repro, bench=geo_settlements⁶ |
 
 **Crosswalk note:** google_v1 crosswalk scoring demands the truth's XW row
 ids, which no app run can observe; emitting app cluster ids would be
@@ -81,6 +82,14 @@ columns each for origins `a`, `d1`, `d2`, `d3`: the app mapped only origin
 1.0, recall 0.2). Conflicts 12783/17030 = 0.751 rides the same cause
 (unmapped columns can't resolve). Single-run observation, not filed as an
 issue.
+
+⁶ **geo_settlements:** OAEI cross-origin-only suite (4 place lists, 3,054
+records). ER precision is the mission's best (0.994) but recall 0.430 —
+1888/4391 must_merge. Mapping 14/32 with the SAME one-origin-mapped shape as
+footnote 5 (18 UNMAPPED = 6 columns each for dbp/fb/nyt, only gns mapped);
+filed as **I-9** once the shape repeated twice. The recall gap was NOT
+decomposed this run (I-9 explains mapping/conflicts, not ER recall) —
+recorded as measured, attribution open.
 
 ## Suite-level verdicts so far
 
