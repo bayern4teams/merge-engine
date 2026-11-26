@@ -19,6 +19,7 @@ carries the flag **`provisional-key`** except `google_v1` (owner-final).
 | affiliations | provisional-key | s1aff_full | 18 s | — / 0.000 / — (missing 0) | (must_merge 0/16795; must_not_auto 87/87; must_not 91/91) | 69/323 = 0.214 | — | — | — | 3/3 = 1.000 | `20261126-1623_80fee52_s1aff_full_DRAFT`; same repro, bench=affiliations⁷ |
 | pagila | provisional-key | s1pagila_full | 636 s | FAILED before load — all 10 entities missing 100% (guardrail abort⁸) | (must_not_auto 0/22) | 0/0 | — | FK 1.000/1.000/1.000; junction 0.667/0.667; weak 0.000 | — | 59/65 = 0.908 | `20261126-1624_cd52a4c_s1pagila_full_DRAFT`; run FAILED in load_data, see ⁸ |
 | chinook | provisional-key | s1chink_full | 132 s | FAILED before load — all 8 entities missing 100% (guardrail abort⁹) | (must_not_auto 0/331) | 0/0 | — | FK 0.846/1.000/0.917; junction 0.000; weak 0.000 | — | 52/56 = 0.929 | `20261126-1636_4214b2b_s1chink_full_DRAFT`; run FAILED in load_data, see ⁹ |
+| musicbrainz20k | provisional-key | s1mbz_full | 410 s | 0.935 / 0.358 / 0.518 (missing 0) | (must_merge 5818/16250; must_not_auto —; must_not 197/200) | 10167/14067 = 0.723 | — | — | — | 22/50 = 0.440 | `20261126-1639_1f47bd2_s1mbz_full_DRAFT`; same repro, bench=musicbrainz20k¹⁰ |
 
 **Crosswalk note:** google_v1 crosswalk scoring demands the truth's XW row
 ids, which no app run can observe; emitting app cluster ids would be
@@ -133,6 +134,13 @@ ceiling to 0 which a real small cluster then trips), which is why I-11 is
 now a REPEATED shape, not a one-run observation. FK 0.846/1.000 scored from
 pre-load state; mapping 52/56; must_not_auto 0/331 inside the fitted map
 before the abort.
+
+¹⁰ **musicbrainz20k:** 5-origin track list (19,375 records). ER precision
+high (0.935), recall 0.358 (5818/16250 must_merge). Mapping 22/50 = 0.440 —
+**I-9's third occurrence**, identical shape again: all 28 wrong entries are
+UNMAPPED, exactly 7 columns each for s1–s4, only s5 mapped. ER recall gap
+not decomposed here (unmapped columns can suppress comparison fields, but
+that attribution needs a focused check — recorded as open).
 
 ## Suite-level verdicts so far
 

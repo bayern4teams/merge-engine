@@ -235,3 +235,12 @@ invoice_line, playlist_track); largest_cluster_share = 0.0588 (threshold 0;
 violating: invoice, track)`. Same two shapes, different corpus, no
 intervention between runs. I-11 is a REPEATED, PREDICTIVE defect shape, not
 a one-run artifact.
+
+REPEATED ×3 (musicbrainz20k s1mbz, `20261126-1639_1f47bd2_s1mbz_full_DRAFT`):
+mapping 22/50, wrong list = 28 UNMAPPED, exactly 7 columns each for s1–s4,
+only s5 mapped. The mapped origin differs per suite (febrl: b — the SECOND
+priority tier; geo: gns — the top priority; mbz: s5 — the last origin): no
+consistent priority rule, so "maps the top-priority origin" is NOT the
+shape; "maps exactly one origin" is. Three suites, three corpora, one run
+each, same mechanical fingerprint — attribution inside map_fields remains
+open, cost measured per row.
