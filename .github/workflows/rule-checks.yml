@@ -25,6 +25,7 @@ jobs:
     timeout-minutes: 5
     env:
       PR_BASE: ${{ github.event.pull_request.base.sha }}
+      PUSH_BEFORE: ${{ github.event.before }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -41,10 +42,18 @@ jobs:
         id: base
         run: |
           if [ -n "$PR_BASE" ]; then
+            # Pull request: the prompt's range — main to head.
             echo "sha=$PR_BASE" >> "$GITHUB_OUTPUT"
+          elif [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            # Push to an existing branch: exactly what THIS push added.
+            # Diffing against origin/main instead would charge a long-lived
+            # feature branch for commits that predate the rule (the prompt:
+            # "existing history does not block CI"). A force-push can make
+            # `before` unreachable — the script then passes with a notice.
+            echo "sha=$PUSH_BEFORE" >> "$GITHUB_OUTPUT"
           else
-            git fetch -q origin main
-            echo "sha=$(git merge-base origin/main HEAD)" >> "$GITHUB_OUTPUT"
+            # New branch push: no previously pushed state; nothing to compare.
+            echo "sha=$PUSH_BEFORE" >> "$GITHUB_OUTPUT"
           fi
 
       - name: C4 — no TODO/FIXME added to src/
