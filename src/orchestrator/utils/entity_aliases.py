@@ -40,6 +40,29 @@ ALIAS_GROUPS: list[set[str]] = [
         "businesses",
     },
     {"person", "persons", "people", "staff", "individual", "individuals", "employee", "employees"},
+    # Scholarly-publication family (I-1): the DBLP-ACM/DBLP-Scholar destinations
+    # store "publication" while source tables say "papers"/"xml"/"dblp" —
+    # without this group resolve_dest_table("paper", ["publication"]) found no
+    # vocabulary and parse_request's I-1 reconciliation could not rename.
+    {
+        "publication",
+        "publications",
+        "paper",
+        "papers",
+        "article",
+        "articles",
+        "preprint",
+        "preprints",
+        "thesis",
+        "theses",
+        "conference",
+        "conferences",
+        "proceedings",
+        "journal",
+        "journals",
+        "citation",
+        "citations",
+    },
     {"product", "products", "product_catalog", "catalog", "item", "items"},
     {"contract", "contracts", "deal", "deals", "agreement", "agreements"},
     {"founder", "founders", "org_founder", "org_founders", "cofounder", "cofounders"},

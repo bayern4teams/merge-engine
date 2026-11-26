@@ -27,6 +27,22 @@ source table). Fix shape (owner call — not mine mid-benchmark): reconcile
 extracted target_entities against destination table names (or suite
 entity_types) before propagating, with the destination contract winning.
 
+**FIXED (owner assigned 2026-11-26).** Reconciliation now happens inside
+`parse_request._finish` — the destination contract wins, deterministically:
+(a) a group name resolving to a contract table via the existing alias
+vocabulary takes that table's own name (added the scholarly-publication
+alias group so `paper`/`papers` resolve to `publication`); (b) when the
+contract is EXACTLY ONE table, every source group folds into it (the
+destination says: these sources describe one thing). Ambiguous contracts
+never fold. Unreadable contract → naming stands and the guardrail remains
+the backstop. The `entity_tables` cache fingerprint is now destination-
+scoped so a name cannot replay against a different destination DB.
+Proof in `tests/unit/test_parse_request_node.py::TestDestinationContractNaming`:
+BOTH captured flake answers ('paper' from s1dblp3, 'publication' from
+s1dblp5) replayed through the node emit `['publication']` with membership
+intact, and the real `pre_load_gate` coverage invariant passes on the
+contract name the reconciled run now carries.
+
 Reproduction (needs the box):
 
 ```

@@ -933,3 +933,234 @@ class TestSubjectFirstMode:
             "subject": "Nova",
             "scope_type": "company",
         }
+
+
+# ── I-1: the destination contract wins the entity name ─────────────────────
+#
+# The live dblp_acm flake (docs/BENCH_ISSUES.md I-1): the destination is one
+# contract table `publication`; two identical runs' LLM calls named the one
+# deterministic group "publication" (pass) and "paper" (guardrail fail:
+# `mapping_coverage = 0 ... violating: paper`). The fix reconciles names in
+# parse_request; these tests pin it deterministically by replaying BOTH
+# captured LLM answers through the same node, then through the real P10
+# coverage invariant.
+
+
+def _dblp_like_schema() -> dict[str, Any]:
+    """The dblp_acm shape: TWO origins each with a `papers` table -> ONE
+    deterministic group ('paper') covering 2 tables — matches the live run
+    (`.tmp/benchmark_runs/dblp_acm/20261125-1759*/logs/debug.log`:
+    'Deterministic groups: 1 covering 2 tables')."""
+    return {
+        "origin_acm": {
+            "origin_type": "postgres",
+            "tables": [{"name": "papers", "columns": [{"name": "id"}, {"name": "title"}]}],
+        },
+        "origin_dblp": {
+            "origin_type": "postgres",
+            "tables": [{"name": "papers", "columns": [{"name": "id"}, {"name": "title"}]}],
+        },
+    }
+
+
+def _dblp_state(destination: Any = None) -> dict[str, Any]:
+    state: dict[str, Any] = {
+        "user_request": "deduplicate all publications",
+        "schemas": _dblp_like_schema(),
+        "llm_config": {"provider": "openai", "model": "gpt-4o", "api_key": "k"},
+        "errors": [],
+    }
+    if destination is not None:
+        state["destination"] = destination
+    return state
+
+
+def _names_answer(group_key: str, name: str) -> dict[str, Any]:
+    """Exactly the shape the live run recorded for group key 'paper'
+    (`.tmp/benchmark_runs/dblp_acm/20261125-1702*/logs/debug.log`)."""
+    return {
+        "group_names": {group_key: name},
+        "explicit_groups": [group_key],
+        "subject": "",
+        "scope_type": "none",
+    }
+
+
+async def _run_with_answer(answer: dict[str, Any], destination: Any) -> dict[str, Any]:
+    client = MagicMock()
+    client.call_json = AsyncMock(return_value=answer)
+    state = _dblp_state(destination)
+    with (
+        patch("src.orchestrator.nodes.parse_request.LLMClient", return_value=client),
+        patch(
+            "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+            TestParseRequest._prompts(),
+        ),
+        patch(
+            "src.mcp_server.tools.load_data._get_destination_connector",
+            return_value=MagicMock(list_tables=lambda: ["publication"]),
+        ),
+    ):
+        return await parse_request(state)
+
+
+class TestDestinationContractNaming:
+    """I-1 — the destination contract, not the LLM flake, decides the name."""
+
+    @pytest.mark.asyncio
+    async def test_two_identical_runs_both_pass_the_entity_name(self) -> None:
+        """THE I-1 regression test. Both LLM answers were captured from the
+        real dblp_acm flake — run 20261125-1702 answered 'paper' and died at
+        the guardrail; run 20261125-1759 answered 'publication' and passed.
+        Against the same contract (one destination table `publication`), the
+        node must now emit the SAME entity name for both answers."""
+        good = await _run_with_answer(_names_answer("paper", "publication"), {"tables": {}})
+        flaky = await _run_with_answer(_names_answer("paper", "paper"), {"tables": {}})
+        assert good["target_entities"] == flaky["target_entities"] == ["publication"]
+        assert flaky["explicit_target_entities"] == ["publication"]
+        # membership untouched: both origins' tables still reach entity_tables
+        tables = {
+            (e["origin_id"], e["table"])
+            for entries in flaky["entity_tables"].values()
+            for e in entries
+        }
+        assert tables == {("origin_acm", "papers"), ("origin_dblp", "papers")}
+
+    @pytest.mark.asyncio
+    async def test_coverage_invariant_cannot_fire_on_the_contract_name(self) -> None:
+        """The guardrail the flake actually tripped (s1dblp3 debug.log:
+        'mapping_coverage = 0 ... violating: paper'). With the reconciled
+        name, the P10 invariant measures the CONTRACT entity — a mapped
+        'publication' passes and a phantom 'paper' is measured nowhere, so
+        it cannot fire on a name the run no longer carries."""
+        from src.orchestrator.nodes.load_data import pre_load_gate
+
+        records = [
+            {"_record_id": f"origin_1:papers:{i}", "id": f"p{i}", "title": f"t{i}"}
+            for i in range(6)
+        ]
+        for name in ("publication", "paper"):
+            state: dict[str, Any] = {
+                "extracted_data": {name: records},
+                "field_mappings": {name: {"id": "id", "title": "title"}},
+                "unmapped_fields": {name: []},
+                "entity_clusters": {name: [{"record_ids": [r["_record_id"] for r in records]}]},
+            }
+            gate = pre_load_gate(state)
+            cov = gate["invariants"]["mapping_coverage"]
+            if name == "publication":
+                assert not cov["violated"], gate
+            else:
+                assert "paper" not in gate["entities_violating"].get("mapping_coverage", [])
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_group_folds_into_sole_contract_table(self) -> None:
+        """A source table with no vocabulary at all ('xml') still lands on
+        the contract when the contract is one table — the destination says
+        these sources describe one thing."""
+
+        def _xml_schema() -> dict[str, Any]:
+            return {
+                "origin_1": {
+                    "origin_type": "postgres",
+                    "tables": [
+                        {"name": "xml", "columns": [{"name": "id"}, {"name": "title"}]},
+                    ],
+                }
+            }
+
+        client = MagicMock()
+        client.call_json = AsyncMock(return_value=_names_answer("xml", "xml"))
+        state = _dblp_state({"tables": {}})
+        state["schemas"] = _xml_schema()
+        with (
+            patch("src.orchestrator.nodes.parse_request.LLMClient", return_value=client),
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                TestParseRequest._prompts(),
+            ),
+            patch(
+                "src.mcp_server.tools.load_data._get_destination_connector",
+                return_value=MagicMock(list_tables=lambda: ["publication"]),
+            ),
+        ):
+            result = await parse_request(state)
+        assert result["target_entities"] == ["publication"]
+        assert {e["table"] for entries in result["entity_tables"].values() for e in entries} == {
+            "xml"
+        }
+
+    @pytest.mark.asyncio
+    async def test_multi_table_contract_renames_only_by_vocabulary(self) -> None:
+        """Rule (b) is single-table only — an ambiguous contract never
+        folds groups together; 'xml' stays 'xml', 'paper' still becomes
+        'publication' by vocabulary."""
+        client = MagicMock()
+        client.call_json = AsyncMock(
+            return_value={
+                "group_names": {"paper": "paper", "xml": "xml"},
+                "explicit_groups": ["paper"],
+                "subject": "",
+                "scope_type": "none",
+            }
+        )
+        state = _dblp_state({"tables": {}})
+        state["schemas"] = {
+            "origin_1": {
+                "origin_type": "postgres",
+                "tables": [
+                    {"name": "papers", "columns": [{"name": "id"}, {"name": "name"}]},
+                    {"name": "xml", "columns": [{"name": "id"}, {"name": "name"}]},
+                ],
+            }
+        }
+        with (
+            patch("src.orchestrator.nodes.parse_request.LLMClient", return_value=client),
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                TestParseRequest._prompts(),
+            ),
+            patch(
+                "src.mcp_server.tools.load_data._get_destination_connector",
+                return_value=MagicMock(list_tables=lambda: ["publication", "venue"]),
+            ),
+        ):
+            result = await parse_request(state)
+        assert set(result["target_entities"]) == {"publication", "xml"}
+
+    @pytest.mark.asyncio
+    async def test_unreadable_contract_keeps_naming_and_caches_safely(self) -> None:
+        """No contract to reconcile against (connector raises) — the node
+        must neither crash nor rename, and must NOT cache the unreconciled
+        answer under the destination-scoped fingerprint."""
+
+        class _Boom:
+            def list_tables(self) -> list[str]:
+                raise RuntimeError("destination unreachable")
+
+        state = _dblp_state({"tables": {}})
+        with (
+            patch("src.orchestrator.nodes.parse_request.LLMClient") as client_cls,
+            patch(
+                "src.orchestrator.nodes.parse_request.PROMPT_TEMPLATES",
+                TestParseRequest._prompts(),
+            ),
+            patch(
+                "src.mcp_server.tools.load_data._get_destination_connector",
+                side_effect=RuntimeError("destination unreachable"),
+            ),
+        ):
+            client_cls.return_value.call_json = AsyncMock(
+                return_value=_names_answer("paper", "paper")
+            )
+            # (1) no profile cache: degraded-but-naming-stands (the single
+            # deterministic group keeps its key, unreconciled).
+            result = await parse_request(state)
+            assert result["target_entities"] == ["paper"]
+            # (2) destination-scoped fingerprint: a run against another
+            # destination must never replay this one's name.
+            from src.orchestrator.nodes.parse_request import _destination_identity
+
+            assert _destination_identity({"host": "a", "database": "d1"}) != (
+                _destination_identity({"host": "a", "database": "d2"})
+            )

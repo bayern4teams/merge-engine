@@ -24,12 +24,64 @@ from typing import Any
 from src.llm import PROMPT_TEMPLATES, LLMClient
 from src.orchestrator.fingerprint import origins_fingerprint, stage_fingerprint
 from src.orchestrator.profiles import stage_cache_get
+from src.orchestrator.utils.entity_aliases import resolve_dest_table
 from src.orchestrator.utils.entity_grouping import group_tables_into_entities
 from src.orchestrator.utils.retry import classify_exception
 
 logger = logging.getLogger("merge-engine.orchestrator.parse_request")
 
 _INACTIVE_SCOPE: dict[str, Any] = {"active": False, "subject": "", "scope_type": "none"}
+
+# Tables the app itself creates in the destination (decision maps, watermarks,
+# audit, probes, staging) are bookkeeping, never part of the destination
+# CONTRACT a concept may be renamed onto — same exclusion `er_service` applies
+# when listing destination tables for a human.
+_APP_BOOKKEEPING_PREFIXES = ("merge_engine_", "er_")
+
+
+def _destination_identity(destination: Any) -> str:
+    """Cache-safe identity of the destination for fingerprinting: which DB,
+    not how to log into it (no password)."""
+    if not destination:
+        return ""
+    get = (
+        destination.get
+        if isinstance(destination, dict)
+        else lambda k, d="": getattr(destination, k, d)
+    )
+    return "|".join(str(get(k, "")) for k in ("type", "host", "port", "database", "schema"))
+
+
+def _destination_contract_tables(state: dict[str, Any]) -> list[str] | None:
+    """The destination's business tables — the contract entity names must
+    resolve against — or None when unknowable (no destination configured,
+    or it is unreachable right now). None means "no contract to reconcile
+    against": naming stays as computed and the pre-load guardrail remains
+    the backstop, exactly as before this function existed.
+    """
+    destination = state.get("destination")
+    if not destination:
+        return None
+    try:
+        # Imported and CALLED through the module (not `from … import`) so
+        # tests can patch the connector — the real function stays the
+        # single owner of destination-connection policy.
+        from src.mcp_server.tools import load_data as load_data_module
+
+        connector = load_data_module._get_destination_connector(
+            destination if isinstance(destination, dict) else None
+        )
+        return [
+            str(t)
+            for t in connector.list_tables()
+            if not str(t).startswith(_APP_BOOKKEEPING_PREFIXES)
+        ]
+    except Exception as exc:
+        logger.warning(
+            "parse_request: destination contract unreadable (%s) — entity names not reconciled",
+            exc,
+        )
+        return None
 
 
 def _discovered_table_pairs(schemas: dict[str, Any]) -> set[tuple[str, str]]:
@@ -127,6 +179,12 @@ async def parse_request(state: dict[str, Any]) -> dict[str, Any]:
         origins_fp=origins_fingerprint(origins, schemas),
         user_request=user_request,
         subject=(pre_set_scope or {}).get("subject", ""),
+        # I-1: naming is now reconciled against the DESTINATION contract, so
+        # a cache hit is only valid for the same destination too — the same
+        # origins+request against a different destination DB may legitimately
+        # name entities differently (and must never replay a name that has
+        # no table there).
+        destination=_destination_identity(state.get("destination")),
     )
     cached = stage_cache_get(profile_cache, "entity_tables", entity_tables_fp)
     if cached and cached.get("entity_tables"):
@@ -155,6 +213,10 @@ async def parse_request(state: dict[str, Any]) -> dict[str, Any]:
     # `_finish`, which `_finish` being called from within the `try` caused
     # to be caught, logged with the wrong diagnosis, and re-raised).
     deterministic_groups, _unassigned = group_tables_into_entities(schemas)
+    # I-1: fetched ONCE here so `_finish` (and only it) reconciles names
+    # against the contract; None (unreadable/no destination) means "no
+    # contract" and naming stays as computed.
+    contract_tables = _destination_contract_tables(state)
     logger.debug(
         "Deterministic groups: %d covering %d tables",
         len(deterministic_groups),
@@ -251,6 +313,52 @@ async def parse_request(state: dict[str, Any]) -> dict[str, Any]:
         target_entities = [resolved_names[g] for g in deterministic_groups]
         entity_tables = {resolved_names[g]: deterministic_groups[g] for g in deterministic_groups}
         explicit_target_entities = [resolved_names[g] for g in explicit_keys]
+
+        # I-1: the destination CONTRACT wins the entity's name and the
+        # merge shape. The LLM names groups from the SOURCE table shapes
+        # ("public.papers"), and for a benchmark-shaped destination that
+        # name has no table — the live dblp_acm flake: it emitted 'paper'
+        # where the contract is `publication`, map_fields resolved no
+        # columns, and the guardrail (correctly) refused a 0-coverage
+        # mapping. Two rules, both deterministic:
+        #  (a) a name that resolves to a contract table takes that table's
+        #      own name — what EVERY downstream stage keys on anyway;
+        #  (b) when the contract has EXACTLY ONE table, every source group
+        #      becomes one entity named for it (the destination says: these
+        #      sources describe one thing). Ambiguous contracts (several
+        #      tables) only get rule (a) — no invented multi-entity split.
+        # This is not naming freedom — it is saying the same name the
+        # mapper re-discovers one stage down, so the whole run agrees
+        # instead of the LLM flake deciding. Two identical runs can no
+        # longer disagree at the guardrail: after reconciliation both
+        # carry the same deterministic names.
+        if contract_tables:
+            renames: dict[str, str] = {}
+            for name in target_entities:
+                resolved = resolve_dest_table(name, contract_tables)
+                if resolved is not None:
+                    renames[name] = resolved
+                elif len(contract_tables) == 1:
+                    renames[name] = contract_tables[0]
+            # A same-name rename (resolve_dest_table is exact-identity when
+            # the name IS a contract table) still folds groups; only a
+            # group renaming onto ITSELF changes nothing.
+            renames = {k: v for k, v in renames.items() if k != v}
+            if renames:
+                logger.warning(
+                    "parse_request: destination contract wins the entity "
+                    "name/shape — %s (destination contract wins over "
+                    "source/LLM naming)",
+                    ", ".join(f"{a!r} -> {b!r}" for a, b in sorted(renames.items())),
+                )
+                merged: dict[str, list[dict[str, str]]] = {}
+                for k, v in entity_tables.items():
+                    merged.setdefault(renames.get(k, k), []).extend(v)
+                entity_tables = merged
+                target_entities = list(entity_tables)
+                explicit_target_entities = list(
+                    dict.fromkeys(renames.get(n, n) for n in explicit_target_entities)
+                )
 
         # The hard post-condition: every table discover_schemas found must
         # still be reachable through entity_tables. Membership itself is
