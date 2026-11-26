@@ -85,5 +85,22 @@ Split from the old root `TECHNICAL_README.md`, by subsystem, in reading order:
 
 - `CLAUDE.md` / `AGENTS.md` — the map into this index, read on every session; kept at repo root because that's where every agent harness looks for it first.
 - `README.md` — human-facing project overview and setup instructions.
+- `ARCHITECTURE.md` — the system view for integrators and operators (created by the docs pass, 2026-11-26).
+- `TECHNICAL_IMPLEMENTATION.md` — the developer map: modules, workflows, how to change safely.
+- `GLOSSARY.md` — one fixed term per concept, each with its code home.
+- `docs/LESSONS.md` — what was tried and did not work, and why (J14).
 - `User_Guide.md` — end-user walkthrough of the UI.
+- `TECHNICAL_README.md` — pointer left by the Phase 0 Sec 0.4 split; the content is `architecture/`.
 - `TODO.md` — the live, continuously-updated task list. Not moved into `docs/plans/` because it changes far more often than anything else here and mixing that churn into a directory of stable reference docs would bury the signal.
+
+## Pointers for documents that had nothing linking to them (F6 sweep, 2026-11-26)
+
+- [merge-engine-benchmark-report.md](merge-engine-benchmark-report.md) — handover report for the 20-package ground-truth benchmark suite on the bench box (`template@10.10.9.41:/home/benchmark`); the suite itself lives outside the repo (H1).
+- [BENCH_STAGE0.md](BENCH_STAGE0.md), [BENCH_SCORECARD.md](BENCH_SCORECARD.md), [BENCH_ISSUES.md](BENCH_ISSUES.md) — stage-0 setup, scorecard, and issue log for that benchmark work.
+- [inference_report_reranker_2026-11-24.md](inference_report_reranker_2026-11-24.md) and [inference_rerank_acceptance_2026-11-25.md](inference_rerank_acceptance_2026-11-25.md) — reranker/embedding inference measurements and their acceptance record.
+- [NIGHTLY_REPORT_2026-11-24.md](NIGHTLY_REPORT_2026-11-24.md) — the P21 nightly build + fix-round report (per-item DONE/PARTIAL/BLOCKED with CI run ids).
+- [plans/FIX_BUGS_PLAN.md](plans/FIX_BUGS_PLAN.md) — the fix-bugs plan executed on the `fix-bugs` branch lineage.
+- [verification/GROUND_TRUTH_BUILD_20260916.md](verification/GROUND_TRUTH_BUILD_20260916.md) — the first (2026-09-16) ground-truth build record, predecessor of the 2026-09-24 builds.
+- [tool-evaluation.md](tool-evaluation.md) — the F7 tool survey backing the adopt/reject ADRs.
+- `../reports/` and `../research_notes/` — MDM survivorship/match-rule research (vendor practice notes); research notes describe intent, not what happened (facts need code/measurement confirmation).
+- `.handoff/` — internal multi-agent handoff verdicts/acceptances for the Part 1 programme; deliberately not linked from prose, they are audit logs.
