@@ -467,25 +467,6 @@ def store_unified(run_id: str, entity_type: str, records: list[dict[str, Any]]) 
     return make_handle(run_id, entity_type, len(records), kind="unified")
 
 
-def spool_collection(
-    state: dict[str, Any],
-    channel: str,
-    kind: str,
-    run_id: str,
-    entity_type: str,
-    records: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """Write `records` to the spool and return the handle to store in state.
-
-    Used for `unified_entities` and `entity_clusters` — the two channels that
-    a measurement showed were 98% of what a checkpoint still carried after
-    the extracted rows moved out.
-    """
-    spool = RunSpool(run_id)
-    spool.put_records(kind, entity_type, records)
-    return make_handle(run_id, entity_type, len(records), kind=kind)
-
-
 def collection_records(
     container: Any, entity_type: str, kind: str = "rows"
 ) -> list[dict[str, Any]]:
